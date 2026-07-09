@@ -36,6 +36,7 @@ MainWindow::MainWindow(Device& device)
     console(*this),
 #if defined(__MOBILE_PLATFORM__)
     mobileUi(player),
+    gamepad(player),
 #endif
     player(dialogs,inventory) {
   Gothic::inst().onSettingsChanged.bind(this,&MainWindow::onSettings);
@@ -874,6 +875,10 @@ uint64_t MainWindow::tick() {
   if(dt<5)
     return 0;
   lastTick  = time;
+
+#if defined(__MOBILE_PLATFORM__)
+  gamepad.tick(dt);
+#endif
 
   auto st = Gothic::inst().checkLoading();
   if(st==Gothic::LoadState::Finalize || st==Gothic::LoadState::FailedLoad || st==Gothic::LoadState::FailedSave) {

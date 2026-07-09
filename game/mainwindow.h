@@ -34,6 +34,7 @@
 #include "ui/menuroot.h"
 #include "ui/consolewidget.h"
 #include "ui/touchinput.h"
+#include "ui/gamepadinput.h"
 
 #include "utils/keycodec.h"
 #include "resources.h"
@@ -152,6 +153,7 @@ class MainWindow : public Tempest::Window {
     ConsoleWidget             console;
 #if defined(__MOBILE_PLATFORM__)
     TouchInput                mobileUi;
+    GamepadInput              gamepad;
 #endif
     RuntimeMode               runtimeMode = R_Normal;
 

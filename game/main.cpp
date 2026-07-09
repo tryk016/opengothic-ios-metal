@@ -19,6 +19,7 @@
 #endif
 
 #include "utils/crashlog.h"
+#include "utils/systemmsg.h"
 #include "mainwindow.h"
 #include "gothic.h"
 #include "build.h"
@@ -127,20 +128,35 @@ int main(int argc,const char** argv) {
   Tempest::Log::i(appBuild);
   Workers::setThreadName("Main thread");
 
-  CommandLine          cmd{argc,argv};
-  auto                 api     = mkApi(cmd);
-  const auto           gpuName = selectDevice(*api);
-  CrashLog::setGpu(gpuName);
+  try {
+    CommandLine          cmd{argc,argv};
+    auto                 api     = mkApi(cmd);
+    const auto           gpuName = selectDevice(*api);
+    CrashLog::setGpu(gpuName);
 
-  Tempest::Device      device{*api,gpuName};
-  CrashLog::setGpu(device.properties().name);
+    Tempest::Device      device{*api,gpuName};
+    CrashLog::setGpu(device.properties().name);
 
-  Resources            resources{device};
-  Gothic               gothic;
-  GameMusic            music;
-  gothic.setupGlobalScripts();
+    Resources            resources{device};
+    Gothic               gothic;
+    GameMusic            music;
+    gothic.setupGlobalScripts();
 
-  MainWindow           wx(device);
-  Tempest::Application app;
-  return app.exec();
+    MainWindow           wx(device);
+    Tempest::Application app;
+    return app.exec();
+    }
+  catch(const std::exception& e) {
+    Tempest::Log::e("fatal: ", e.what());
+    SystemMsg::fatal("Gothic II data not found",
+                     "Copy your Gothic II: NotR files (Data/, _work/, system/) "
+                     "into this app's Documents folder, then relaunch.");
+#if defined(__IOS__)
+    // Keep the process alive so the alert stays visible on screen.
+    Tempest::Application app;
+    return app.exec();
+#else
+    return 1;
+#endif
+    }
   }

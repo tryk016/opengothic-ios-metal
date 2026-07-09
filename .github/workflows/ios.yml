@@ -1,0 +1,57 @@
+name: iOS build (unsigned .ipa)
+
+# Builds an UNSIGNED .ipa on a GitHub-hosted macOS runner.
+# Install it on device from Windows via AltStore/AltServer, which re-signs
+# it with your free Apple ID. No Mac and no paid Apple Developer account needed.
+#
+# macOS runner minutes are free for PUBLIC repositories. For private repos they
+# count 10x against your quota, so a public fork is recommended.
+
+on:
+  push:
+    branches: [ master, main, ios ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install cmake glslang
+
+      - name: Configure (Xcode generator, iOS arm64)
+        run: |
+          cmake -S . -B build-ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+
+      - name: Build (code signing disabled)
+        run: |
+          cmake --build build-ios --config Release -- \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned .ipa
+        run: |
+          APP="$(find build-ios -name '*.app' -type d | head -n1)"
+          if [ -z "$APP" ]; then echo "no .app produced"; exit 1; fi
+          echo "Packaging: $APP"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r OpenGothic-unsigned.ipa Payload >/dev/null
+
+      - name: Upload .ipa artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenGothic-ipa
+          path: OpenGothic-unsigned.ipa
+          if-no-files-found: error
