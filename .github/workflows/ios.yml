@@ -10,6 +10,9 @@ name: iOS build (unsigned .ipa)
 on:
   push:
     branches: [ master, main, ios ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
   workflow_dispatch:
 
 jobs:
