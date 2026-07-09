@@ -1,15 +1,17 @@
 #include "touchinput.h"
 
 #include <Tempest/Painter>
+#include <Tempest/Event>
 
 #include "game/playercontrol.h"
+#include "ui/menuroot.h"
 #include "gothic.h"
 
 using namespace Tempest;
 using A = KeyCodec::Action;
 using M = KeyCodec::Mapping;
 
-TouchInput::TouchInput(PlayerControl& ctrl) : ctrl(ctrl) {
+TouchInput::TouchInput(PlayerControl& ctrl, MenuRoot& menu) : ctrl(ctrl), menu(menu) {
   }
 
 bool TouchInput::active() const {
@@ -23,55 +25,86 @@ std::array<TouchInput::Btn,6> TouchInput::layout() const {
   const int bx = W - s - m;       // right column x
   const int by = H - s - m;       // bottom row y
   return {{
-    { bx,          by,          s, A::ActionGeneric, 0.90f, 0.30f, 0.30f }, // interact/attack
-    { bx,          by-(s+m),    s, A::Jump,          0.30f, 0.60f, 0.90f }, // jump
-    { bx-(s+m),    by,          s, A::Weapon,        0.90f, 0.80f, 0.30f }, // draw weapon
-    { bx-(s+m),    by-(s+m),    s, A::Sneak,         0.50f, 0.90f, 0.40f }, // sneak/crouch
-    { W-s-m,       m,           s, A::Inventory,     0.85f, 0.85f, 0.85f }, // inventory
-    { W-2*(s+m),   m,           s, A::Escape,        0.85f, 0.85f, 0.85f }, // menu/escape
+    { bx,         by,         s, A::ActionGeneric, 0.90f, 0.30f, 0.30f }, // interact/attack
+    { bx,         by-(s+m),   s, A::Jump,          0.30f, 0.60f, 0.90f }, // jump
+    { bx-(s+m),   by,         s, A::Weapon,        0.90f, 0.80f, 0.30f }, // draw weapon
+    { bx-(s+m),   by-(s+m),   s, A::Sneak,         0.50f, 0.90f, 0.40f }, // sneak/crouch
+    { W-s-m,      m,          s, A::Inventory,     0.85f, 0.85f, 0.85f }, // inventory
+    { W-2*(s+m),  m,          s, A::Escape,        0.85f, 0.85f, 0.85f }, // menu/escape
+  }};
+  }
+
+std::array<TouchInput::MBtn,4> TouchInput::menuLayout() const {
+  const int W = w(), H = h();
+  const int s = H/7;
+  const int m = H/30;
+  using E = Tempest::Event;
+  return {{
+    { 2*m,         H-2*(s+m),  s, E::K_Up,     0.85f, 0.85f, 0.85f }, // up
+    { 2*m,         H-(s+m),    s, E::K_Down,   0.85f, 0.85f, 0.85f }, // down
+    { W-2*(s+m),   H-(s+m),    s, E::K_Return, 0.40f, 0.90f, 0.40f }, // OK
+    { W-(s+m),     H-(s+m),    s, E::K_ESCAPE, 0.90f, 0.40f, 0.40f }, // back
   }};
   }
 
 void TouchInput::paintEvent(PaintEvent& e) {
-  if(!active())
-    return;
   Painter p(e);
 
-  const int H  = h();
-  const int ms = H/3, mm = H/20;
-  p.setBrush(Color(1.f, 1.f, 1.f, 0.10f));            // movement pad (bottom-left)
-  p.drawRect(mm, H-ms-mm, ms, ms);
+  if(active()) {
+    const int H  = h();
+    const int ms = H/3, mm = H/20;
+    p.setBrush(Color(1.f, 1.f, 1.f, 0.10f));           // movement pad (bottom-left)
+    p.drawRect(mm, H-ms-mm, ms, ms);
+    for(auto& b:layout()) {
+      p.setBrush(Color(b.r, b.g, b.b, 0.22f));
+      p.drawRect(b.x, b.y, b.s, b.s);
+      }
+    return;
+    }
 
-  for(auto& b:layout()) {
-    p.setBrush(Color(b.r, b.g, b.b, 0.22f));
-    p.drawRect(b.x, b.y, b.s, b.s);
+  if(menu.isActive()) {
+    for(auto& b:menuLayout()) {
+      p.setBrush(Color(b.r, b.g, b.b, 0.30f));
+      p.drawRect(b.x, b.y, b.s, b.s);
+      }
     }
   }
 
 void TouchInput::mouseDownEvent(MouseEvent& e) {
-  if(!active()) { e.ignore(); return; }
-
   const Point pos = e.pos();
   const int   id  = e.mouseID;
 
-  for(auto& b:layout())
-    if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
-      ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
-      btnDown[id] = b.act;
+  if(active()) {
+    for(auto& b:layout())
+      if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
+        ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
+        btnDown[id] = b.act;
+        return;
+        }
+    const int H = h(), ms = H/3, mm = H/20;
+    if(pos.x>=mm && pos.x<mm+ms && pos.y>=H-ms-mm && pos.y<H-mm) {
+      moveId = id; moveOrigin = pos;
       return;
       }
+    if(pos.x > w()/2) {
+      lookId = id; lookLast = pos;
+      return;
+      }
+    e.ignore();
+    return;
+    }
 
-  const int H = h(), ms = H/3, mm = H/20;
-  const bool inMove = pos.x>=mm && pos.x<mm+ms && pos.y>=H-ms-mm && pos.y<H-mm;
-  if(inMove) {
-    moveId = id; moveOrigin = pos;
-    return;
+  if(menu.isActive()) {
+    for(auto& b:menuLayout())
+      if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
+        KeyEvent ev(b.key);
+        menu.keyDownEvent(ev);
+        return;
+        }
+    return;                       // swallow stray taps (avoid accidental confirm)
     }
-  if(pos.x > w()/2) {            // right side (not a button) -> camera
-    lookId = id; lookLast = pos;
-    return;
-    }
-  e.ignore();                    // leave the rest for menus/HUD
+
+  e.ignore();                     // not our screen -> let others handle
   }
 
 void TouchInput::mouseDragEvent(MouseEvent& e) {
@@ -89,12 +122,12 @@ void TouchInput::mouseDragEvent(MouseEvent& e) {
 
   if(id==moveId) {
     const int H  = h();
-    const int dz = H/16;         // dead-zone
+    const int dz = H/16;          // dead-zone
     const int dx = pos.x - moveOrigin.x;
     const int dy = pos.y - moveOrigin.y;
     auto set = [&](int idx, bool on, A a){
-      if(on && !mv[idx])       { ctrl.onKeyPressed(a, Event::K_NoKey, M::Primary); mv[idx]=true;  }
-      else if(!on && mv[idx])  { ctrl.onKeyReleased(a, M::Primary);                mv[idx]=false; }
+      if(on && !mv[idx])      { ctrl.onKeyPressed(a, Event::K_NoKey, M::Primary); mv[idx]=true;  }
+      else if(!on && mv[idx]) { ctrl.onKeyReleased(a, M::Primary);                mv[idx]=false; }
       };
     set(0, dy < -dz, A::Forward);
     set(1, dy >  dz, A::Back);

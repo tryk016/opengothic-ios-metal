@@ -35,7 +35,7 @@ MainWindow::MainWindow(Device& device)
     dialogs(inventory),document(keycodec),
     console(*this),
 #if defined(__MOBILE_PLATFORM__)
-    mobileUi(player),
+    mobileUi(player,rootMenu),
     gamepad(player),
 #endif
     player(dialogs,inventory) {
@@ -133,7 +133,20 @@ MainWindow::~MainWindow() {
   }
 
 float MainWindow::uiScale() const {
-  return SystemApi::uiScale(hwnd());
+  const float base = SystemApi::uiScale(hwnd());
+#if defined(__MOBILE_PLATFORM__)
+  // High-DPI phones/tablets render the UI at native pixels, but SystemApi
+  // reports scale 1.0 on iOS, leaving the fixed-size Gothic UI tiny. Scale up
+  // roughly with the framebuffer size so menu/dialogue/subtitle text stays
+  // legible (~1x at 1200px, ~2x at 2556px).
+  const int   longEdge = (w()>h() ? w() : h());
+  float       k        = float(longEdge)/1200.0f;
+  if(k<1.0f)
+    k = 1.0f;
+  return base * k;
+#else
+  return base;
+#endif
   }
 
 void MainWindow::setupUi() {
