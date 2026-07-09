@@ -13,6 +13,9 @@ command -v cmake            >/dev/null || { echo "Installing cmake";   brew inst
 command -v glslangValidator >/dev/null || { echo "Installing glslang"; brew install glslang; }
 xcode-select -p             >/dev/null || { echo "Install Xcode + run 'xcode-select --install' first"; exit 1; }
 
+echo "==> Applying submodule patches"
+bash "$ROOT/ios/patches/apply-patches.sh"
+
 echo "==> Configuring (Xcode generator, iOS arm64, deployment 15.0)"
 cmake -S "$ROOT" -B "$BUILD" -G Xcode \
   -DCMAKE_SYSTEM_NAME=iOS \

@@ -24,6 +24,9 @@ jobs:
       - name: Install build tools
         run: brew install cmake glslang
 
+      - name: Apply submodule patches
+        run: bash ios/patches/apply-patches.sh
+
       - name: Configure (Xcode generator, iOS arm64)
         run: |
           cmake -S . -B build-ios -G Xcode \
