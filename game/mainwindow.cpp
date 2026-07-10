@@ -25,6 +25,7 @@
 #include "utils/gamepad.h"
 #include "utils/haptics.h"
 #include "utils/exceptiondump.h"
+#include "utils/poolprobe.h"
 #include "ui/padglyph.h"
 
 #include <array>
@@ -859,6 +860,14 @@ void MainWindow::drawLoading(Painter &p, int x, int y, int w, int h) {
   }
 
 void MainWindow::drawSaving(Painter &p) {
+#if defined(__IOS__)
+  // Pool-stack probe for the save-crash investigation: sample the first few
+  // saving-screen frames and then every ~quarter second.
+  static uint32_t frame = 0;
+  if(frame<3 || frame%15==0)
+    PoolProbe::dump("drawSaving frame");
+  ++frame;
+#endif
   if(auto back = Gothic::inst().loadingBanner(); back!=nullptr && !back->isEmpty()) {
     p.setBrush(Brush(*back,Painter::NoBlend));
     p.drawRect(0,0,this->w(),this->h(),
@@ -1222,6 +1231,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
     // flushes log.txt immediately, and these lines must survive the crash
     // currently under investigation.
     Log::e("[save] begin, slot=", slot);
+    PoolProbe::dump("save-begin");
     const int sw = std::max(4, Gothic::options().saveGameImageSize.w);
     const int sh = std::max(4, Gothic::options().saveGameImageSize.h);
     Tempest::Pixmap pm(uint32_t(sw), uint32_t(sh), Tempest::TextureFormat::RGBA8);

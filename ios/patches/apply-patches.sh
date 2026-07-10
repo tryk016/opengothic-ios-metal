@@ -126,3 +126,23 @@ else
     exit 1
   fi
 fi
+
+# Fix (save crash, proven on device): the game runs on a manual setjmp/longjmp
+# fiber that SHARES the thread's Objective-C autorelease-pool stack with the
+# UIKit fiber. The @autoreleasepool pushed here got its page invalidated across
+# fiber switches -> AutoreleasePoolPage::badPop -> _objc_fatal ("Invalid or
+# prematurely-freed autorelease pool") -> SIGABRT on save. Do NOT push a pool
+# on the game fiber at all: objects autoreleased during game dispatch drain in
+# UIKit's own per-runloop-cycle pools, which is safe and bounded.
+# NOTE: must run AFTER the exception-guard patch above (it anchors on 'try {').
+if grep -q 'no-objc-pool' "$VC"; then
+  echo "skip: iosapi.mm implProcessEvents no-objc-pool (already patched)"
+else
+  perl -0777 -pi -e 's|\@autoreleasepool \{(\r?\n    try \{)|{ // no-objc-pool: pool stack is per-thread and shared with the UIKit fiber; pushing here gets invalidated across swapContext (badPop/SIGABRT)${1}|s' "$VC"
+  if grep -q 'no-objc-pool' "$VC"; then
+    echo "patched: iosapi.mm implProcessEvents no-objc-pool"
+  else
+    echo "ERROR: failed to patch iosapi.mm no-objc-pool (pattern not found)" >&2
+    exit 1
+  fi
+fi

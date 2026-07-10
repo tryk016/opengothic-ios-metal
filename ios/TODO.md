@@ -90,15 +90,28 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
   popped) and the abort happens **inside libobjc on the UIKit/apple-fiber side**;
   the frames below libobjc are stale fiber-stack remnants (manual setjmp/longjmp
   breaks the FP walk).
-- Round 4 (this): recover the **real abort reason** — `CrashLog::dumpStack` now
-  dumps every image's `__DATA,__crash_info` annotations (what Apple shows as
-  "Application Specific Information", e.g. libobjc's `_objc_fatal` message);
-  `[save]` breadcrumbs (Log::e → flushed) at save begin / worker done /
-  finalize begin / finalize done narrow the crash window; stderr redirected to
-  `Documents/stderr.log` (libc++abi/libobjc last words). Also ask the user for
-  the `.ips` from Settings → Privacy → Analytics Data, and whether quick-LOAD
-  (LB+View) crashes the same way (would implicate the shared
-  finalize/onWorldLoaded path).
+- Round 4 (`640f5d08`): recover the **real abort reason** — `CrashLog::dumpStack`
+  dumps `__DATA,__crash_info` annotations; `[save]` breadcrumbs; stderr →
+  `Documents/stderr.log`.
+- **Round 4 RESULT (device, iOS 26.6 beta): SMOKING GUN.**
+  `objc[2004]: Invalid or prematurely-freed autorelease pool 0x…` — and the
+  `.ips` shows `AutoreleasePoolPage::badPop` called from
+  `implProcessEvents` (main thread). Breadcrumbs: **three quick-saves in a row
+  succeeded**, then a save-slot enumeration ran (7× "Unable to open file" =
+  save/load menu opened), and the **4th save died mid-saving-screen** between
+  "startSave dispatched" and worker completion. So: the ObjC autorelease-pool
+  STACK (per-thread TLS, shared by both setjmp/longjmp fibers) gets desynced —
+  the game-loop pool's page is invalidated by the time implProcessEvents pops it.
+  Not an exception, not MRC in our .mm files — a fiber/pool architecture defect.
+- Round 5 (this): **(a) mitigation** — new `apply-patches.sh` step
+  `no-objc-pool`: implProcessEvents no longer pushes an ObjC pool on the game
+  fiber (plain scope; game-dispatch autoreleases drain in UIKit's own
+  per-runloop-cycle pools — bounded); **(b) probe** — `utils/poolprobe.{h,mm,cpp}`
+  (`_objc_autoreleasePoolPrint`, weak import) dumps the pool stack to
+  stderr.log at save-begin / saving frames / finalize, so if a desync survives
+  the mitigation we see exactly whose pool breaks. If the crash stops but pool
+  dumps look wrong, the deeper fix is rethinking the fiber loop (e.g. drain
+  pools only on the UIKit side).
 
 ## ⏳ To do — deferred (needs on-device iteration)
 - [ ] **B9 / N1** — pause game tick (`onTimer`) + `displayLink` while

@@ -22,6 +22,7 @@
 #include "utils/fileutil.h"
 #include "utils/inifile.h"
 #include "utils/exceptiondump.h"
+#include "utils/poolprobe.h"
 
 #include "commandline.h"
 #include "mainwindow.h"
@@ -510,6 +511,7 @@ bool Gothic::finishLoading() {
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
 #if defined(__IOS__)
     Tempest::Log::e("[save/load] finalize: begin"); // Log::e => flushed (crash breadcrumb)
+    PoolProbe::dump("finalize-begin");
 #endif
     loaderTh.join();
     if(pendingGame!=nullptr)
@@ -519,6 +521,7 @@ bool Gothic::finishLoading() {
     onWorldLoaded();
 #if defined(__IOS__)
     Tempest::Log::e("[save/load] finalize: done");
+    PoolProbe::dump("finalize-done");
 #endif
     return true;
     }
