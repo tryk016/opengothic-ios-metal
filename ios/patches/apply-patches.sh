@@ -31,3 +31,49 @@ else
     exit 1
   fi
 fi
+
+# Fix (review B4): handle -touchesCancelled. Without it a system touch cancel
+# (Control Center, incoming call) never produces a MouseUp -> stuck movement
+# keys + a leaked touch-id slot. Forward it to the existing -touchesEnded.
+if grep -q 'touchesCancelled' "$VC"; then
+  echo "skip: iosapi.mm touchesCancelled (already patched)"
+else
+  perl -0777 -pi -e 's/(curentEvent = Event::MouseUp;\r?\n\s*swapContext\(\);\r?\n\s*\}\r?\n\s*\}\r?\n)\@end/$1\n- (void)touchesCancelled:(NSSet *)touches withEvent:(UIEvent *)ex {\n  [self touchesEnded:touches withEvent:ex];\n  }\n\@end/s' \
+    "$VC"
+  if grep -q 'touchesCancelled' "$VC"; then
+    echo "patched: iosapi.mm touchesCancelled"
+  else
+    echo "ERROR: failed to patch iosapi.mm touchesCancelled (pattern not found)" >&2
+    exit 1
+  fi
+fi
+
+# Fix (review N3): the whole engine + Daedalus VM run on this hand-swapped fiber
+# stack. 1 MB has no guard page, so deep call chains (VM recursion, world vob
+# trees) can silently overflow into corruption. Enlarge to 8 MB.
+if grep -q 'appleStack\[8\*1024\*1024\]' "$VC"; then
+  echo "skip: iosapi.mm fiber stack size (already patched)"
+else
+  perl -0777 -pi -e 's/appleStack\[1\*1024\*1024\]/appleStack[8*1024*1024]/' "$VC"
+  if grep -q 'appleStack\[8\*1024\*1024\]' "$VC"; then
+    echo "patched: iosapi.mm fiber stack -> 8 MB"
+  else
+    echo "ERROR: failed to patch iosapi.mm fiber stack (pattern not found)" >&2
+    exit 1
+  fi
+fi
+
+# Fix (review N2): implDestroyWindow was empty, leaving a live CADisplayLink and
+# a dangling owner after teardown. Invalidate the link and null the pointers.
+if grep -q 'displayLink invalidate' "$VC"; then
+  echo "skip: iosapi.mm implDestroyWindow (already patched)"
+else
+  perl -0777 -pi -e 's/(void iOSApi::implDestroyWindow\(SystemApi::Window \*w\) \{\r?\n)\s*\}/${1}  auto wx = reinterpret_cast<TempestWindow*>(w);\n  if(wx==nullptr)\n    return;\n  [wx->displayLink invalidate];\n  wx->displayLink = nil;\n  wx->owner = nullptr;\n  }/s' \
+    "$VC"
+  if grep -q 'displayLink invalidate' "$VC"; then
+    echo "patched: iosapi.mm implDestroyWindow"
+  else
+    echo "ERROR: failed to patch iosapi.mm implDestroyWindow (pattern not found)" >&2
+    exit 1
+  fi
+fi
