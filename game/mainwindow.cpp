@@ -601,6 +601,15 @@ PadCtx MainWindow::padContext() const {
   return PadCtx::World;
   }
 
+#if defined(__MOBILE_PLATFORM__)
+bool MainWindow::padRingOpen() const          { return gamepad.ringOpen(); }
+void MainWindow::padOpenWeaponRing()          { gamepad.openWeaponRing(); }
+void MainWindow::padOpenItemRing()            { gamepad.openItemRing(); }
+void MainWindow::padRingAim(float nx,float ny){ gamepad.ringAim(nx,ny); }
+void MainWindow::padRingCommit()              { gamepad.ringCommit(); }
+void MainWindow::padQuickSave()               { gamepad.quickSave(); }
+#endif
+
 void MainWindow::dispatchKey(Tempest::KeyEvent& e) {
   // Route a synthetic key to whichever UI is active, mirroring keyDownEvent.
   if(video.isActive())     { video.keyDownEvent(e);     return; }

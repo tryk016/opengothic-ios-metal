@@ -120,11 +120,14 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       (`padglyph.cpp`: A/B/X/Y discs, LB/RB/LT/RT pills, sticks, D-pad, Menu/View)
       if a texture is missing. Used by the touch overlay + controls-help bar.
 
-## ⏳ To do — full on-screen virtual gamepad
-- [ ] Touch overlay currently shows a subset (A/B/X/Y, View/Menu, move pad). Since
-      gameplay uses RB/RT/LB/LT/L3/R3/D-pad too, show the **full pad** in World
-      context and wire each glyph to its action; add touch ring-selection (drag to
-      aim, release to activate) so RB/LT rings are usable on touch.
+## ✅ Done — full on-screen virtual gamepad (2026-07-10)
+- [x] World touch overlay is now a **full virtual pad** (16 glyph buttons):
+      A/B/X/Y, RB(weapon ring)/RT(block)/LB(quick-save)/LT(item ring), L3(walk)/
+      R3(lock), D-pad (Heal/Potion + focus L/R), View/Menu, plus move pad + camera.
+      Each wired to its action via `ctrl`/`uiAction`/new `MainWindow::pad*`
+      bridges. **Touch ring-selection**: tapping RB/LT opens the radial, drag aims
+      it, release activates (`GamepadInput::ring*` hooks). Uses Xelu glyphs.
+      NOTE: button placement/sizes are v1 — tune on device.
 
 ## ⏳ Spec gaps / simplifications (control spec §1–§8) — deliberate, not blocking
 - [ ] Rings are **single-ring v1**: no concentric multi-ring + centre-easing

@@ -2,6 +2,7 @@
 
 #include <Tempest/Painter>
 #include <Tempest/Event>
+#include <algorithm>
 
 #include "game/playercontrol.h"
 #include "utils/gamepad.h"
@@ -14,18 +15,6 @@
 using namespace Tempest;
 using A = KeyCodec::Action;
 using M = KeyCodec::Mapping;
-
-static PadGlyph::Btn glyphOfAction(KeyCodec::Action a) {
-  switch(a) {
-    case KeyCodec::ActionGeneric: return PadGlyph::A;
-    case KeyCodec::Jump:          return PadGlyph::B;
-    case KeyCodec::Sneak:         return PadGlyph::X;
-    case KeyCodec::Weapon:        return PadGlyph::Y;
-    case KeyCodec::Inventory:     return PadGlyph::View;
-    case KeyCodec::Escape:        return PadGlyph::Menu;
-    default:                      return PadGlyph::A;
-    }
-  }
 
 static PadGlyph::Btn glyphOfKey(Tempest::Event::KeyType k) {
   switch(k) {
@@ -43,19 +32,38 @@ TouchInput::TouchInput(MainWindow& owner, PlayerControl& ctrl)
   : owner(owner), ctrl(ctrl) {
   }
 
-std::array<TouchInput::Btn,6> TouchInput::layout() const {
+std::array<TouchInput::Btn,16> TouchInput::layout() const {
   const int W = w(), H = h();
-  const int s  = H/8;             // button size
-  const int m  = H/40;            // margin
-  const int bx = W - s - m;       // right column x
-  const int by = H - s - m;       // bottom row y
+  const int s  = H/11;
+  const int m  = H/40;
+  const int bx = W-s-m, by = H-s-m;                 // face cluster anchor (bottom-right)
+  const int tR = W-s-m, tL = m;                     // shoulder columns
+  const int row0 = m, row1 = m+s+m;
+  const int dcx = int(float(W)*0.44f), dcy = H-int(float(s)*1.7f)-m;   // d-pad centre
+  using G = PadGlyph;
+  using K = TAct;
   return {{
-    { bx,         by,         s, A::ActionGeneric, 0.90f, 0.30f, 0.30f }, // interact/attack
-    { bx,         by-(s+m),   s, A::Jump,          0.30f, 0.60f, 0.90f }, // jump
-    { bx-(s+m),   by,         s, A::Weapon,        0.90f, 0.80f, 0.30f }, // draw weapon
-    { bx-(s+m),   by-(s+m),   s, A::Sneak,         0.50f, 0.90f, 0.40f }, // sneak/crouch
-    { W-s-m,      m,          s, A::Inventory,     0.85f, 0.85f, 0.85f }, // inventory
-    { W-2*(s+m),  m,          s, A::Escape,        0.85f, 0.85f, 0.85f }, // menu/escape
+    // face
+    { bx,        by,        s, G::A, K::Key, A::ActionGeneric },
+    { bx,        by-(s+m),  s, G::B, K::Key, A::Jump          },
+    { bx-(s+m),  by,        s, G::X, K::Key, A::Sneak         },
+    { bx-(s+m),  by-(s+m),  s, G::Y, K::Key, A::Weapon        },
+    // shoulders / triggers
+    { tR,        row0,      s, G::RB, K::WeaponRing, A::ActionGeneric },
+    { tR,        row1,      s, G::RT, K::Key,        A::Parade        },
+    { tL,        row0,      s, G::LB, K::QSave,      A::ActionGeneric },
+    { tL,        row1,      s, G::LT, K::ItemRing,   A::ActionGeneric },
+    // stick clicks
+    { m,         H-H/3-m-s-m, s, G::L3, K::Key,  A::Walk          },
+    { bx,        by-2*(s+m),  s, G::R3, K::Lock, A::ActionGeneric },
+    // d-pad
+    { dcx,       dcy-s, s, G::DPadUp,    K::Key,    A::Heal          },
+    { dcx,       dcy+s, s, G::DPadDown,  K::Key,    A::Potion        },
+    { dcx-s,     dcy,   s, G::DPadLeft,  K::FocusL, A::ActionGeneric },
+    { dcx+s,     dcy,   s, G::DPadRight, K::FocusR, A::ActionGeneric },
+    // system
+    { W/2-(s+m), m, s, G::View, K::Key, A::Inventory },
+    { W/2+m,     m, s, G::Menu, K::Key, A::Escape    },
   }};
   }
 
@@ -64,15 +72,15 @@ std::array<TouchInput::MBtn,6> TouchInput::menuLayout() const {
   const int s  = H/9;
   const int m  = H/40;
   using E = Tempest::Event;
-  const int cx = m + s;           // d-pad centre column (bottom-left)
-  const int by = H - m;           // bottom edge
+  const int cx = m + s;
+  const int by = H - m;
   return {{
-    { cx,          by-3*s-2*m,  s, E::K_Up,     0.85f, 0.85f, 0.85f }, // up
-    { cx,          by-s,        s, E::K_Down,   0.85f, 0.85f, 0.85f }, // down
-    { cx-(s+m),    by-2*s-m,    s, E::K_Left,   0.80f, 0.80f, 0.90f }, // decrease value
-    { cx+(s+m),    by-2*s-m,    s, E::K_Right,  0.80f, 0.80f, 0.90f }, // increase value
-    { W-2*(s+m),   by-s,        s, E::K_Return, 0.40f, 0.90f, 0.40f }, // OK
-    { W-(s+m),     by-s,        s, E::K_ESCAPE, 0.90f, 0.40f, 0.40f }, // back
+    { cx,          by-3*s-2*m,  s, E::K_Up     },
+    { cx,          by-s,        s, E::K_Down   },
+    { cx-(s+m),    by-2*s-m,    s, E::K_Left   },
+    { cx+(s+m),    by-2*s-m,    s, E::K_Right  },
+    { W-2*(s+m),   by-s,        s, E::K_Return },
+    { W-(s+m),     by-s,        s, E::K_ESCAPE },
   }};
   }
 
@@ -84,11 +92,18 @@ std::array<TouchInput::MBtn,4> TouchInput::dialogLayout() const {
   const int cx = m + s;
   const int by = H - m;
   return {{
-    { cx,          by-3*s-2*m,  s, E::K_Up,     0.85f, 0.85f, 0.85f }, // previous choice
-    { cx,          by-s,        s, E::K_Down,   0.85f, 0.85f, 0.85f }, // next choice
-    { W-2*(s+m),   by-s,        s, E::K_Return, 0.40f, 0.90f, 0.40f }, // select choice
-    { W-(s+m),     by-s,        s, E::K_ESCAPE, 0.90f, 0.40f, 0.40f }, // skip spoken line
+    { cx,          by-3*s-2*m,  s, E::K_Up     },
+    { cx,          by-s,        s, E::K_Down   },
+    { W-2*(s+m),   by-s,        s, E::K_Return },
+    { W-(s+m),     by-s,        s, E::K_ESCAPE },
   }};
+  }
+
+void TouchInput::aimRing(const Point& pos) {
+  const float R  = float(std::min(w(),h()))/3.f;
+  const float nx = float(pos.x - w()/2)/R;
+  const float ny = float(h()/2 - pos.y)/R;      // up positive, matching the stick
+  owner.padRingAim(nx, ny);
   }
 
 void TouchInput::paintEvent(PaintEvent& e) {
@@ -104,7 +119,7 @@ void TouchInput::paintEvent(PaintEvent& e) {
       const int ms = H/3, mm = H/20;
       PadGlyph::draw(p, fnt, PadGlyph::LStick, mm, H-ms-mm, ms, 0.7f);   // movement pad
       for(auto& b:layout())
-        PadGlyph::draw(p, fnt, glyphOfAction(b.act), b.x, b.y, b.s);
+        PadGlyph::draw(p, fnt, b.glyph, b.x, b.y, b.s);
       break;
       }
     case PadCtx::Dialog:
@@ -129,17 +144,26 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
   const PadCtx ctx = owner.padContext();
 
   if(ctx==PadCtx::World) {
+    // A radial ring is open -> this touch aims it, release commits.
+    if(owner.padRingOpen()) { ringId = id; aimRing(pos); return; }
+
     for(auto& b:layout())
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
-        // Escape/Inventory are window-level actions, not PlayerControl ones (B1).
-        if(b.act==A::Escape || b.act==A::Inventory) {
-          owner.uiAction(b.act);
-          return;
+        switch(b.kind) {
+          case TAct::Key:
+            if(b.act==A::Escape || b.act==A::Inventory) { owner.uiAction(b.act); return; }
+            ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
+            btnDown[id] = b.act;
+            return;
+          case TAct::WeaponRing: owner.padOpenWeaponRing(); ringId = id; return;
+          case TAct::ItemRing:   owner.padOpenItemRing();   ringId = id; return;
+          case TAct::Lock:       ctrl.toggleTargetLock();   return;
+          case TAct::FocusL:     ctrl.focusLeft();          return;
+          case TAct::FocusR:     ctrl.focusRight();         return;
+          case TAct::QSave:      owner.padQuickSave();       return;
           }
-        ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
-        btnDown[id] = b.act;
-        return;
         }
+
     const int H = h(), ms = H/3, mm = H/20;
     if(pos.x>=mm && pos.x<mm+ms && pos.y>=H-ms-mm && pos.y<H-mm) {
       moveId = id; moveOrigin = pos;
@@ -153,8 +177,7 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
     return;
     }
 
-  // UI contexts: a tap fires one synthetic key, routed to the active widget
-  // (menu / dialogue / inventory) by MainWindow::dispatchKey.
+  // UI contexts: a tap fires one synthetic key, routed to the active widget.
   auto tap = [&](const auto& arr)->bool{
     for(auto& b:arr)
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
@@ -173,14 +196,20 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
     tap(menuLayout());
     return;
     }
-  e.ignore();                     // loading etc. -> not our screen
+  e.ignore();
   }
 
 void TouchInput::mouseDragEvent(MouseEvent& e) {
+  if(Gamepad::poll().connected)         { e.ignore(); return; }
   if(owner.padContext()!=PadCtx::World) { e.ignore(); return; }
 
   const Point pos = e.pos();
   const int   id  = e.mouseID;
+
+  if(id==ringId && owner.padRingOpen()) {
+    aimRing(pos);
+    return;
+    }
 
   if(id==lookId) {
     const Point d = pos - lookLast;
@@ -209,6 +238,13 @@ void TouchInput::mouseDragEvent(MouseEvent& e) {
 
 void TouchInput::mouseUpEvent(MouseEvent& e) {
   const int id = e.mouseID;
+
+  if(id==ringId) {
+    if(owner.padRingOpen())
+      owner.padRingCommit();
+    ringId = -1;
+    return;
+    }
 
   auto it = btnDown.find(id);
   if(it!=btnDown.end()) {

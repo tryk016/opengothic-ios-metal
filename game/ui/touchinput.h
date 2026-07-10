@@ -5,14 +5,17 @@
 #include <unordered_map>
 
 #include "utils/keycodec.h"
+#include "ui/padglyph.h"
 
 class PlayerControl;
 class MainWindow;
 
-// On-screen touch overlay for when no gamepad is connected. Context-aware via
-// MainWindow::padContext():
-//  * World     — left-bottom movement pad, right side = camera, action buttons.
-//  * Menu/Inv  — on-screen D-pad (Up/Down/Left/Right) + OK/Back drive the UI.
+// On-screen virtual gamepad for when no controller is connected. Context-aware
+// via MainWindow::padContext():
+//  * World     — full pad: left-bottom move pad, right side = camera, and glyph
+//    buttons for A/B/X/Y, RB/RT/LB/LT, L3/R3, D-pad, View/Menu, each wired to its
+//    action (rings open a radial that touch then aims + commits).
+//  * Menu/Inv  — on-screen D-pad + OK/Back.
 //  * Dialogue  — Up/Down pick a choice, Select confirms, Skip skips the line.
 // Multitouch via MouseEvent::mouseID.
 class TouchInput : public Tempest::Widget {
@@ -25,17 +28,23 @@ class TouchInput : public Tempest::Widget {
     void mouseUpEvent(Tempest::MouseEvent& e);
 
   private:
-    struct Btn  { int x, y, s; KeyCodec::Action        act; float r, g, b; };
-    struct MBtn { int x, y, s; Tempest::Event::KeyType key; float r, g, b; };
-    std::array<Btn,6>  layout()       const;   // gameplay action buttons
+    // What a World button does when tapped.
+    enum class TAct : uint8_t { Key, WeaponRing, ItemRing, Lock, FocusL, FocusR, QSave };
+    struct Btn  { int x, y, s; PadGlyph::Btn glyph; TAct kind; KeyCodec::Action act; };
+    struct MBtn { int x, y, s; Tempest::Event::KeyType key; };
+
+    std::array<Btn,16> layout()       const;   // full virtual pad (World)
     std::array<MBtn,6> menuLayout()   const;   // menu / inventory: dpad + ok/back
     std::array<MBtn,4> dialogLayout() const;   // dialogue: up/down/select/skip
+
+    void aimRing(const Tempest::Point& pos);
 
     MainWindow&    owner;
     PlayerControl& ctrl;
 
     int            moveId = -1;   // touch id driving movement
     int            lookId = -1;   // touch id driving camera
+    int            ringId = -1;   // touch id aiming an open radial ring
     Tempest::Point moveOrigin;
     Tempest::Point lookLast;
     bool           mv[4] = {};    // forward, back, left, right currently pressed

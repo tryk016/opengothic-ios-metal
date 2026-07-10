@@ -77,6 +77,32 @@ const QuickRing* GamepadInput::activeRing() const {
   return nullptr;
   }
 
+bool GamepadInput::ringOpen() const {
+  return ringWeapons.isOpen() || ringItems.isOpen();
+  }
+
+void GamepadInput::openWeaponRing() { openRing(ringWeapons); }
+void GamepadInput::openItemRing()   { openRing(ringItems);   }
+
+void GamepadInput::ringAim(float nx, float ny) {
+  QuickRing* r = ringWeapons.isOpen() ? &ringWeapons : (ringItems.isOpen() ? &ringItems : nullptr);
+  if(r!=nullptr)
+    r->updateSelection(nx, ny);
+  }
+
+void GamepadInput::ringCommit() {
+  QuickRing* r = ringWeapons.isOpen() ? &ringWeapons : (ringItems.isOpen() ? &ringItems : nullptr);
+  if(r==nullptr)
+    return;
+  if(auto pl = worldPlayer())
+    r->commit(*pl);
+  else
+    r->close();
+  Haptics::impact(Haptics::Light);
+  }
+
+void GamepadInput::quickSave() { quickSaveRotating(); }
+
 void GamepadInput::openRing(QuickRing& r) {
   if(auto pl = worldPlayer()) {
     releaseAllWorld();               // stop moving/attacking while the ring is up

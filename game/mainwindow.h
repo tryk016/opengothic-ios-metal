@@ -55,6 +55,16 @@ class MainWindow : public Tempest::Window {
     void   dispatchKey(Tempest::KeyEvent& e);  // send a synthetic key to the active UI
     void   uiAction(KeyCodec::Action a);       // window-level Escape/Inventory/Log/Status
 
+#if defined(__MOBILE_PLATFORM__)
+    // Touch-overlay -> gamepad ring/quick-save bridges.
+    bool padRingOpen() const;
+    void padOpenWeaponRing();
+    void padOpenItemRing();
+    void padRingAim(float nx, float ny);
+    void padRingCommit();
+    void padQuickSave();
+#endif
+
   private:
     void paintEvent     (Tempest::PaintEvent& event) override;
     void resizeEvent    (Tempest::SizeEvent & event) override;

@@ -35,6 +35,15 @@ class GamepadInput {
     // The radial quick-bar currently open (for MainWindow to draw), or nullptr.
     const QuickRing* activeRing() const;
 
+    // Touch-overlay hooks (used when no pad is connected): open/aim/commit the
+    // rings and quick-save from on-screen taps.
+    bool  ringOpen() const;
+    void  openWeaponRing();
+    void  openItemRing();
+    void  ringAim(float nx, float ny);
+    void  ringCommit();
+    void  quickSave();
+
   private:
     MainWindow&    owner;
     PlayerControl& ctrl;
