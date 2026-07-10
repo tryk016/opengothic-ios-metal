@@ -40,8 +40,8 @@ std::array<TouchInput::Btn,16> TouchInput::layout() const {
   const int tR = W-s-m, tL = m;                     // shoulder columns
   const int row0 = m, row1 = m+s+m;
   const int dcx = int(float(W)*0.44f), dcy = H-int(float(s)*1.7f)-m;   // d-pad centre
-  using G = PadGlyph;
-  using K = TAct;
+  namespace G = PadGlyph;
+  using     K = TAct;
   return {{
     // face
     { bx,        by,        s, G::A, K::Key, A::ActionGeneric },
