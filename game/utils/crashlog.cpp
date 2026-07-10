@@ -1,5 +1,6 @@
 #include "crashlog.h"
 #include "commandline.h"
+#include "exceptiondump.h"
 
 #include <Tempest/Except>
 #include <Tempest/Platform>
@@ -60,7 +61,7 @@ static void signalHandler(int sig) {
 
 [[noreturn]]
 static void terminateHandler() {
-  char msg[128] = "std::terminate";
+  char msg[512] = "std::terminate";
   std::exception_ptr p = std::current_exception();
   std::string extGpuLog;
   if(p) {
@@ -94,6 +95,12 @@ static void terminateHandler() {
       std::snprintf(msg,sizeof(msg),"std::exception(%s)",e.what());
       }
     catch (...) {
+      // Non-std exception (on iOS typically an Objective-C NSException):
+      // identify it, so crash.log names the real cause instead of a bare
+      // "std::terminate".
+      auto desc = ExceptionDump::describe(p);
+      if(!desc.empty())
+        std::snprintf(msg,sizeof(msg),"%s",desc.c_str());
       }
     }
   CrashLog::dumpStack(msg, extGpuLog.c_str());

@@ -24,6 +24,7 @@
 #include "utils/dbgpainter.h"
 #include "utils/gamepad.h"
 #include "utils/haptics.h"
+#include "utils/exceptiondump.h"
 #include "ui/padglyph.h"
 
 #include <array>
@@ -1462,8 +1463,10 @@ void MainWindow::render(){
   catch(...) {
     // Objective-C / Metal exceptions are NOT std::exception; on the Apple ABI
     // they still unwind through C++ and terminate the app if unhandled. Catch
-    // them here too (e.g. a Metal validation NSException on the saving screen).
-    Log::e("unhandled non-std/ObjC exception in render loop");
+    // them here too (e.g. a Metal validation NSException on the saving screen)
+    // and log their identity, so the device log names the throw site.
+    Log::e("unhandled non-std/ObjC exception in render loop: ",
+           ExceptionDump::describe(std::current_exception()));
     try { device.waitIdle(); } catch(...) {}
     }
   }

@@ -21,6 +21,7 @@
 
 #include "utils/fileutil.h"
 #include "utils/inifile.h"
+#include "utils/exceptiondump.h"
 
 #include "commandline.h"
 #include "mainwindow.h"
@@ -573,6 +574,13 @@ void Gothic::implStartLoadSave(std::string_view banner,
         }
       catch(const std::exception&e) {
         Tempest::Log::e("loading error: ", e.what());
+        loadingFlag.compare_exchange_strong(curState,err);
+        }
+      catch(...){
+        // The lambda is noexcept: any non-std exception (e.g. an Objective-C
+        // NSException on iOS) escaping here would std::terminate the whole app
+        // with no log at all. Catch, identify and fail the load/save instead.
+        Tempest::Log::e("loading error: ", ExceptionDump::describe(std::current_exception()));
         loadingFlag.compare_exchange_strong(curState,err);
         }
       if(curState==LoadState::Saving) {

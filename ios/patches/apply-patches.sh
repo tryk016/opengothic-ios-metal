@@ -118,7 +118,7 @@ if grep -q 'uncaught exception in iOS event dispatch' "$VC"; then
   echo "skip: iosapi.mm implProcessEvents exception guard (already patched)"
 else
   perl -0777 -pi -e 's/(\@autoreleasepool \{\r?\n)(\s*auto& wnd   = \*mainWindow->owner;)/${1}    try {\n${2}/s' "$VC"
-  perl -0777 -pi -e 's/    \}(\r?\n)  swapContext\(\);(\r?\n)  \}(\r?\n\r?\n)void iOSApi::implSetWindowTitle/    }\n    catch(const std::exception& e){ Tempest::Log::e("uncaught exception in iOS event dispatch: ", e.what()); }\n    catch(...){ Tempest::Log::e("uncaught non-std\/ObjC exception in iOS event dispatch"); }\n    }${1}  swapContext();${2}  }${3}void iOSApi::implSetWindowTitle/s' "$VC"
+  perl -0777 -pi -e 's/    \}(\r?\n)  swapContext\(\);(\r?\n)  \}(\r?\n\r?\n)void iOSApi::implSetWindowTitle/    }\n    catch(const std::exception& e){ Tempest::Log::e("uncaught exception in iOS event dispatch: ", e.what()); }\n    catch(NSException* e){ Tempest::Log::e("uncaught NSException in iOS event dispatch: ", (e.name!=nil ? e.name.UTF8String : "?"), ": ", (e.reason!=nil ? e.reason.UTF8String : "?")); }\n    catch(...){ Tempest::Log::e("uncaught non-std\/ObjC exception in iOS event dispatch"); }\n    }${1}  swapContext();${2}  }${3}void iOSApi::implSetWindowTitle/s' "$VC"
   if grep -q 'uncaught exception in iOS event dispatch' "$VC"; then
     echo "patched: iosapi.mm implProcessEvents exception guard"
   else

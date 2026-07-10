@@ -70,6 +70,22 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       and both `supportedInterfaceOrientations` in `iosapi.mm` restricted to
       `MaskLandscape` (via `apply-patches.sh`); still rotates Left/Right.
 
+## 🔥 In progress — save crash-to-home (round 3)
+- Round 1 (`c0f30e50`, `d4de87ec`): removed GPU-thumbnail readback + fixed the
+  `applicationSupportDirectory` MRC over-release. Save persists, crash remained.
+- Round 2 (`56684300`): `catch(std::exception)` guards in `render()` +
+  `implProcessEvents`. Crash remained, **no guard logged** → not a std::exception.
+- Round 3 (`189145ae` + this): `catch(...)` guards + **exception identity
+  logging** (`utils/exceptiondump.{h,mm,cpp}` — rethrows and names NSExceptions
+  incl. throw-site backtrace); the loader-thread `noexcept` lambda now also has
+  `catch(...)` (a foreign exception there aborted with no log at all);
+  `implProcessEvents` guard additionally catches `NSException*` with
+  name/reason; `terminateHandler` writes the NSException identity to crash.log.
+- Next device test decides: a) log line in `Documents/log.txt` names the
+  exception → fix at source; b) crash.log shows NSException identity → same;
+  c) still SIGABRT with a pool-drain stack and no exception → another MRC
+  memory bug (like `d4de87ec`), audit `.mm`/Tempest-Metal release calls.
+
 ## ⏳ To do — deferred (needs on-device iteration)
 - [ ] **B9 / N1** — pause game tick (`onTimer`) + `displayLink` while
       backgrounded. Deferred: the manual setjmp/longjmp fiber loop in `implExec`
