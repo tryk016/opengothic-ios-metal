@@ -919,6 +919,20 @@ void GameMenu::execSaveGame(const GameMenu::Item& item) {
     return;
 
   string_frm fname("save_slot_",int(id),".sav");
+#if defined(__IOS__)
+  // No system keyboard is wired up on iOS, so a slot name cannot be typed in.
+  // Auto-name the save with the world + in-game time instead of the stale
+  // slot text.
+  if(auto w = Gothic::inst().world()) {
+    const auto t = w->time();
+    char nm[128] = {};
+    std::snprintf(nm, sizeof(nm), "%.*s - day %d, %d:%02d",
+                  int(w->name().size()), w->name().data(),
+                  int(t.day()), int(t.hour()), int(t.minute()));
+    Gothic::inst().save(fname, nm);
+    return;
+    }
+#endif
   Gothic::inst().save(fname,item.handle->text[0]);
   }
 

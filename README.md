@@ -100,9 +100,9 @@ saveSlots=5             ; rotating quick-save slots
 
 ### Known limitations
 
-- **⚠️ Saving is currently broken** — saving the game does not work reliably on-device yet (crash / failed
-  save under investigation). Treat progress as unsafe until this is fixed; see `ios/TODO.md`.
 - **Not fully tested on-device yet** — this is a work in progress (see the notice above and `ios/TODO.md`).
+- Save-slot preview thumbnails are not captured on iOS yet (slots show name, date and in-game time, but a
+  blank picture).
 - Sideload certificate expires weekly (auto-refresh via AltStore/SideStore).
 - Mesh shaders are disabled on iOS for GPU compatibility.
 - On-screen virtual-pad button layout is a first pass and still needs on-device tuning.

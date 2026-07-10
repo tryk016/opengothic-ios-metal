@@ -121,10 +121,16 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
   so loading a save failed ("Unable to open file"), slots had no
   header/date/thumbnail, and Gothic.ini could not be read back. Fixed with the
   `cwd-first` patch in apply-patches.sh (try CWD, then bundle).
+- **DEVICE-CONFIRMED (round 6):** slots show name/date/game-time, loading works
+  from both the main menu and in-game menu, and Gothic.ini settings persist.
+- Follow-ups done: saves now **auto-named** "&lt;world&gt; - day D, H:MM" (menu; no
+  system keyboard on iOS) and "Quick - &lt;world&gt;, day D H:MM" (pad rotating);
+  temporary `[save]` breadcrumbs + PoolProbe call-sites removed (probe util kept
+  dormant in `utils/poolprobe.*`); README "saving is broken" note replaced with
+  a thumbnail-only limitation.
 - Still TODO: real save **thumbnail** on iOS (placeholder image is saved; the
   original GPU-readback abort may have been this very pool bug — worth
-  re-testing the upstream screenshot path now), and removing the temporary
-  `[save]` breadcrumbs + PoolProbe once save/load is fully confirmed.
+  re-testing the upstream screenshot path now).
 
 ## ⏳ To do — deferred (needs on-device iteration)
 - [ ] **B9 / N1** — pause game tick (`onTimer`) + `displayLink` while

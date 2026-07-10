@@ -25,7 +25,6 @@
 #include "utils/gamepad.h"
 #include "utils/haptics.h"
 #include "utils/exceptiondump.h"
-#include "utils/poolprobe.h"
 #include "ui/padglyph.h"
 
 #include <array>
@@ -860,14 +859,6 @@ void MainWindow::drawLoading(Painter &p, int x, int y, int w, int h) {
   }
 
 void MainWindow::drawSaving(Painter &p) {
-#if defined(__IOS__)
-  // Pool-stack probe for the save-crash investigation: sample the first few
-  // saving-screen frames and then every ~quarter second.
-  static uint32_t frame = 0;
-  if(frame<3 || frame%15==0)
-    PoolProbe::dump("drawSaving frame");
-  ++frame;
-#endif
   if(auto back = Gothic::inst().loadingBanner(); back!=nullptr && !back->isEmpty()) {
     p.setBrush(Brush(*back,Painter::NoBlend));
     p.drawRect(0,0,this->w(),this->h(),
@@ -1227,11 +1218,6 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   // inside the Metal driver on iOS, crashing the save. Save with a small
   // placeholder preview and no screenshot background instead.
   {
-    // NOTE: Log::e is used for the [save] breadcrumbs on purpose — only Error
-    // flushes log.txt immediately, and these lines must survive the crash
-    // currently under investigation.
-    Log::e("[save] begin, slot=", slot);
-    PoolProbe::dump("save-begin");
     const int sw = std::max(4, Gothic::options().saveGameImageSize.w);
     const int sh = std::max(4, Gothic::options().saveGameImageSize.h);
     Tempest::Pixmap pm(uint32_t(sw), uint32_t(sh), Tempest::TextureFormat::RGBA8);
@@ -1242,10 +1228,8 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
         Tempest::WFile f(slot);
         Serialize      s(f);
         game->save(s,name,pm);
-        Log::e("[save] worker: serialize done");
         return std::move(game);
         });
-    Log::e("[save] startSave dispatched");
     return;
   }
 #endif

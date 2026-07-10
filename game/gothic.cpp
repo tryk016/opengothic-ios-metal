@@ -22,7 +22,6 @@
 #include "utils/fileutil.h"
 #include "utils/inifile.h"
 #include "utils/exceptiondump.h"
-#include "utils/poolprobe.h"
 
 #include "commandline.h"
 #include "mainwindow.h"
@@ -509,20 +508,12 @@ bool Gothic::finishLoading() {
   if(state!=LoadState::Finalize && state!=LoadState::FailedLoad && state!=LoadState::FailedSave)
     return false;
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
-#if defined(__IOS__)
-    Tempest::Log::e("[save/load] finalize: begin"); // Log::e => flushed (crash breadcrumb)
-    PoolProbe::dump("finalize-begin");
-#endif
     loaderTh.join();
     if(pendingGame!=nullptr)
       game = std::move(pendingGame);
     saveTex = Texture2d();
     loadTex = Texture2d();
     onWorldLoaded();
-#if defined(__IOS__)
-    Tempest::Log::e("[save/load] finalize: done");
-    PoolProbe::dump("finalize-done");
-#endif
     return true;
     }
   return false;

@@ -47,8 +47,14 @@ void GamepadInput::quickSaveRotating() {
   char slot[32] = {};
   std::snprintf(slot, sizeof(slot), "save_slot_%d.sav", idx);
   std::string nm = "Quick";
-  if(auto w = g.world())
-    nm = "Quick - " + std::string(w->name());
+  if(auto w = g.world()) {
+    const auto t = w->time();
+    char buf[128] = {};
+    std::snprintf(buf, sizeof(buf), "Quick - %.*s, day %d %d:%02d",
+                  int(w->name().size()), w->name().data(),
+                  int(t.day()), int(t.hour()), int(t.minute()));
+    nm = buf;
+    }
   g.save(slot, nm);
   Haptics::impact(Haptics::Medium);
   }
