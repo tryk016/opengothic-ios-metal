@@ -96,9 +96,16 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       assets). Target **lock-on reticle** (corner brackets) drawn on the pinned
       target. Touch overlay auto-hides when a gamepad is connected.
 
-## ⏳ To do — "ideal controls" batch 2–3 (control spec §4, §7, §8-stuck)
-- [ ] Radial rings: weapons (RB) + items (LB) quick-bars. (spec §4)
-- [ ] Haptics via Core Haptics. (spec §7)
+## ✅ Done — ideal controls, batch 2 (2026-07-10)
+- [x] **Radial rings** (spec §4) — RB opens the weapon quick-bar, LT the item
+      quick-bar; hold to aim with the right stick, release to activate
+      (`Npc::useItem` equips weapons / consumes items). Content pulled live from
+      inventory (weapons = NF|FF, items = POTION|FOOD), own vector segments with
+      text labels + equipped/selection markers. `QuickRing` owned by
+      `GamepadInput`, drawn by `MainWindow`.
+
+## ⏳ To do — "ideal controls" batch 3 (control spec §7, §8-stuck)
+- [ ] Haptics (Core Haptics / impact feedback) on damage + UI actions. (spec §7)
 - [ ] Stuck-protection: L3+R3 hold → teleport to nearest waypoint. (spec §8)
 
 ## ✅ Done — UI / readability

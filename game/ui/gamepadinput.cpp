@@ -59,6 +59,40 @@ void GamepadInput::quickLoadRotating() {
   Gothic::inst().load(slot);
   }
 
+Npc* GamepadInput::worldPlayer() const {
+  auto w = Gothic::inst().world();
+  return w!=nullptr ? w->player() : nullptr;
+  }
+
+const QuickRing* GamepadInput::activeRing() const {
+  if(ringWeapons.isOpen())
+    return &ringWeapons;
+  if(ringItems.isOpen())
+    return &ringItems;
+  return nullptr;
+  }
+
+void GamepadInput::openRing(QuickRing& r) {
+  if(auto pl = worldPlayer()) {
+    releaseAllWorld();               // stop moving/attacking while the ring is up
+    r.open(*pl);
+    }
+  }
+
+void GamepadInput::tickRing(const GamepadState& s) {
+  const bool weapons = ringWeapons.isOpen();
+  QuickRing& r       = weapons ? ringWeapons : ringItems;
+  const bool held    = weapons ? s.rb : (s.lt > trigThresh);
+
+  r.updateSelection(s.rx, s.ry);
+  if(!held) {                        // released -> activate the aimed slice
+    if(auto pl = worldPlayer())
+      r.commit(*pl);
+    else
+      r.close();
+    }
+  }
+
 void GamepadInput::edge(bool now, bool before, A a) {
   if(now && !before)
     ctrl.onKeyPressed(a, Event::K_NoKey, M::Primary);
@@ -96,6 +130,13 @@ void GamepadInput::tick(uint64_t dt) {
     return;
     }
 
+  // An open radial quick-bar captures all input until released.
+  if(ringWeapons.isOpen() || ringItems.isOpen()) {
+    tickRing(s);
+    prev = s;
+    return;
+    }
+
   const PadCtx ctx = owner.padContext();
 
   // Leaving gameplay for any UI: release held world actions so the character
@@ -121,6 +162,17 @@ void GamepadInput::tick(uint64_t dt) {
   }
 
 void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s) {
+  // Radial quick-bars first: RB opens the weapon ring, LT opens the item ring.
+  // Opening one hands input to tickRing on the following frames.
+  if(s.rb && !prev.rb) {
+    openRing(ringWeapons);
+    return;
+    }
+  if(s.lt>trigThresh && !(prev.lt>trigThresh)) {
+    openRing(ringItems);
+    return;
+    }
+
   // Left stick -> movement (digital, dead-zoned). Forward == stick up (ly>0).
   const bool fwd   = s.ly >  deadZone, back  = s.ly < -deadZone;
   const bool left  = s.lx < -deadZone, right = s.lx >  deadZone;

@@ -272,6 +272,8 @@ void MainWindow::paintEvent(PaintEvent& event) {
   const float scale = Gothic::interfaceScale(this);
 #if defined(__MOBILE_PLATFORM__)
   drawPadHints(p, scale);
+  if(auto* ring = gamepad.activeRing())
+    ring->paint(p, w(), h(), scale);
 #endif
   if(Gothic::inst().doFrate() && !Gothic::inst().isDesktop()) {
     char fpsT[64]={};

@@ -6,9 +6,11 @@
 
 #include "utils/gamepad.h"
 #include "utils/keycodec.h"
+#include "ui/quickring.h"
 
 class PlayerControl;
 class MainWindow;
+class Npc;
 
 // Active pad-routing context, chosen once per tick. The dispatcher sends the
 // pad either to gameplay (PlayerControl) or, for any UI, to synthetic key
@@ -30,12 +32,18 @@ class GamepadInput {
 
     void tick(uint64_t dt);
 
+    // The radial quick-bar currently open (for MainWindow to draw), or nullptr.
+    const QuickRing* activeRing() const;
+
   private:
     MainWindow&    owner;
     PlayerControl& ctrl;
     GamepadState   prev;
     PadCtx         prevCtx = PadCtx::Loading;
     bool           prevRT  = false;
+
+    QuickRing      ringWeapons{QuickRing::Weapons};
+    QuickRing      ringItems  {QuickRing::Items};
 
     void tickWorld (uint64_t dt, const GamepadState& s);
     void tickDialog(const GamepadState& s);
@@ -50,6 +58,10 @@ class GamepadInput {
     void loadConfig();                     // read the [GAMEPAD] section
     void quickSaveRotating();              // rotating save slots (spec 6)
     void quickLoadRotating();              // load the last rotating slot
+
+    void  tickRing(const GamepadState& s); // drive an open radial quick-bar
+    void  openRing(QuickRing& r);          // fill from inventory + open
+    Npc*  worldPlayer() const;             // current player npc, or nullptr
 
     // Tunables, overridable via Gothic.ini [GAMEPAD] (see loadConfig).
     float deadZone   = 0.25f;   // stick dead-zone
