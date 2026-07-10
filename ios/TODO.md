@@ -49,9 +49,15 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       `Info.plist` + `ViewController::supportedInterfaceOrientations` update and
       a call on whether portrait should be allowed.
 
-## ⏳ To do — "ideal controls" (bigger, self-contained; control spec §3–§8)
-- [ ] Target-lock via native focus (`moveFocus`/`setTarget`) — replaces provisional
-      R3→`LookBack`. (spec §3)
+## ✅ Done — ideal controls, phase 3 (2026-07-10)
+- [x] **Target-lock via native focus** (spec §3) — R3 pins the current npc focus
+      (`PlayerControl::toggleTargetLock`); `tickFocus` keeps it instead of
+      re-finding by aim, and auto-releases when the target dies/leaves
+      (`World::validateFocus` + `Npc::isDead`). D-pad ←/→ switch target
+      (`focusLeft/focusRight` → `moveFocus`). Existing focus highlight shows it.
+      Replaces the provisional R3→`LookBack`.
+
+## ⏳ To do — "ideal controls" (bigger, self-contained; control spec §4–§8)
 - [ ] Radial rings: weapons (RB) + items (LB) quick-bars. (spec §4)
 - [ ] Controls-help overlay + button glyphs (Xelu CC0) + target reticle. (spec §5)
 - [ ] Rotating quick-saves with auto-names. (spec §6)

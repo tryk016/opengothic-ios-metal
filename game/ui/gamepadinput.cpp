@@ -104,13 +104,17 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s) {
   edge(rtDown, prevRT, A::Parade);
   prevRT = rtDown;
 
-  // Stick presses: R3 = target (provisional LookBack), L3 = toggle walk/run.
-  edge(s.r3, prev.r3, A::LookBack);
+  // R3 = toggle target-lock (native focus); L3 = toggle walk/run.
+  if(s.r3 && !prev.r3)
+    ctrl.toggleTargetLock();
   edge(s.l3, prev.l3, A::Walk);
 
-  // D-pad up/down -> quick items (Heal / Potion as a start).
+  // D-pad up/down -> quick items (Heal / Potion). Left/right switch the locked
+  // target (no-op when not locked).
   edge(s.dup,   prev.dup,   A::Heal);
   edge(s.ddown, prev.ddown, A::Potion);
+  if(s.dleft  && !prev.dleft)  ctrl.focusLeft();
+  if(s.dright && !prev.dright) ctrl.focusRight();
 
   // LB modifier: bare View/Menu open inventory/menu (routed to the window, B1);
   // LB + View/Menu = quick load/save, mirroring the F5/F9 keyboard guards (B3).

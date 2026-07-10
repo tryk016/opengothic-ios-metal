@@ -42,6 +42,11 @@ class PlayerControl final {
     void  actionFocus(Npc& other);
     void  emptyFocus();
 
+    void  toggleTargetLock();          //!< pin the current npc focus (R3)
+    void  focusLeft();                 //!< switch locked target left
+    void  focusRight();                //!< switch locked target right
+    bool  isTargetLocked() const { return targetLock; }
+
     Focus focus() const;
     bool  hasActionFocus() const;
 
@@ -143,6 +148,7 @@ class PlayerControl final {
 
     bool           cacheFocus=false;
     Focus          currentFocus;
+    bool           targetLock=false;
     float          rotMouse=0;
     float          rotMouseY=0;
     bool           casting = false;

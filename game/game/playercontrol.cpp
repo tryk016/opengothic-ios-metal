@@ -270,8 +270,23 @@ void PlayerControl::drawVobRay(DbgPainter& p) const {
   }
 
 void PlayerControl::tickFocus() {
-  currentFocus = findFocus(&currentFocus);
-  setTarget(currentFocus.npc);
+  if(targetLock) {
+    // Keep the pinned npc as focus, ignoring aim-based switching, until it
+    // dies / leaves the world or the player toggles the lock off.
+    auto w      = Gothic::inst().world();
+    Npc* locked = (w!=nullptr) ? w->validateFocus(currentFocus).npc : nullptr;
+    if(locked!=nullptr && !locked->isDead()) {
+      currentFocus = Focus(*locked);
+      setTarget(currentFocus.npc);
+      } else {
+      targetLock   = false;
+      currentFocus = findFocus(&currentFocus);
+      setTarget(currentFocus.npc);
+      }
+    } else {
+    currentFocus = findFocus(&currentFocus);
+    setTarget(currentFocus.npc);
+    }
 
   if(!ctrl[Action::ActionGeneric])
     return;
@@ -302,6 +317,26 @@ void PlayerControl::actionFocus(Npc& other) {
 
 void PlayerControl::emptyFocus() {
   setTarget(nullptr);
+  }
+
+void PlayerControl::toggleTargetLock() {
+  if(targetLock) {
+    targetLock = false;
+    return;
+    }
+  // Lock only if we currently have a valid npc focus to pin.
+  if(currentFocus.npc!=nullptr)
+    targetLock = true;
+  }
+
+void PlayerControl::focusLeft() {
+  if(targetLock)
+    moveFocus(ActLeft);
+  }
+
+void PlayerControl::focusRight() {
+  if(targetLock)
+    moveFocus(ActRight);
   }
 
 Focus PlayerControl::focus() const {
