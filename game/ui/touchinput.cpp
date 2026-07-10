@@ -5,13 +5,15 @@
 
 #include "game/playercontrol.h"
 #include "ui/menuroot.h"
+#include "mainwindow.h"
 #include "gothic.h"
 
 using namespace Tempest;
 using A = KeyCodec::Action;
 using M = KeyCodec::Mapping;
 
-TouchInput::TouchInput(PlayerControl& ctrl, MenuRoot& menu) : ctrl(ctrl), menu(menu) {
+TouchInput::TouchInput(MainWindow& owner, PlayerControl& ctrl, MenuRoot& menu)
+  : owner(owner), ctrl(ctrl), menu(menu) {
   }
 
 bool TouchInput::active() const {
@@ -77,6 +79,11 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
   if(active()) {
     for(auto& b:layout())
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
+        // Escape/Inventory are window-level actions, not PlayerControl ones (B1).
+        if(b.act==A::Escape || b.act==A::Inventory) {
+          owner.uiAction(b.act);
+          return;
+          }
         ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
         btnDown[id] = b.act;
         return;

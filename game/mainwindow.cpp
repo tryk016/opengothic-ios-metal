@@ -35,8 +35,8 @@ MainWindow::MainWindow(Device& device)
     dialogs(inventory),document(keycodec),
     console(*this),
 #if defined(__MOBILE_PLATFORM__)
-    mobileUi(player,rootMenu),
-    gamepad(player),
+    mobileUi(*this,player,rootMenu),
+    gamepad(*this,player),
 #endif
     player(dialogs,inventory) {
   Gothic::inst().onSettingsChanged.bind(this,&MainWindow::onSettings);
@@ -544,6 +544,11 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
   auto act     = keycodec.tr(event);
   auto mapping = keycodec.mapping(event);
 
+  uiAction(act);
+  player.onKeyReleased(act, mapping);
+  }
+
+void MainWindow::uiAction(KeyCodec::Action act) {
   std::string_view menuEv;
   if(act==KeyCodec::Escape)
     menuEv = Gothic::inst().menuMain();
@@ -569,7 +574,31 @@ void MainWindow::keyUpEvent(KeyEvent &event) {
       }
     clearInput();
     }
-  player.onKeyReleased(act, mapping);
+  }
+
+PadCtx MainWindow::padContext() const {
+  auto& g = Gothic::inst();
+  if(g.checkLoading()!=Gothic::LoadState::Idle)
+    return PadCtx::Loading;
+  if(video.isActive() || chapter.isActive() || document.isActive())
+    return PadCtx::Menu;
+  if(dialogs.isActive())
+    return PadCtx::Dialog;
+  if(inventory.isActive())
+    return PadCtx::Inventory;
+  if(rootMenu.isActive())
+    return PadCtx::Menu;
+  return PadCtx::World;
+  }
+
+void MainWindow::dispatchKey(Tempest::KeyEvent& e) {
+  // Route a synthetic key to whichever UI is active, mirroring keyDownEvent.
+  if(video.isActive())     { video.keyDownEvent(e);     return; }
+  if(rootMenu.isActive())  { rootMenu.keyDownEvent(e);  return; }
+  if(chapter.isActive())   { chapter.keyDownEvent(e);   return; }
+  if(document.isActive())  { document.keyDownEvent(e);  return; }
+  if(dialogs.isActive())   { dialogs.keyDownEvent(e);   return; }
+  if(inventory.isActive()) { inventory.keyDownEvent(e); return; }
   }
 
 void MainWindow::focusEvent(FocusEvent &event) {

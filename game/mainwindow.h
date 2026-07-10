@@ -50,6 +50,11 @@ class MainWindow : public Tempest::Window {
 
     float uiScale() const;
 
+    // UI hooks shared by GamepadInput / TouchInput.
+    PadCtx padContext() const;                 // which context the pad routes to
+    void   dispatchKey(Tempest::KeyEvent& e);  // send a synthetic key to the active UI
+    void   uiAction(KeyCodec::Action a);       // window-level Escape/Inventory/Log/Status
+
   private:
     void paintEvent     (Tempest::PaintEvent& event) override;
     void resizeEvent    (Tempest::SizeEvent & event) override;

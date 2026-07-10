@@ -8,6 +8,7 @@
 
 class PlayerControl;
 class MenuRoot;
+class MainWindow;
 
 // On-screen touch overlay for when no gamepad is connected.
 //  * In game: left-bottom pad = movement, right side = camera, right-column
@@ -15,7 +16,7 @@ class MenuRoot;
 //  * In a menu: on-screen Up / Down / OK / Back buttons drive MenuRoot.
 class TouchInput : public Tempest::Widget {
   public:
-    TouchInput(PlayerControl& ctrl, MenuRoot& menu);
+    TouchInput(MainWindow& owner, PlayerControl& ctrl, MenuRoot& menu);
 
     void paintEvent(Tempest::PaintEvent& e);
     void mouseDownEvent(Tempest::MouseEvent& e);
@@ -29,6 +30,7 @@ class TouchInput : public Tempest::Widget {
     std::array<MBtn,4> menuLayout() const;
     bool active() const;   // true while in gameplay (not menu, not paused)
 
+    MainWindow&    owner;
     PlayerControl& ctrl;
     MenuRoot&      menu;
 
