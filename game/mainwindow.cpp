@@ -1459,6 +1459,13 @@ void MainWindow::render(){
     Log::e("unhandled exception in render loop: ", e.what());
     try { device.waitIdle(); } catch(...) {}
     }
+  catch(...) {
+    // Objective-C / Metal exceptions are NOT std::exception; on the Apple ABI
+    // they still unwind through C++ and terminate the app if unhandled. Catch
+    // them here too (e.g. a Metal validation NSException on the saving screen).
+    Log::e("unhandled non-std/ObjC exception in render loop");
+    try { device.waitIdle(); } catch(...) {}
+    }
   }
 
 double MainWindow::Fps::get() const {
