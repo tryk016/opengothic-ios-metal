@@ -146,3 +146,27 @@ else
     exit 1
   fi
 fi
+
+RF="$ROOT/lib/Tempest/Engine/io/rfile.mm"
+
+# Fix: RFile on iOS resolves RELATIVE paths against the app-bundle resource dir
+# only. But savegames and Gothic.ini are written (WFile = plain fopen) into the
+# CWD — the Documents folder — so reading them back always failed ("Unable to
+# open file"): loading a save did nothing and save slots showed no
+# header/date/thumbnail. Try the CWD first; fall back to the bundle only for
+# genuinely bundled resources.
+if [ ! -f "$RF" ]; then
+  echo "ERROR: not found: $RF" >&2
+  exit 1
+fi
+if grep -q 'cwd-first' "$RF"; then
+  echo "skip: rfile.mm cwd-first (already patched)"
+else
+  perl -0777 -pi -e 's|(  \@autoreleasepool \{)|  // cwd-first: user files (saves, Gothic.ini) are written to CWD == Documents\n  if(void* ret = fopen(cstr,"rb"))\n    return ret;\n\n${1}|s' "$RF"
+  if grep -q 'cwd-first' "$RF"; then
+    echo "patched: rfile.mm cwd-first"
+  else
+    echo "ERROR: failed to patch rfile.mm cwd-first (pattern not found)" >&2
+    exit 1
+  fi
+fi

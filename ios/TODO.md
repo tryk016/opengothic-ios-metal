@@ -113,6 +113,19 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
   dumps look wrong, the deeper fix is rethinking the fiber loop (e.g. drain
   pools only on the UIKit side).
 
+## ✅ Save crash — FIXED & DEVICE-CONFIRMED (2026-07-10, round 5)
+- `no-objc-pool` patch confirmed on device: the crash scenario (multiple
+  quick-saves + menu between them + menu save) no longer crashes.
+- **Follow-up found via the same logs:** `RFile` on iOS resolved relative
+  paths against the app **bundle**, while `WFile` writes to CWD (Documents) —
+  so loading a save failed ("Unable to open file"), slots had no
+  header/date/thumbnail, and Gothic.ini could not be read back. Fixed with the
+  `cwd-first` patch in apply-patches.sh (try CWD, then bundle).
+- Still TODO: real save **thumbnail** on iOS (placeholder image is saved; the
+  original GPU-readback abort may have been this very pool bug — worth
+  re-testing the upstream screenshot path now), and removing the temporary
+  `[save]` breadcrumbs + PoolProbe once save/load is fully confirmed.
+
 ## ⏳ To do — deferred (needs on-device iteration)
 - [ ] **B9 / N1** — pause game tick (`onTimer`) + `displayLink` while
       backgrounded. Deferred: the manual setjmp/longjmp fiber loop in `implExec`
