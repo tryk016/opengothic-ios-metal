@@ -104,7 +104,6 @@ saveSlots=5             ; rotating quick-save slots
   save under investigation). Treat progress as unsafe until this is fixed; see `ios/TODO.md`.
 - **Not fully tested on-device yet** — this is a work in progress (see the notice above and `ios/TODO.md`).
 - Sideload certificate expires weekly (auto-refresh via AltStore/SideStore).
-- No TestFlight / App Store without a paid account (both require App Review).
 - Mesh shaders are disabled on iOS for GPU compatibility.
 - On-screen virtual-pad button layout is a first pass and still needs on-device tuning.
 - Radial rings are a single-ring first version; some smaller items in `ios/TODO.md` are not done yet.
