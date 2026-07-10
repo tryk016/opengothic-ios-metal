@@ -35,7 +35,7 @@ MainWindow::MainWindow(Device& device)
     dialogs(inventory),document(keycodec),
     console(*this),
 #if defined(__MOBILE_PLATFORM__)
-    mobileUi(*this,player,rootMenu),
+    mobileUi(*this,player),
     gamepad(*this,player),
 #endif
     player(dialogs,inventory) {

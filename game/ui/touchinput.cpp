@@ -4,7 +4,6 @@
 #include <Tempest/Event>
 
 #include "game/playercontrol.h"
-#include "ui/menuroot.h"
 #include "mainwindow.h"
 #include "gothic.h"
 
@@ -12,12 +11,8 @@ using namespace Tempest;
 using A = KeyCodec::Action;
 using M = KeyCodec::Mapping;
 
-TouchInput::TouchInput(MainWindow& owner, PlayerControl& ctrl, MenuRoot& menu)
-  : owner(owner), ctrl(ctrl), menu(menu) {
-  }
-
-bool TouchInput::active() const {
-  return Gothic::inst().isInGame() && !Gothic::inst().isPause();
+TouchInput::TouchInput(MainWindow& owner, PlayerControl& ctrl)
+  : owner(owner), ctrl(ctrl) {
   }
 
 std::array<TouchInput::Btn,6> TouchInput::layout() const {
@@ -36,47 +31,76 @@ std::array<TouchInput::Btn,6> TouchInput::layout() const {
   }};
   }
 
-std::array<TouchInput::MBtn,4> TouchInput::menuLayout() const {
+std::array<TouchInput::MBtn,6> TouchInput::menuLayout() const {
   const int W = w(), H = h();
-  const int s = H/7;
-  const int m = H/30;
+  const int s  = H/9;
+  const int m  = H/40;
   using E = Tempest::Event;
+  const int cx = m + s;           // d-pad centre column (bottom-left)
+  const int by = H - m;           // bottom edge
   return {{
-    { 2*m,         H-2*(s+m),  s, E::K_Up,     0.85f, 0.85f, 0.85f }, // up
-    { 2*m,         H-(s+m),    s, E::K_Down,   0.85f, 0.85f, 0.85f }, // down
-    { W-2*(s+m),   H-(s+m),    s, E::K_Return, 0.40f, 0.90f, 0.40f }, // OK
-    { W-(s+m),     H-(s+m),    s, E::K_ESCAPE, 0.90f, 0.40f, 0.40f }, // back
+    { cx,          by-3*s-2*m,  s, E::K_Up,     0.85f, 0.85f, 0.85f }, // up
+    { cx,          by-s,        s, E::K_Down,   0.85f, 0.85f, 0.85f }, // down
+    { cx-(s+m),    by-2*s-m,    s, E::K_Left,   0.80f, 0.80f, 0.90f }, // decrease value
+    { cx+(s+m),    by-2*s-m,    s, E::K_Right,  0.80f, 0.80f, 0.90f }, // increase value
+    { W-2*(s+m),   by-s,        s, E::K_Return, 0.40f, 0.90f, 0.40f }, // OK
+    { W-(s+m),     by-s,        s, E::K_ESCAPE, 0.90f, 0.40f, 0.40f }, // back
+  }};
+  }
+
+std::array<TouchInput::MBtn,4> TouchInput::dialogLayout() const {
+  const int W = w(), H = h();
+  const int s  = H/9;
+  const int m  = H/40;
+  using E = Tempest::Event;
+  const int cx = m + s;
+  const int by = H - m;
+  return {{
+    { cx,          by-3*s-2*m,  s, E::K_Up,     0.85f, 0.85f, 0.85f }, // previous choice
+    { cx,          by-s,        s, E::K_Down,   0.85f, 0.85f, 0.85f }, // next choice
+    { W-2*(s+m),   by-s,        s, E::K_Return, 0.40f, 0.90f, 0.40f }, // select choice
+    { W-(s+m),     by-s,        s, E::K_ESCAPE, 0.90f, 0.40f, 0.40f }, // skip spoken line
   }};
   }
 
 void TouchInput::paintEvent(PaintEvent& e) {
   Painter p(e);
-
-  if(active()) {
-    const int H  = h();
-    const int ms = H/3, mm = H/20;
-    p.setBrush(Color(1.f, 1.f, 1.f, 0.10f));           // movement pad (bottom-left)
-    p.drawRect(mm, H-ms-mm, ms, ms);
-    for(auto& b:layout()) {
-      p.setBrush(Color(b.r, b.g, b.b, 0.22f));
-      p.drawRect(b.x, b.y, b.s, b.s);
+  switch(owner.padContext()) {
+    case PadCtx::World: {
+      const int H  = h();
+      const int ms = H/3, mm = H/20;
+      p.setBrush(Color(1.f, 1.f, 1.f, 0.10f));           // movement pad (bottom-left)
+      p.drawRect(mm, H-ms-mm, ms, ms);
+      for(auto& b:layout()) {
+        p.setBrush(Color(b.r, b.g, b.b, 0.22f));
+        p.drawRect(b.x, b.y, b.s, b.s);
+        }
+      break;
       }
-    return;
-    }
-
-  if(menu.isActive()) {
-    for(auto& b:menuLayout()) {
-      p.setBrush(Color(b.r, b.g, b.b, 0.30f));
-      p.drawRect(b.x, b.y, b.s, b.s);
-      }
+    case PadCtx::Dialog:
+      for(auto& b:dialogLayout()) {
+        p.setBrush(Color(b.r, b.g, b.b, 0.30f));
+        p.drawRect(b.x, b.y, b.s, b.s);
+        }
+      break;
+    case PadCtx::Menu:
+    case PadCtx::Inventory:
+      for(auto& b:menuLayout()) {
+        p.setBrush(Color(b.r, b.g, b.b, 0.30f));
+        p.drawRect(b.x, b.y, b.s, b.s);
+        }
+      break;
+    case PadCtx::Loading:
+      break;
     }
   }
 
 void TouchInput::mouseDownEvent(MouseEvent& e) {
-  const Point pos = e.pos();
-  const int   id  = e.mouseID;
+  const Point  pos = e.pos();
+  const int    id  = e.mouseID;
+  const PadCtx ctx = owner.padContext();
 
-  if(active()) {
+  if(ctx==PadCtx::World) {
     for(auto& b:layout())
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
         // Escape/Inventory are window-level actions, not PlayerControl ones (B1).
@@ -101,21 +125,31 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
     return;
     }
 
-  if(menu.isActive()) {
-    for(auto& b:menuLayout())
+  // UI contexts: a tap fires one synthetic key, routed to the active widget
+  // (menu / dialogue / inventory) by MainWindow::dispatchKey.
+  auto tap = [&](const auto& arr)->bool{
+    for(auto& b:arr)
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
         KeyEvent ev(b.key);
-        menu.keyDownEvent(ev);
-        return;
+        owner.dispatchKey(ev);
+        return true;
         }
-    return;                       // swallow stray taps (avoid accidental confirm)
-    }
+    return false;
+    };
 
-  e.ignore();                     // not our screen -> let others handle
+  if(ctx==PadCtx::Dialog) {
+    tap(dialogLayout());
+    return;
+    }
+  if(ctx==PadCtx::Menu || ctx==PadCtx::Inventory) {
+    tap(menuLayout());
+    return;
+    }
+  e.ignore();                     // loading etc. -> not our screen
   }
 
 void TouchInput::mouseDragEvent(MouseEvent& e) {
-  if(!active()) { e.ignore(); return; }
+  if(owner.padContext()!=PadCtx::World) { e.ignore(); return; }
 
   const Point pos = e.pos();
   const int   id  = e.mouseID;

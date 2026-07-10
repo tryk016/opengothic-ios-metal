@@ -77,3 +77,19 @@ else
     exit 1
   fi
 fi
+
+# Change: lock the game to landscape (matches Info.plist). Both the view
+# controller and the app delegate advertise all orientations; restrict both to
+# landscape so the 3D world never flips to portrait. shouldAutorotate stays YES,
+# so it still rotates between LandscapeLeft/Right.
+if grep -q 'UIInterfaceOrientationMaskLandscape' "$VC"; then
+  echo "skip: iosapi.mm landscape lock (already patched)"
+else
+  perl -0777 -pi -e 's/UIInterfaceOrientationMaskAll/UIInterfaceOrientationMaskLandscape/g' "$VC"
+  if grep -q 'UIInterfaceOrientationMaskLandscape' "$VC"; then
+    echo "patched: iosapi.mm landscape lock"
+  else
+    echo "ERROR: failed to patch iosapi.mm landscape lock (pattern not found)" >&2
+    exit 1
+  fi
+fi

@@ -40,14 +40,23 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       Encryption=false`, `GCSupportsControllerUserInteraction`,
       `UIApplicationSupportsIndirectInputEvents`.
 
+## ✅ Done — input coverage + landscape (2026-07-10)
+- [x] **Touch dialogue controls** — the overlay is now context-aware
+      (`MainWindow::padContext`): in dialogue it shows Up/Down (pick choice),
+      Select (K_Return) and **Skip** (K_ESCAPE → `skipPhrase`), so lines can be
+      skipped and choices confirmed from touch. (Pad already did this via B2.)
+- [x] **Touch menu value editing** — menu/inventory overlay gained a full D-pad
+      incl. **◀ ▶** (K_Left/K_Right), so sliders/options can be changed, plus
+      OK/Back. Routed through `dispatchKey` to the active widget.
+- [x] **Landscape orientation lock** — `Info.plist` landscape-only (iPhone+iPad)
+      and both `supportedInterfaceOrientations` in `iosapi.mm` restricted to
+      `MaskLandscape` (via `apply-patches.sh`); still rotates Left/Right.
+
 ## ⏳ To do — deferred (needs on-device iteration)
 - [ ] **B9 / N1** — pause game tick (`onTimer`) + `displayLink` while
       backgrounded. Deferred: the manual setjmp/longjmp fiber loop in `implExec`
       means naively sleeping the main context starves the UIKit run loop; needs
       careful on-device testing. (Render is already gated on `isApplicationActive`.)
-- [ ] Landscape orientation lock — behaviour change; wants coordinated
-      `Info.plist` + `ViewController::supportedInterfaceOrientations` update and
-      a call on whether portrait should be allowed.
 
 ## ✅ Done — ideal controls, phase 3 (2026-07-10)
 - [x] **Target-lock via native focus** (spec §3) — R3 pins the current npc focus
