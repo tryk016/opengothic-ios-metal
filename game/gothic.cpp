@@ -508,12 +508,18 @@ bool Gothic::finishLoading() {
   if(state!=LoadState::Finalize && state!=LoadState::FailedLoad && state!=LoadState::FailedSave)
     return false;
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
+#if defined(__IOS__)
+    Tempest::Log::e("[save/load] finalize: begin"); // Log::e => flushed (crash breadcrumb)
+#endif
     loaderTh.join();
     if(pendingGame!=nullptr)
       game = std::move(pendingGame);
     saveTex = Texture2d();
     loadTex = Texture2d();
     onWorldLoaded();
+#if defined(__IOS__)
+    Tempest::Log::e("[save/load] finalize: done");
+#endif
     return true;
     }
   return false;

@@ -1218,6 +1218,10 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   // inside the Metal driver on iOS, crashing the save. Save with a small
   // placeholder preview and no screenshot background instead.
   {
+    // NOTE: Log::e is used for the [save] breadcrumbs on purpose — only Error
+    // flushes log.txt immediately, and these lines must survive the crash
+    // currently under investigation.
+    Log::e("[save] begin, slot=", slot);
     const int sw = std::max(4, Gothic::options().saveGameImageSize.w);
     const int sh = std::max(4, Gothic::options().saveGameImageSize.h);
     Tempest::Pixmap pm(uint32_t(sw), uint32_t(sh), Tempest::TextureFormat::RGBA8);
@@ -1228,8 +1232,10 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
         Tempest::WFile f(slot);
         Serialize      s(f);
         game->save(s,name,pm);
+        Log::e("[save] worker: serialize done");
         return std::move(game);
         });
+    Log::e("[save] startSave dispatched");
     return;
   }
 #endif

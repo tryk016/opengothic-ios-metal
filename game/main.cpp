@@ -18,6 +18,8 @@
 #include "utils/installdetect.h"
 #endif
 
+#include <cstdio>
+
 #include "utils/crashlog.h"
 #include "utils/systemmsg.h"
 #include "utils/audiosession.h"
@@ -74,6 +76,12 @@ int main(int argc,const char** argv) {
   {
     auto appdir = InstallDetect::applicationSupportDirectory();
     std::filesystem::current_path(appdir);
+    // Capture the runtime's last words: libobjc/libc++abi/libmalloc print their
+    // fatal reason to stderr before abort(). CWD is the user-visible Documents
+    // folder, so the file can be pulled via the Files app. Unbuffered, so the
+    // message survives the crash.
+    if(std::freopen("stderr.log","w",stderr)!=nullptr)
+      std::setvbuf(stderr,nullptr,_IONBF,0);
   }
 #endif
 

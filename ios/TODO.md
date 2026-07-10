@@ -81,10 +81,24 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
   `catch(...)` (a foreign exception there aborted with no log at all);
   `implProcessEvents` guard additionally catches `NSException*` with
   name/reason; `terminateHandler` writes the NSException identity to crash.log.
-- Next device test decides: a) log line in `Documents/log.txt` names the
-  exception → fix at source; b) crash.log shows NSException identity → same;
-  c) still SIGABRT with a pool-drain stack and no exception → another MRC
-  memory bug (like `d4de87ec`), audit `.mm`/Tempest-Metal release calls.
+- **Round 3 RESULT (device log, 2026-07-10): exception hypothesis REFUTED.**
+  crash.log tag is `SIGABRT` (signal handler), not `std::terminate` → no
+  exception ever unwound; none of the four guards logged. Disassembly of the
+  shipped binary: `implProcessEvents+368` is the **return address of the final
+  `swapContext()` call** (+48=objc_autoreleasePoolPush, +360=objc_autoreleasePoolPop,
+  +364=bl swapContext) → the game fiber finished its dispatch cleanly (pool
+  popped) and the abort happens **inside libobjc on the UIKit/apple-fiber side**;
+  the frames below libobjc are stale fiber-stack remnants (manual setjmp/longjmp
+  breaks the FP walk).
+- Round 4 (this): recover the **real abort reason** — `CrashLog::dumpStack` now
+  dumps every image's `__DATA,__crash_info` annotations (what Apple shows as
+  "Application Specific Information", e.g. libobjc's `_objc_fatal` message);
+  `[save]` breadcrumbs (Log::e → flushed) at save begin / worker done /
+  finalize begin / finalize done narrow the crash window; stderr redirected to
+  `Documents/stderr.log` (libc++abi/libobjc last words). Also ask the user for
+  the `.ips` from Settings → Privacy → Analytics Data, and whether quick-LOAD
+  (LB+View) crashes the same way (would implicate the shared
+  finalize/onWorldLoaded path).
 
 ## ⏳ To do — deferred (needs on-device iteration)
 - [ ] **B9 / N1** — pause game tick (`onTimer`) + `displayLink` while
