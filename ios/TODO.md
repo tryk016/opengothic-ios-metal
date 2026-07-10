@@ -65,12 +65,12 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 - [ ] Stuck-protection + `[GAMEPAD]` config in `Gothic.ini` (dead-zones,
       sensitivity, invert-Y, save slots). (spec §8) — wires the `invertY` field.
 
-## UI / readability (pre-existing)
+## ✅ Done — UI / readability
 - [x] Scale up UI on iOS for high-DPI legibility (`MainWindow::uiScale`).
-- [ ] Dialogue subtitle window is small — enlarge / reflow for phone screens.
-- [ ] Dialogue **choice** list is small — enlarge and make touch-friendly.
-- [ ] Verify main-menu text size after the uiScale change; tune if needed.
+- [x] Dialogue subtitle window enlarged / reflowed for phone screens.
+- [x] Dialogue **choice** list enlarged and made touch-friendly.
+- [x] Main-menu text size verified after the uiScale change.
 
-## Language
+## ⏳ To do — Language
 - [ ] Polish requires Polish game data (e.g. GOG Gold Edition or a PL install);
       then automatic, or force via `[GAME] language=2` in Documents/Gothic.ini.
