@@ -32,33 +32,42 @@ legally own the game and supply its data yourself (see *Language & voices* below
 
 Target: iPhone/iPad on **iOS 15+**, arm64. Best on modern GPUs (A-series / M-series). Locked to landscape.
 
-### Build & install — no Mac required
+### Install — just download, no build, no Mac
 
-Full walkthrough: **[ios/README-ios.md](ios/README-ios.md)**. In short:
+You do **not** need to fork this repo or compile anything. A prebuilt **unsigned `.ipa`** is published
+on every update. Full walkthrough: **[ios/README-ios.md](ios/README-ios.md)**. In short:
 
-1. **Build** — push this repo to your own GitHub. The [`iOS build`](.github/workflows/ios.yml) Action
-   compiles an **unsigned `.ipa`** on a macOS runner and uploads it as an artifact. (A public fork gets
-   free macOS runner minutes.)
-2. **Install (from Windows)** — sign & install the `.ipa` with your **free Apple ID** using
-   **Sideloadly** or **AltStore/SideStore**. No paid Apple Developer account, no App Store, no Mac.
-   The free certificate expires every 7 days (AltStore/SideStore can auto-refresh it).
+1. **Download** — grab the latest **unsigned `.ipa`** from the
+   **[Releases page](https://github.com/tryk016/opengothic-ios/releases/latest)**
+   (asset `OpenGothic-unsigned.ipa`). No login or fork required.
+2. **Install** — sign & install the `.ipa` with your **own free Apple ID** using **SideStore**,
+   **AltStore**, or **Sideloadly**. No paid Apple Developer account, no App Store, no Mac. The free
+   certificate expires every 7 days; **SideStore/AltStore auto-refresh it over Wi-Fi** so you don't have
+   to reinstall manually.
+   - **Easiest — add the SideStore source** (one-tap install + auto-updates): in SideStore go to
+     **Sources → +** and paste
+     `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json`,
+     then install OpenGothic from that source.
 3. **Add game data** — copy the `Data/`, `_work/`, and `system/` folders from your Gothic II install into
-   the app's **Documents** folder (iTunes/Apple Devices File Sharing on Windows, or the Files app). Data
-   persists across launches and app updates.
+   the app's **Documents** folder (Files app on iOS, or iTunes/Apple Devices File Sharing on Windows).
+   Data persists across launches and app updates.
 
-With a Mac, use [`ios/build-ios.sh`](ios/build-ios.sh) + Xcode instead (also covered in the guide).
+Want to build it yourself? Maintainers can trigger the [`iOS build`](.github/workflows/ios.yml) Action
+(it publishes the Release automatically), or use [`ios/build-ios.sh`](ios/build-ios.sh) + Xcode on a Mac —
+both are covered in the guide. **Regular users don't need this.**
 
 ### Sharing the build with other people
 
-The CI produces an **unsigned** `.ipa`. You can share that file freely (e.g. attach it to a GitHub
-Release) — but there is no free way to hand someone a *ready-to-run, tap-to-install* build, because
-signing with a free Apple ID is tied to **your** Apple ID **and** a specific device and expires after
-**7 days**. Options, cheapest first:
+The CI publishes an **unsigned** `.ipa` to the **[Releases page](https://github.com/tryk016/opengothic-ios/releases/latest)**
+on every update, so anyone can download it directly — no fork, no build, no account. There is no *free*
+way to hand someone a *ready-to-run, tap-to-install* build, because signing with a free Apple ID is tied
+to **their** Apple ID **and** device and expires after **7 days**. So each person signs it themselves;
+the options, cheapest first:
 
-- **Share the unsigned `.ipa`.** Each person installs it themselves with **their own** free Apple ID via
-  AltStore/SideStore/Sideloadly — exactly like you do. This is the practical free route.
-- **Host an AltStore source.** Publish the `.ipa` + a small source JSON so others "add source" in
-  AltStore and it self-signs on their device. Still their own Apple ID; nicer updates.
+- **Send them the Release link / SideStore source (free, recommended).** They add the source
+  `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json` in SideStore, or just
+  download the `.ipa` and sideload with their **own** free Apple ID via SideStore/AltStore/Sideloadly —
+  exactly like you do. The source gives them one-tap install **and** auto-updates when a new build ships.
 - **Paid Apple Developer account ($99/yr)** — the only way to distribute a *signed* build others just
   tap to install: **TestFlight** (up to 10,000 testers, no per-device registration) or **ad-hoc**
   (a signed `.ipa` that runs on up to 100 UDIDs you register). This fork otherwise avoids App Review
