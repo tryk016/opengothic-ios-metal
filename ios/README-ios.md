@@ -93,6 +93,22 @@ on-screen alert instead of a crash.
 | Quick load | LB + View | L1 + Touchpad |
 
 ---
+## Config reference (Documents/Gothic.ini)
+
+[GAME]
+showFpsCounter=1        ; on-screen FPS counter (mobile)
+language=2              ; force Polish if you have Polish data
+useQuickSaveKeys=1      ; enable quick save/load (may default off)
+
+[GAMEPAD]
+deadZone=0.25
+triggerThreshold=0.50
+lookSensitivity=0.20
+invertY=0
+saveSlots=5             ; rotating quick-save slot count
+; noStuckProtect=1      ; disable the L3+R3 unstuck warp
+; padQuickSlot=<n>      ; managed automatically (rotating save index)
+
 
 ## Known limitations / follow-ups
 - **Quick save/load** combos are detected but not yet bound to an engine action
