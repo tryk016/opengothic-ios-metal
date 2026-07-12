@@ -66,7 +66,14 @@ elseif(IOS)
     MACOSX_BUNDLE_BUNDLE_VERSION "${OPENGOTHIC_IOS_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${OPENGOTHIC_IOS_VERSION}"
     XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
+    XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
     XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "iPhone Developer")
+  # App icon: Xcode's actool compiles this asset catalog on the CI runner and
+  # injects the CFBundleIcons keys, so the icon shows on the home screen.
+  set(OPENGOTHIC_APPICON "${CMAKE_SOURCE_DIR}/ios/Assets.xcassets")
+  target_sources(${PROJECT_NAME} PRIVATE "${OPENGOTHIC_APPICON}")
+  set_source_files_properties("${OPENGOTHIC_APPICON}" PROPERTIES
+    MACOSX_PACKAGE_LOCATION Resources)
 elseif(APPLE)
   enable_language(OBJCXX)
 endif()
