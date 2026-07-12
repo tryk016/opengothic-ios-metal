@@ -23,6 +23,14 @@ on:
 permissions:
   contents: write          # required to create/update the Release
 
+# All builds publish to the same "latest" release: two concurrent runs race on
+# the asset upload (one sees 422 "already exists", the other 404 mid-clobber).
+# Serialize per branch and drop superseded builds - only the newest commit's
+# .ipa matters anyway.
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: macos-latest
