@@ -121,7 +121,14 @@ jobs:
           Requires your own legally-owned Gothic II data. No game assets are included."
           if gh release view latest >/dev/null 2>&1; then
             gh release edit latest --prerelease --notes "$NOTES"
-            gh release upload latest OpenGothic-unsigned.ipa apps.json --clobber
+            # --clobber can hit "ReleaseAsset.name already exists" (HTTP 422)
+            # when a previous upload left a stale/partial asset behind. Delete
+            # explicitly first, then upload fresh; retry once for API races.
+            for a in OpenGothic-unsigned.ipa apps.json; do
+              gh release delete-asset latest "$a" --yes || true
+            done
+            gh release upload latest OpenGothic-unsigned.ipa apps.json ||
+              { sleep 10; gh release upload latest OpenGothic-unsigned.ipa apps.json --clobber; }
           else
             gh release create latest OpenGothic-unsigned.ipa apps.json \
               --title "OpenGothic iOS — latest" --prerelease --notes "$NOTES"
