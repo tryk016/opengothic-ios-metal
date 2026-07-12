@@ -10,6 +10,7 @@
 #include "world/objects/item.h"
 #include "game/inventory.h"
 #include "game/constants.h"
+#include "graphics/inventoryrenderer.h"
 #include "resources.h"
 #include "utils/gthfont.h"
 
@@ -70,9 +71,13 @@ void QuickRing::commit(Npc& pl) {
   close();
   }
 
-void QuickRing::paint(Painter& p, int screenW, int screenH, float scale) const {
+void QuickRing::paint(Painter& p, InventoryRenderer& ir, const Npc* pl,
+                      int screenW, int screenH, float scale) const {
   if(!opened)
     return;
+
+  // rebuild this frame's icon set from scratch, like the inventory menu does
+  ir.reset();
 
   p.setBrush(Color(0.f,0.f,0.f,0.45f));           // dim the world behind the ring
   p.drawRect(0,0,screenW,screenH);
@@ -92,6 +97,21 @@ void QuickRing::paint(Painter& p, int screenW, int screenH, float scale) const {
   const int R   = std::min(screenW,screenH)/3;
   const int hs  = std::max(18,int(30*scale));
   const int bar = std::max(3,int(4*scale));
+
+  // resolve live items in one inventory pass: cells store only the class id,
+  // because the world keeps running while the ring is open and an item may be
+  // gone by now (then its tile simply stays empty)
+  std::vector<const Item*> icon(cells.size(),nullptr);
+  if(pl!=nullptr) {
+    for(auto it=pl->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it) {
+      for(size_t c=0; c<cells.size(); ++c)
+        if(icon[c]==nullptr && cells[c].cls==(*it).clsId()) {
+          icon[c] = &*it;
+          break;
+          }
+      }
+    }
+
   for(int i=0;i<n;++i) {
     const float a  = 2.f*float(M_PI)*float(i)/float(n);   // 0 at top, clockwise
     const int   px = cx + int(std::sin(a)*float(R));
@@ -109,6 +129,9 @@ void QuickRing::paint(Painter& p, int screenW, int screenH, float scale) const {
       p.setBrush(Color(0.4f,0.9f,0.4f,0.55f));           // equipped marker
       p.drawRect(px-hs, py-hs, bar, hs*2);
       }
+
+    if(icon[size_t(i)]!=nullptr)
+      ir.drawItem(px-hs, py-hs, hs*2, hs*2, *icon[size_t(i)]);
 
     std::string label = cells[size_t(i)].name;
     if(cells[size_t(i)].count>1)

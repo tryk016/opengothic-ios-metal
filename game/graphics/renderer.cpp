@@ -558,7 +558,10 @@ void Renderer::draw(Encoder<CommandBuffer>& cmd, uint8_t cmdId, size_t imgId,
   cmd.setDebugMarker("UI");
   uiLayer.draw(cmd);
 
-  if(inventory.isOpen()!=InventoryMenu::State::Closed) {
+  // the QuickRing collects icons into the same renderer while the menu itself
+  // stays closed, so flush also when it left items for this frame
+  const bool ringIcons = !video.isActive() && inventory.itemRenderer().hasItems();
+  if(inventory.isOpen()!=InventoryMenu::State::Closed || ringIcons) {
     auto& zb = (zbufferUi.isEmpty() ? zbuffer : zbufferUi);
     cmd.setFramebuffer({{result, Tempest::Preserve, Tempest::Preserve}},{zb, 1.f, Tempest::Preserve});
     cmd.setDebugMarker("Inventory");

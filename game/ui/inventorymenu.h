@@ -53,6 +53,10 @@ class InventoryMenu : public Tempest::Widget {
     void  draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);
     void  paintNumOverlay(Tempest::PaintEvent& e);
 
+    // the QuickRing borrows this renderer to draw live 3D item icons; the
+    // engine flushes whatever was collected into it each frame
+    InventoryRenderer& itemRenderer() { return renderer; }
+
     void  keyDownEvent  (Tempest::KeyEvent&   e) override;
     void  keyRepeatEvent(Tempest::KeyEvent&   e) override;
     void  keyUpEvent    (Tempest::KeyEvent&   e) override;

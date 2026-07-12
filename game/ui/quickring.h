@@ -7,11 +7,13 @@
 
 namespace Tempest { class Painter; }
 class Npc;
+class InventoryRenderer;
 
 // A radial quick-bar driven by the right stick: hold a trigger to open it, aim
 // the stick at a slice, release to activate (equip weapon / use item). Content
 // is pulled live from the player's inventory. Draws its own vector segments with
-// text labels — no bundled glyph assets (control spec 4).
+// text labels — no bundled glyph assets (control spec 4). Item icons are 3D
+// meshes collected into the shared InventoryRenderer (flushed by the engine).
 class QuickRing {
   public:
     enum Kind : uint8_t { Weapons, Items };
@@ -22,7 +24,8 @@ class QuickRing {
     void updateSelection(float sx, float sy);   // right-stick aim
     void close();                               // dismiss without acting
     void commit(Npc& pl);                       // activate the selected slice
-    void paint(Tempest::Painter& p, int screenW, int screenH, float scale) const;
+    void paint(Tempest::Painter& p, InventoryRenderer& ir, const Npc* pl,
+               int screenW, int screenH, float scale) const;
 
   private:
     struct Cell {

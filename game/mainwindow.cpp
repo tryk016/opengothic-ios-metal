@@ -47,6 +47,7 @@ MainWindow::MainWindow(Device& device)
     player(dialogs,inventory) {
   Gothic::inst().onSettingsChanged.bind(this,&MainWindow::onSettings);
   onSettings();
+  safeArea = SafeArea::insets();
 
   if(Gothic::inst().version().game==2)
     setWindowTitle("Gothic II"); else
@@ -180,6 +181,11 @@ void MainWindow::setupUi() {
   }
 
 void MainWindow::paintEvent(PaintEvent& event) {
+  // refresh per painted frame: the ctor may run before the window is laid out
+  // (insets read as zero), and a same-size relayout never reaches resizeEvent
+  // (Widget::resize early-outs), so this is the only reliable refresh point
+  safeArea = SafeArea::insets();
+
   Painter p(event);
   auto world = Gothic::inst().world();
   auto st    = Gothic::inst().checkLoading();
@@ -245,15 +251,15 @@ void MainWindow::paintEvent(PaintEvent& event) {
           bool showSwimBar   = (opt.showSwimBar==2) || (opt.showSwimBar==1 && pl->isDive());
 
           if(showHealthBar)
-            drawBar(p,barHp, 10, h()-10, hp, AlignLeft | AlignBottom);
+            drawBar(p,barHp, 10+safeArea.left, h()-10-safeArea.bottom, hp, AlignLeft | AlignBottom);
           if(showManaBar)
-            drawBar(p,barMana, w()-10, h()-10, mp, AlignRight | AlignBottom);
+            drawBar(p,barMana, w()-10-safeArea.right, h()-10-safeArea.bottom, mp, AlignRight | AlignBottom);
           if(showSwimBar) {
             uint32_t gl = pl->guild();
             auto     v  = float(pl->world().script().guildVal().dive_time[gl]);
             if(v>0) {
               auto t = float(pl->diveTime())/1000.f;
-              drawBar(p,barMisc,w()/2,h()-10, (v-t)/(v), AlignHCenter | AlignBottom);
+              drawBar(p,barMisc,w()/2,h()-10-safeArea.bottom, (v-t)/(v), AlignHCenter | AlignBottom);
               }
             }
           }
@@ -278,14 +284,16 @@ void MainWindow::paintEvent(PaintEvent& event) {
 #if defined(__MOBILE_PLATFORM__)
   drawPadHints(p, scale);
   if(auto* ring = gamepad.activeRing())
-    ring->paint(p, w(), h(), scale);
+    ring->paint(p, inventory.itemRenderer(), Gothic::inst().player(), w(), h(), scale);
+  else if(!inventory.isActive())
+    inventory.itemRenderer().reset();   // drop leftover ring icons after close
 #endif
   if(Gothic::inst().doFrate() && !Gothic::inst().isDesktop()) {
     char fpsT[64]={};
     std::snprintf(fpsT,sizeof(fpsT),"fps = %.2f",fps.get());
 
     auto& fnt = Resources::font(scale);
-    fnt.drawText(p,5,fnt.pixelSize()+5,fpsT);
+    fnt.drawText(p,5+safeArea.left,fnt.pixelSize()+5+safeArea.top,fpsT);
     }
 
   if(!Gothic::inst().isDesktop() && world!=nullptr) {
@@ -294,7 +302,7 @@ void MainWindow::paintEvent(PaintEvent& event) {
       auto min  = world->time().minute();
       auto& fnt = Resources::font(scale);
       string_frm clockT(int(hour),":",int(min));
-      fnt.drawText(p,w()-fnt.textSize(clockT).w-5,fnt.pixelSize()+5,clockT);
+      fnt.drawText(p,w()-fnt.textSize(clockT).w-5-safeArea.right,fnt.pixelSize()+5+safeArea.top,clockT);
       }
 
     auto c = Gothic::inst().camera();
@@ -818,7 +826,7 @@ void MainWindow::drawPadHints(Painter& p, float scale) {
     total += s + gap + fnt.textSize(hints[i].t).w + gap*2;
 
   int       x = (w()-total)/2;
-  const int y = h() - s - std::max(6,int(10*scale));
+  const int y = h() - s - std::max(6,int(10*scale)) - safeArea.bottom;
   for(size_t i=0;i<n;++i)
     x += PadGlyph::drawLabelled(p, fnt, hints[i].b, x, y, s, hints[i].t);
   }

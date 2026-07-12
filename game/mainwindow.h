@@ -37,6 +37,7 @@
 #include "ui/gamepadinput.h"
 
 #include "utils/keycodec.h"
+#include "utils/safearea.h"
 #include "resources.h"
 
 class MenuRoot;
@@ -179,6 +180,7 @@ class MainWindow : public Tempest::Window {
     int                       lastPlayerHp = -1;  // for damage haptics
 #endif
     RuntimeMode               runtimeMode = R_Normal;
+    SafeArea::Insets          safeArea;           // display cutouts, px; zero off-iOS
 
     Tempest::Widget*          uiKeyUp=nullptr;
     Tempest::Point            dMouse;
