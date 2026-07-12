@@ -9,6 +9,7 @@
 
 #include <Tempest/Painter>
 #include <Tempest/Event>
+#include <Tempest/Application>
 #include <algorithm>
 
 #include "game/playercontrol.h"
@@ -56,10 +57,10 @@ std::array<TouchInput::Btn,16> TouchInput::layout() const {
     { bx-(s+m),  by,        s, G::X, K::Key, A::Sneak         },
     { bx-(s+m),  by-(s+m),  s, G::Y, K::Key, A::Weapon        },
     // shoulders / triggers
-    { tR,        row0,      s, G::RB, K::MagicRing, A::ActionGeneric },
-    { tR,        row1,      s, G::RT, K::Key,       A::Parade        },
-    { tL,        row0,      s, G::LB, K::QSave,     A::ActionGeneric },
-    { tL,        row1,      s, G::LT, K::ItemRing,  A::ActionGeneric },
+    { tR,        row0,      s, G::RT, K::Key,       A::Parade        },
+    { tR,        row1,      s, G::RB, K::MagicRing, A::ActionGeneric },
+    { tL,        row0,      s, G::LT, K::ItemRing,  A::ActionGeneric },
+    { tL,        row1,      s, G::LB, K::LbModifier,A::ActionGeneric },
     // stick clicks
     { m,         H-H/3-m-s-m, s, G::L3, K::Key,  A::Walk          },
     { bx,        by-2*(s+m),  s, G::R3, K::Lock, A::ActionGeneric },
@@ -69,8 +70,8 @@ std::array<TouchInput::Btn,16> TouchInput::layout() const {
     { dcx-s,     dcy,   s, G::DPadLeft,  K::SlotL, A::ActionGeneric },
     { dcx+s,     dcy,   s, G::DPadRight, K::SlotR, A::ActionGeneric },
     // system
-    { W/2-(s+m), m, s, G::View, K::Key, A::Inventory },
-    { W/2+m,     m, s, G::Menu, K::Key, A::Escape    },
+    { W/2-(s+m), m, s, G::View, K::SystemView, A::Inventory },
+    { W/2+m,     m, s, G::Menu, K::SystemMenu, A::Escape    },
   }};
   }
 
@@ -121,10 +122,44 @@ void TouchInput::releaseWorldTouches() {
   mv[0]=mv[1]=mv[2]=mv[3]=false;
   moveId = -1;
   lookId = -1;
+  lbId   = -1;
+  viewId = -1;
+  menuId = -1;
+  systemGesture.reset();
 
   for(auto& held : btnDown)
     ctrl.onKeyReleased(held.second, M::Primary);
   btnDown.clear();
+  }
+
+bool TouchInput::dispatchSystemEffect(PadSystemGesture::Effect effect) {
+  using E = PadSystemGesture::Effect;
+  if(effect==E::None)
+    return false;
+
+  // Suppress every touch still down before an effect can switch UI context.
+  systemGesture.reset(lbId>=0,viewId>=0,menuId>=0);
+  if(owner.padContext()!=PadCtx::World)
+    return true;
+  switch(effect) {
+    case E::Map:        owner.padOpenMap();             break;
+    case E::Inventory:  owner.uiAction(A::Inventory);   break;
+    case E::QuestLog:   owner.uiAction(A::Log);         break;
+    case E::Status:     owner.uiAction(A::Status);      break;
+    case E::GameMenu:   owner.uiAction(A::Escape);      break;
+    case E::QuickLoad:  owner.padQuickLoad();           break;
+    case E::QuickSave:  owner.padQuickSave();           break;
+    case E::None:                                        break;
+    }
+  return true;
+  }
+
+void TouchInput::tick() {
+  if(Gamepad::poll().connected || owner.padContext()!=PadCtx::World) {
+    releaseWorldTouches();
+    return;
+    }
+  dispatchSystemEffect(systemGesture.tick(Application::tickCount()));
   }
 
 void TouchInput::paintEvent(PaintEvent& e) {
@@ -166,7 +201,11 @@ void TouchInput::paintEvent(PaintEvent& e) {
   }
 
 void TouchInput::mouseDownEvent(MouseEvent& e) {
-  if(Gamepad::poll().connected) { e.ignore(); return; }   // gamepad active -> ignore taps
+  if(Gamepad::poll().connected) {
+    releaseWorldTouches();
+    e.ignore();
+    return;
+    }   // gamepad active -> ignore taps
 
   const Point  pos = e.pos();
   const int    id  = e.mouseID;
@@ -182,7 +221,6 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
         switch(b.kind) {
           case TAct::Key:
-            if(b.act==A::Escape || b.act==A::Inventory) { owner.uiAction(b.act); return; }
             ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
             btnDown[id] = b.act;
             return;
@@ -193,7 +231,27 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
           case TAct::Lock:       ctrl.toggleTargetLock();   return;
           case TAct::SlotL:      owner.padUseQuickSlot(0);  return;
           case TAct::SlotR:      owner.padUseQuickSlot(1);  return;
-          case TAct::QSave:      owner.padQuickSave();       return;
+          case TAct::LbModifier:
+            if(lbId<0) {
+              lbId = id;
+              dispatchSystemEffect(systemGesture.onButton(
+                  PadSystemGesture::Button::Lb,true,Application::tickCount()));
+              }
+            return;
+          case TAct::SystemView:
+            if(viewId<0) {
+              viewId = id;
+              dispatchSystemEffect(systemGesture.onButton(
+                  PadSystemGesture::Button::View,true,Application::tickCount()));
+              }
+            return;
+          case TAct::SystemMenu:
+            if(menuId<0) {
+              menuId = id;
+              dispatchSystemEffect(systemGesture.onButton(
+                  PadSystemGesture::Button::Menu,true,Application::tickCount()));
+              }
+            return;
           }
         }
 
@@ -279,6 +337,19 @@ void TouchInput::mouseUpEvent(MouseEvent& e) {
     ringId = -1;
     return;
     }
+
+  auto releaseSystem = [&](int& touchId, PadSystemGesture::Button button) {
+    if(id!=touchId)
+      return false;
+    touchId = -1;
+    dispatchSystemEffect(systemGesture.onButton(
+        button,false,Application::tickCount()));
+    return true;
+    };
+  if(releaseSystem(lbId,PadSystemGesture::Button::Lb) ||
+     releaseSystem(viewId,PadSystemGesture::Button::View) ||
+     releaseSystem(menuId,PadSystemGesture::Button::Menu))
+    return;
 
   auto it = btnDown.find(id);
   if(it!=btnDown.end()) {

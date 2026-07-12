@@ -28,6 +28,7 @@ namespace {
 struct Loc {
   const char* title;
   const char* itemRing;
+  const char* map;
   const char* move;
   const char* walkRun;
   const char* melee;
@@ -42,10 +43,13 @@ struct Loc {
   const char* camera;
   const char* targetLock;
   const char* inventory;
+  const char* questLog;
+  const char* status;
   const char* gameMenu;
   const char* quickSave;
   const char* quickLoad;
   const char* unstuck;
+  const char* tap;
   const char* hold;
   };
 
@@ -55,30 +59,35 @@ struct Loc {
 const Loc& loc(ScriptLang language) {
   static const Loc en = {
     "Controller layout",
-    "Item wheel",
+    "Item quick-ring",
+    "Map",
     "Move / Turn",
     "Walk / Run",
     "Melee weapon",
     "Ranged weapon",
     "Quick slot 1 / 2",
     "Parry",
-    "Magic wheel",
+    "Magic quick-ring",
     "Draw / sheathe weapon",
     "Jump / Climb",
     "Sneak",
     "Action / Attack",
-    "Camera",
+    "Camera / Flick: switch target",
     "Target lock",
     "Inventory",
+    "Quest log",
+    "Status",
     "Game menu",
     "Quick save",
     "Quick load",
     "Teleport when stuck",
+    "tap",
     "hold",
     };
   static const Loc de = {
     "Controller-Belegung",
     "Gegenstands-Rad",
+    "Karte",
     "Bewegen / Drehen",
     "Gehen / Laufen",
     "Nahkampfwaffe",
@@ -90,18 +99,22 @@ const Loc& loc(ScriptLang language) {
     "Springen / Klettern",
     "Schleichen",
     "Aktion / Angriff",
-    "Kamera",
+    "Kamera / Ausschlag: Ziel wechseln",
     "Ziel fixieren",
     "Inventar",
+    "Tagebuch",
+    "Status",
     "Spielermen\xFC",
     "Schnellspeichern",
     "Schnellladen",
     "Teleport, wenn man feststeckt",
+    "kurz",
     "halten",
     };
   static const Loc pl = {
     "Uk\xB3" "ad kontrolera",
     "Ko\xB3o przedmiot\xF3w",
+    "Mapa",
     "Ruch / skr\xEAt",
     "Ch\xF3" "d / bieg",
     "Bro\xF1 bia\xB3" "a",
@@ -113,13 +126,16 @@ const Loc& loc(ScriptLang language) {
     "Skok / wspinaczka",
     "Skradanie",
     "Akcja / atak",
-    "Kamera",
+    "Kamera / wychylenie: zmiana celu",
     "Blokada celu",
     "Ekwipunek",
+    "Dziennik zada\xF1",
+    "Statystyki",
     "Menu gry",
     "Szybki zapis",
     "Szybkie wczytanie",
     "Teleport, gdy posta\xE6 utknie",
+    "kr\xF3tko",
     "przytrzymaj",
     };
   switch(language) {
@@ -267,7 +283,8 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
 
   // Vertical bands: title / View+Menu callouts / diagram / combo footer.
   const int topBandY = margin + ts.h + int(10.f*scale);
-  const int imgTop   = topBandY + s + int(14.f*scale);
+  const int topBlockH= std::max(s,2*th+textGap);
+  const int imgTop   = topBandY + topBlockH + int(14.f*scale);
 
   // The menu draws its build string after this page. Reserve its real glyph
   // box explicitly so the two combo rows can never overlap it.
@@ -284,7 +301,8 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
       ret = std::max(ret,minimumTwoLineWidth(fnt,label));
     return ret;
     };
-  const int leftSingleW = widestTwoLine({L.itemRing,L.move,L.walkRun,L.melee,L.ranged});
+  const int leftSingleW = widestTwoLine({L.itemRing,L.map,L.move,L.walkRun,
+                                         L.melee,L.ranged});
   const int leftDoubleW = minimumTwoLineWidth(fnt,L.quickSlots) + s+tokGap/2;
   const int rightW = widestTwoLine({L.parry,L.magicRing,L.weapon,L.jump,
                                     L.sneak,L.action,L.camera,L.targetLock});
@@ -338,6 +356,7 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
   // height-aware callout rows roughly track their buttons.
   const Row left[] = {
     {PadGlyph::LT,       PadGlyph::LT,        1, L.itemRing,   0.251f,0.068f},
+    {PadGlyph::LB,       PadGlyph::LB,        1, L.map,        0.268f,0.137f},
     {PadGlyph::LStick,   PadGlyph::LStick,    1, L.move,       0.260f,0.446f},
     {PadGlyph::L3,       PadGlyph::L3,        1, L.walkRun,    0.260f,0.490f},
     {PadGlyph::DPadUp,   PadGlyph::DPadUp,    1, L.melee,      0.378f,0.595f},
@@ -456,16 +475,23 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
     const int axp = imgX + int(ax*float(dw));
     const int ayp = imgY + int(ay*float(dh));
     const int gx  = axp - s/2;
-    glyph(b, gx, topBandY);
-    if(textOnLeft)
-      fnt.drawText(p, gx-gap-fnt.textSize(txt).w, topBandY+(s+th)/2, txt);
-    else
-      fnt.drawText(p, gx+s+gap, topBandY+(s+th)/2, txt);
-    vline(axp, topBandY+s+2, ayp);
+    const int gy  = topBandY+(topBlockH-s)/2;
+    const int edge= textOnLeft ? gx-gap : gx+s+gap;
+    const int maxW= textOnLeft ? edge-margin : w-margin-edge;
+    const auto label = wrapLabel(fnt,txt,std::max(1,maxW));
+    glyph(b,gx,gy);
+    drawLabel(label,edge,topBandY+topBlockH/2,textOnLeft);
+    vline(axp, topBandY+topBlockH+2, ayp);
     dot(axp,ayp);
     };
-  topLbl(PadGlyph::View, L.inventory, true,  0.433f,0.438f);
-  topLbl(PadGlyph::Menu, L.gameMenu,  false, 0.571f,0.433f);
+  char viewLabel[192] = {};
+  char menuLabel[192] = {};
+  std::snprintf(viewLabel,sizeof(viewLabel),"%s: %s / %s: %s",
+                L.tap,L.inventory,L.hold,L.questLog);
+  std::snprintf(menuLabel,sizeof(menuLabel),"%s: %s / %s: %s",
+                L.tap,L.status,L.hold,L.gameMenu);
+  topLbl(PadGlyph::View, viewLabel, true,  0.433f,0.438f);
+  topLbl(PadGlyph::Menu, menuLabel, false, 0.571f,0.433f);
 
   // Footer: each combo owns a bounded column and wraps its description just
   // like a side callout, so long translations cannot cross the panel edge.

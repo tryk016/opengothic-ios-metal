@@ -96,8 +96,9 @@ on-screen alert instead of a crash.
 | Parry | RT | R2 |
 | Melee / ranged weapon | D-pad ↑ / ↓ | D-pad ↑ / ↓ |
 | Quick slots 1 / 2 | D-pad ← / → | D-pad ← / → |
-| Inventory | View | Share / Create |
-| Game menu | Menu | Options |
+| Map | LB | L1 |
+| Inventory (tap) / Quest log (hold) | View | Share / Create |
+| Status (tap) / Game menu (hold) | Menu | Options |
 | Quick save | LB + Menu | L1 + Options |
 | Quick load | LB + View | L1 + Share / Create |
 | Unstuck teleport | hold L3 + R3 ~2 s | hold L3 + R3 ~2 s |
@@ -119,13 +120,18 @@ Notes on feel and on-screen input:
   (▶) potion. A slot bound to the torch toggles it: first press lights the
   torch, second press stows it back into the inventory (bind the torch while
   one is still in the inventory — a lit torch has no row to highlight).
+- **System buttons:** LB opens the map. Tap View for inventory or hold it for
+  ~0.6 s for the quest log; tap Menu for character status or hold it for
+  ~0.6 s for the game menu. LB+View/Menu wins over tap/hold and performs the
+  rotating quick load/save shortcut.
 - **Left-stick response:** forward/back keeps Gothic's animation-driven motion
   but uses separate press/release thresholds; horizontal turning is scaled by
   the stick deflection. Rings, UI transitions, controller resets and app resume
   release held world actions and require a return to neutral before re-arming.
 - **On-screen virtual gamepad:** with no controller, a full pad is drawn during
   play (buttons, sticks, D-pad, move + camera area). Tap a ring button, drag to
-  aim, release to activate. It **auto-hides the moment a controller connects**.
+  aim, release to activate. LB/View/Menu mirror the physical pad's map,
+  tap/hold and save/load chords. It **auto-hides the moment a controller connects**.
 - A **lock-on reticle** brackets the pinned target (gamepad only). The former
   transient controls-hint bar is disabled; the complete mapping lives in
   Options → Controls.
@@ -148,10 +154,12 @@ copied with the game data:
 1. `Documents/system/Gothic.ini` — read-only base from the PC install.
 2. `Documents/Gothic.ini` — writable iOS override, with higher priority.
 
-On a fresh install, when the second file does not exist, OpenGothic creates it
-immediately with this complete iOS profile. An existing override is not
-auto-populated or replaced; values changed later through the game menu are still
-written there normally.
+On the first successful launch after valid game data is installed, OpenGothic
+creates the second file with this complete iOS profile when it does not exist.
+An existing override — even an empty or malformed one — is not auto-populated
+or replaced; values changed later through the game menu are still written there
+normally. A launch that stops at the missing-data alert happens before profile
+creation and will try again after the game data is copied.
 
 ```ini
 [GAME]

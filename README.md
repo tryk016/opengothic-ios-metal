@@ -74,8 +74,9 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
 | Parry | RT | R2 |
 | Melee / ranged weapon | D-pad ↑ / ↓ | D-pad ↑ / ↓ |
 | Quick slots 1 / 2 | D-pad ← / → | D-pad ← / → |
-| Inventory | View | Share / Create |
-| Game menu | Menu | Options |
+| Map | LB | L1 |
+| Inventory (tap) / Quest log (hold) | View | Share / Create |
+| Status (tap) / Game menu (hold) | Menu | Options |
 | Quick save | LB + Menu | L1 + Options |
 | Quick load | LB + View | L1 + Share / Create |
 | Unstuck teleport | hold L3 + R3 ~2 s | hold L3 + R3 ~2 s |
@@ -88,6 +89,9 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
   highlighting it in the inventory and **holding D-pad ← or → for ~0.6 s**. Unassigned slots drink the
   best healing (←) / mana (→) potion. A slot bound to the torch is a toggle: press once to light it,
   press again to stow it back into the inventory.
+- **System buttons:** LB opens the map. Tap View for the inventory or hold it for ~0.6 s for the quest
+  log; tap Menu for character status or hold it for ~0.6 s for the game menu. LB+View/Menu takes
+  priority over tap/hold and performs rotating quick load/save.
 - **Left-stick response:** Y keeps Gothic's animation-driven movement with press/release hysteresis;
   X turns proportionally to the deflection. A sloped axial guard rejects accidental movement while the
   stick is held mostly sideways (and accidental turning while held mostly forward/back). Returning to
@@ -99,15 +103,17 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
 
 **On-screen virtual gamepad (no controller):** a full pad is drawn during play — move pad + camera area,
 A/B/X/Y, shoulders/triggers, sticks, D-pad, View/Menu — using the Xelu glyphs. Tap a quick-ring button,
-drag to aim, release to activate. Menus and dialogues get on-screen D-pad + OK/Back/Skip.
+drag to aim, release to activate. Its LB/View/Menu buttons use the same map, tap/hold and save/load
+chords as a physical pad. Menus and dialogues get on-screen D-pad + OK/Back/Skip.
 
 ### iOS configuration
 
-The copied `Documents/system/Gothic.ini` is never overwritten. On a fresh
-install, OpenGothic creates a separate `Documents/Gothic.ini` override with the
-complete iOS profile: half-resolution 3D rendering, SSAO off, 512 px shadow
-maps, quick-save support and all stable `[GAMEPAD]` defaults (including
-`crossAxisGuard=0.12`). Existing root overrides are not auto-populated or
+The copied `Documents/system/Gothic.ini` is never overwritten. On the first
+successful launch after valid game data is installed, OpenGothic creates a
+separate `Documents/Gothic.ini` override if it is absent, with the complete iOS
+profile: half-resolution 3D rendering, SSAO off, 512 px shadow maps, quick-save
+support and all stable `[GAMEPAD]` defaults (including `crossAxisGuard=0.12`).
+An existing root override — even an empty one — is not auto-populated or
 replaced.
 
 The generated profile, upgrade note, override priority, optional FPS cap and

@@ -8,6 +8,7 @@
 #include "utils/gamepad.h"
 #include "utils/keycodec.h"
 #include "ui/gamepadaxisstate.h"
+#include "ui/padsystemgesture.h"
 #include "ui/quickring.h"
 
 class PlayerControl;
@@ -38,13 +39,15 @@ class GamepadInput {
     const QuickRing* activeRing() const;
 
     // Touch-overlay hooks (used when no pad is connected): open/aim/commit the
-    // rings, quick-save and the assignable quick slots from on-screen taps.
+    // rings, rotating save/load and the assignable quick slots from on-screen taps.
     bool  ringOpen() const;
     void  openMagicRing();
     void  openItemRing();
     void  ringAim(float nx, float ny);
     void  ringCommit();
     void  quickSave();
+    void  quickLoad();
+    void  openMap();
     void  useQuickSlot(int idx);           // 0 = D-pad left, 1 = D-pad right
 
   private:
@@ -62,6 +65,7 @@ class GamepadInput {
     bool             suppressAUntilRelease = true;
     bool             suppressBUntilRelease = true;
     bool             suppressRtUntilRelease = true;
+    PadSystemGesture systemGesture;
 
     QuickRing      ringMagic{QuickRing::Magic};
     QuickRing      ringItems{QuickRing::Items};
@@ -83,11 +87,12 @@ class GamepadInput {
                         const std::vector<GamepadButtonEvent>& events);
     void setWorldAxis(KeyCodec::Action negative, bool negativeHeld,
                       KeyCodec::Action positive, bool positiveHeld);
-    void uiEdge(bool now, bool before, KeyCodec::Action a);       // -> MainWindow::uiAction
     void key   (bool now, bool before, Tempest::Event::KeyType k);// synthetic KeyEvent
     void keyTap(Tempest::Event::KeyType k, PadCtx ctx,
                 const GamepadButtonEvent& source,
                 const GamepadState& state);
+    void tickWorldSystemButtons(const GamepadState& s,
+                                const std::vector<GamepadButtonEvent>& events);
     void suppressCarriedWorldInput();                            // per-control neutral gates
     void releaseAllWorld();                                       // drop held world actions
 

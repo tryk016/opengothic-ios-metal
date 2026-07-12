@@ -8,6 +8,14 @@
       now drives `Camera::onRotateMouse` with per-axis dead-zones and a 50 ms
       local frame-time cap. Verify up/down, `invertY=1`, diagonal look and idle
       drift on hardware.
+- [ ] **System-button tap/hold + dedicated parry — implementation complete,
+      device confirmation pending.** LB opens the map; View tap/hold opens
+      inventory/quest log; Menu tap/hold opens status/game menu (600 ms).
+      LB+View/Menu remains rotating load/save and consumes every pending tap or
+      hold in either modifier order. A shared reducer handles physical and
+      touch input, queued between-frame taps, context resets and held-button
+      suppression. `Parade` now maps to the real melee/fist block in both G2
+      and classic/G1 control presets, so RT/R2 works without Action+Back.
 
 ## ✅ Done — controller, landing, inventory and shadows (2026-07-12, rounds 2–5)
 > **DEVICE-CONFIRMED (round 3):** mobsi levitation gone (player + NPCs), the
@@ -250,10 +258,11 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       `crossAxisGuard`, `triggerThreshold`, `lookSensitivity`, `invertY`,
       `saveSlots` and optional transition-only `debugInput` diagnostics are read from
       `Gothic.ini [GAMEPAD]` in `GamepadInput::loadConfig`.
-- [x] **First-run iOS profile** — when `Documents/Gothic.ini` is absent, create
-      and flush a focused override with performance, shadow, quick-save and
-      complete controller defaults; never copy or overwrite `system/Gothic.ini`
-      and never auto-populate an existing root override.
+- [x] **First-run iOS profile** — on the first successful launch with valid
+      game data, when `Documents/Gothic.ini` is absent, create and flush a
+      focused override with performance, shadow, quick-save and complete
+      controller defaults; never copy or overwrite `system/Gothic.ini` and
+      never auto-populate an existing root override (even an empty one).
 - [x] **Rotating quick-saves** (spec §6) — LB+Menu saves to `save_slot_1..N`
       (N=`saveSlots`), auto-named `Quick - <world>`; index persisted in
       `[GAMEPAD] padQuickSlot`. LB+View loads the last rotating slot.
@@ -288,9 +297,9 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 
 ## ✅ Done — full on-screen virtual gamepad (2026-07-10)
 - [x] World touch overlay is now a **full virtual pad** (16 glyph buttons):
-      A/B/X/Y, RB(magic ring)/RT(block)/LB(quick-save)/LT(item ring), L3(walk)/
-      R3(lock), D-pad (melee/bow + assignable slots), View/Menu, plus move pad +
-      camera.
+      A/B/X/Y, RB(magic ring)/RT(block)/LB(map + save/load modifier)/LT(item
+      ring), L3(walk)/R3(lock), D-pad (melee/bow + assignable slots), tap/hold
+      View/Menu, plus move pad + camera.
       Each wired to its action via `ctrl`/`uiAction`/new `MainWindow::pad*`
       bridges. **Touch ring-selection**: tapping RB/LT opens the radial, drag aims
       it, release activates (`GamepadInput::ring*` hooks). Uses Xelu glyphs.
@@ -320,4 +329,6 @@ haptic intensity and glyph sizing).
       the active `MENU.DAT` strings (including Polish data with `GAME.language=-1`).
 - [x] README controller tables replaced by a clickable, HiDPI-safe mapping SVG;
       the complete text mapping remains available in a collapsed accessible
-      fallback.
+      fallback. Leader lines render above the pad body; Left stick/L3 and the
+      three D-pad actions use one bracket/leader each, and trigger/bumper depth
+      matches a physical controller.

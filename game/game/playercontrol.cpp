@@ -147,10 +147,6 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
           }
         }
       }
-    if(ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) {
-      if(a==Action::Parade)
-        fk = ActBack;
-      }
     if(ws!=WeaponState::NoWeapon && !pl->hasState(BS_RUN)) {
       if(a==Action::ActionLeft)
         fk = ActLeft;
@@ -158,6 +154,13 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
         fk = ActRight;
       }
     }
+
+  // Parade is a semantic block action (RT/R2 on mobile). Classic/G1 controls
+  // normally build the same ActBack from ActionGeneric+Back, but a dedicated
+  // Parade binding must not become a no-op merely because that preset is active.
+  if((ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) &&
+     a==Action::Parade)
+    fk = ActBack;
 
   if(fk>=0) {
     std::memset(actrl,0,sizeof(actrl));

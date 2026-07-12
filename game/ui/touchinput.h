@@ -6,6 +6,7 @@
 
 #include "utils/keycodec.h"
 #include "ui/padglyph.h"
+#include "ui/padsystemgesture.h"
 
 class PlayerControl;
 class MainWindow;
@@ -22,6 +23,7 @@ class TouchInput : public Tempest::Widget {
   public:
     TouchInput(MainWindow& owner, PlayerControl& ctrl);
 
+    void tick();
     void paintEvent(Tempest::PaintEvent& e);
     void mouseDownEvent(Tempest::MouseEvent& e);
     void mouseDragEvent(Tempest::MouseEvent& e);
@@ -29,7 +31,10 @@ class TouchInput : public Tempest::Widget {
 
   private:
     // What a World button does when tapped.
-    enum class TAct : uint8_t { Key, MagicRing, ItemRing, Lock, SlotL, SlotR, QSave };
+    enum class TAct : uint8_t {
+      Key, MagicRing, ItemRing, Lock, SlotL, SlotR,
+      LbModifier, SystemView, SystemMenu
+      };
     struct Btn  { int x, y, s; PadGlyph::Btn glyph; TAct kind; KeyCodec::Action act; };
     struct MBtn { int x, y, s; Tempest::Event::KeyType key; };
 
@@ -39,6 +44,7 @@ class TouchInput : public Tempest::Widget {
 
     void aimRing(const Tempest::Point& pos);
     void releaseWorldTouches();
+    bool dispatchSystemEffect(PadSystemGesture::Effect effect);
 
     MainWindow&    owner;
     PlayerControl& ctrl;
@@ -46,6 +52,10 @@ class TouchInput : public Tempest::Widget {
     int            moveId = -1;   // touch id driving movement
     int            lookId = -1;   // touch id driving camera
     int            ringId = -1;   // touch id aiming an open radial ring
+    int            lbId   = -1;   // touch id holding the LB map/save/load modifier
+    int            viewId = -1;   // touch id holding View (tap/hold)
+    int            menuId = -1;   // touch id holding Menu (tap/hold)
+    PadSystemGesture systemGesture;
     Tempest::Point moveOrigin;
     Tempest::Point lookLast;
     bool           mv[4] = {};    // forward, back, left, right currently pressed

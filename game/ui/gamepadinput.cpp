@@ -218,6 +218,17 @@ void GamepadInput::quickLoadRotating() {
   Gothic::inst().load(slot);
   }
 
+void GamepadInput::openMap() {
+  auto& g = Gothic::inst();
+  auto* w = g.world();
+  if(owner.padContext()!=PadCtx::World || w==nullptr || w->player()==nullptr ||
+     !g.isInGameAndAlive() || g.isPause() || w->isCutsceneLock())
+    return;
+  // The engine intentionally opens the scripted map on KeyCodec::Map release.
+  ctrl.onKeyPressed (A::Map, Event::K_NoKey, M::Primary);
+  ctrl.onKeyReleased(A::Map, M::Primary);
+  }
+
 Npc* GamepadInput::worldPlayer() const {
   auto w = Gothic::inst().world();
   return w!=nullptr ? w->player() : nullptr;
@@ -255,7 +266,20 @@ void GamepadInput::ringCommit() {
   Haptics::impact(Haptics::Light);
   }
 
-void GamepadInput::quickSave() { quickSaveRotating(); }
+void GamepadInput::quickSave() {
+  auto& g = Gothic::inst();
+  if(owner.padContext()==PadCtx::World &&
+     Gothic::settingsGetI("GAME","useQuickSaveKeys")!=0 &&
+     g.isInGameAndAlive() && !g.isPause())
+    quickSaveRotating();
+  }
+
+void GamepadInput::quickLoad() {
+  auto& g = Gothic::inst();
+  if(owner.padContext()==PadCtx::World &&
+     Gothic::settingsGetI("GAME","useQuickSaveKeys")!=0 && !g.isPause())
+    quickLoadRotating();
+  }
 
 void GamepadInput::openRing(QuickRing& r) {
   if(auto pl = worldPlayer()) {
@@ -381,11 +405,6 @@ void GamepadInput::setWorldAxis(A negative, bool negativeHeld,
     setWorldHeld(positive, true);
   }
 
-void GamepadInput::uiEdge(bool now, bool before, A a) {
-  if(now && !before)
-    owner.uiAction(a);
-  }
-
 void GamepadInput::key(bool now, bool before, Event::KeyType k) {
   if(now && !before) {
     Tempest::KeyEvent ev(k);
@@ -409,12 +428,68 @@ void GamepadInput::keyTap(Event::KeyType k, PadCtx ctx,
     }
   }
 
+void GamepadInput::tickWorldSystemButtons(
+    const GamepadState& s, const std::vector<GamepadButtonEvent>& events) {
+  using B = PadSystemGesture::Button;
+  using E = PadSystemGesture::Effect;
+  const uint64_t now = Tempest::Application::tickCount();
+
+  auto dispatch = [&](E effect) {
+    if(effect==E::None)
+      return false;
+
+    // Cancel every pending short/long variant before an effect changes the
+    // routing context. Buttons still held become suppressed until release.
+    systemGesture.reset(s.lb,s.options,s.menu);
+    switch(effect) {
+      case E::Map:        openMap();                    break;
+      case E::Inventory:  owner.uiAction(A::Inventory); break;
+      case E::QuestLog:   owner.uiAction(A::Log);       break;
+      case E::Status:     owner.uiAction(A::Status);    break;
+      case E::GameMenu:   owner.uiAction(A::Escape);    break;
+      case E::QuickLoad:  quickLoad();                  break;
+      case E::QuickSave:  quickSave();                  break;
+      case E::None:                                     break;
+      }
+    return true;
+    };
+
+  auto feed = [&](B button, bool pressed) {
+    return dispatch(systemGesture.onButton(button,pressed,now));
+    };
+
+  // Queue order preserves taps entirely contained between two game frames and
+  // lets either modifier order form an LB chord.
+  for(const auto& event:events) {
+    bool fired = false;
+    switch(event.button) {
+      case GamepadButton::LB:      fired = feed(B::Lb,  event.pressed); break;
+      case GamepadButton::Options: fired = feed(B::View,event.pressed); break;
+      case GamepadButton::Menu:    fired = feed(B::Menu,event.pressed); break;
+      default:                                                           break;
+      }
+    if(fired)
+      return;
+    }
+
+  // Snapshot reconciliation covers controllers that omit a callback. LB is
+  // reconciled first so simultaneous LB+View/Menu is interpreted as a chord.
+  if(systemGesture.down(B::Lb)!=s.lb && feed(B::Lb,s.lb))
+    return;
+  if(systemGesture.down(B::View)!=s.options && feed(B::View,s.options))
+    return;
+  if(systemGesture.down(B::Menu)!=s.menu && feed(B::Menu,s.menu))
+    return;
+  dispatch(systemGesture.tick(now));
+  }
+
 void GamepadInput::suppressCarriedWorldInput() {
   suppressMoveUntilNeutral = true;
   suppressTurnUntilNeutral = true;
   suppressAUntilRelease    = true;
   suppressBUntilRelease    = true;
   suppressRtUntilRelease   = true;
+  systemGesture.reset(true,true,true);
   }
 
 void GamepadInput::releaseAllWorld() {
@@ -447,8 +522,10 @@ void GamepadInput::tick(uint64_t dt) {
   // Once the bounded queue overflows its remaining prefix may begin with a
   // release whose matching press was discarded. Drop that batch and reconcile
   // held world controls from the fresh final snapshot instead.
-  if(input.droppedEvents!=0)
+  if(input.droppedEvents!=0) {
     input.events.clear();
+    systemGesture.reset(s.lb,s.options,s.menu);
+    }
 
   if(s.generation!=observedControllerGen) {
     // A disconnect/suspend can happen entirely between rendered frames. The
@@ -505,6 +582,9 @@ void GamepadInput::tick(uint64_t dt) {
   // Entering gameplay synchronizes one-shot edges with the physical state and
   // requires continuous controls to return to neutral before they can re-arm.
   if(ctx==PadCtx::World && prevCtx!=PadCtx::World) {
+    const bool carriedLb = prev.connected && prev.lb;
+    const bool carriedView = prev.connected && prev.options;
+    const bool carriedMenu = prev.connected && prev.menu;
     moveAxis.reset();
     turnAxis.reset();
     ctrl.setGamepadTurn(0.f);
@@ -521,6 +601,7 @@ void GamepadInput::tick(uint64_t dt) {
     else {
       suppressCarriedWorldInput();
       }
+    systemGesture.reset(carriedLb,carriedView,carriedMenu);
     prev = s;
     }
 
@@ -683,22 +764,9 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
   if(s.dleft  && !prev.dleft)  useQuickSlot(0);
   if(s.dright && !prev.dright) useQuickSlot(1);
 
-  // LB modifier: bare View/Menu open inventory/menu (routed to the window, B1);
-  // LB + View/Menu = quick load/save, mirroring the F5/F9 keyboard guards (B3).
-  if(!s.lb) {
-    uiEdge(s.options, prev.options, A::Inventory);
-    uiEdge(s.menu,    prev.menu,    A::Escape);
-    }
-  else {
-    const bool useQuickSaveKeys = Gothic::settingsGetI("GAME","useQuickSaveKeys")!=0;
-    if(useQuickSaveKeys) {
-      auto& g = Gothic::inst();
-      if(s.menu    && !prev.menu    && g.isInGameAndAlive() && !g.isPause())
-        quickSaveRotating();
-      if(s.options && !prev.options && !g.isPause())
-        quickLoadRotating();
-      }
-    }
+  // LB tap = map; LB+Menu/View = rotating quick save/load. Dispatch on release
+  // so a chord can consume LB without briefly opening the map.
+  tickWorldSystemButtons(s,events);
   }
 
 void GamepadInput::tickDialog(const GamepadState& s,

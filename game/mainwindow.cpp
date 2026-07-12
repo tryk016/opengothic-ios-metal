@@ -623,6 +623,8 @@ void MainWindow::padOpenItemRing()            { gamepad.openItemRing(); }
 void MainWindow::padRingAim(float nx,float ny){ gamepad.ringAim(nx,ny); }
 void MainWindow::padRingCommit()              { gamepad.ringCommit(); }
 void MainWindow::padQuickSave()               { gamepad.quickSave(); }
+void MainWindow::padQuickLoad()               { gamepad.quickLoad(); }
+void MainWindow::padOpenMap()                 { gamepad.openMap(); }
 void MainWindow::padUseQuickSlot(int idx)     { gamepad.useQuickSlot(idx); }
 size_t MainWindow::padInventorySelectedCls()  { return inventory.selectedItemCls(); }
 bool MainWindow::padVideoActive() const       { return video.isActive(); }
@@ -1051,6 +1053,7 @@ uint64_t MainWindow::tick() {
   lastTick  = time;
 
 #if defined(__MOBILE_PLATFORM__)
+  mobileUi.tick();
   gamepad.tick(dt);
   if(const PadCtx pc = padContext(); pc!=lastPadCtx) {
     lastPadCtx   = pc;                       // flash the controls-help on context change
