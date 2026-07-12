@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
+#include <string_view>
 
 #include "utils/string_frm.h"
 #include "world/objects/npc.h"
@@ -16,6 +18,7 @@
 #include "utils/gthfont.h"
 #include "utils/fileutil.h"
 #include "utils/keycodec.h"
+#include "game/constants.h"
 #include "game/definitions/musicdefinitions.h"
 #include "game/serialize.h"
 #include "game/savegameheader.h"
@@ -387,6 +390,57 @@ void GameMenu::initItems() {
     }
   }
 
+ScriptLang GameMenu::padDiagramLanguage() const {
+  int polishScore = 0;
+  int germanScore = 0;
+  int englishScore= 0;
+
+  // GAME.language can remain -1 even though the generic MENU.DAT mounted by
+  // the game data is Polish or German. The already-initialized strings are
+  // therefore the authoritative source for this screen's language. Match
+  // several ASCII word stems, which survive all supported single-byte
+  // codepages without confusing CP1250/CP1251/CP1252 byte values.
+  for(const auto& item:hItems) {
+    if(item.handle==nullptr)
+      continue;
+    for(const auto& text:item.handle->text) {
+      std::string ascii(text);
+      for(char& ch:ascii)
+        if(ch>='A' && ch<='Z')
+          ch = char(ch-'A'+'a');
+
+      auto keywords = [&](int& score,
+                          std::initializer_list<std::string_view> words) {
+        for(const auto word:words)
+          if(ascii.find(word)!=std::string::npos)
+            score += 2;
+        };
+      keywords(polishScore, {"sterowan","klawiatur","ekwipun","skradan",
+                             "przodu","parowan","wspinacz","ruch","atak",
+                             "skok","przedmiot","wczyt"});
+      keywords(germanScore, {"steuer","tastatur","inventar","schleich",
+                             "bewegen","springen","parieren","waffe",
+                             "angriff","ziel","laufen"});
+      keywords(englishScore,{"control","keyboard","inventory","sneak",
+                             "forward","backward","parry","weapon",
+                             "attack","target","climb"});
+      }
+    }
+  const int activeScore = std::max({polishScore,germanScore,englishScore});
+  if(activeScore>=4 && polishScore>germanScore && polishScore>englishScore)
+    return ScriptLang::PL;
+  if(activeScore>=4 && germanScore>polishScore && germanScore>englishScore)
+    return ScriptLang::DE;
+  if(activeScore>=4 && englishScore>polishScore && englishScore>germanScore)
+    return ScriptLang::EN;
+
+  switch(ScriptLang(Gothic::settingsGetI("GAME","language"))) {
+    case ScriptLang::PL: return ScriptLang::PL;
+    case ScriptLang::DE: return ScriptLang::DE;
+    default:             return ScriptLang::EN;
+    }
+  }
+
 void GameMenu::paintEvent(PaintEvent &e) {
   const float scale = Gothic::interfaceScale(this);
 
@@ -401,7 +455,8 @@ void GameMenu::paintEvent(PaintEvent &e) {
 
   if(padDiagramPage && PadDiagram::available()) {
     auto& fnt = Resources::font(scale);
-    PadDiagram::draw(p, fnt, w(), h(), scale);
+    PadDiagram::draw(p, fnt, w(), h(), scale, padDiagramLanguage(),
+                     owner.hasVersionLine());
     if(owner.hasVersionLine())
       fnt.drawText(p, w()-fnt.textSize(appBuild).w-int(25*scale), h()-int(25*scale), appBuild);
     return;

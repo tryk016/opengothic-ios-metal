@@ -101,9 +101,10 @@ class GamepadInput {
     void  stuckTeleport();                 // warp to the nearest waypoint (spec 8)
 
     // Tunables, overridable via Gothic.ini [GAMEPAD] (see loadConfig).
-    float deadZone   = 0.25f;   // stick press dead-zone
-    float releaseZone= 0.15f;   // inner neutral threshold for re-arming an axis
-    float trigThresh = 0.50f;   // trigger press threshold
+    float deadZone      = 0.25f; // stick press dead-zone
+    float releaseZone   = 0.15f; // inner neutral threshold for re-arming an axis
+    float crossAxisGuard= 0.12f; // suppress perpendicular stick-axis drift
+    float trigThresh    = 0.50f; // trigger press threshold
     float lookSens   = 0.20f;   // camera speed per ms
     bool  invertY    = false;   // camera Y invert (review B6)
     int   saveSlots  = 5;       // rotating quick-save slot count

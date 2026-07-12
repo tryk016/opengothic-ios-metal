@@ -6,13 +6,20 @@
 #include <Tempest/Texture2d>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
+#include <initializer_list>
 #include <iterator>
+#include <limits>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
 
 #include "game/constants.h"
 #include "utils/gthfont.h"
 #include "ui/padglyph.h"
-#include "gothic.h"
 
 using namespace Tempest;
 
@@ -45,7 +52,7 @@ struct Loc {
 // GthFont maps one byte to one glyph in the game codepage, not UTF-8. PL uses
 // CP1250, DE CP1252. Hex escapes are split ("\xB3" "a") wherever the next
 // character is a hex digit, or it would be swallowed by the escape.
-const Loc& loc() {
+const Loc& loc(ScriptLang language) {
   static const Loc en = {
     "Controller layout",
     "Item wheel",
@@ -115,7 +122,7 @@ const Loc& loc() {
     "Teleport, gdy posta\xE6 utknie",
     "przytrzymaj",
     };
-  switch(ScriptLang(Gothic::settingsGetI("GAME","language"))) {
+  switch(language) {
     case ScriptLang::DE: return de;
     case ScriptLang::PL: return pl;
     default:             return en;
@@ -131,18 +138,112 @@ struct Row {
   const char*   txt;
   float         ax, ay;
   };
+
+struct WrappedLabel {
+  std::string line1;
+  std::string line2;
+
+  int lines() const {
+    return line2.empty() ? 1 : 2;
+    }
+  };
+
+// Split only on ASCII spaces: the labels use the game's one-byte CP1250/
+// CP1252 encoding, so byte-wise word boundaries are safe while UTF-8 rules
+// would not be. The best balanced split is used and the result never exceeds
+// two lines.
+WrappedLabel wrapLabel(const GthFont& fnt, const char* text, int maxWidth) {
+  const std::string_view full(text);
+  if(fnt.textSize(full).w<=maxWidth)
+    return {std::string(full),{}};
+
+  WrappedLabel best = {std::string(full),{}};
+  int  bestWidth = std::numeric_limits<int>::max();
+  bool bestFits  = false;
+
+  for(size_t split=full.find(' '); split!=std::string_view::npos;
+      split=full.find(' ',split+1)) {
+    size_t leftEnd = split;
+    while(leftEnd>0 && full[leftEnd-1]==' ')
+      --leftEnd;
+    size_t rightBeg = split+1;
+    while(rightBeg<full.size() && full[rightBeg]==' ')
+      ++rightBeg;
+    if(leftEnd==0 || rightBeg==full.size())
+      continue;
+
+    std::string first(full.substr(0,leftEnd));
+    std::string second(full.substr(rightBeg));
+    const int w1 = fnt.textSize(first).w;
+    const int w2 = fnt.textSize(second).w;
+    const int widest = std::max(w1,w2);
+    const bool fits = widest<=maxWidth;
+    if((fits && !bestFits) || (fits==bestFits && widest<bestWidth)) {
+      best      = {std::move(first),std::move(second)};
+      bestWidth = widest;
+      bestFits  = fits;
+      }
+    }
+
+  // A German compound (or a very narrow panel) may have no usable word
+  // boundary. The game strings are single-byte encoded, so a last-resort
+  // character split is safe and still keeps the complete label visible.
+  if(!bestFits) {
+    for(size_t split=1; split<full.size(); ++split) {
+      size_t leftEnd = split;
+      while(leftEnd>0 && full[leftEnd-1]==' ')
+        --leftEnd;
+      size_t rightBeg = split;
+      while(rightBeg<full.size() && full[rightBeg]==' ')
+        ++rightBeg;
+      if(leftEnd==0 || rightBeg==full.size())
+        continue;
+
+      std::string first(full.substr(0,leftEnd));
+      std::string second(full.substr(rightBeg));
+      const int widest = std::max(fnt.textSize(first).w,
+                                  fnt.textSize(second).w);
+      const bool fits = widest<=maxWidth;
+      if((fits && !bestFits) || (fits==bestFits && widest<bestWidth)) {
+        best      = {std::move(first),std::move(second)};
+        bestWidth = widest;
+        bestFits  = fits;
+        }
+      }
+    }
+  return best;
+  }
+
+int minimumTwoLineWidth(const GthFont& fnt, const char* text) {
+  const std::string_view full(text);
+  int best = fnt.textSize(full).w;
+  for(size_t split=1; split<full.size(); ++split) {
+    size_t leftEnd = split;
+    while(leftEnd>0 && full[leftEnd-1]==' ')
+      --leftEnd;
+    size_t rightBeg = split;
+    while(rightBeg<full.size() && full[rightBeg]==' ')
+      ++rightBeg;
+    if(leftEnd==0 || rightBeg==full.size())
+      continue;
+    best = std::min(best,std::max(fnt.textSize(full.substr(0,leftEnd)).w,
+                                 fnt.textSize(full.substr(rightBeg)).w));
+    }
+  return best;
+  }
 }
 
 bool PadDiagram::available() {
   return PadGlyph::diagram()!=nullptr;
   }
 
-void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale) {
+void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
+                      ScriptLang language, bool reserveVersionLine) {
   const Texture2d* img = PadGlyph::diagram();
   if(img==nullptr)
     return;
 
-  const Loc& L = loc();
+  const Loc& L = loc(language);
 
   // Dim the whole page: the parchment menu background is too busy behind the
   // thin white line-art.
@@ -156,6 +257,8 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
   const int   tokGap = int(6.f*scale);
   const int   margin = int(18.f*scale);
   const int   lineT  = std::max(1, int(2.f*scale));
+  const int   textGap= std::max(1, int(2.f*scale));
+  const int   footerRowH = std::max(rowH,2*th+textGap+int(4.f*scale));
   const Color ink    = Color(0.86f,0.78f,0.60f,0.65f);
 
   // Title.
@@ -165,8 +268,31 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
   // Vertical bands: title / View+Menu callouts / diagram / combo footer.
   const int topBandY = margin + ts.h + int(10.f*scale);
   const int imgTop   = topBandY + s + int(14.f*scale);
-  const int imgBot   = h - margin - 2*rowH - int(12.f*scale);
-  const int colW     = int(float(w)*0.27f);
+
+  // The menu draws its build string after this page. Reserve its real glyph
+  // box explicitly so the two combo rows can never overlap it.
+  const int versionTop  = reserveVersionLine ? h-int(25.f*scale)-th : h;
+  const int footerBot   = std::min(h-margin, versionTop-gap);
+  const int cy2         = footerBot-footerRowH/2;
+  const int cy1         = cy2-footerRowH;
+  const int imgBot      = std::max(imgTop+1,
+                                  cy1-footerRowH/2-int(12.f*scale));
+
+  auto widestTwoLine = [&](std::initializer_list<const char*> labels) {
+    int ret = 0;
+    for(const char* label:labels)
+      ret = std::max(ret,minimumTwoLineWidth(fnt,label));
+    return ret;
+    };
+  const int leftSingleW = widestTwoLine({L.itemRing,L.move,L.walkRun,L.melee,L.ranged});
+  const int leftDoubleW = minimumTwoLineWidth(fnt,L.quickSlots) + s+tokGap/2;
+  const int rightW = widestTwoLine({L.parry,L.magicRing,L.weapon,L.jump,
+                                    L.sneak,L.action,L.camera,L.targetLock});
+  const int requiredColW = margin+2*gap+s+
+                           std::max({leftSingleW,leftDoubleW,rightW});
+  const int maxColW = std::max(1,(w-4*s)/2);
+  const int colW = std::clamp(std::max(int(float(w)*0.30f),requiredColW),
+                              1,maxColW);
 
   // Fit the line-art into the middle band, keeping aspect.
   const int   availW = w - 2*colW;
@@ -209,7 +335,7 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
     };
 
   // Keep in sync with GamepadInput::tickWorld. Sorted by anchor height so the
-  // evenly spaced callout rows roughly track their buttons.
+  // height-aware callout rows roughly track their buttons.
   const Row left[] = {
     {PadGlyph::LT,       PadGlyph::LT,        1, L.itemRing,   0.251f,0.068f},
     {PadGlyph::LStick,   PadGlyph::LStick,    1, L.move,       0.260f,0.446f},
@@ -229,13 +355,73 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
     {PadGlyph::R3,     PadGlyph::R3,     1, L.targetLock, 0.622f,0.690f},
     };
 
-  auto rowCy = [&](size_t i, size_t n) {
-    return imgY + int(float(dh)*(float(i)+0.5f)/float(n));
+  auto prepareLabels = [&](const auto& rows, bool onLeft) {
+    constexpr size_t count = std::extent_v<std::remove_reference_t<decltype(rows)>>;
+    std::array<WrappedLabel,count> labels;
+    for(size_t i=0; i<std::size(rows); ++i) {
+      int maxWidth = 0;
+      if(onLeft) {
+        int gx = imgX-gap-s;
+        if(rows[i].ng==2)
+          gx -= s+tokGap/2;
+        maxWidth = gx-gap-margin;
+        }
+      else {
+        const int textX = imgX+dw+gap+s+gap;
+        maxWidth = w-margin-textX;
+        }
+      labels[i] = wrapLabel(fnt,rows[i].txt,std::max(1,maxWidth));
+      }
+    return labels;
+    };
+
+  const auto leftLabels  = prepareLabels(left, true);
+  const auto rightLabels = prepareLabels(right,false);
+
+  auto blockHeight = [&](const WrappedLabel& label) {
+    const int textH = label.lines()*th + (label.lines()-1)*textGap;
+    return std::max(s,textH);
+    };
+  auto layoutRows = [&](const auto& labels) {
+    constexpr size_t count = std::tuple_size_v<std::decay_t<decltype(labels)>>;
+    std::array<int,count> centers = {};
+    int total = 0;
+    for(const auto& label:labels)
+      total += blockHeight(label);
+
+    const int bandH = std::max(1,imgBot-imgTop);
+    const int free  = std::max(0,bandH-total);
+    const int rowsGap = labels.size()>1 ? free/int(labels.size()-1) : 0;
+    const int used = total + rowsGap*int(labels.size()-1);
+    int y = imgTop + std::max(0,(bandH-used)/2);
+    for(size_t i=0; i<labels.size(); ++i) {
+      const int bh = blockHeight(labels[i]);
+      centers[i] = y+bh/2;
+      y += bh+rowsGap;
+      }
+    return centers;
+    };
+
+  const auto leftCy  = layoutRows(leftLabels);
+  const auto rightCy = layoutRows(rightLabels);
+
+  auto drawLabel = [&](const WrappedLabel& label, int edge, int cy,
+                       bool alignRight) {
+    auto line = [&](const std::string& text, int baseline) {
+      const int x = alignRight ? edge-fnt.textSize(text).w : edge;
+      fnt.drawText(p,x,baseline,text.c_str());
+      };
+    if(label.line2.empty()) {
+      line(label.line1,cy+th/2);
+      return;
+      }
+    line(label.line1,cy-textGap/2);
+    line(label.line2,cy+th+textGap/2);
     };
 
   for(size_t i=0; i<std::size(left); ++i) {
     const Row& r   = left[i];
-    const int  cy  = rowCy(i,std::size(left));
+    const int  cy  = leftCy[i];
     const int  axp = imgX + int(r.ax*float(dw));
     const int  ayp = imgY + int(r.ay*float(dh));
     int gx = imgX - gap - s;               // rightmost glyph next to the art
@@ -244,7 +430,7 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
       gx -= s + tokGap/2;
       glyph(r.g1, gx, cy-s/2);
       }
-    fnt.drawText(p, gx-gap-fnt.textSize(r.txt).w, cy+th/2, r.txt);
+    drawLabel(leftLabels[i],gx-gap,cy,true);
     hline(imgX-gap+2, axp, cy);
     vline(axp, cy, ayp);
     dot(axp,ayp);
@@ -252,12 +438,12 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
 
   for(size_t i=0; i<std::size(right); ++i) {
     const Row& r   = right[i];
-    const int  cy  = rowCy(i,std::size(right));
+    const int  cy  = rightCy[i];
     const int  axp = imgX + int(r.ax*float(dw));
     const int  ayp = imgY + int(r.ay*float(dh));
     const int  gx  = imgX + dw + gap;
     glyph(r.g1, gx, cy-s/2);
-    fnt.drawText(p, gx+s+gap, cy+th/2, r.txt);
+    drawLabel(rightLabels[i],gx+s+gap,cy,false);
     hline(axp, imgX+dw+gap-2, cy);
     vline(axp, cy, ayp);
     dot(axp,ayp);
@@ -281,44 +467,33 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale)
   topLbl(PadGlyph::View, L.inventory, true,  0.433f,0.438f);
   topLbl(PadGlyph::Menu, L.gameMenu,  false, 0.571f,0.433f);
 
-  // Footer: button combos that have no single spot on the art.
-  struct Tok {
-    PadGlyph::Btn b;
-    const char*   t;   // nullptr -> glyph token
-    };
-  auto seqW = [&](const Tok* tk, size_t n) {
-    int r = 0;
-    for(size_t i=0; i<n; ++i)
-      r += (tk[i].t==nullptr ? s : fnt.textSize(tk[i].t).w) + (i+1<n ? tokGap : 0);
-    return r;
-    };
-  auto seqDraw = [&](const Tok* tk, size_t n, int x, int cy) {
-    for(size_t i=0; i<n; ++i) {
-      if(tk[i].t==nullptr) {
-        glyph(tk[i].b, x, cy-s/2);
-        x += s + tokGap;
-        }
-      else {
-        fnt.drawText(p, x, cy+th/2, tk[i].t);
-        x += fnt.textSize(tk[i].t).w + tokGap;
-        }
-      }
+  // Footer: each combo owns a bounded column and wraps its description just
+  // like a side callout, so long translations cannot cross the panel edge.
+  const int plusW = fnt.textSize("+").w;
+  const int comboPrefixW = 2*s+plusW+3*tokGap;
+  auto combo = [&](PadGlyph::Btn b1, PadGlyph::Btn b2, const char* text,
+                   int x0, int x1, int cy) {
+    const int blockW = std::max(1,x1-x0);
+    const auto label = wrapLabel(fnt,text,std::max(1,blockW-comboPrefixW));
+    const int labelW = std::max(fnt.textSize(label.line1).w,
+                                fnt.textSize(label.line2).w);
+    int x = x0+std::max(0,(blockW-comboPrefixW-labelW)/2);
+    glyph(b1,x,cy-s/2);
+    x += s+tokGap;
+    fnt.drawText(p,x,cy+th/2,"+");
+    x += plusW+tokGap;
+    glyph(b2,x,cy-s/2);
+    x += s+tokGap;
+    drawLabel(label,x,cy,false);
     };
 
-  const int cy1 = imgBot + int(12.f*scale) + rowH/2;
-  const int cy2 = cy1 + rowH;
-
-  const Tok save[] = {{PadGlyph::LB,nullptr},{PadGlyph::LB,"+"},{PadGlyph::Menu,nullptr},{PadGlyph::LB,L.quickSave}};
-  const Tok load[] = {{PadGlyph::LB,nullptr},{PadGlyph::LB,"+"},{PadGlyph::View,nullptr},{PadGlyph::LB,L.quickLoad}};
-  const int groupGap = int(42.f*scale);
-  const int wSave    = seqW(save,std::size(save));
-  const int wLoad    = seqW(load,std::size(load));
-  int x = (w - (wSave+groupGap+wLoad))/2;
-  seqDraw(save,std::size(save), x,          cy1);
-  seqDraw(load,std::size(load), x+wSave+groupGap, cy1);
+  const int groupGap = std::max(tokGap,int(42.f*scale));
+  combo(PadGlyph::LB,PadGlyph::Menu,L.quickSave,
+        margin,w/2-groupGap/2,cy1);
+  combo(PadGlyph::LB,PadGlyph::View,L.quickLoad,
+        w/2+(groupGap-groupGap/2),w-margin,cy1);
 
   char buf[192] = {};
-  std::snprintf(buf,sizeof(buf),"(%s)  %s", L.hold, L.unstuck);
-  const Tok stuck[] = {{PadGlyph::L3,nullptr},{PadGlyph::L3,"+"},{PadGlyph::R3,nullptr},{PadGlyph::L3,buf}};
-  seqDraw(stuck,std::size(stuck), (w-seqW(stuck,std::size(stuck)))/2, cy2);
+  std::snprintf(buf,sizeof(buf),"(%s)  %s",L.hold,L.unstuck);
+  combo(PadGlyph::L3,PadGlyph::R3,buf,margin,w-margin,cy2);
   }

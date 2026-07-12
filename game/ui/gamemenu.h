@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cstdint>
+
 #include <Tempest/Widget>
 #include <Tempest/Texture2d>
 #include <Tempest/Timer>
@@ -18,6 +20,7 @@ class Gothic;
 class MenuRoot;
 class Npc;
 class GthFont;
+enum class ScriptLang : int32_t;
 
 class GameMenu : public Tempest::Widget {
   public:
@@ -121,6 +124,7 @@ class GameMenu : public Tempest::Widget {
     void                                  updateSavThumb(Item& sel);
     void                                  updateVideo();
     void                                  setDefaultKeys(std::string_view preset);
+    ScriptLang                            padDiagramLanguage() const;
 
     static QuestStat                      toStatus(std::string_view str);
     static bool                           isCompatible(const QuestLog::Quest& q, QuestStat st);

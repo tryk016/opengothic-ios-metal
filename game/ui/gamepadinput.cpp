@@ -73,6 +73,21 @@ const char* contextName(PadCtx ctx) {
   return "Unknown";
   }
 
+// Sloped axial dead-zone: a dominant component raises the activation threshold
+// of the perpendicular component. This keeps imperfect cardinal stick motion
+// from becoming a full second digital action while preserving true diagonals.
+constexpr float slopedAxisThreshold(float deadZone, float crossAxis,
+                                    float crossAxisGuard) {
+  const float magnitude = crossAxis<0.f ? -crossAxis : crossAxis;
+  const float clamped    = magnitude>1.f ? 1.f : magnitude;
+  const float threshold  = deadZone + crossAxisGuard*clamped;
+  return threshold>1.f ? 1.f : threshold;
+  }
+
+static_assert(slopedAxisThreshold(0.25f, 0.960f, 0.12f)>0.269f);
+static_assert(slopedAxisThreshold(0.25f,-0.948f, 0.12f)>0.304f);
+static_assert(slopedAxisThreshold(0.25f, 0.269f, 0.12f)<0.960f);
+
 bool buttonDown(const GamepadState& s, GamepadButton b) {
   switch(b) {
     case GamepadButton::A:         return s.a;
@@ -108,6 +123,8 @@ void GamepadInput::loadConfig() {
   deadZone   = std::clamp(f("deadZone", 0.25f), 0.05f, 0.95f);
   releaseZone= std::clamp(f("releaseZone", 0.15f), 0.01f,
                           std::max(0.01f, deadZone-0.01f));
+  crossAxisGuard = std::clamp(Gothic::settingsGetF("GAMEPAD","crossAxisGuard"),
+                              0.f,0.50f);
   trigThresh = f("triggerThreshold", 0.50f);
   lookSens   = f("lookSensitivity",  0.20f);
   invertY    = Gothic::settingsGetI("GAMEPAD","invertY")!=0;
@@ -556,21 +573,26 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
   if(suppressRtUntilRelease && s.rt<=trigThresh)
     suppressRtUntilRelease = false;
 
+  const float moveThreshold = slopedAxisThreshold(deadZone, s.lx,
+                                                  crossAxisGuard);
+  const float turnThreshold = slopedAxisThreshold(deadZone, s.ly,
+                                                  crossAxisGuard);
+
   if(!suppressMoveUntilNeutral) {
-    // Y keeps Gothic's animation-driven start/stop movement. Falling back
-    // below deadZone releases immediately; releaseZone only rearms after
-    // threshold chatter.
-    moveAxis.update(s.ly, deadZone, releaseZone);
+    // Y keeps Gothic's animation-driven start/stop movement. The guarded
+    // threshold starts a direction; the fixed deadZone releases it, while
+    // releaseZone only rearms after threshold chatter.
+    moveAxis.update(s.ly, moveThreshold, deadZone, releaseZone);
     setWorldAxis(A::Back,    moveAxis.negative(),
                  A::Forward, moveAxis.positive());
     }
 
   if(!suppressTurnUntilNeutral) {
-    // X is genuinely analog: remove the inner dead-zone and scale the classic
-    // turn rate in PlayerControl by the remaining -1..1 deflection.
+    // X is genuinely analog: guard only activation, then remove the fixed
+    // inner dead-zone and scale the classic turn rate by the remaining -1..1.
     const bool wasLeft  = turnAxis.negative();
     const bool wasRight = turnAxis.positive();
-    turnAxis.update(s.lx, deadZone, releaseZone);
+    turnAxis.update(s.lx, turnThreshold, deadZone, releaseZone);
     const float turn = turnAxis.scaled(s.lx, deadZone);
     ctrl.setGamepadTurn(turn);
     // Keep RotateL/RotateR edge semantics for lockpicking, classic combat and

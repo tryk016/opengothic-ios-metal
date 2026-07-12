@@ -134,6 +134,8 @@ Gothic::Gothic() {
   defaults->set("GAME", "voice",    -1);
   defaults->set("GAME", "scaleVideos", 1);
 
+  defaults->set("GAMEPAD", "crossAxisGuard", 0.12f);
+
   defaults->set("SKY_OUTDOOR", "zSunName",   "unsun5.tga");
   defaults->set("SKY_OUTDOOR", "zSunSize",   200);
   defaults->set("SKY_OUTDOOR", "zSunAlpha",  230);

@@ -188,6 +188,7 @@ shadowResolution=512    ; shadow-map size (iOS default 512; PC default 2048;
 [GAMEPAD]
 deadZone=0.25           ; axis press threshold (0..1)
 releaseZone=0.15        ; release threshold; must stay below deadZone
+crossAxisGuard=0.12     ; raises the perpendicular threshold near cardinal directions; 0 disables it
 triggerThreshold=0.50   ; how far RT/R2 must be pressed to register (0..1)
 lookSensitivity=0.20    ; right-stick look speed
 invertY=0               ; 1 = invert vertical look
@@ -201,9 +202,10 @@ saveSlots=5             ; rotating quick-save slot count
 
 A connected controller works out of the box — the uncommented `[GAMEPAD]`
 values above are the built-in defaults; commented entries are optional. Add a
-line only when you want a different value. Keep `0 < releaseZone < deadZone < 1`;
-the lower release threshold is the hysteresis that prevents noise near the
-press threshold from repeatedly latching movement.
+  line only when you want a different value. Keep `0 < releaseZone < deadZone < 1`;
+  the lower release threshold is the hysteresis that prevents noise near the
+  press threshold from repeatedly latching movement. `crossAxisGuard` rejects
+  the small perpendicular component produced by imperfect cardinal stick motion.
 
 ## Known limitations / follow-ups
 - **Save-slot thumbnails** are not captured on iOS yet — slots show name, date

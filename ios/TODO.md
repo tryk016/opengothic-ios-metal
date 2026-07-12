@@ -265,8 +265,8 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 
 ## ✅ Done — ideal controls, batch 1 (2026-07-10)
 - [x] **[GAMEPAD] config** (spec §8) — `deadZone`, `releaseZone`,
-      `triggerThreshold`, `lookSensitivity`, `invertY`, `saveSlots` and optional
-      transition-only `debugInput` diagnostics are read from
+      `crossAxisGuard`, `triggerThreshold`, `lookSensitivity`, `invertY`,
+      `saveSlots` and optional transition-only `debugInput` diagnostics are read from
       `Gothic.ini [GAMEPAD]` in `GamepadInput::loadConfig`.
 - [x] **Rotating quick-saves** (spec §6) — LB+Menu saves to `save_slot_1..N`
       (N=`saveSlots`), auto-named `Quick - <world>`; index persisted in
@@ -328,6 +328,9 @@ haptic intensity, glyph sizing, hint wording).
 - [x] Dialogue subtitle window enlarged / reflowed for phone screens.
 - [x] Dialogue **choice** list enlarged and made touch-friendly.
 - [x] Main-menu text size verified after the uiScale change.
+- [x] Controller-layout labels wrap to at most two lines, use height-aware
+      callout spacing, reserve the build-version line, and infer EN/DE/PL from
+      the active `MENU.DAT` strings (including Polish data with `GAME.language=-1`).
 
 ## ⏳ To do — Language
 - [ ] Polish requires Polish game data (e.g. GOG Gold Edition or a PL install);

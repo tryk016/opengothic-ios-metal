@@ -72,11 +72,13 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
   best healing (←) / mana (→) potion. A slot bound to the torch is a toggle: press once to light it,
   press again to stow it back into the inventory.
 - **Left-stick response:** Y keeps Gothic's animation-driven movement with press/release hysteresis;
-  X turns proportionally to the deflection. Returning to neutral, opening a ring/UI, disconnecting or
-  resuming the app releases controller-owned actions before input can re-arm.
+  X turns proportionally to the deflection. A sloped axial guard rejects accidental movement while the
+  stick is held mostly sideways (and accidental turning while held mostly forward/back). Returning to
+  neutral, opening a ring/UI, disconnecting or resuming the app releases controller-owned actions before
+  input can re-arm.
 - Config lives in `Documents/Gothic.ini` under `[GAMEPAD]` — `deadZone`, `releaseZone`,
-  `lookSensitivity`, `invertY`, `triggerThreshold`, `saveSlots`, `noStuckProtect` (quick-slot bindings
-  are stored there too).
+  `crossAxisGuard`, `lookSensitivity`, `invertY`, `triggerThreshold`, `saveSlots`, `noStuckProtect`
+  (quick-slot bindings are stored there too).
 
 **On-screen virtual gamepad (no controller):** a full pad is drawn during play — move pad + camera area,
 A/B/X/Y, shoulders/triggers, sticks, D-pad, View/Menu — using the Xelu glyphs. Tap a quick-ring button,
@@ -109,6 +111,7 @@ shadowResolution=512    ; shadow-map size (iOS default 512, PC 2048)
 [GAMEPAD]
 deadZone=0.25
 releaseZone=0.15        ; release threshold; keep lower than deadZone
+crossAxisGuard=0.12     ; suppress perpendicular drift near cardinal directions; 0 disables it
 lookSensitivity=0.20
 invertY=0
 saveSlots=5             ; rotating quick-save slots

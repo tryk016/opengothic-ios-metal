@@ -4,15 +4,25 @@
 
 // Pure state reducer for one signed gamepad axis. It deliberately owns no
 // callbacks: consumers compare positive()/negative() before and after update
-// and decide which gameplay actions to press or release. The press threshold
-// also releases an active direction; the lower release threshold only rearms
-// a direction after the stick has returned to the neutral band.
+// and decide which gameplay actions to press or release. Activation may use a
+// higher threshold than an already-active direction; the lower release
+// threshold only rearms a direction after the stick returns to neutral.
 class GamepadAxisState final {
   public:
     constexpr void update(float value, float pressThreshold,
                           float releaseThreshold) {
+      update(value, pressThreshold, pressThreshold, releaseThreshold);
+      }
+
+    // The activation threshold may be higher than the threshold which releases
+    // an already active direction. This lets a caller reject perpendicular
+    // stick drift without stopping a direction merely because the other axis
+    // changed after it was engaged.
+    constexpr void update(float value, float pressThreshold,
+                          float activeThreshold, float releaseThreshold) {
       const float press   = clamp01(pressThreshold);
-      const float release = min(clamp01(releaseThreshold), press);
+      const float active  = min(clamp01(activeThreshold),press);
+      const float release = min(clamp01(releaseThreshold),active);
       value = clampSigned(value);
 
       // A direction which has just been released must reach the inner neutral
@@ -41,7 +51,7 @@ class GamepadAxisState final {
             dir = Direction::Negative;
             negativeArmed = false;
             }
-          else if(value<=press)
+          else if(value<=active)
             dir = Direction::Neutral;
           break;
         case Direction::Negative:
@@ -49,7 +59,7 @@ class GamepadAxisState final {
             dir = Direction::Positive;
             positiveArmed = false;
             }
-          else if(value>=-press)
+          else if(value>=-active)
             dir = Direction::Neutral;
           break;
         }
@@ -159,7 +169,20 @@ constexpr bool ignoresThresholdChatter() {
   return !axis.positive() && !axis.negative();
   }
 
+constexpr bool guardedActivationKeepsActiveDirection() {
+  GamepadAxisState axis;
+  axis.update(0.31f, 0.25f, 0.15f);
+  if(!axis.positive())
+    return false;
+  axis.update(0.31f, 0.322f, 0.25f, 0.15f);
+  if(!axis.positive())
+    return false;
+  axis.update(0.25f, 0.322f, 0.25f, 0.15f);
+  return !axis.positive() && !axis.negative();
+  }
+
 static_assert(releaseAtPressAndRearmAtNeutral());
 static_assert(changesSignAndResets());
 static_assert(ignoresThresholdChatter());
+static_assert(guardedActivationKeepsActiveDirection());
 }
