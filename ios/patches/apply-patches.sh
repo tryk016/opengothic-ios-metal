@@ -189,3 +189,29 @@ else
     exit 1
   fi
 fi
+
+MTS="$ROOT/lib/Tempest/Engine/gapi/metal/mtswapchain.mm"
+
+# Change: triple-buffer the Metal swapchain. Tempest pins maximumDrawableCount
+# to 2 on iOS (memory guard for 2 GB iPhones), but with double buffering the
+# synchronous present path blocks inside nextDrawable()
+# (allowsNextDrawableTimeout is NO) for up to a full vsync while the previous
+# frame is still on glass - a fixed ~16 ms cost every frame that caps the game
+# near 30 fps on 60 Hz displays and ~60 fps on ProMotion, regardless of GPU
+# load. A third drawable (~15 MB at 2868x1320 BGRA) makes the acquire
+# non-blocking.
+if [ ! -f "$MTS" ]; then
+  echo "ERROR: not found: $MTS" >&2
+  exit 1
+fi
+if grep -Eq 'maximumDrawableCount\s+= 3' "$MTS"; then
+  echo "skip: mtswapchain.mm triple buffering (already patched)"
+else
+  perl -0777 -pi -e 's/(lay\.maximumDrawableCount\s*=\s*)2;/${1}3;/' "$MTS"
+  if grep -Eq 'maximumDrawableCount\s+= 3' "$MTS"; then
+    echo "patched: mtswapchain.mm maximumDrawableCount 2 -> 3 (triple buffering)"
+  else
+    echo "ERROR: failed to patch mtswapchain.mm drawable count (pattern not found)" >&2
+    exit 1
+  fi
+fi

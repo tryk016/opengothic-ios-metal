@@ -4,6 +4,38 @@ Tracked work beyond the core "build + run + control" milestone.
 Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 "ideal gamepad" control spec.
 
+## ✅ Done — fps unlock, HUD safe-area, ring icons, mobsi levitation (2026-07-12)
+- [x] **ProMotion unlock** — `preferredFrameRateRange(30,120,120)` on the
+      CADisplayLink (apply-patches.sh) + `CADisableMinimumFrameDurationOnPhone`
+      in Info.plist. DEVICE-CONFIRMED: menu 60, in-game 40–45 (was hard 30).
+- [x] **Triple buffering** — Tempest pins `maximumDrawableCount=2` on iOS
+      (2 GB-iPhone memory guard); with `allowsNextDrawableTimeout=NO` the
+      present path blocks in `nextDrawable()` up to a full vsync every frame.
+      Patched 2→3 via apply-patches.sh (~15 MB extra); lifts the fixed
+      per-frame stall on all displays, incl. non-ProMotion 60 Hz.
+- [x] **HUD safe-area** — `utils/safearea.{h,cpp,mm}` reads
+      `UIWindow.safeAreaInsets`×`contentScaleFactor`; cached per painted frame
+      in `MainWindow::paintEvent` (ctor can run pre-layout, and a same-size
+      relayout never reaches `resizeEvent` — Widget::resize early-outs).
+      HP/mana/swim bars, fps counter, world clock and the pad-hint bar no
+      longer fall under the rounded corners / Dynamic Island. 3D stays
+      full-bleed.
+- [x] **Quick-ring 3D item icons** (spec §4.5) — `QuickRing::paint` collects
+      live icons into `InventoryMenu`'s `InventoryRenderer` (resolved by cls
+      via one inventory-iterator pass; vanished items = empty tile). Renderer
+      flush gate widened: items also draw when the ring collected them while
+      the menu is closed (`Renderer::draw`), leftover icons cleared on ring
+      close.
+- [x] **NPC/player standing on top of mobsi** — root cause found in
+      `GameScript::fixNpcPosition`: when the npc overlaps another NPC at the
+      `ZS_POS` node, the ring-search down-ray (`+100cm → −1000cm`) can land on
+      TOP of the interactive's collider (`DynamicWorld::ray` hits `C_Object`
+      too) and the spot passes the npc-vs-npc-only `hasCollision()` check —
+      the user then plays the use animation standing on the barrel/cupboard.
+      Fixed: candidates whose ray hit an interactive (`ray.vob!=nullptr`) are
+      rejected. Note: dt-spike hypothesis refuted — game logic dt is already
+      clamped to 50 ms at the source (`MainWindow::tick`).
+
 ## ✅ Done — device-test round 1 fixes (2026-07-10)
 - [x] **Save crash** — `MainWindow::saveGame` captured a GPU thumbnail
       (`screenshoot`+`submit`+`readPixels`) which aborts in the Metal driver on
@@ -193,8 +225,8 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 
 ## ⏳ Spec gaps / simplifications (control spec §1–§8) — deliberate, not blocking
 - [ ] Rings are **single-ring v1**: no concentric multi-ring + centre-easing
-      (`SmoothIncrease`), no world-pause while open, no pulsing highlight, text
-      labels instead of 3D item icons (spec §4.3–§4.5).
+      (`SmoothIncrease`), no world-pause while open, no pulsing highlight
+      (spec §4.3–§4.4). 3D item icons done (2026-07-12).
 - [ ] Target-lock has no **camera auto-pull** toward the pinned target (spec §3).
 - [ ] No dedicated **Dead**-screen / **Container**-vs-Inventory / **MapDoc**
       pad contexts (folded into Menu/Inventory) (spec §1.1).
