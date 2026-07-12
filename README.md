@@ -69,7 +69,8 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
   tiles show real 3D item icons.
 - **Quick slots (D-pad ← / →):** bind any inventory item — potion, food, rune, scroll, torch — by
   highlighting it in the inventory and **holding D-pad ← or → for ~0.6 s**. Unassigned slots drink the
-  best healing (←) / mana (→) potion.
+  best healing (←) / mana (→) potion. A slot bound to the torch is a toggle: press once to light it,
+  press again to stow it back into the inventory.
 - **Left-stick response:** Y keeps Gothic's animation-driven movement with press/release hysteresis;
   X turns proportionally to the deflection. Returning to neutral, opening a ring/UI, disconnecting or
   resuming the app releases controller-owned actions before input can re-arm.

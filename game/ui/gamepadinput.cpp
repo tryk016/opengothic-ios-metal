@@ -140,6 +140,15 @@ void GamepadInput::useQuickSlot(int idx) {
       Haptics::impact(Haptics::Light);
       return;
       }
+  if(pl->isUsingTorch()) {
+    // slot bound to the torch: the lit torch is in the hand, not in the inventory;
+    // Inventory::use stows it back when cls is the torch class
+    pl->useItem(cls, Item::NSLOT, false);
+    if(!pl->isUsingTorch()) {
+      Haptics::impact(Haptics::Light);
+      return;
+      }
+    }
   Gothic::inst().onPrint("Quick slot: item not in inventory");
   }
 
