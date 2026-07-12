@@ -263,7 +263,19 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
       fallCount += float(dt);
       }
     else if(!dead) {
-      setState(InAir);
+      // The jump anim often ends slightly above the local ground (uneven terrain,
+      // collision), and the Jump->InAir handoff starts the fall from ~zero velocity:
+      // the npc would visibly hang in the air (30cm takes ~0.25s to fall). Attach to
+      // the ground right away when it is within regular step distance. Slide-band
+      // slopes and deep water keep the InAir path (rough landing / splash).
+      const float dYg  = pos.y-ground;
+      const bool  deep = std::isfinite(water) && ground+chest<water;
+      const bool  snap = gValid && !deep && 0.f<dYg && dYg<=stepHeight() &&
+                         !testSlide(pos,normal,info) &&
+                         npc.tryMove(Tempest::Vec3(0,-dYg,0));
+      setState(snap ? Run : InAir);
+      if(dYg>15.f)
+        Tempest::Log::i("[jump] end: dY=", int(dYg), snap ? " snapped" : " fall");
       }
     return true;
     }
