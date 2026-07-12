@@ -6,6 +6,10 @@
 	<string>English</string>
 	<key>CFBundleExecutable</key>
 	<string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
+	<key>CFBundleDisplayName</key>
+	<string>OpenGothic</string>
+	<key>CFBundleName</key>
+	<string>OpenGothic</string>
 	<key>CFBundleGetInfoString</key>
 	<string>${MACOSX_BUNDLE_INFO_STRING}</string>
 	<key>CFBundleIconFile</key>
@@ -15,9 +19,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleLongVersionString</key>
-	<string>${MACOSX_BUNDLE_LONG_VERSION_STRING}</string>
-	<key>CFBundleName</key>
-	<string>${MACOSX_BUNDLE_BUNDLE_NAME}</string>
+	<string>OpenGothic 1.0</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
