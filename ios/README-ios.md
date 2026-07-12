@@ -75,9 +75,11 @@ on-screen alert instead of a crash.
 
 ## Recommended settings (do this first)
 
-The engine defaults to full native resolution with SSAO on — on a phone that
-means ~17–25 fps, sluggish menus and slow saves. Set this once after the first
-launch; the change applies live, no restart needed:
+The hard 30 fps cap is gone — the iOS build now unlocks ProMotion / high refresh.
+Device-confirmed: ~60 fps in menus and ~40–45 fps in-game on recent hardware
+(was a hard 30). The engine still defaults to full native resolution with SSAO
+on, which drags the 3D scene down and heats the phone. Set the two options below
+once after the first launch; the change applies live, no restart needed:
 
 **Path A — in-game menu (no file editing):**
 1. Options → Video → *resolution*: **upscale(half)** (safe everywhere) or
@@ -91,12 +93,15 @@ HUD, menus and subtitles always stay sharp at native resolution.
 **Path B — the same via config files:** in `Documents/Gothic.ini` set
 `vidResIndex` and `zCloudShadowScale` as shown in the config reference below.
 
-**Optional frame cap** — steadier pacing and less thermal throttling on long
-sessions. Create `Documents/system/SystemPack.ini` (if it does not exist):
+**Optional frame cap** — the build runs uncapped by default (recommended, so
+ProMotion can do its job). Add a cap only if you want steadier pacing or less
+heat / battery drain on long sessions, and keep it at your display's refresh —
+capping below in-game fps just undoes the ProMotion unlock. Create
+`Documents/system/SystemPack.ini` (if it does not exist):
 
 ```ini
 [PARAMETERS]
-FPS_Limit=30       ; 0 = uncapped
+FPS_Limit=60       ; 0 = uncapped (default). Don't set below ~45 or you undo ProMotion.
 ```
 
 ---
@@ -122,6 +127,24 @@ FPS_Limit=30       ; 0 = uncapped
 | Pause menu | Menu | Options |
 | Quick save | LB + Menu | L1 + Options |
 | Quick load | LB + View | L1 + Touchpad |
+| Warp to nearest waypoint (unstuck) | hold L3 + R3 ~2 s | hold L3 + R3 ~2 s |
+
+Notes on feel and on-screen input:
+- **Quick-rings** are *hold-to-aim*: hold the ring button, steer the highlight
+  with the right stick, release to equip a weapon / use an item. Contents are
+  pulled live from your inventory and shown as **real 3D item icons**.
+- **Target lock-on** (R3) pins the current focus via the engine's native focus
+  (not a camera hack); it auto-releases when the target dies or leaves, and
+  D-pad ◀ / ▶ switch between targets.
+- **On-screen virtual gamepad:** with no controller, a full pad is drawn during
+  play (buttons, sticks, D-pad, move + camera area). Tap a ring button, drag to
+  aim, release to activate. It **auto-hides the moment a controller connects**.
+- **Controls-help hint bar** flashes context-sensitive button prompts, and a
+  **lock-on reticle** brackets the pinned target (gamepad only).
+- **Haptics** fire on taking damage, on lock-on / ring-commit, and on quick-save.
+- **HUD is safe-area aware** — HP/mana/swim bars, world clock, fps counter and
+  the hint bar avoid the notch / Dynamic Island and the rounded corners; the 3D
+  scene stays full-bleed.
 
 ---
 ## Config reference (Documents/Gothic.ini)
@@ -156,10 +179,9 @@ A connected controller works out of the box — every `[GAMEPAD]` value above is
 the built-in default. Add a line only when you want a different value.
 
 ## Known limitations / follow-ups
-- **Quick save/load** combos are detected but not yet bound to an engine action
-  (`KeyCodec::Action` has no save/load entry) — currently logged. Needs a hook.
-- **Lock-on** is mapped provisionally to `LookBack`; revisit against Gothic's
-  targeting.
+- **Save-slot thumbnails** are not captured on iOS yet — slots show name, date
+  and in-game time, but the preview picture is blank (the GPU screenshot readback
+  aborted in the Metal driver, so a placeholder is saved instead).
 - **Mesh shaders** are defaulted **off** on iOS for GPU compatibility; modern
   Apple GPUs (A17 Pro / M-series) could re-enable them.
 - **No TestFlight / App Store** — requires a paid Apple Developer account and
@@ -167,6 +189,11 @@ the built-in default. Add a line only when you want a different value.
   Sideloading for personal use avoids review entirely.
 - `increased-memory-limit` entitlement may be stripped under free signing; large
   worlds rely on the device's default per-app limit (fine on modern devices).
+
+> Quick save/load and native target lock-on were previously listed here as
+> unfinished. Both are now implemented and **device-confirmed** — quick save/load
+> (incl. the earlier save crash-to-home) works from menus and gamepad, and lock-on
+> uses the engine's native focus. See [`TODO.md`](TODO.md) for the full status.
 
 ## Disabling the increased-memory-limit entitlement
 If free signing rejects it, delete these two lines from `Info.plist.in`:

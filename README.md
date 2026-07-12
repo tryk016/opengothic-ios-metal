@@ -4,12 +4,12 @@ An **unofficial iOS port** of [OpenGothic](https://github.com/Try/OpenGothic) �
 re-implementation of *Gothic II: Night of the Raven*. This fork adds the plumbing to build, sideload,
 and play OpenGothic on iPhone/iPad with a Bluetooth controller **or** a full on-screen virtual gamepad.
 
-> ### ⚠️ Work in progress — not yet fully tested
-> This fork is under **active development** and has **not been verified end-to-end on a device** yet.
-> The code compiles on the CI iOS toolchain, but gameplay, the controller mapping, the on-screen
-> virtual gamepad, save/load, haptics and the graphics/controller glyphs still need on-device testing
-> and tuning. Expect rough edges and bugs. See [`ios/TODO.md`](ios/TODO.md) for current status and
-> known gaps.
+> ### ⚠️ Work in progress
+> This fork is under **active development**. The core loop — gameplay, the controller mapping, the
+> on-screen virtual gamepad, save/load and haptics — has been **tested and confirmed on a device**,
+> and the hard 30 fps cap is lifted (ProMotion). It is still rough in places and being tuned, so
+> expect bugs. See [`ios/TODO.md`](ios/TODO.md) for the current, device-verified status and the
+> remaining gaps.
 
 > ### Credit
 > **The entire engine is the work of [Try](https://github.com/Try) and the OpenGothic contributors.**
@@ -100,7 +100,8 @@ saveSlots=5             ; rotating quick-save slots
 
 ### Known limitations
 
-- **Not fully tested on-device yet** — this is a work in progress (see the notice above and `ios/TODO.md`).
+- **Still a work in progress** — the core game loop is device-tested, but expect rough edges and
+  ongoing tuning (see the notice above and `ios/TODO.md`).
 - Save-slot preview thumbnails are not captured on iOS yet (slots show name, date and in-game time, but a
   blank picture).
 - Sideload certificate expires weekly (auto-refresh via AltStore/SideStore).
