@@ -44,6 +44,8 @@ GamepadState readState(GCExtendedGamepad* g) {
   s.ry = g.rightThumbstick.yAxis.value;
   s.lt = g.leftTrigger.value;
   s.rt = g.rightTrigger.value;
+  s.ltPressed = g.leftTrigger.isPressed;
+  s.rtPressed = g.rightTrigger.isPressed;
 
   s.a = g.buttonA.isPressed;
   s.b = g.buttonB.isPressed;
@@ -90,6 +92,8 @@ bool* buttonField(GamepadState& state, GamepadButton button) {
     case GamepadButton::Y:         return &state.y;
     case GamepadButton::LB:        return &state.lb;
     case GamepadButton::RB:        return &state.rb;
+    case GamepadButton::LT:        return &state.ltPressed;
+    case GamepadButton::RT:        return &state.rtPressed;
     case GamepadButton::L3:        return &state.l3;
     case GamepadButton::R3:        return &state.r3;
     case GamepadButton::DpadUp:    return &state.dup;
@@ -154,6 +158,9 @@ void installButtonHandlers(GCExtendedGamepad* gamepad) {
   installButtonHandler(gamepad.buttonY,                 GamepadButton::Y);
   installButtonHandler(gamepad.leftShoulder,            GamepadButton::LB);
   installButtonHandler(gamepad.rightShoulder,           GamepadButton::RB);
+  // Triggers stay analog-only. Their configurable threshold is applied by
+  // GamepadInput; GCControllerButtonInput.isPressed uses an Apple-defined
+  // threshold which may not match Gothic.ini.
   installButtonHandler(gamepad.leftThumbstickButton,    GamepadButton::L3);
   installButtonHandler(gamepad.rightThumbstickButton,   GamepadButton::R3);
   installButtonHandler(gamepad.dpad.up,                 GamepadButton::DpadUp);

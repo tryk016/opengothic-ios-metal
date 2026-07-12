@@ -27,28 +27,25 @@ namespace {
 
 struct Loc {
   const char* title;
-  const char* itemRing;
-  const char* map;
+  const char* ltAction;
+  const char* lbAction;
   const char* move;
-  const char* walkRun;
-  const char* melee;
-  const char* ranged;
-  const char* quickSlots;
-  const char* parry;
-  const char* magicRing;
-  const char* weapon;
-  const char* jump;
   const char* sneak;
+  const char* itemRing;
+  const char* statusPrev;
+  const char* questNext;
+  const char* weaponMagicRing;
+  const char* rtAction;
+  const char* rbAction;
+  const char* weapon;
+  const char* special;
+  const char* jump;
   const char* action;
   const char* camera;
   const char* targetLock;
   const char* inventory;
-  const char* questLog;
-  const char* status;
+  const char* map;
   const char* gameMenu;
-  const char* quickSave;
-  const char* quickLoad;
-  const char* unstuck;
   const char* tap;
   const char* hold;
   };
@@ -59,82 +56,73 @@ struct Loc {
 const Loc& loc(ScriptLang language) {
   static const Loc en = {
     "Controller layout",
-    "Item quick-ring",
-    "Map",
+    "Draw bow / Block / Aim",
+    "Left attack / Walk",
     "Move / Turn",
-    "Walk / Run",
-    "Melee weapon",
-    "Ranged weapon",
-    "Quick slot 1 / 2",
-    "Parry",
-    "Magic quick-ring",
-    "Draw / sheathe weapon",
-    "Jump / Climb",
     "Sneak",
-    "Action / Attack",
-    "Camera / Flick: switch target",
+    "Item quick-ring",
+    "Status / Previous target",
+    "Quest log / Next target",
+    "Weapons / Magic ring",
+    "Draw melee / Attack / Shoot / Cast",
+    "Right attack / Look back",
+    "Draw / sheathe weapon",
+    "Melee special",
+    "Jump / Climb",
+    "Interact / Use",
+    "Camera",
     "Target lock",
     "Inventory",
-    "Quest log",
-    "Status",
+    "Map",
     "Game menu",
-    "Quick save",
-    "Quick load",
-    "Teleport when stuck",
     "tap",
     "hold",
     };
   static const Loc de = {
     "Controller-Belegung",
-    "Gegenstands-Rad",
-    "Karte",
+    "Bogen ziehen / Blocken / Zielen",
+    "Linker Angriff / Gehen",
     "Bewegen / Drehen",
-    "Gehen / Laufen",
-    "Nahkampfwaffe",
-    "Fernkampfwaffe",
-    "Schnellslot 1 / 2",
-    "Parieren",
-    "Magie-Rad",
-    "Waffe ziehen / wegstecken",
-    "Springen / Klettern",
     "Schleichen",
-    "Aktion / Angriff",
-    "Kamera / Ausschlag: Ziel wechseln",
+    "Gegenstands-Rad",
+    "Status / Vorheriges Ziel",
+    "Tagebuch / N\xE4" "chstes Ziel",
+    "Waffen- / Magie-Rad",
+    "Nahkampf / Angriff / Schuss / Zauber",
+    "Rechter Angriff / Zur\xFC" "ckblick",
+    "Waffe ziehen / wegstecken",
+    "Nahkampf-Spezialangriff",
+    "Springen / Klettern",
+    "Interagieren / Benutzen",
+    "Kamera",
     "Ziel fixieren",
     "Inventar",
-    "Tagebuch",
-    "Status",
+    "Karte",
     "Spielermen\xFC",
-    "Schnellspeichern",
-    "Schnellladen",
-    "Teleport, wenn man feststeckt",
     "kurz",
     "halten",
     };
   static const Loc pl = {
     "Uk\xB3" "ad kontrolera",
-    "Ko\xB3o przedmiot\xF3w",
-    "Mapa",
+    "Dobycie \xB3uku / Blok / Celowanie",
+    "Atak w lewo / Ch\xF3" "d",
     "Ruch / skr\xEAt",
-    "Ch\xF3" "d / bieg",
-    "Bro\xF1 bia\xB3" "a",
-    "Bro\xF1 dystansowa",
-    "Szybki slot 1 / 2",
-    "Parowanie",
-    "Ko\xB3o magii",
-    "Dob\xB9" "d\x9F / schowaj bro\xF1",
-    "Skok / wspinaczka",
     "Skradanie",
-    "Akcja / atak",
-    "Kamera / wychylenie: zmiana celu",
+    "Ko\xB3o przedmiot\xF3w",
+    "Statystyki / Poprzedni cel",
+    "Dziennik zada\xF1 / Nast\xEApny cel",
+    "Ko\xB3o broni / Magii",
+    "Bro\xF1 bia\xB3" "a / Atak / Strza\xB3 / Czar",
+    "Atak w prawo / Spojrzenie wstecz",
+    "Dob\xB9" "d\x9F / schowaj bro\xF1",
+    "Specjalny atak wr\xEA" "cz",
+    "Skok / wspinaczka",
+    "Interakcja / U\xBFycie",
+    "Kamera",
     "Blokada celu",
     "Ekwipunek",
-    "Dziennik zada\xF1",
-    "Statystyki",
+    "Mapa",
     "Menu gry",
-    "Szybki zapis",
-    "Szybkie wczytanie",
-    "Teleport, gdy posta\xE6 utknie",
     "kr\xF3tko",
     "przytrzymaj",
     };
@@ -268,32 +256,27 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
 
   const int   th     = fnt.pixelSize();
   const int   s      = std::max(18, int(26.f*scale));       // glyph side
-  const int   rowH   = std::max(s,th) + int(8.f*scale);
   const int   gap    = int(10.f*scale);
   const int   tokGap = int(6.f*scale);
   const int   margin = int(18.f*scale);
   const int   lineT  = std::max(1, int(2.f*scale));
   const int   textGap= std::max(1, int(2.f*scale));
-  const int   footerRowH = std::max(rowH,2*th+textGap+int(4.f*scale));
   const Color ink    = Color(0.86f,0.78f,0.60f,0.65f);
 
   // Title.
   const auto ts = fnt.textSize(L.title);
   fnt.drawText(p, (w-ts.w)/2, margin+ts.h, L.title);
 
-  // Vertical bands: title / View+Menu callouts / diagram / combo footer.
+  // Vertical bands: title / View+Menu callouts / diagram.
   const int topBandY = margin + ts.h + int(10.f*scale);
   const int topBlockH= std::max(s,2*th+textGap);
   const int imgTop   = topBandY + topBlockH + int(14.f*scale);
 
   // The menu draws its build string after this page. Reserve its real glyph
-  // box explicitly so the two combo rows can never overlap it.
+  // box explicitly so the diagram can never overlap it.
   const int versionTop  = reserveVersionLine ? h-int(25.f*scale)-th : h;
-  const int footerBot   = std::min(h-margin, versionTop-gap);
-  const int cy2         = footerBot-footerRowH/2;
-  const int cy1         = cy2-footerRowH;
   const int imgBot      = std::max(imgTop+1,
-                                  cy1-footerRowH/2-int(12.f*scale));
+                                  std::min(h-margin,versionTop-gap));
 
   auto widestTwoLine = [&](std::initializer_list<const char*> labels) {
     int ret = 0;
@@ -301,13 +284,13 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
       ret = std::max(ret,minimumTwoLineWidth(fnt,label));
     return ret;
     };
-  const int leftSingleW = widestTwoLine({L.itemRing,L.map,L.move,L.walkRun,
-                                         L.melee,L.ranged});
-  const int leftDoubleW = minimumTwoLineWidth(fnt,L.quickSlots) + s+tokGap/2;
-  const int rightW = widestTwoLine({L.parry,L.magicRing,L.weapon,L.jump,
-                                    L.sneak,L.action,L.camera,L.targetLock});
+  const int leftW = widestTwoLine({L.ltAction,L.lbAction,L.move,L.sneak,
+                                   L.itemRing,L.statusPrev,L.questNext,
+                                   L.weaponMagicRing});
+  const int rightW = widestTwoLine({L.rtAction,L.rbAction,L.weapon,L.special,
+                                    L.jump,L.action,L.camera,L.targetLock});
   const int requiredColW = margin+2*gap+s+
-                           std::max({leftSingleW,leftDoubleW,rightW});
+                           std::max(leftW,rightW);
   const int maxColW = std::max(1,(w-4*s)/2);
   const int colW = std::clamp(std::max(int(float(w)*0.30f),requiredColW),
                               1,maxColW);
@@ -355,20 +338,21 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
   // Keep in sync with GamepadInput::tickWorld. Sorted by anchor height so the
   // height-aware callout rows roughly track their buttons.
   const Row left[] = {
-    {PadGlyph::LT,       PadGlyph::LT,        1, L.itemRing,   0.251f,0.068f},
-    {PadGlyph::LB,       PadGlyph::LB,        1, L.map,        0.268f,0.137f},
-    {PadGlyph::LStick,   PadGlyph::LStick,    1, L.move,       0.260f,0.446f},
-    {PadGlyph::L3,       PadGlyph::L3,        1, L.walkRun,    0.260f,0.490f},
-    {PadGlyph::DPadUp,   PadGlyph::DPadUp,    1, L.melee,      0.378f,0.595f},
-    {PadGlyph::DPadLeft, PadGlyph::DPadRight, 2, L.quickSlots, 0.345f,0.643f},
-    {PadGlyph::DPadDown, PadGlyph::DPadDown,  1, L.ranged,     0.378f,0.690f},
+    {PadGlyph::LT,        PadGlyph::LT,        1, L.ltAction,        0.251f,0.068f},
+    {PadGlyph::LB,        PadGlyph::LB,        1, L.lbAction,        0.268f,0.137f},
+    {PadGlyph::LStick,    PadGlyph::LStick,    1, L.move,            0.260f,0.446f},
+    {PadGlyph::L3,        PadGlyph::L3,        1, L.sneak,           0.260f,0.490f},
+    {PadGlyph::DPadUp,    PadGlyph::DPadUp,    1, L.itemRing,        0.378f,0.595f},
+    {PadGlyph::DPadLeft,  PadGlyph::DPadLeft,  1, L.statusPrev,      0.345f,0.643f},
+    {PadGlyph::DPadRight, PadGlyph::DPadRight, 1, L.questNext,       0.411f,0.643f},
+    {PadGlyph::DPadDown,  PadGlyph::DPadDown,  1, L.weaponMagicRing, 0.378f,0.690f},
     };
   const Row right[] = {
-    {PadGlyph::RT,     PadGlyph::RT,     1, L.parry,      0.752f,0.068f},
-    {PadGlyph::RB,     PadGlyph::RB,     1, L.magicRing,  0.732f,0.137f},
+    {PadGlyph::RT,     PadGlyph::RT,     1, L.rtAction,   0.752f,0.068f},
+    {PadGlyph::RB,     PadGlyph::RB,     1, L.rbAction,   0.732f,0.137f},
     {PadGlyph::Y,      PadGlyph::Y,      1, L.weapon,     0.751f,0.334f},
-    {PadGlyph::B,      PadGlyph::B,      1, L.jump,       0.817f,0.420f},
-    {PadGlyph::X,      PadGlyph::X,      1, L.sneak,      0.683f,0.425f},
+    {PadGlyph::B,      PadGlyph::B,      1, L.special,    0.817f,0.420f},
+    {PadGlyph::X,      PadGlyph::X,      1, L.jump,       0.683f,0.425f},
     {PadGlyph::A,      PadGlyph::A,      1, L.action,     0.748f,0.514f},
     {PadGlyph::RStick, PadGlyph::RStick, 1, L.camera,     0.622f,0.648f},
     {PadGlyph::R3,     PadGlyph::R3,     1, L.targetLock, 0.622f,0.690f},
@@ -485,41 +469,8 @@ void PadDiagram::draw(Painter& p, const GthFont& fnt, int w, int h, float scale,
     dot(axp,ayp);
     };
   char viewLabel[192] = {};
-  char menuLabel[192] = {};
   std::snprintf(viewLabel,sizeof(viewLabel),"%s: %s / %s: %s",
-                L.tap,L.inventory,L.hold,L.questLog);
-  std::snprintf(menuLabel,sizeof(menuLabel),"%s: %s / %s: %s",
-                L.tap,L.status,L.hold,L.gameMenu);
+                L.tap,L.inventory,L.hold,L.map);
   topLbl(PadGlyph::View, viewLabel, true,  0.433f,0.438f);
-  topLbl(PadGlyph::Menu, menuLabel, false, 0.571f,0.433f);
-
-  // Footer: each combo owns a bounded column and wraps its description just
-  // like a side callout, so long translations cannot cross the panel edge.
-  const int plusW = fnt.textSize("+").w;
-  const int comboPrefixW = 2*s+plusW+3*tokGap;
-  auto combo = [&](PadGlyph::Btn b1, PadGlyph::Btn b2, const char* text,
-                   int x0, int x1, int cy) {
-    const int blockW = std::max(1,x1-x0);
-    const auto label = wrapLabel(fnt,text,std::max(1,blockW-comboPrefixW));
-    const int labelW = std::max(fnt.textSize(label.line1).w,
-                                fnt.textSize(label.line2).w);
-    int x = x0+std::max(0,(blockW-comboPrefixW-labelW)/2);
-    glyph(b1,x,cy-s/2);
-    x += s+tokGap;
-    fnt.drawText(p,x,cy+th/2,"+");
-    x += plusW+tokGap;
-    glyph(b2,x,cy-s/2);
-    x += s+tokGap;
-    drawLabel(label,x,cy,false);
-    };
-
-  const int groupGap = std::max(tokGap,int(42.f*scale));
-  combo(PadGlyph::LB,PadGlyph::Menu,L.quickSave,
-        margin,w/2-groupGap/2,cy1);
-  combo(PadGlyph::LB,PadGlyph::View,L.quickLoad,
-        w/2+(groupGap-groupGap/2),w-margin,cy1);
-
-  char buf[192] = {};
-  std::snprintf(buf,sizeof(buf),"(%s)  %s",L.hold,L.unstuck);
-  combo(PadGlyph::L3,PadGlyph::R3,buf,margin,w-margin,cy2);
+  topLbl(PadGlyph::Menu, L.gameMenu, false, 0.571f,0.433f);
   }

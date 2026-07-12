@@ -10,6 +10,8 @@ enum class GamepadButton : uint8_t {
   Y,
   LB,
   RB,
+  LT,
+  RT,
   L3,
   R3,
   DpadUp,
@@ -41,6 +43,7 @@ struct GamepadState {
 
   bool  a = false, b = false, x = false, y = false;
   bool  lb = false, rb = false;              // shoulders
+  bool  ltPressed = false, rtPressed = false;// backend digital trigger state
   bool  l3 = false, r3 = false;              // stick presses
   bool  dup = false, ddown = false, dleft = false, dright = false;
   bool  menu = false, options = false;       // menu (☰) / view

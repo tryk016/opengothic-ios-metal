@@ -73,7 +73,7 @@ on-screen alert instead of a crash.
 
 ---
 
-## Controls (Gothic Classic scheme)
+## Controls (contextual Gothic scheme)
 
 [![OpenGothic controller mapping for Xbox and PlayStation pads](../assets/controller/OpenGothic_Controller_Layout.svg)](../assets/controller/OpenGothic_Controller_Layout.svg)
 
@@ -82,56 +82,60 @@ on-screen alert instead of a crash.
 
 | Function | Xbox | PlayStation |
 |---|---|---|
-| Interact / attack | A | ✕ |
+| Interact / use / confirm | A | ✕ |
+| Melee special / Back | B | ○ |
+| Jump / climb | X | □ |
 | Draw / sheathe weapon | Y | △ |
-| Jump / climb / swim up | B | ○ |
-| Sneak / dive | X | □ |
 | Move / turn | Left stick | Left stick |
 | Camera | Right stick | Right stick |
-| Magic quick-ring | RB (hold) | R1 (hold) |
-| Item quick-ring | LT (hold) | L2 (hold) |
-| Walk / run | L3 | L3 |
+| Draw bow / aim; melee block | LT | L2 |
+| Draw melee; attack / shoot / cast | RT | R2 |
+| Walk; melee left attack | LB | L1 |
+| Look back; melee right attack | RB | R1 |
+| Sneak | L3 | L3 |
 | Target lock | R3 | R3 |
-| Switch locked target | flick Right stick ← / → | flick Right stick ← / → |
-| Parry | RT | R2 |
-| Melee / ranged weapon | D-pad ↑ / ↓ | D-pad ↑ / ↓ |
-| Quick slots 1 / 2 | D-pad ← / → | D-pad ← / → |
-| Map | LB | L1 |
-| Inventory (tap) / Quest log (hold) | View | Share / Create |
-| Status (tap) / Game menu (hold) | Menu | Options |
-| Quick save | LB + Menu | L1 + Options |
-| Quick load | LB + View | L1 + Share / Create |
+| Items ring | D-pad ↑ | D-pad ↑ |
+| Weapons / Magic ring | D-pad ↓ | D-pad ↓ |
+| Status / previous combat target | D-pad ← | D-pad ← |
+| Quest log / next combat target | D-pad → | D-pad → |
+| Inventory (tap) / Map (hold) | View | Share / Create |
+| Game menu | Menu | Options |
 | Unstuck teleport | hold L3 + R3 ~2 s | hold L3 + R3 ~2 s |
 
 </details>
 
 Notes on feel and on-screen input:
-- **Quick-rings** are *hold-to-aim*: hold the ring button, steer the highlight
-  with the right stick, release to equip magic / use an item. Contents are
-  pulled live from your inventory and shown as **real 3D item icons**.
+- **There are two separate quick-rings**, and each has two concentric rows.
+  D-pad ↑ opens Items (4 inner + 9 outer slots); D-pad ↓ opens
+  Weapons / Magic (equipped melee and ranged weapons inside, 7 spell-book
+  slots outside). D-pad ↑/↓ also switches between the panels while one is open.
+  Aim by right-stick angle and distance, press A or RT to use the selected slot,
+  or B to cancel. Slots show **real 3D item icons**.
+- **Both panels fill automatically.** Items takes potions, food and torches
+  from the live inventory (9 outer slots first, then 4 inner); a lit torch is
+  added synthetically so it can be stowed again. Weapons / Magic uses the
+  equipped melee/ranged weapons and active spell-book slots 4–10.
 - **Target lock-on** (R3) pins the current focus via the engine's native focus
   (not a camera hack); it auto-releases when the target dies or leaves. While
-  locked, a hard horizontal **flick of the right stick** steps to the next /
-  previous target.
-- **Quick slots** (D-pad ◀ / ▶) fire any item you bind to them — potion, food,
-  rune, scroll, torch. To bind: open the inventory, highlight the item and
-  **hold D-pad ◀ or ▶ for ~0.6 s** (a short press still navigates). Slots
-  persist in `Gothic.ini`; unassigned slots drink the best healing (◀) / mana
-  (▶) potion. A slot bound to the torch toggles it: first press lights the
-  torch, second press stows it back into the inventory (bind the torch while
-  one is still in the inventory — a lit torch has no row to highlight).
-- **System buttons:** LB opens the map. Tap View for inventory or hold it for
-  ~0.6 s for the quest log; tap Menu for character status or hold it for
-  ~0.6 s for the game menu. LB+View/Menu wins over tap/hold and performs the
-  rotating quick load/save shortcut.
+  locked, **D-pad ◀ / ▶** steps to the previous / next target.
+- **Contextual combat:** LT blocks in melee and aims a bow; RT attacks, shoots
+  or casts. LB/RB become left/right melee attacks and otherwise provide
+  walk/look-back. Outside target lock, D-pad ◀/▶ opens status/the quest log;
+  while target lock is active it selects the previous/next target.
+- **Inventory:** LB/RB jumps to the previous/next sorted item category; the
+  sticks and D-pad retain normal grid navigation.
+- **System buttons:** tap View for inventory or hold it for ~0.6 s for the map.
+  Menu opens the game menu. Quick save/load remains available through the
+  engine's keyboard commands, but is not assigned to the controller.
 - **Left-stick response:** forward/back keeps Gothic's animation-driven motion
   but uses separate press/release thresholds; horizontal turning is scaled by
   the stick deflection. Rings, UI transitions, controller resets and app resume
   release held world actions and require a return to neutral before re-arming.
 - **On-screen virtual gamepad:** with no controller, a full pad is drawn during
-  play (buttons, sticks, D-pad, move + camera area). Tap a ring button, drag to
-  aim, release to activate. LB/View/Menu mirror the physical pad's map,
-  tap/hold and save/load chords. It **auto-hides the moment a controller connects**.
+  play (buttons, sticks, D-pad, move + camera area). It mirrors the physical
+  pad's contextual mapping and two D-pad quick-rings. It **auto-hides the moment
+  a controller connects**. While a ring is open, the corner D-pad ↑/↓ glyphs
+  switch panels, B cancels, and a drag/release elsewhere selects and uses a slot.
 - A **lock-on reticle** brackets the pinned target (gamepad only). The former
   transient controls-hint bar is disabled; the complete mapping lives in
   Options → Controls.
@@ -140,7 +144,7 @@ Notes on feel and on-screen input:
   (EN/DE/PL) for the whole mapping — instead of the keyboard bindings list,
   which is dead weight without a keyboard. B/Escape (or the touch Back button)
   returns to Options.
-- **Haptics** fire on taking damage, on lock-on / ring-commit, and on quick-save.
+- **Haptics** fire on taking damage and on lock-on / ring-commit.
 - **HUD is safe-area aware** — HP/mana/swim bars, world clock and fps counter
   avoid the notch / Dynamic Island and the rounded corners; the 3D scene stays
   full-bleed.
@@ -179,7 +183,6 @@ crossAxisGuard=0.12
 triggerThreshold=0.50
 lookSensitivity=0.20
 invertY=0
-saveSlots=5
 ```
 
 When upgrading from an older build, a root override may already exist with only
@@ -206,8 +209,8 @@ noStuckProtect=1        ; disable the L3+R3 unstuck warp
 debugInput=1            ; transition-only controller trace in stderr.log
 ```
 
-Quick-slot ids and the rotating-save index are managed by the game and written
-to this override automatically.
+The controller does not reserve any shortcut for quick save/load. The
+`useQuickSaveKeys` engine option above remains available for keyboard F5/F9.
 
 The build runs uncapped by default for ProMotion. An optional display-rate cap
 uses a different file, `Documents/system/SystemPack.ini`:
@@ -230,9 +233,10 @@ FPS_Limit=60            ; 0 = uncapped; do not cap below normal in-game fps
   worlds rely on the device's default per-app limit (fine on modern devices).
 
 > Quick save/load and native target lock-on were previously listed here as
-> unfinished. Both are now implemented and **device-confirmed** — quick save/load
-> (incl. the earlier save crash-to-home) works from menus and gamepad, and lock-on
-> uses the engine's native focus. See [`TODO.md`](TODO.md) for the full status.
+> unfinished. Both engine features are **device-confirmed** — the earlier save
+> crash-to-home is fixed and lock-on uses the engine's native focus. Quick
+> save/load is intentionally not mapped to the controller. See
+> [`TODO.md`](TODO.md) for the full status.
 
 ## Disabling the increased-memory-limit entitlement
 If free signing rejects it, delete these two lines from `Info.plist.in`:

@@ -8,18 +8,19 @@
       now drives `Camera::onRotateMouse` with per-axis dead-zones and a 50 ms
       local frame-time cap. Verify up/down, `invertY=1`, diagonal look and idle
       drift on hardware.
-- [ ] **System-button tap/hold + dedicated parry — implementation complete,
-      device confirmation pending.** LB opens the map; View tap/hold opens
-      inventory/quest log; Menu tap/hold opens status/game menu (600 ms).
-      LB+View/Menu remains rotating load/save and consumes every pending tap or
-      hold in either modifier order. A shared reducer handles physical and
-      touch input, queued between-frame taps, context resets and held-button
-      suppression. `Parade` now maps to the real melee/fist block in both G2
-      and classic/G1 control presets, so RT/R2 works without Action+Back.
+- [ ] **Contextual zGamePad-style controls + two quick-rings — implementation
+      complete, device confirmation pending.** LT blocks/aims, RT attacks,
+      shoots or casts, LB/RB provide walk/look-back or melee side attacks, L3
+      sneaks and X jumps. D-pad ↑ opens Items (automatic 4+9 slots), while
+      D-pad ↓ opens the separate Weapons / Magic panel (2 equipped weapons + 7
+      spell-book slots); both use concentric radial selection. D-pad ←/→ opens
+      status/log or switches combat focus. View tap/hold opens inventory/map;
+      Menu opens the game menu. Controller quick save/load and FPP are not
+      assigned. Verify every context, both rings, automatic contents and touch.
 
 ## ✅ Done — controller, landing, inventory and shadows (2026-07-12, rounds 2–5)
-> **DEVICE-CONFIRMED (round 3):** mobsi levitation gone (player + NPCs), the
-> magic quick-ring works, D-pad quick-slot binding works. **Round 4:** torch
+> **DEVICE-CONFIRMED (round 3):** mobsi levitation gone (player + NPCs), and the
+> former ring/icon input foundation worked. **Round 4:** torch
 > stow works and shadow maps at 512 are accepted on device. **Round 5:** the
 > external-controller movement stalls and post-jump hover are gone.
 - [x] **External-controller movement stability — device-confirmed.** The
@@ -32,19 +33,15 @@
       collision epsilon. Temporary `[jump]` / `[jumpup]` logs were removed
       after the clean device round.
 - [x] **Torch stow/refund — device-confirmed.** Stowing refunds one
-      `ItLsTorch`; the last lit torch can be returned through its quick slot
-      even though it has no inventory row. Light→stow is lossless.
-- [x] **D-pad, Gothic-Remake style** — ▲ draws melee (`WeaponMele`), ▼ bow/
-      crossbow (`WeaponBow`), ◀/▶ are **player-assignable quick slots**: hold
-      ◀/▶ ~0.6 s on a highlighted inventory item to bind (short press still
-      navigates); persisted as `[GAMEPAD] quickSlotL/R` (item cls id);
-      unassigned slots keep the classic best-heal / best-mana behavior.
-      Touch overlay mirrors all of it (binding is pad-only for now).
-- [x] **RB = magic quick-ring** (runes + scrolls, `ITM_CAT_RUNE`); the LT item
-      ring is back to potions/food only. The old weapon ring is gone — ▲/▼
-      cover weapon draw; picking a specific weapon happens in the inventory.
-- [x] **Target switch = right-stick flick** while locked (>0.75 deflection,
-      350 ms cooldown) — frees the D-pad for the slots.
+      `ItLsTorch`; light→stow is lossless even for the last lit torch.
+- [x] **Legacy Remake-style D-pad retired.** Direct weapon draw and the two
+      global `quickSlotL/R` bindings were replaced by the two D-pad radial
+      panels and contextual status/log/focus actions described above.
+- [x] **Legacy shoulder rings retired.** The former RB magic and LT item rings
+      were replaced by the separate, concentric-row Items and Weapons / Magic
+      D-pad panels.
+- [x] **Target switching moved from a right-stick flick to D-pad ←/→** while
+      locked; native focus validation and the lock-on reticle remain.
 - [x] **shadowResolution** — no longer hard-coded 2048: `[ENGINE]
       shadowResolution` in Gothic.ini, default **512 on iOS** (1024 showed no
       measurable device gain; 512 is now device-confirmed). Rebuilds live via
@@ -91,8 +88,8 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       while retaining `RotateL/RotateR` edges for classic combat, lockpicking
       and rotate+jump side-steps; the touch move-pad remains digital classic
       turning (`playercontrol.cpp:565`).
-- [x] **Runes & scrolls in the magic quick-ring** — `ITM_CAT_RUNE` is the Magic
-      ring filter; selecting a rune or scroll equips it.
+- [x] **Runes & scrolls in the Weapons / Magic panel** — the seven outer
+      spell-book slots expose the magic assigned to keys 4–10.
 - [x] **Mobsi levitation — round-2 diagnostics closed/superseded.** The added
       `[mobsi] attach:`/`[mobsi] quit:` data (`nodeDy≈97`, `fixMoved=0`) led to
       the root-vs-feet `Interactive::attach` fix documented above; the logs
@@ -140,8 +137,9 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 - [x] **B2** — context-aware pad dispatcher (`PadCtx` + `padContext()` +
       `dispatchKey()`): pad drives menus / dialogue / inventory via synthetic
       key events, not just gameplay. (`gamepadinput.*`, `mainwindow.*`)
-- [x] **B3** — gamepad quick save/load wired to `Gothic::quickSave/quickLoad`
-      with the F5/F9 guards (LB+Menu / LB+View). (`gamepadinput.cpp`)
+- [x] **B3 retired from the pad** — F5/F9 quick save/load remains an engine
+      keyboard feature, but LB+Menu / LB+View and the rotating controller slots
+      were deliberately removed for the contextual control scheme.
 - [x] **B5** — controller disconnect, lifecycle reset, ring and UI transition
       release only world actions actually held by the pad, then require neutral
       re-arm. A generation epoch covers resets occurring between rendered frames
@@ -230,7 +228,7 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 - **DEVICE-CONFIRMED (round 6):** slots show name/date/game-time, loading works
   from both the main menu and in-game menu, and Gothic.ini settings persist.
 - Follow-ups done: saves now **auto-named** "&lt;world&gt; - day D, H:MM" (menu; no
-  system keyboard on iOS) and "Quick - &lt;world&gt;, day D H:MM" (pad rotating);
+  system keyboard on iOS); the former rotating pad shortcut was later retired;
   temporary `[save]` breadcrumbs + PoolProbe call-sites removed (probe util kept
   dormant in `utils/poolprobe.*`); README "saving is broken" note replaced with
   a thumbnail-only limitation.
@@ -248,24 +246,23 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 - [x] **Target-lock via native focus** (spec §3) — R3 pins the current npc focus
       (`PlayerControl::toggleTargetLock`); `tickFocus` keeps it instead of
       re-finding by aim, and auto-releases when the target dies/leaves
-      (`World::validateFocus` + `Npc::isDead`). A horizontal right-stick flick
-      switches target
+      (`World::validateFocus` + `Npc::isDead`). D-pad ←/→ switches target
       (`focusLeft/focusRight` → `moveFocus`). Existing focus highlight shows it.
       Replaces the provisional R3→`LookBack`.
 
 ## ✅ Done — ideal controls, batch 1 (2026-07-10)
 - [x] **[GAMEPAD] config** (spec §8) — `deadZone`, `releaseZone`,
-      `crossAxisGuard`, `triggerThreshold`, `lookSensitivity`, `invertY`,
-      `saveSlots` and optional transition-only `debugInput` diagnostics are read from
+      `crossAxisGuard`, `triggerThreshold`, `lookSensitivity`, `invertY` and
+      optional transition-only `debugInput` diagnostics are read from
       `Gothic.ini [GAMEPAD]` in `GamepadInput::loadConfig`.
 - [x] **First-run iOS profile** — on the first successful launch with valid
       game data, when `Documents/Gothic.ini` is absent, create and flush a
-      focused override with performance, shadow, quick-save and complete
+      focused override with performance, shadow, keyboard quick-save and stable
       controller defaults; never copy or overwrite `system/Gothic.ini` and
       never auto-populate an existing root override (even an empty one).
-- [x] **Rotating quick-saves** (spec §6) — LB+Menu saves to `save_slot_1..N`
-      (N=`saveSlots`), auto-named `Quick - <world>`; index persisted in
-      `[GAMEPAD] padQuickSlot`. LB+View loads the last rotating slot.
+- [x] **Controller quick save/load retired.** The engine's guarded F5/F9 path
+      remains, but no controller button is reserved for it and the controller
+      `saveSlots` / `padQuickSlot` configuration is no longer documented.
 - [x] **Controller help + lock-on reticle** (spec §5) — the full mapping is
       available in Options → Controls; the former transient context-hint bar
       was retired because it duplicated that screen and obscured gameplay.
@@ -273,17 +270,17 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       overlay auto-hides when a gamepad is connected.
 
 ## ✅ Done — ideal controls, batch 2 (2026-07-10)
-- [x] **Radial rings** (spec §4) — RB opens the magic quick-bar (runes +
-      scrolls), LT the item quick-bar (potions + food); hold to aim with the
-      right stick, release to activate. Content is pulled live from inventory
-      and rendered with 3D item icons. `QuickRing` is owned by `GamepadInput`
-      and drawn by `MainWindow`.
+- [x] **Two radial panels** (spec §4) — D-pad ↑ opens Items with 4 inner + 9
+      outer slots filled automatically from potions, food and torches; D-pad ↓
+      opens Weapons / Magic with equipped melee
+      and ranged weapons inside + 7 spell-book slots outside. Right-stick
+      angle selects a segment and distance selects a row; A/RT activates and B
+      cancels. Live inventory objects render as 3D item icons.
 
 ## ✅ Done — ideal controls, batch 3 (2026-07-10)
 - [x] **Haptics** (spec §7) — `Haptics::impact` via `UIImpactFeedbackGenerator`
       (haptics.mm/.cpp split like systemmsg). Heavy pulse when the player's HP
-      drops (polled, no combat-code changes); light on lock/ring-commit; medium
-      on quick-save.
+      drops (polled, no combat-code changes); light on lock/ring-commit.
 - [x] **Stuck-protection** (spec §8) — hold L3+R3 ~2 s to warp to the nearest
       waypoint (`World::findWayPoint` + `Npc::setPosition`); opt out with
       `[GAMEPAD] noStuckProtect=1`.
@@ -297,22 +294,22 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 
 ## ✅ Done — full on-screen virtual gamepad (2026-07-10)
 - [x] World touch overlay is now a **full virtual pad** (16 glyph buttons):
-      A/B/X/Y, RB(magic ring)/RT(block)/LB(map + save/load modifier)/LT(item
-      ring), L3(walk)/R3(lock), D-pad (melee/bow + assignable slots), tap/hold
-      View/Menu, plus move pad + camera.
+      A/B/X/Y, contextual shoulders/triggers, L3(sneak)/R3(lock), D-pad (two
+      rings + status/log/focus), View tap/hold (inventory/map), Menu, plus move
+      pad + camera.
       Each wired to its action via `ctrl`/`uiAction`/new `MainWindow::pad*`
-      bridges. **Touch ring-selection**: tapping RB/LT opens the radial, drag aims
-      it, release activates (`GamepadInput::ring*` hooks). Uses Xelu glyphs.
+      bridges. Touch uses the same two modal radial panels and slot selection as
+      the physical controller. Uses Xelu glyphs.
       NOTE: button placement/sizes are v1 — tune on device.
 
 ## ⏳ Spec gaps / simplifications (control spec §1–§8) — deliberate, not blocking
-- [ ] Rings are **single-ring v1**: no concentric multi-ring + centre-easing
-      (`SmoothIncrease`), no world-pause while open, no pulsing highlight
-      (spec §4.3–§4.4). 3D item icons done (2026-07-12).
+- [ ] Concentric rings and radial centre-easing are implemented; on-device
+      tuning of row thresholds, sector highlight and touch selection remains.
 - [ ] Target-lock has no **camera auto-pull** toward the pinned target (spec §3).
 - [ ] No dedicated **Dead**-screen / **Container**-vs-Inventory / **MapDoc**
       pad contexts (folded into Menu/Inventory) (spec §1.1).
-- [ ] Inventory RB/LB **tab switching** + right-stick 3D item preview (spec §2.4).
+- [x] Inventory LB/RB jumps between the previous/next sorted item category.
+- [ ] Inventory right-stick 3D item preview remains pending (spec §2.4).
 - [ ] Overlay **daylight tint** (spec §5.5, optional).
 - [ ] Deferred B9/N1 background pause (needs on-device fiber testing).
 
@@ -330,5 +327,5 @@ haptic intensity and glyph sizing).
 - [x] README controller tables replaced by a clickable, HiDPI-safe mapping SVG;
       the complete text mapping remains available in a collapsed accessible
       fallback. Leader lines render above the pad body; Left stick/L3 and the
-      three D-pad actions use one bracket/leader each, and trigger/bumper depth
+      four D-pad actions use one bracket/leader each, and trigger/bumper depth
       matches a physical controller.

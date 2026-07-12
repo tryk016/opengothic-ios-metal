@@ -128,7 +128,6 @@ Gothic::Gothic() {
     iniFile->set("GAMEPAD",  "triggerThreshold",  0.50f);
     iniFile->set("GAMEPAD",  "lookSensitivity",   0.20f);
     iniFile->set("GAMEPAD",  "invertY",           0);
-    iniFile->set("GAMEPAD",  "saveSlots",         5);
     iniFile->flush();
     }
 #else

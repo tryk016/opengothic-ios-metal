@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdio>
 #include <algorithm>
+#include <initializer_list>
 #include <string>
 
 #include "game/playercontrol.h"
@@ -39,6 +40,11 @@ const char* actionName(A a) {
     case A::ActionGeneric: return "Action";
     case A::Jump:          return "Jump";
     case A::Parade:        return "Parade";
+    case A::PadAttack:     return "PadAttack";
+    case A::PadAim:        return "PadAim";
+    case A::PadAttackLeft: return "PadAttackLeft";
+    case A::PadAttackRight:return "PadAttackRight";
+    case A::PadSpecial:    return "PadSpecial";
     default:                return "Other";
     }
   }
@@ -51,6 +57,8 @@ const char* buttonName(GamepadButton b) {
     case GamepadButton::Y:         return "Y";
     case GamepadButton::LB:        return "LB";
     case GamepadButton::RB:        return "RB";
+    case GamepadButton::LT:        return "LT";
+    case GamepadButton::RT:        return "RT";
     case GamepadButton::L3:        return "L3";
     case GamepadButton::R3:        return "R3";
     case GamepadButton::DpadUp:    return "DpadUp";
@@ -97,6 +105,8 @@ bool buttonDown(const GamepadState& s, GamepadButton b) {
     case GamepadButton::Y:         return s.y;
     case GamepadButton::LB:        return s.lb;
     case GamepadButton::RB:        return s.rb;
+    case GamepadButton::LT:        return s.ltPressed;
+    case GamepadButton::RT:        return s.rtPressed;
     case GamepadButton::L3:        return s.l3;
     case GamepadButton::R3:        return s.r3;
     case GamepadButton::DpadUp:    return s.dup;
@@ -129,93 +139,8 @@ void GamepadInput::loadConfig() {
   trigThresh = f("triggerThreshold", 0.50f);
   lookSens   = f("lookSensitivity",  0.20f);
   invertY    = Gothic::settingsGetI("GAMEPAD","invertY")!=0;
-  const int slots = Gothic::settingsGetI("GAMEPAD","saveSlots");
-  saveSlots  = slots>0 ? slots : 5;
   stuckProtect = (Gothic::settingsGetI("GAMEPAD","noStuckProtect")==0); // opt-out
   debugInput = Gothic::settingsGetI("GAMEPAD","debugInput")!=0;
-
-  const int sl = Gothic::settingsGetI("GAMEPAD","quickSlotL");
-  const int sr = Gothic::settingsGetI("GAMEPAD","quickSlotR");
-  slotCls[0] = sl>0 ? size_t(sl) : 0;
-  slotCls[1] = sr>0 ? size_t(sr) : 0;
-  }
-
-void GamepadInput::useQuickSlot(int idx) {
-  auto* pl = worldPlayer();
-  if(pl==nullptr || idx<0 || idx>1)
-    return;
-  const size_t cls = slotCls[idx];
-  if(cls==0) {
-    // unassigned: keep the classic quick-potion behavior (heal / mana)
-    const A a = (idx==0) ? A::Heal : A::Potion;
-    ctrl.onKeyPressed(a, Event::K_NoKey, M::Primary);
-    ctrl.onKeyReleased(a, M::Primary);
-    return;
-    }
-  for(auto it=pl->inventory().iterator(Inventory::T_Inventory); it.isValid(); ++it)
-    if((*it).clsId()==cls) {
-      pl->useItem(cls, Item::NSLOT, false);
-      Haptics::impact(Haptics::Light);
-      return;
-      }
-  if(pl->isUsingTorch()) {
-    // slot bound to the torch: the lit torch is in the hand, not in the inventory;
-    // Inventory::use stows it back when cls is the torch class
-    pl->useItem(cls, Item::NSLOT, false);
-    if(!pl->isUsingTorch()) {
-      Haptics::impact(Haptics::Light);
-      return;
-      }
-    }
-  Gothic::inst().onPrint("Quick slot: item not in inventory");
-  }
-
-bool GamepadInput::assignQuickSlot(int idx) {
-  if(idx<0 || idx>1)
-    return false;
-  const size_t cls = owner.padInventorySelectedCls();
-  if(cls==0)
-    return false;
-  slotCls[idx] = cls;
-  Gothic::settingsSetI("GAMEPAD", idx==0 ? "quickSlotL" : "quickSlotR", int(cls));
-  Gothic::flushSettings();
-  Haptics::impact(Haptics::Medium);
-  Gothic::inst().onPrint(idx==0 ? "Assigned to left quick slot"
-                                : "Assigned to right quick slot");
-  return true;
-  }
-
-void GamepadInput::quickSaveRotating() {
-  auto& g = Gothic::inst();
-  const int slots = std::max(1, saveSlots);
-  int idx = Gothic::settingsGetI("GAMEPAD","padQuickSlot");
-  idx = (idx % slots) + 1;                         // 1..slots
-  Gothic::settingsSetI("GAMEPAD","padQuickSlot", idx);
-  Gothic::flushSettings();                          // survive restart
-  char slot[32] = {};
-  std::snprintf(slot, sizeof(slot), "save_slot_%d.sav", idx);
-  std::string nm = "Quick";
-  if(auto w = g.world()) {
-    const auto t = w->time();
-    char buf[128] = {};
-    std::snprintf(buf, sizeof(buf), "Quick - %.*s, day %d %d:%02d",
-                  int(w->name().size()), w->name().data(),
-                  int(t.day()), int(t.hour()), int(t.minute()));
-    nm = buf;
-    }
-  g.save(slot, nm);
-  Haptics::impact(Haptics::Medium);
-  }
-
-void GamepadInput::quickLoadRotating() {
-  const int idx = Gothic::settingsGetI("GAMEPAD","padQuickSlot");
-  if(idx<=0) {
-    Gothic::inst().quickLoad();                     // nothing rotated yet
-    return;
-    }
-  char slot[32] = {};
-  std::snprintf(slot, sizeof(slot), "save_slot_%d.sav", idx);
-  Gothic::inst().load(slot);
   }
 
 void GamepadInput::openMap() {
@@ -235,72 +160,95 @@ Npc* GamepadInput::worldPlayer() const {
   }
 
 const QuickRing* GamepadInput::activeRing() const {
-  if(ringMagic.isOpen())
-    return &ringMagic;
+  if(ringWeapons.isOpen())
+    return &ringWeapons;
   if(ringItems.isOpen())
     return &ringItems;
   return nullptr;
   }
 
 bool GamepadInput::ringOpen() const {
-  return ringMagic.isOpen() || ringItems.isOpen();
+  return ringWeapons.isOpen() || ringItems.isOpen();
   }
 
-void GamepadInput::openMagicRing() { openRing(ringMagic); }
-void GamepadInput::openItemRing()  { openRing(ringItems); }
+void GamepadInput::openWeaponsRing() { openRing(ringWeapons); }
+void GamepadInput::openItemRing()    { openRing(ringItems); }
 
 void GamepadInput::ringAim(float nx, float ny) {
-  QuickRing* r = ringMagic.isOpen() ? &ringMagic : (ringItems.isOpen() ? &ringItems : nullptr);
+  QuickRing* r = ringWeapons.isOpen() ? &ringWeapons : (ringItems.isOpen() ? &ringItems : nullptr);
   if(r!=nullptr)
     r->updateSelection(nx, ny);
   }
 
+void GamepadInput::pulseWorldAction(A action) {
+  ctrl.onKeyPressed(action, Event::K_NoKey, M::Primary);
+  ctrl.onKeyReleased(action, M::Primary);
+  }
+
+void GamepadInput::activateRingSelection(QuickRing& r) {
+  if(auto pl = worldPlayer()) {
+    if(auto action = r.commit(*pl))
+      pulseWorldAction(*action);
+    Haptics::impact(Haptics::Light);
+    }
+  else
+    r.close();
+  }
+
 void GamepadInput::ringCommit() {
-  QuickRing* r = ringMagic.isOpen() ? &ringMagic : (ringItems.isOpen() ? &ringItems : nullptr);
+  QuickRing* r = ringWeapons.isOpen() ? &ringWeapons : (ringItems.isOpen() ? &ringItems : nullptr);
   if(r==nullptr)
     return;
-  if(auto pl = worldPlayer())
-    r->commit(*pl);
-  else
-    r->close();
-  Haptics::impact(Haptics::Light);
+  activateRingSelection(*r);
   }
 
-void GamepadInput::quickSave() {
-  auto& g = Gothic::inst();
-  if(owner.padContext()==PadCtx::World &&
-     Gothic::settingsGetI("GAME","useQuickSaveKeys")!=0 &&
-     g.isInGameAndAlive() && !g.isPause())
-    quickSaveRotating();
-  }
-
-void GamepadInput::quickLoad() {
-  auto& g = Gothic::inst();
-  if(owner.padContext()==PadCtx::World &&
-     Gothic::settingsGetI("GAME","useQuickSaveKeys")!=0 && !g.isPause())
-    quickLoadRotating();
+void GamepadInput::ringCancel() {
+  if(ringWeapons.isOpen())
+    ringWeapons.close();
+  if(ringItems.isOpen())
+    ringItems.close();
   }
 
 void GamepadInput::openRing(QuickRing& r) {
-  if(auto pl = worldPlayer()) {
+  auto& g = Gothic::inst();
+  auto* w = g.world();
+  if(owner.padContext()!=PadCtx::World || w==nullptr || w->isCutsceneLock() ||
+     !g.isInGameAndAlive() || g.isPause())
+    return;
+  if(auto pl = w->player()) {
     releaseAllWorld();               // stop moving/attacking while the ring is up
+    ringWeapons.close();
+    ringItems.close();
     r.open(*pl);
     }
   }
 
-void GamepadInput::tickRing(const GamepadState& s) {
-  const bool magic = ringMagic.isOpen();
-  QuickRing& r     = magic ? ringMagic : ringItems;
-  const bool held  = magic ? s.rb : (s.lt > trigThresh);
-
+void GamepadInput::tickRing(
+    const GamepadState& s, const std::vector<GamepadButtonEvent>& events) {
+  QuickRing& r = ringWeapons.isOpen() ? ringWeapons : ringItems;
   r.updateSelection(s.rx, s.ry);
-  if(!held) {                        // released -> activate the aimed slice
-    if(auto pl = worldPlayer()) {
-      r.commit(*pl);
-      Haptics::impact(Haptics::Light);
-      }
-    else
-      r.close();
+
+  auto pressed = [&](GamepadButton button) {
+    return std::any_of(events.begin(),events.end(),[&](const auto& event) {
+      return event.button==button && event.pressed;
+      });
+    };
+  if(pressed(GamepadButton::B) || (s.b && !prev.b)) {
+    ringCancel();
+    return;
+    }
+  if(pressed(GamepadButton::DpadUp) || (s.dup && !prev.dup)) {
+    openRing(ringItems);
+    return;
+    }
+  if(pressed(GamepadButton::DpadDown) || (s.ddown && !prev.ddown)) {
+    openRing(ringWeapons);
+    return;
+    }
+  if(pressed(GamepadButton::A) || (s.a && !prev.a) ||
+     (s.rt>trigThresh && prev.rt<=trigThresh)) {
+    activateRingSelection(r);
+    return;
     }
   }
 
@@ -313,15 +261,10 @@ void GamepadInput::stuckTeleport() {
     pl->setPosition(wp->position());
   }
 
-void GamepadInput::edge(bool now, bool before, A a) {
-  if(now && !before)
-    ctrl.onKeyPressed(a, Event::K_NoKey, M::Primary);
-  else if(!now && before)
-    ctrl.onKeyReleased(a, M::Primary);
-  }
-
 void GamepadInput::setWorldHeld(A a, bool held) {
   auto& current = worldHeld[size_t(a)];
+  if(!held)
+    worldPulseRelease[size_t(a)] = false;
   if(current==held)
     return;
   current = held;
@@ -440,15 +383,11 @@ void GamepadInput::tickWorldSystemButtons(
 
     // Cancel every pending short/long variant before an effect changes the
     // routing context. Buttons still held become suppressed until release.
-    systemGesture.reset(s.lb,s.options,s.menu);
+    systemGesture.reset(s.options,s.menu);
     switch(effect) {
-      case E::Map:        openMap();                    break;
       case E::Inventory:  owner.uiAction(A::Inventory); break;
-      case E::QuestLog:   owner.uiAction(A::Log);       break;
-      case E::Status:     owner.uiAction(A::Status);    break;
+      case E::Map:        openMap();                    break;
       case E::GameMenu:   owner.uiAction(A::Escape);    break;
-      case E::QuickLoad:  quickLoad();                  break;
-      case E::QuickSave:  quickSave();                  break;
       case E::None:                                     break;
       }
     return true;
@@ -458,12 +397,10 @@ void GamepadInput::tickWorldSystemButtons(
     return dispatch(systemGesture.onButton(button,pressed,now));
     };
 
-  // Queue order preserves taps entirely contained between two game frames and
-  // lets either modifier order form an LB chord.
+  // Queue order preserves taps entirely contained between two game frames.
   for(const auto& event:events) {
     bool fired = false;
     switch(event.button) {
-      case GamepadButton::LB:      fired = feed(B::Lb,  event.pressed); break;
       case GamepadButton::Options: fired = feed(B::View,event.pressed); break;
       case GamepadButton::Menu:    fired = feed(B::Menu,event.pressed); break;
       default:                                                           break;
@@ -472,10 +409,7 @@ void GamepadInput::tickWorldSystemButtons(
       return;
     }
 
-  // Snapshot reconciliation covers controllers that omit a callback. LB is
-  // reconciled first so simultaneous LB+View/Menu is interpreted as a chord.
-  if(systemGesture.down(B::Lb)!=s.lb && feed(B::Lb,s.lb))
-    return;
+  // Snapshot reconciliation covers controllers that omit a callback.
   if(systemGesture.down(B::View)!=s.options && feed(B::View,s.options))
     return;
   if(systemGesture.down(B::Menu)!=s.menu && feed(B::Menu,s.menu))
@@ -488,8 +422,12 @@ void GamepadInput::suppressCarriedWorldInput() {
   suppressTurnUntilNeutral = true;
   suppressAUntilRelease    = true;
   suppressBUntilRelease    = true;
+  suppressXUntilRelease    = true;
+  suppressLbUntilRelease   = true;
+  suppressRbUntilRelease   = true;
+  suppressLtUntilRelease   = true;
   suppressRtUntilRelease   = true;
-  systemGesture.reset(true,true,true);
+  systemGesture.reset(true,true);
   }
 
 void GamepadInput::releaseAllWorld() {
@@ -499,6 +437,12 @@ void GamepadInput::releaseAllWorld() {
   moveAxis.reset();
   turnAxis.reset();
   worldPulseRelease.fill(false);
+  ltSemanticLatched = false;
+  ltLatchedSemantic = A::Idle;
+  if(gamepadWalkHeld) {
+    ctrl.setGamepadWalk(false);
+    gamepadWalkHeld = false;
+    }
   ctrl.setGamepadTurn(0.f);
   suppressCarriedWorldInput();
   }
@@ -524,7 +468,7 @@ void GamepadInput::tick(uint64_t dt) {
   // held world controls from the fresh final snapshot instead.
   if(input.droppedEvents!=0) {
     input.events.clear();
-    systemGesture.reset(s.lb,s.options,s.menu);
+    systemGesture.reset(s.options,s.menu);
     }
 
   if(s.generation!=observedControllerGen) {
@@ -532,6 +476,7 @@ void GamepadInput::tick(uint64_t dt) {
     // generation survives a fast reconnect so a stale held action is still
     // released even when no disconnected snapshot was rendered.
     releaseAllWorld();
+    ringCancel();
     observedControllerGen = s.generation;
     if(debugInput) {
       std::fprintf(stderr, "[pad] t=%llu controller-reset generation=%llu\n",
@@ -547,8 +492,11 @@ void GamepadInput::tick(uint64_t dt) {
     // It already discarded the input, so do not synthesize releases here.
     worldHeld.fill(false);
     worldPulseRelease.fill(false);
+    ltSemanticLatched = false;
+    ltLatchedSemantic = A::Idle;
     moveAxis.reset();
     turnAxis.reset();
+    gamepadWalkHeld = false;
     ctrl.setGamepadTurn(0.f);
     suppressCarriedWorldInput();
     observedInputGen = inputGen;
@@ -560,18 +508,29 @@ void GamepadInput::tick(uint64_t dt) {
       }
     }
   if(!s.connected) {                 // pad vanished mid-hold -> release everything (B5)
-    if(prev.connected)
+    if(prev.connected) {
       releaseAllWorld();
+      ringCancel();
+      }
+    else if(ringOpen() && owner.padContext()!=PadCtx::World) {
+      // Touch uses the same rings while no physical pad is connected. Keep a
+      // gameplay ring alive, but never let it retain items from an old world
+      // or draw above a menu/loading screen.
+      ringCancel();
+      }
     prev    = GamepadState{};
     prevCtx = PadCtx::Loading;
     return;
     }
 
-  // An open radial quick-bar captures all input until released.
-  if(ringMagic.isOpen() || ringItems.isOpen()) {
-    tickRing(s);
-    prev = s;
-    return;
+  // An open radial panel captures all input until confirm or cancel.
+  if(ringWeapons.isOpen() || ringItems.isOpen()) {
+    if(owner.padContext()==PadCtx::World) {
+      tickRing(s,input.events);
+      prev = s;
+      return;
+      }
+    ringCancel();
     }
 
   const PadCtx ctx = owner.padContext();
@@ -582,7 +541,6 @@ void GamepadInput::tick(uint64_t dt) {
   // Entering gameplay synchronizes one-shot edges with the physical state and
   // requires continuous controls to return to neutral before they can re-arm.
   if(ctx==PadCtx::World && prevCtx!=PadCtx::World) {
-    const bool carriedLb = prev.connected && prev.lb;
     const bool carriedView = prev.connected && prev.options;
     const bool carriedMenu = prev.connected && prev.menu;
     moveAxis.reset();
@@ -596,19 +554,17 @@ void GamepadInput::tick(uint64_t dt) {
       suppressTurnUntilNeutral = std::abs(prev.lx)>deadZone;
       suppressAUntilRelease    = prev.a;
       suppressBUntilRelease    = prev.b;
+      suppressXUntilRelease    = prev.x;
+      suppressLbUntilRelease   = prev.lb;
+      suppressRbUntilRelease   = prev.rb;
+      suppressLtUntilRelease   = prev.lt>trigThresh;
       suppressRtUntilRelease   = prev.rt>trigThresh;
       }
     else {
       suppressCarriedWorldInput();
       }
-    systemGesture.reset(carriedLb,carriedView,carriedMenu);
+    systemGesture.reset(carriedView,carriedMenu);
     prev = s;
-    }
-
-  // Any context switch aborts a pending hold-to-bind.
-  if(ctx!=prevCtx) {
-    slotHoldMs[0]   = slotHoldMs[1]   = 0;
-    slotHoldDone[0] = slotHoldDone[1] = false;
     }
 
   switch(ctx) {
@@ -625,14 +581,23 @@ void GamepadInput::tick(uint64_t dt) {
 
 void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
                              const std::vector<GamepadButtonEvent>& events) {
-  // Radial quick-bars first: RB opens the magic ring, LT opens the item ring.
-  // Opening one hands input to tickRing on the following frames.
-  if(s.rb && !prev.rb) {
-    openRing(ringMagic);
+  auto pressed = [&](GamepadButton button) {
+    return std::any_of(events.begin(),events.end(),[&](const auto& event) {
+      return event.button==button && event.pressed;
+      });
+    };
+  auto pressedOrEdge = [&](GamepadButton button, bool now, bool before) {
+    return pressed(button) || (now && !before);
+    };
+
+  // Two independent modal quick-rings. Once opened, tickRing captures every
+  // input until A/RT confirms or B cancels.
+  if(pressedOrEdge(GamepadButton::DpadUp,s.dup,prev.dup)) {
+    openRing(ringItems);
     return;
     }
-  if(s.lt>trigThresh && !(prev.lt>trigThresh)) {
-    openRing(ringItems);
+  if(pressedOrEdge(GamepadButton::DpadDown,s.ddown,prev.ddown)) {
+    openRing(ringWeapons);
     return;
     }
 
@@ -648,11 +613,34 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
   const bool bReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
     return event.button==GamepadButton::B && !event.pressed;
     });
+  const bool xReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
+    return event.button==GamepadButton::X && !event.pressed;
+    });
+  const bool lbReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
+    return event.button==GamepadButton::LB && !event.pressed;
+    });
+  const bool rbReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
+    return event.button==GamepadButton::RB && !event.pressed;
+    });
+  const bool ltReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
+    return event.button==GamepadButton::LT && !event.pressed;
+    });
+  const bool rtReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
+    return event.button==GamepadButton::RT && !event.pressed;
+    });
   if(suppressAUntilRelease && (!s.a || aReleased))
     suppressAUntilRelease = false;
   if(suppressBUntilRelease && (!s.b || bReleased))
     suppressBUntilRelease = false;
-  if(suppressRtUntilRelease && s.rt<=trigThresh)
+  if(suppressXUntilRelease && (!s.x || xReleased))
+    suppressXUntilRelease = false;
+  if(suppressLbUntilRelease && (!s.lb || lbReleased))
+    suppressLbUntilRelease = false;
+  if(suppressRbUntilRelease && (!s.rb || rbReleased))
+    suppressRbUntilRelease = false;
+  if(suppressLtUntilRelease && (s.lt<=trigThresh || ltReleased))
+    suppressLtUntilRelease = false;
+  if(suppressRtUntilRelease && (s.rt<=trigThresh || rtReleased))
     suppressRtUntilRelease = false;
 
   const float moveThreshold = slopedAxisThreshold(deadZone, s.lx,
@@ -692,12 +680,155 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
     ctrl.setGamepadTurn(0.f);
     }
 
-  if(!suppressAUntilRelease)
-    setWorldButton(GamepadButton::A, s.a, A::ActionGeneric, events);
-  if(!suppressBUntilRelease)
-    setWorldButton(GamepadButton::B, s.b, A::Jump,          events);
-  if(!suppressRtUntilRelease)
-    setWorldHeld(A::Parade,        s.rt>trigThresh);
+  auto* pl = worldPlayer();
+  const WeaponState ws = pl!=nullptr ? pl->weaponState() : WeaponState::NoWeapon;
+  const bool melee  = ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H;
+  const bool ranged = ws==WeaponState::Bow || ws==WeaponState::CBow;
+  const bool armed  = ws!=WeaponState::NoWeapon;
+
+  const A ltSemantic = !armed ? A::WeaponBow :
+                       melee  ? A::Parade    :
+                       ranged ? A::PadAim    : A::Idle;
+  const A rtSemantic = !armed ? A::WeaponMele : A::PadAttack;
+  const A lbSemantic = melee ? A::PadAttackLeft : A::Walk; // Walk is a latch sentinel
+  const A rbSemantic = melee ? A::PadAttackRight : A::LookBack;
+  auto semanticChanged = [&](A desired, std::initializer_list<A> choices) {
+    for(A action:choices)
+      if(action!=desired && worldHeld[size_t(action)])
+        return true;
+    return false;
+    };
+  auto releaseSemantic = [&](std::initializer_list<A> choices) {
+    for(A action:choices)
+      setWorldHeld(action,false);
+    };
+
+  // A held contextual button keeps the meaning it had at press time. If a
+  // draw/sheathe animation changes WeaponState underneath it, release the old
+  // meaning and require a real button release before the new one can arm.
+  const bool ltHeld = s.lt>trigThresh;
+  if(!ltHeld) {
+    ltSemanticLatched = false;
+    ltLatchedSemantic = A::Idle;
+    }
+  else if(!suppressLtUntilRelease && !ltSemanticLatched) {
+    ltSemanticLatched = true;
+    ltLatchedSemantic = ltSemantic;
+    }
+  if(!suppressLtUntilRelease && ltHeld && ltSemanticLatched &&
+     ltLatchedSemantic!=ltSemantic) {
+    releaseSemantic({A::WeaponBow,A::Parade,A::PadAim});
+    suppressLtUntilRelease = true;
+    }
+  if(!suppressRtUntilRelease && s.rt>trigThresh &&
+     semanticChanged(rtSemantic,{A::WeaponMele,A::PadAttack})) {
+    releaseSemantic({A::WeaponMele,A::PadAttack});
+    suppressRtUntilRelease = true;
+    }
+  const bool lbChanged = gamepadWalkHeld ? lbSemantic!=A::Walk
+                                        : semanticChanged(lbSemantic,{A::PadAttackLeft});
+  if(!suppressLbUntilRelease && s.lb && lbChanged) {
+    releaseSemantic({A::PadAttackLeft});
+    if(gamepadWalkHeld) {
+      ctrl.setGamepadWalk(false);
+      gamepadWalkHeld = false;
+      }
+    suppressLbUntilRelease = true;
+    }
+  if(!suppressRbUntilRelease && s.rb &&
+     semanticChanged(rbSemantic,{A::LookBack,A::PadAttackRight})) {
+    releaseSemantic({A::LookBack,A::PadAttackRight});
+    suppressRbUntilRelease = true;
+    }
+
+  // zGamePad-style context mapping. Internal Pad* actions deliberately bypass
+  // Gothic 1/2 keyboard preset differences in PlayerControl.
+  if(!suppressAUntilRelease && !armed)
+    setWorldButton(GamepadButton::A,s.a,A::ActionGeneric,events);
+  else
+    setWorldHeld(A::ActionGeneric,false);
+
+  if(!suppressBUntilRelease && melee)
+    setWorldButton(GamepadButton::B,s.b,A::PadSpecial,events);
+  else
+    setWorldHeld(A::PadSpecial,false);
+
+  if(!suppressXUntilRelease)
+    setWorldButton(GamepadButton::X,s.x,A::Jump,events);
+  else
+    setWorldHeld(A::Jump,false);
+  if(pressedOrEdge(GamepadButton::Y,s.y,prev.y))
+    pulseWorldAction(A::Weapon);
+
+  if(!suppressLtUntilRelease) {
+    if(!armed) {
+      setWorldHeld(A::Parade,false);
+      setWorldHeld(A::PadAim,false);
+      setWorldButton(GamepadButton::LT,s.lt>trigThresh,A::WeaponBow,events);
+      }
+    else if(melee) {
+      setWorldHeld(A::WeaponBow,false);
+      setWorldHeld(A::PadAim,false);
+      setWorldButton(GamepadButton::LT,s.lt>trigThresh,A::Parade,events);
+      }
+    else if(ranged) {
+      setWorldHeld(A::WeaponBow,false);
+      setWorldHeld(A::Parade,false);
+      setWorldButton(GamepadButton::LT,s.lt>trigThresh,A::PadAim,events);
+      }
+    else {
+      setWorldHeld(A::WeaponBow,false);
+      setWorldHeld(A::Parade,false);
+      setWorldHeld(A::PadAim,false);
+      }
+    }
+
+  if(!suppressRtUntilRelease) {
+    if(!armed) {
+      setWorldHeld(A::PadAttack,false);
+      setWorldButton(GamepadButton::RT,s.rt>trigThresh,A::WeaponMele,events);
+      }
+    else {
+      setWorldHeld(A::WeaponMele,false);
+      setWorldButton(GamepadButton::RT,s.rt>trigThresh,A::PadAttack,events);
+      }
+    }
+
+  if(!suppressLbUntilRelease && melee) {
+    if(gamepadWalkHeld) {
+      ctrl.setGamepadWalk(false);
+      gamepadWalkHeld = false;
+      }
+    setWorldButton(GamepadButton::LB,s.lb,A::PadAttackLeft,events);
+    }
+  else if(!suppressLbUntilRelease) {
+    setWorldHeld(A::PadAttackLeft,false);
+    const bool walk = s.lb;
+    if(gamepadWalkHeld!=walk) {
+      ctrl.setGamepadWalk(walk);
+      gamepadWalkHeld = walk;
+      }
+    }
+  else {
+    setWorldHeld(A::PadAttackLeft,false);
+    if(gamepadWalkHeld) {
+      ctrl.setGamepadWalk(false);
+      gamepadWalkHeld = false;
+      }
+    }
+
+  if(!suppressRbUntilRelease && melee) {
+    setWorldHeld(A::LookBack,false);
+    setWorldButton(GamepadButton::RB,s.rb,A::PadAttackRight,events);
+    }
+  else if(!suppressRbUntilRelease) {
+    setWorldHeld(A::PadAttackRight,false);
+    setWorldButton(GamepadButton::RB,s.rb,A::LookBack,events);
+    }
+  else {
+    setWorldHeld(A::PadAttackRight,false);
+    setWorldHeld(A::LookBack,false);
+    }
 
   // Right stick -> analog camera look. PlayerControl consumes yaw, but normal
   // gameplay deliberately ignores Npc::setDirectionY; feed Camera as well so
@@ -721,28 +852,13 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
       }
     }
 
-  // While locked, a hard horizontal flick of the right stick steps the locked
-  // target (the D-pad hosts quick slots now). Re-arm on crossing the threshold
-  // so one flick = one step; the cooldown guards against jitter re-crossings.
-  if(ctrl.isTargetLocked() && std::abs(s.rx)>0.75f && std::abs(prev.rx)<=0.75f) {
-    const uint64_t now = Tempest::Application::tickCount();
-    if(now>=focusFlickCd) {
-      if(s.rx<0.f) ctrl.focusLeft(); else ctrl.focusRight();
-      focusFlickCd = now + 350;
-      Haptics::impact(Haptics::Light);
-      }
-    }
-
-  // A/B are continuous and handled above; X/Y are one-shot toggles.
-  edge(s.x, prev.x, A::Sneak);
-  edge(s.y, prev.y, A::Weapon);
-
-  // R3 = toggle target-lock (native focus); L3 = toggle walk/run.
-  if(s.r3 && !prev.r3) {
+  // L3 toggles sneak; R3 toggles target lock.
+  if(pressedOrEdge(GamepadButton::L3,s.l3,prev.l3))
+    pulseWorldAction(A::Sneak);
+  if(pressedOrEdge(GamepadButton::R3,s.r3,prev.r3)) {
     ctrl.toggleTargetLock();
     Haptics::impact(Haptics::Light);
     }
-  edge(s.l3, prev.l3, A::Walk);
 
   // Stuck-protection: hold both sticks (L3+R3) ~2 s to warp to the nearest
   // waypoint (opt out with [GAMEPAD] noStuckProtect=1).
@@ -757,15 +873,29 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
     stuckHoldMs = 0;
     }
 
-  // D-pad, Gothic-Remake style: ▲ draws the melee weapon, ▼ the bow/crossbow,
-  // ◀/▶ fire the two player-assignable quick slots (assigned in the inventory).
-  edge(s.dup,   prev.dup,   A::WeaponMele);
-  edge(s.ddown, prev.ddown, A::WeaponBow);
-  if(s.dleft  && !prev.dleft)  useQuickSlot(0);
-  if(s.dright && !prev.dright) useQuickSlot(1);
+  // D-pad left/right changes target focus or opens the two character pages.
+  if(pressedOrEdge(GamepadButton::DpadLeft,s.dleft,prev.dleft)) {
+    if(ctrl.isTargetLocked()) {
+      ctrl.focusLeft();
+      Haptics::impact(Haptics::Light);
+      }
+    else {
+      owner.uiAction(A::Status);
+      return;
+      }
+    }
+  if(pressedOrEdge(GamepadButton::DpadRight,s.dright,prev.dright)) {
+    if(ctrl.isTargetLocked()) {
+      ctrl.focusRight();
+      Haptics::impact(Haptics::Light);
+      }
+    else {
+      owner.uiAction(A::Log);
+      return;
+      }
+    }
 
-  // LB tap = map; LB+Menu/View = rotating quick save/load. Dispatch on release
-  // so a chord can consume LB without briefly opening the map.
+  // View tap = inventory, View hold = map, Menu = the game menu.
   tickWorldSystemButtons(s,events);
   }
 
@@ -810,49 +940,16 @@ void GamepadInput::tickMenu(const GamepadState& s,
 
 void GamepadInput::tickInvent(uint64_t dt, const GamepadState& s,
                               const std::vector<GamepadButtonEvent>& events) {
-  // Grid navigation like a menu; View (options) also closes.
-  // D-pad ◀/▶: hold ~0.6 s to bind the highlighted item to that quick slot;
-  // a short press keeps its column-navigation meaning (sent on release).
-  auto holdSlot = [&](bool now, int idx, Event::KeyType k){
-    if(now) {
-      slotHoldMs[idx] += dt;
-      if(!slotHoldDone[idx] && slotHoldMs[idx]>=600) {
-        // binding works only on the player's own equip page (see
-        // selectedItemCls); elsewhere - chest, trade, lockpicking - the hold
-        // falls through to a plain (late) navigation tap on release
-        if(assignQuickSlot(idx))
-          slotHoldDone[idx] = true;
-        }
-      }
-    else {
-      if(slotHoldMs[idx]>0 && !slotHoldDone[idx]) {
-        key(true,  false, k);          // released early -> normal navigation tap
-        key(false, true,  k);
-        }
-      slotHoldMs[idx]   = 0;
-      slotHoldDone[idx] = false;
-      }
-    };
-  const bool fastLeftTap  = !s.dleft  && slotHoldMs[0]==0 &&
-    std::any_of(events.begin(),events.end(),[](const auto& event) {
-      return event.button==GamepadButton::DpadLeft && event.pressed;
-      });
-  const bool fastRightTap = !s.dright && slotHoldMs[1]==0 &&
-    std::any_of(events.begin(),events.end(),[](const auto& event) {
-      return event.button==GamepadButton::DpadRight && event.pressed;
-      });
-
-  holdSlot(s.dleft,  0, Event::K_Left);
-  holdSlot(s.dright, 1, Event::K_Right);
-
-  if(fastLeftTap)
-    for(const auto& event : events)
-      if(event.button==GamepadButton::DpadLeft && event.pressed)
-        keyTap(Event::K_Left,PadCtx::Inventory,event,s);
-  if(fastRightTap)
-    for(const auto& event : events)
-      if(event.button==GamepadButton::DpadRight && event.pressed)
-        keyTap(Event::K_Right,PadCtx::Inventory,event,s);
+  (void)dt;
+  // Grid navigation like a menu; LB/RB jump between sorted item categories.
+  for(const auto& event : events) {
+    if(!event.pressed)
+      continue;
+    if(event.button==GamepadButton::LB)
+      owner.padInventoryCategory(-1);
+    else if(event.button==GamepadButton::RB)
+      owner.padInventoryCategory(1);
+    }
 
   const bool up    = s.ly >  deadZone;
   const bool down  = s.ly < -deadZone;
@@ -868,6 +965,8 @@ void GamepadInput::tickInvent(uint64_t dt, const GamepadState& s,
     switch(event.button) {
       case GamepadButton::DpadUp:   keyTap(Event::K_Up,     PadCtx::Inventory, event, s); break;
       case GamepadButton::DpadDown: keyTap(Event::K_Down,   PadCtx::Inventory, event, s); break;
+      case GamepadButton::DpadLeft: keyTap(Event::K_Left,   PadCtx::Inventory, event, s); break;
+      case GamepadButton::DpadRight:keyTap(Event::K_Right,  PadCtx::Inventory, event, s); break;
       case GamepadButton::A:       keyTap(Event::K_Return, PadCtx::Inventory, event, s); break;
       case GamepadButton::B:
       case GamepadButton::Menu:

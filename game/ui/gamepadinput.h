@@ -26,9 +26,9 @@ enum class PadCtx : uint8_t {
   Loading,    // world loading — ignore input
   };
 
-// Maps a GamepadState snapshot to the game each tick, following the Gothic
-// Classic (THQ Nordic) console scheme. Owns edge-detection and dead-zones, and
-// routes per-context so the pad works in menus and dialogues, not just world.
+// Maps a GamepadState snapshot to the game each tick, following a contextual
+// zGamePad-inspired scheme. Owns edge-detection and dead-zones, and routes
+// per-context so the pad works in menus and dialogues, not just the world.
 class GamepadInput {
   public:
     GamepadInput(MainWindow& owner, PlayerControl& ctrl);
@@ -39,16 +39,14 @@ class GamepadInput {
     const QuickRing* activeRing() const;
 
     // Touch-overlay hooks (used when no pad is connected): open/aim/commit the
-    // rings, rotating save/load and the assignable quick slots from on-screen taps.
+    // two independent modal rings.
     bool  ringOpen() const;
-    void  openMagicRing();
+    void  openWeaponsRing();
     void  openItemRing();
     void  ringAim(float nx, float ny);
     void  ringCommit();
-    void  quickSave();
-    void  quickLoad();
+    void  ringCancel();
     void  openMap();
-    void  useQuickSlot(int idx);           // 0 = D-pad left, 1 = D-pad right
 
   private:
     MainWindow&    owner;
@@ -64,10 +62,17 @@ class GamepadInput {
     bool             suppressTurnUntilNeutral = true;
     bool             suppressAUntilRelease = true;
     bool             suppressBUntilRelease = true;
+    bool             suppressXUntilRelease = true;
+    bool             suppressLbUntilRelease = true;
+    bool             suppressRbUntilRelease = true;
+    bool             suppressLtUntilRelease = true;
     bool             suppressRtUntilRelease = true;
+    bool             gamepadWalkHeld = false;
+    bool             ltSemanticLatched = false;
+    KeyCodec::Action ltLatchedSemantic = KeyCodec::Idle;
     PadSystemGesture systemGesture;
 
-    QuickRing      ringMagic{QuickRing::Magic};
+    QuickRing      ringWeapons{QuickRing::Weapons};
     QuickRing      ringItems{QuickRing::Items};
 
     void tickWorld (uint64_t dt, const GamepadState& s,
@@ -78,9 +83,7 @@ class GamepadInput {
                     const std::vector<GamepadButtonEvent>& events);
     void tickInvent(uint64_t dt, const GamepadState& s,
                     const std::vector<GamepadButtonEvent>& events);
-    bool assignQuickSlot(int idx);         // bind the inventory selection
 
-    void edge  (bool now, bool before, KeyCodec::Action a);       // -> PlayerControl
     void setWorldHeld(KeyCodec::Action a, bool held);             // stateful world action
     void setWorldButton(GamepadButton button, bool physicalHeld,
                         KeyCodec::Action action,
@@ -97,11 +100,12 @@ class GamepadInput {
     void releaseAllWorld();                                       // drop held world actions
 
     void loadConfig();                     // read the [GAMEPAD] section
-    void quickSaveRotating();              // rotating save slots (spec 6)
-    void quickLoadRotating();              // load the last rotating slot
 
-    void  tickRing(const GamepadState& s); // drive an open radial quick-bar
+    void  tickRing(const GamepadState& s,
+                   const std::vector<GamepadButtonEvent>& events);
     void  openRing(QuickRing& r);          // fill from inventory + open
+    void  activateRingSelection(QuickRing& r);
+    void  pulseWorldAction(KeyCodec::Action action);
     Npc*  worldPlayer() const;             // current player npc, or nullptr
     void  stuckTeleport();                 // warp to the nearest waypoint (spec 8)
 
@@ -112,7 +116,6 @@ class GamepadInput {
     float trigThresh    = 0.50f; // trigger press threshold
     float lookSens   = 0.20f;   // camera speed per ms
     bool  invertY    = false;   // camera Y invert (review B6)
-    int   saveSlots  = 5;       // rotating quick-save slot count
     bool  stuckProtect = true;  // L3+R3 hold -> warp to nearest waypoint
     bool  debugInput = false;   // transition-only stderr diagnostics
 
@@ -122,10 +125,4 @@ class GamepadInput {
 
     uint64_t stuckHoldMs = 0;   // how long both sticks have been held
 
-    // Assignable quick slots (D-pad left/right): item class ids, persisted in
-    // Gothic.ini [GAMEPAD] quickSlotL/R. 0 = unassigned -> classic quick potion.
-    size_t   slotCls[2]    = {0,0};
-    uint64_t slotHoldMs[2] = {0,0};   // inventory: D-pad hold time (assign)
-    bool     slotHoldDone[2] = {};    // assign fired for this hold
-    uint64_t focusFlickCd  = 0;       // right-stick flick cooldown (target switch)
   };

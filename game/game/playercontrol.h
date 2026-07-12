@@ -26,6 +26,7 @@ class PlayerControl final {
     bool  isPressed(KeyCodec::Action a) const;
     void  onRotateMouse(float dAngleX, float dAngleY);
     void  setGamepadTurn(float value);
+    void  setGamepadWalk(bool enabled);
     uint64_t inputGeneration() const { return inputGen; }
 
     void  drawVobRay(DbgPainter& p) const;
@@ -154,6 +155,9 @@ class PlayerControl final {
     float          rotMouse=0;
     float          rotMouseY=0;
     float          gamepadTurn=0;
+    Npc*           gamepadWalkNpc=nullptr;
+    bool           gamepadWalkHeld=false;
+    bool           gamepadWalkOwned=false;
     bool           casting = false;
     size_t         pickLockProgress = 0;
 
@@ -167,6 +171,8 @@ class PlayerControl final {
     InventoryMenu& inv;
 
     void           setupSettings();
+    void           rebuildPadCombatAction(WeaponState ws);
+    bool           hasPadCombatAction() const;
     bool           canInteract() const;
     void           marvinF8(uint64_t dt);
     void           marvinK(uint64_t dt);

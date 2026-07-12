@@ -11,6 +11,15 @@
 #include "ui/inventorymenu.h"
 #include "gothic.h"
 
+namespace {
+bool isPadCombatAction(KeyCodec::Action a) {
+  using A = KeyCodec::Action;
+  return a==A::PadAttack      || a==A::PadAim       ||
+         a==A::PadAttackLeft  || a==A::PadAttackRight ||
+         a==A::PadSpecial     || a==A::Parade;
+  }
+}
+
 PlayerControl::PlayerControl(DialogMenu& dlg, InventoryMenu &inv)
   :dlg(dlg),inv(inv) {
   Gothic::inst().onSettingsChanged.bind(this,&PlayerControl::setupSettings);
@@ -110,6 +119,12 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
       ctrl[Action::K_ENTER] = true;
     }
 
+  if(isPadCombatAction(a)) {
+    ctrl[a] = true;
+    rebuildPadCombatAction(ws);
+    return;
+    }
+
   // this odd behaviour is from original game, seem more like a bug
   // const bool actTunneling = (pl!=nullptr && pl->isAttackAnim());
   const bool actTunneling = false;
@@ -154,13 +169,6 @@ void PlayerControl::onKeyPressed(KeyCodec::Action a, Tempest::KeyEvent::KeyType 
         fk = ActRight;
       }
     }
-
-  // Parade is a semantic block action (RT/R2 on mobile). Classic/G1 controls
-  // normally build the same ActBack from ActionGeneric+Back, but a dedicated
-  // Parade binding must not become a no-op merely because that preset is active.
-  if((ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H) &&
-     a==Action::Parade)
-    fk = ActBack;
 
   if(fk>=0) {
     std::memset(actrl,0,sizeof(actrl));
@@ -210,6 +218,12 @@ void PlayerControl::onKeyReleased(KeyCodec::Action a, KeyCodec::Mapping mapping)
 
   auto w  = Gothic::inst().world();
   auto pl = w ? w->player() : nullptr;
+  auto ws = pl==nullptr ? WeaponState::NoWeapon : pl->weaponState();
+
+  if(isPadCombatAction(a)) {
+    rebuildPadCombatAction(ws);
+    return;
+    }
 
   if(a==KeyCodec::Map && pl!=nullptr) {
     w->script().playerHotKeyScreenMap(*pl);
@@ -221,13 +235,49 @@ void PlayerControl::onKeyReleased(KeyCodec::Action a, KeyCodec::Mapping mapping)
     w->script().playerHotLamePotion(*pl);
     }
 
-  auto ws = pl==nullptr ? WeaponState::NoWeapon : pl->weaponState();
   if(ws==WeaponState::Bow || ws==WeaponState::CBow || ws==WeaponState::Mage) {
     if(a==KeyCodec::ActionGeneric || (!g2Ctrl && ws==WeaponState::Mage && a==KeyCodec::Forward))
       std::memset(actrl,0,sizeof(actrl));
     } else {
     std::memset(actrl,0,sizeof(actrl));
     }
+  if(hasPadCombatAction())
+    rebuildPadCombatAction(ws);
+  }
+
+void PlayerControl::rebuildPadCombatAction(WeaponState ws) {
+  std::memset(actrl,0,sizeof(actrl));
+
+  // ActMove writes ctrl[Forward] while it is consumed. Once PadSpecial is no
+  // longer held, restore that compatibility bit from the real movement axis.
+  if(!ctrl[Action::PadSpecial])
+    ctrl[Action::Forward] = wantsToMoveForward();
+
+  const bool melee = ws==WeaponState::Fist ||
+                     ws==WeaponState::W1H  || ws==WeaponState::W2H;
+  const bool ranged = ws==WeaponState::Bow || ws==WeaponState::CBow;
+
+  // A stable priority makes overlapping controls deterministic. Releasing a
+  // higher-priority action rebuilds the lower-priority one that is still held
+  // (most importantly RT attack -> LT bow aim).
+  if(ctrl[Action::PadAttack] && ws!=WeaponState::NoWeapon)
+    actrl[ActForward] = true;
+  else if(ctrl[Action::PadSpecial] && melee)
+    actrl[ActMove] = true;
+  else if(ctrl[Action::PadAttackLeft] && melee)
+    actrl[ActLeft] = true;
+  else if(ctrl[Action::PadAttackRight] && melee)
+    actrl[ActRight] = true;
+  else if(ctrl[Action::Parade] && melee)
+    actrl[ActBack] = true;
+  else if(ctrl[Action::PadAim] && ranged)
+    actrl[ActGeneric] = true;
+  }
+
+bool PlayerControl::hasPadCombatAction() const {
+  return ctrl[Action::PadAttack]      || ctrl[Action::PadAim]       ||
+         ctrl[Action::PadAttackLeft]  || ctrl[Action::PadAttackRight] ||
+         ctrl[Action::PadSpecial]     || ctrl[Action::Parade];
   }
 
 auto PlayerControl::handleMovementAction(KeyCodec::ActionMapping actionMapping, bool pressed) -> void {
@@ -258,6 +308,31 @@ void PlayerControl::onRotateMouse(float dAngleX, float dAngleY) {
 
 void PlayerControl::setGamepadTurn(float value) {
   gamepadTurn = std::clamp(value, -1.f, 1.f);
+  }
+
+void PlayerControl::setGamepadWalk(bool enabled) {
+  if(gamepadWalkHeld==enabled)
+    return;
+
+  auto w  = Gothic::inst().world();
+  auto pl = w ? w->player() : nullptr;
+  if(enabled) {
+    gamepadWalkHeld  = true;
+    gamepadWalkNpc   = pl;
+    gamepadWalkOwned = pl!=nullptr &&
+                       (pl->walkMode()&WalkBit::WM_Walk)!=WalkBit::WM_Walk;
+    if(gamepadWalkOwned)
+      pl->setWalkMode(pl->walkMode()|WalkBit::WM_Walk);
+    return;
+    }
+
+  // Never dereference the remembered pointer: the old world may already have
+  // been unloaded. Only undo our bit when that same NPC is still current.
+  if(gamepadWalkOwned && pl!=nullptr && pl==gamepadWalkNpc)
+    pl->setWalkMode(pl->walkMode()&~WalkBit::WM_Walk);
+  gamepadWalkHeld  = false;
+  gamepadWalkOwned = false;
+  gamepadWalkNpc   = nullptr;
   }
 
 void PlayerControl::drawVobRay(DbgPainter& p) const {
@@ -480,6 +555,7 @@ bool PlayerControl::canInteract() const {
   }
 
 void PlayerControl::clearInput() {
+  setGamepadWalk(false);
   movement.reset();
   std::memset(ctrl, 0,sizeof(ctrl));
   std::memset(actrl,0,sizeof(actrl));

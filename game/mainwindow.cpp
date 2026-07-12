@@ -618,15 +618,13 @@ PadCtx MainWindow::padContext() const {
 
 #if defined(__MOBILE_PLATFORM__)
 bool MainWindow::padRingOpen() const          { return gamepad.ringOpen(); }
-void MainWindow::padOpenMagicRing()           { gamepad.openMagicRing(); }
+void MainWindow::padOpenWeaponsRing()         { gamepad.openWeaponsRing(); }
 void MainWindow::padOpenItemRing()            { gamepad.openItemRing(); }
 void MainWindow::padRingAim(float nx,float ny){ gamepad.ringAim(nx,ny); }
 void MainWindow::padRingCommit()              { gamepad.ringCommit(); }
-void MainWindow::padQuickSave()               { gamepad.quickSave(); }
-void MainWindow::padQuickLoad()               { gamepad.quickLoad(); }
+void MainWindow::padRingCancel()              { gamepad.ringCancel(); }
 void MainWindow::padOpenMap()                 { gamepad.openMap(); }
-void MainWindow::padUseQuickSlot(int idx)     { gamepad.useQuickSlot(idx); }
-size_t MainWindow::padInventorySelectedCls()  { return inventory.selectedItemCls(); }
+void MainWindow::padInventoryCategory(int d)  { inventory.moveCategory(d); }
 bool MainWindow::padVideoActive() const       { return video.isActive(); }
 void MainWindow::padSkipVideo()               { video.skip(); }
 #endif

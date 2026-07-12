@@ -442,18 +442,48 @@ size_t InventoryMenu::pagesCount() const {
   return 1;
   }
 
-size_t InventoryMenu::selectedItemCls() {
-  // quick-slot binding works only on the player's own equip page: in chest /
-  // trade view the highlighted item may belong to the other actor, and during
-  // lockpicking left/right are the pick combination
-  if(state!=State::Equip)
-    return 0;
+void InventoryMenu::moveCategory(int direction) {
+  if(direction==0 || state==State::Closed || state==State::LockPicking)
+    return;
+
   auto& pg  = activePage();
   auto& sel = activePageSel();
-  auto  it  = pg.get(sel.sel);
-  if(!it.isValid())
-    return 0;
-  return it->clsId();
+  const size_t count = pg.size();
+  if(count<2)
+    return;
+  sel.sel = std::min(sel.sel,count-1);
+
+  auto category = [&](size_t index) {
+    auto it = pg.get(index);
+    return it.isValid() ? uint32_t(it->mainFlag()) : uint32_t(0);
+    };
+  const uint32_t current = category(sel.sel);
+  size_t target = sel.sel;
+  for(size_t step=1; step<count; ++step) {
+    const size_t index = direction>0 ? (sel.sel+step)%count
+                                     : (sel.sel+count-step)%count;
+    if(category(index)!=current) {
+      target = index;
+      break;
+      }
+    }
+  if(target==sel.sel)
+    return;
+
+  if(direction<0) {
+    const uint32_t targetCategory = category(target);
+    for(size_t step=1; step<count; ++step) {
+      const size_t before = (target+count-1)%count;
+      if(category(before)!=targetCategory)
+        break;
+      target = before;
+      }
+    }
+
+  sel.sel = target;
+  adjustScroll();
+  update();
+  Gothic::inst().emitGlobalSound("INV_CHANGE");
   }
 
 const InventoryMenu::Page &InventoryMenu::activePage() {

@@ -16,6 +16,7 @@
 #include "utils/gamepad.h"
 #include "utils/gthfont.h"
 #include "ui/padglyph.h"
+#include "world/objects/npc.h"
 #include "resources.h"
 #include "mainwindow.h"
 #include "gothic.h"
@@ -52,23 +53,23 @@ std::array<TouchInput::Btn,16> TouchInput::layout() const {
   using     K = TAct;
   return {{
     // face
-    { bx,        by,        s, G::A, K::Key, A::ActionGeneric },
-    { bx,        by-(s+m),  s, G::B, K::Key, A::Jump          },
-    { bx-(s+m),  by,        s, G::X, K::Key, A::Sneak         },
+    { bx,        by,        s, G::A, K::Interact, A::ActionGeneric },
+    { bx,        by-(s+m),  s, G::B, K::Special,  A::PadSpecial    },
+    { bx-(s+m),  by,        s, G::X, K::Key,      A::Jump          },
     { bx-(s+m),  by-(s+m),  s, G::Y, K::Key, A::Weapon        },
     // shoulders / triggers
-    { tR,        row0,      s, G::RT, K::Key,       A::Parade        },
-    { tR,        row1,      s, G::RB, K::MagicRing, A::ActionGeneric },
-    { tL,        row0,      s, G::LT, K::ItemRing,  A::ActionGeneric },
-    { tL,        row1,      s, G::LB, K::LbModifier,A::ActionGeneric },
+    { tR,        row0,      s, G::RT, K::Rt, A::PadAttack },
+    { tR,        row1,      s, G::RB, K::Rb, A::PadAttackRight },
+    { tL,        row0,      s, G::LT, K::Lt, A::PadAim },
+    { tL,        row1,      s, G::LB, K::Lb, A::PadAttackLeft },
     // stick clicks
-    { m,         H-H/3-m-s-m, s, G::L3, K::Key,  A::Walk          },
+    { m,         H-H/3-m-s-m, s, G::L3, K::Key,  A::Sneak         },
     { bx,        by-2*(s+m),  s, G::R3, K::Lock, A::ActionGeneric },
-    // d-pad, Gothic-Remake style: melee / ranged / two assignable quick slots
-    { dcx,       dcy-s, s, G::DPadUp,    K::Key,   A::WeaponMele    },
-    { dcx,       dcy+s, s, G::DPadDown,  K::Key,   A::WeaponBow     },
-    { dcx-s,     dcy,   s, G::DPadLeft,  K::SlotL, A::ActionGeneric },
-    { dcx+s,     dcy,   s, G::DPadRight, K::SlotR, A::ActionGeneric },
+    // d-pad: two separate rings and status/focus navigation
+    { dcx,       dcy-s, s, G::DPadUp,    K::ItemRing,   A::Idle },
+    { dcx,       dcy+s, s, G::DPadDown,  K::WeaponsRing,A::Idle },
+    { dcx-s,     dcy,   s, G::DPadLeft,  K::StatusOrFocus,A::Idle },
+    { dcx+s,     dcy,   s, G::DPadRight, K::LogOrFocus, A::Idle },
     // system
     { W/2-(s+m), m, s, G::View, K::SystemView, A::Inventory },
     { W/2+m,     m, s, G::Menu, K::SystemMenu, A::Escape    },
@@ -122,7 +123,10 @@ void TouchInput::releaseWorldTouches() {
   mv[0]=mv[1]=mv[2]=mv[3]=false;
   moveId = -1;
   lookId = -1;
-  lbId   = -1;
+  ringId = -1;
+  if(walkId>=0)
+    ctrl.setGamepadWalk(false);
+  walkId = -1;
   viewId = -1;
   menuId = -1;
   systemGesture.reset();
@@ -138,17 +142,13 @@ bool TouchInput::dispatchSystemEffect(PadSystemGesture::Effect effect) {
     return false;
 
   // Suppress every touch still down before an effect can switch UI context.
-  systemGesture.reset(lbId>=0,viewId>=0,menuId>=0);
+  systemGesture.reset(viewId>=0,menuId>=0);
   if(owner.padContext()!=PadCtx::World)
     return true;
   switch(effect) {
-    case E::Map:        owner.padOpenMap();             break;
     case E::Inventory:  owner.uiAction(A::Inventory);   break;
-    case E::QuestLog:   owner.uiAction(A::Log);         break;
-    case E::Status:     owner.uiAction(A::Status);      break;
+    case E::Map:        owner.padOpenMap();             break;
     case E::GameMenu:   owner.uiAction(A::Escape);      break;
-    case E::QuickLoad:  owner.padQuickLoad();           break;
-    case E::QuickSave:  owner.padQuickSave();           break;
     case E::None:                                        break;
     }
   return true;
@@ -165,6 +165,17 @@ void TouchInput::tick() {
 void TouchInput::paintEvent(PaintEvent& e) {
   if(Gamepad::poll().connected)
     return;                          // a gamepad drives the UI -> hide the touch overlay
+  if(owner.padRingOpen()) {
+    // Keep the full overlay off the radial sectors, but retain the three
+    // modal controls in the empty corners: panel switch and explicit cancel.
+    Painter p(e);
+    auto& fnt = Resources::font(Gothic::interfaceScale(this));
+    const int s = h()/10, m = h()/40;
+    PadGlyph::draw(p,fnt,PadGlyph::DPadUp,  m,h()-2*s-2*m,s);
+    PadGlyph::draw(p,fnt,PadGlyph::DPadDown,m,h()-s-m,    s);
+    PadGlyph::draw(p,fnt,PadGlyph::B,w()-s-m,h()-s-m,    s);
+    return;
+    }
 
   Painter p(e);
   auto&   fnt = Resources::font(Gothic::interfaceScale(this));
@@ -191,10 +202,17 @@ void TouchInput::paintEvent(PaintEvent& e) {
         PadGlyph::draw(p, fnt, glyphOfKey(b.key), b.x, b.y, b.s);
       break;
     case PadCtx::Menu:
-    case PadCtx::Inventory:
       for(auto& b:menuLayout())
         PadGlyph::draw(p, fnt, glyphOfKey(b.key), b.x, b.y, b.s);
       break;
+    case PadCtx::Inventory: {
+      for(auto& b:menuLayout())
+        PadGlyph::draw(p, fnt, glyphOfKey(b.key), b.x, b.y, b.s);
+      const int s = h()/9, m = h()/40;
+      PadGlyph::draw(p,fnt,PadGlyph::LB,w()/2-s-m,m,s);
+      PadGlyph::draw(p,fnt,PadGlyph::RB,w()/2+m,  m,s);
+      break;
+      }
     case PadCtx::Loading:
       break;
     }
@@ -214,29 +232,86 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
   if(owner.padVideoActive()) { owner.padSkipVideo(); return; }   // any tap skips the intro/cutscene
 
   if(ctx==PadCtx::World) {
-    // A radial ring is open -> this touch aims it, release commits.
-    if(owner.padRingOpen()) { ringId = id; aimRing(pos); return; }
+    // A radial ring is open -> corners switch/cancel; every other touch aims
+    // and commits on release.
+    if(owner.padRingOpen()) {
+      const int s = h()/10, m = h()/40;
+      if(pos.x>=w()-s-m && pos.x<w()-m &&
+         pos.y>=h()-s-m && pos.y<h()-m) {
+        owner.padRingCancel();
+        return;
+        }
+      if(pos.x>=m && pos.x<m+s &&
+         pos.y>=h()-2*s-2*m && pos.y<h()-s-2*m) {
+        owner.padOpenItemRing();
+        return;
+        }
+      if(pos.x>=m && pos.x<m+s &&
+         pos.y>=h()-s-m && pos.y<h()-m) {
+        owner.padOpenWeaponsRing();
+        return;
+        }
+      ringId = id;
+      aimRing(pos);
+      return;
+      }
+
+    auto* pl = Gothic::inst().player();
+    const WeaponState ws = pl!=nullptr ? pl->weaponState() : WeaponState::NoWeapon;
+    const bool melee  = ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H;
+    const bool ranged = ws==WeaponState::Bow || ws==WeaponState::CBow;
+    const bool armed  = ws!=WeaponState::NoWeapon;
+    auto holdAction = [&](A action) {
+      ctrl.onKeyPressed(action,Event::K_NoKey,M::Primary);
+      btnDown[id] = action;
+      };
 
     for(auto& b:layout())
       if(pos.x>=b.x && pos.x<b.x+b.s && pos.y>=b.y && pos.y<b.y+b.s) {
         switch(b.kind) {
           case TAct::Key:
-            ctrl.onKeyPressed(b.act, Event::K_NoKey, M::Primary);
-            btnDown[id] = b.act;
+            holdAction(b.act);
             return;
-          case TAct::MagicRing:
-            releaseWorldTouches(); owner.padOpenMagicRing(); ringId = id; return;
-          case TAct::ItemRing:
-            releaseWorldTouches(); owner.padOpenItemRing(); ringId = id; return;
-          case TAct::Lock:       ctrl.toggleTargetLock();   return;
-          case TAct::SlotL:      owner.padUseQuickSlot(0);  return;
-          case TAct::SlotR:      owner.padUseQuickSlot(1);  return;
-          case TAct::LbModifier:
-            if(lbId<0) {
-              lbId = id;
-              dispatchSystemEffect(systemGesture.onButton(
-                  PadSystemGesture::Button::Lb,true,Application::tickCount()));
+          case TAct::Interact:
+            if(!armed)
+              holdAction(A::ActionGeneric);
+            return;
+          case TAct::Special:
+            if(melee)
+              holdAction(A::PadSpecial);
+            return;
+          case TAct::Lt:
+            if(!armed)      holdAction(A::WeaponBow);
+            else if(melee)  holdAction(A::Parade);
+            else if(ranged) holdAction(A::PadAim);
+            return;
+          case TAct::Rt:
+            holdAction(armed ? A::PadAttack : A::WeaponMele);
+            return;
+          case TAct::Lb:
+            if(melee) {
+              holdAction(A::PadAttackLeft);
               }
+            else if(walkId<0) {
+              ctrl.setGamepadWalk(true);
+              walkId = id;
+              }
+            return;
+          case TAct::Rb:
+            holdAction(melee ? A::PadAttackRight : A::LookBack);
+            return;
+          case TAct::WeaponsRing:
+            releaseWorldTouches(); owner.padOpenWeaponsRing(); return;
+          case TAct::ItemRing:
+            releaseWorldTouches(); owner.padOpenItemRing(); return;
+          case TAct::Lock:       ctrl.toggleTargetLock();   return;
+          case TAct::StatusOrFocus:
+            if(ctrl.isTargetLocked()) ctrl.focusLeft();
+            else owner.uiAction(A::Status);
+            return;
+          case TAct::LogOrFocus:
+            if(ctrl.isTargetLocked()) ctrl.focusRight();
+            else owner.uiAction(A::Log);
             return;
           case TAct::SystemView:
             if(viewId<0) {
@@ -282,6 +357,21 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
   if(ctx==PadCtx::Dialog) {
     tap(dialogLayout());
     return;
+    }
+  if(ctx==PadCtx::Inventory) {
+    const int s = h()/9, m = h()/40;
+    const int left = w()/2-s-m;
+    const int right = w()/2+m;
+    if(pos.y>=m && pos.y<m+s) {
+      if(pos.x>=left && pos.x<left+s) {
+        owner.padInventoryCategory(-1);
+        return;
+        }
+      if(pos.x>=right && pos.x<right+s) {
+        owner.padInventoryCategory(1);
+        return;
+        }
+      }
     }
   if(ctx==PadCtx::Menu || ctx==PadCtx::Inventory) {
     tap(menuLayout());
@@ -346,10 +436,15 @@ void TouchInput::mouseUpEvent(MouseEvent& e) {
         button,false,Application::tickCount()));
     return true;
     };
-  if(releaseSystem(lbId,PadSystemGesture::Button::Lb) ||
-     releaseSystem(viewId,PadSystemGesture::Button::View) ||
+  if(releaseSystem(viewId,PadSystemGesture::Button::View) ||
      releaseSystem(menuId,PadSystemGesture::Button::Menu))
     return;
+
+  if(id==walkId) {
+    ctrl.setGamepadWalk(false);
+    walkId = -1;
+    return;
+    }
 
   auto it = btnDown.find(id);
   if(it!=btnDown.end()) {

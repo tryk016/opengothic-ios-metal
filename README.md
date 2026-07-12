@@ -51,7 +51,7 @@ No fork, no compiling — a prebuilt **unsigned `.ipa`** is published on every u
 
 Two input modes; the on-screen overlay hides automatically when a controller is connected.
 
-**Bluetooth controller (Gothic Classic scheme — Xbox / PS5 buttons):**
+**Bluetooth controller (contextual Gothic scheme — Xbox / PlayStation buttons):**
 
 [![OpenGothic controller mapping for Xbox and PlayStation pads](assets/controller/OpenGothic_Controller_Layout.svg)](assets/controller/OpenGothic_Controller_Layout.svg)
 
@@ -60,51 +60,58 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
 
 | Function | Xbox | PlayStation |
 |---|---|---|
-| Interact / attack | A | ✕ |
+| Interact / use / confirm | A | ✕ |
+| Melee special / Back | B | ○ |
+| Jump / climb | X | □ |
 | Draw / sheathe weapon | Y | △ |
-| Jump / climb / swim up | B | ○ |
-| Sneak / dive | X | □ |
 | Move / turn | Left stick | Left stick |
 | Camera | Right stick | Right stick |
-| Magic quick-ring | RB (hold) | R1 (hold) |
-| Item quick-ring | LT (hold) | L2 (hold) |
-| Walk / run | L3 | L3 |
+| Draw bow / aim; melee block | LT | L2 |
+| Draw melee; attack / shoot / cast | RT | R2 |
+| Walk; melee left attack | LB | L1 |
+| Look back; melee right attack | RB | R1 |
+| Sneak | L3 | L3 |
 | Target lock | R3 | R3 |
-| Switch locked target | flick Right stick ← / → | flick Right stick ← / → |
-| Parry | RT | R2 |
-| Melee / ranged weapon | D-pad ↑ / ↓ | D-pad ↑ / ↓ |
-| Quick slots 1 / 2 | D-pad ← / → | D-pad ← / → |
-| Map | LB | L1 |
-| Inventory (tap) / Quest log (hold) | View | Share / Create |
-| Status (tap) / Game menu (hold) | Menu | Options |
-| Quick save | LB + Menu | L1 + Options |
-| Quick load | LB + View | L1 + Share / Create |
+| Items ring | D-pad ↑ | D-pad ↑ |
+| Weapons / Magic ring | D-pad ↓ | D-pad ↓ |
+| Status / previous combat target | D-pad ← | D-pad ← |
+| Quest log / next combat target | D-pad → | D-pad → |
+| Inventory (tap) / Map (hold) | View | Share / Create |
+| Game menu | Menu | Options |
 | Unstuck teleport | hold L3 + R3 ~2 s | hold L3 + R3 ~2 s |
 
 </details>
 
-- **Quick-rings:** hold RB (magic) or LT (items), aim with the right stick, release to equip/use —
-  tiles show real 3D item icons.
-- **Quick slots (D-pad ← / →):** bind any inventory item — potion, food, rune, scroll, torch — by
-  highlighting it in the inventory and **holding D-pad ← or → for ~0.6 s**. Unassigned slots drink the
-  best healing (←) / mana (→) potion. A slot bound to the torch is a toggle: press once to light it,
-  press again to stow it back into the inventory.
-- **System buttons:** LB opens the map. Tap View for the inventory or hold it for ~0.6 s for the quest
-  log; tap Menu for character status or hold it for ~0.6 s for the game menu. LB+View/Menu takes
-  priority over tap/hold and performs rotating quick load/save.
-- **Left-stick response:** Y keeps Gothic's animation-driven movement with press/release hysteresis;
-  X turns proportionally to the deflection. A sloped axial guard rejects accidental movement while the
+- **Two separate quick-rings:** D-pad ↑ opens the Items ring (4 inner + 9 outer slots);
+  D-pad ↓ opens the Weapons / Magic ring (equipped melee and ranged weapons inside, 7 spell-book
+  slots outside). These are two panels, not one combined wheel; D-pad ↑/↓ also switches between them
+  while open. Aim by the right-stick angle and distance, press A or RT to use the selected slot, or B
+  to cancel. Tiles show real 3D item icons.
+- **Automatic contents:** the Items ring fills its 9 outer slots first, then its 4 inner slots, using
+  potions, food and torches from the live inventory. A lit torch is included synthetically so it can be
+  stowed again. The Weapons / Magic ring is populated from equipped gear and active spell-book slots 4–10.
+- **Contextual combat:** LT blocks in melee and aims a bow; RT attacks, shoots or casts. LB/RB become
+  left/right melee attacks and otherwise provide walk/look-back. Outside combat, D-pad ←/→ opens
+  character status/the quest log; while target lock is active it selects the previous/next target.
+- **Inventory:** LB/RB jumps to the previous/next sorted item category; the sticks and D-pad retain
+  normal grid navigation.
+- **System buttons:** tap View for the inventory or hold it for ~0.6 s for the map. Menu opens the game
+  menu. Quick save/load remains available to the engine through its keyboard commands, but is not
+  assigned to the controller.
+- **Left-stick response:** the vertical axis keeps Gothic's animation-driven movement with
+  press/release hysteresis; the horizontal axis turns proportionally to the deflection. A sloped axial
+  guard rejects accidental movement while the
   stick is held mostly sideways (and accidental turning while held mostly forward/back). Returning to
   neutral, opening a ring/UI, disconnecting or resuming the app releases controller-owned actions before
   input can re-arm.
 - Config lives in `Documents/Gothic.ini` under `[GAMEPAD]` — `deadZone`, `releaseZone`,
-  `crossAxisGuard`, `lookSensitivity`, `invertY`, `triggerThreshold`, `saveSlots`, `noStuckProtect`
-  (quick-slot bindings are stored there too).
+  `crossAxisGuard`, `lookSensitivity`, `invertY`, `triggerThreshold` and `noStuckProtect`.
 
 **On-screen virtual gamepad (no controller):** a full pad is drawn during play — move pad + camera area,
-A/B/X/Y, shoulders/triggers, sticks, D-pad, View/Menu — using the Xelu glyphs. Tap a quick-ring button,
-drag to aim, release to activate. Its LB/View/Menu buttons use the same map, tap/hold and save/load
-chords as a physical pad. Menus and dialogues get on-screen D-pad + OK/Back/Skip.
+A/B/X/Y, shoulders/triggers, sticks, D-pad, View/Menu — using the Xelu glyphs. It mirrors the physical
+pad's contextual mapping and two D-pad quick-rings. Menus and dialogues get on-screen D-pad +
+OK/Back/Skip. While a ring is open, only corner controls remain: D-pad ↑/↓ switches the two panels and
+B cancels; drag anywhere else and release to use the selected sector.
 
 ### iOS configuration
 
@@ -129,7 +136,7 @@ diagnostic settings are documented in the
 - Sideload certificate expires weekly (auto-refresh via AltStore/SideStore).
 - Mesh shaders are disabled on iOS for GPU compatibility.
 - On-screen virtual-pad button layout is a first pass and still needs on-device tuning.
-- Radial rings are a single-ring first version; some smaller items in `ios/TODO.md` are not done yet.
+- Some smaller controller-polish items in `ios/TODO.md` are not done yet.
 
 ### What this fork adds on top of upstream
 
@@ -137,9 +144,9 @@ diagnostic settings are documented in the
   script, sideload/data guide, and submodule patches (`ios/patches/apply-patches.sh`).
 - **Controller:** event-driven GameController snapshots (`game/utils/gamepad.*`), a release-safe,
   context-aware dispatcher with left-stick hysteresis and proportional turning that also drives
-  menus/dialogues (`game/ui/gamepadinput.*`), native target lock-on, radial magic/item rings with 3D
-  item icons (`game/ui/quickring.*`), Remake-style D-pad with two player-assignable quick slots,
-  rotating quick-saves, haptics (`game/utils/haptics.*`), stuck-protection, and a `[GAMEPAD]` config.
+  menus/dialogues (`game/ui/gamepadinput.*`), native target lock-on, two concentric-row radial panels
+  with 3D item icons (`game/ui/quickring.*`), contextual zGamePad-inspired combat controls, haptics
+  (`game/utils/haptics.*`), stuck-protection, and a `[GAMEPAD]` config.
 - **On-screen input:** a full virtual gamepad + menu/dialogue/inventory controls with controller glyphs
   (`game/ui/touchinput.*`, `game/ui/padglyph.*`, `assets/controller/`), a complete controller-layout
   screen and a lock-on reticle.

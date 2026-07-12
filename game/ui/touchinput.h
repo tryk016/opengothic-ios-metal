@@ -32,8 +32,9 @@ class TouchInput : public Tempest::Widget {
   private:
     // What a World button does when tapped.
     enum class TAct : uint8_t {
-      Key, MagicRing, ItemRing, Lock, SlotL, SlotR,
-      LbModifier, SystemView, SystemMenu
+      Key, Interact, Special, Lt, Rt, Lb, Rb,
+      WeaponsRing, ItemRing, Lock, StatusOrFocus, LogOrFocus,
+      SystemView, SystemMenu
       };
     struct Btn  { int x, y, s; PadGlyph::Btn glyph; TAct kind; KeyCodec::Action act; };
     struct MBtn { int x, y, s; Tempest::Event::KeyType key; };
@@ -52,7 +53,7 @@ class TouchInput : public Tempest::Widget {
     int            moveId = -1;   // touch id driving movement
     int            lookId = -1;   // touch id driving camera
     int            ringId = -1;   // touch id aiming an open radial ring
-    int            lbId   = -1;   // touch id holding the LB map/save/load modifier
+    int            walkId = -1;   // LB temporarily forcing walk outside melee
     int            viewId = -1;   // touch id holding View (tap/hold)
     int            menuId = -1;   // touch id holding Menu (tap/hold)
     PadSystemGesture systemGesture;
