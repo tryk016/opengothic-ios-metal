@@ -94,10 +94,12 @@ The rings are separate modal `QuickRing` instances, never one combined wheel.
 
 ### Weapons / Magic
 
-- 9 fixed sectors.
+- 10 fixed sectors.
 - 2 inner sectors: currently equipped melee and ranged weapon.
-- 7 outer sectors: active spell-book slots 4 through 10, including runes/scrolls.
-- Committing returns `WeaponMele`, `WeaponBow` or `WeaponMage4..10` to
+- 8 outer sectors: all active spell-book slots 3 through 10, including runes/scrolls.
+  Slot 3 must be included because it is the first slot chosen by automatic rune
+  assignment in the inventory.
+- Committing returns `WeaponMele`, `WeaponBow` or `WeaponMage3..10` to
   `PlayerControl`, preserving normal draw/sheathe animation queuing.
 
 The right-stick angle selects a sector. Stick distance selects inner/outer row with a
@@ -173,7 +175,7 @@ starting an unintended turn or step.
 - Hold each contextual shoulder/trigger while drawing and sheathing weapons; no held
   input may silently become a different action.
 - Confirm short A/B presses in dialogue, pause menu and inventory.
-- Verify both ring sizes, inner/outer hysteresis, empty sectors, spells 4-10 and the
+- Verify both ring sizes, inner/outer hysteresis, empty sectors, spells 3-10 and the
   last burning-torch stow case.
 - Verify touch panel switching/cancel, and opening a menu/loading transition with a
   touch ring active.

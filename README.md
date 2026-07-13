@@ -83,13 +83,13 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
 </details>
 
 - **Two separate quick-rings:** D-pad ↑ opens the Items ring (4 inner + 9 outer slots);
-  D-pad ↓ opens the Weapons / Magic ring (equipped melee and ranged weapons inside, 7 spell-book
+  D-pad ↓ opens the Weapons / Magic ring (equipped melee and ranged weapons inside, 8 spell-book
   slots outside). These are two panels, not one combined wheel; D-pad ↑/↓ also switches between them
   while open. Aim by the right-stick angle and distance, press A or RT to use the selected slot, or B
   to cancel. Tiles show real 3D item icons.
 - **Automatic contents:** the Items ring fills its 9 outer slots first, then its 4 inner slots, using
   potions, food and torches from the live inventory. A lit torch is included synthetically so it can be
-  stowed again. The Weapons / Magic ring is populated from equipped gear and active spell-book slots 4–10.
+  stowed again. The Weapons / Magic ring is populated from equipped gear and all active spell-book slots 3–10.
 - **Contextual combat:** LT blocks in melee and aims a bow; RT attacks, shoots or casts. LB/RB become
   left/right melee attacks and otherwise provide walk/look-back. Outside combat, D-pad ←/→ opens
   character status/the quest log; while target lock is active it selects the previous/next target.

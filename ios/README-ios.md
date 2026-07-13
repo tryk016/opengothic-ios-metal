@@ -110,14 +110,14 @@ are documented in [`CONTROLLER-TECHNICAL.md`](CONTROLLER-TECHNICAL.md).
 Notes on feel and on-screen input:
 - **There are two separate quick-rings**, and each has two concentric rows.
   D-pad ↑ opens Items (4 inner + 9 outer slots); D-pad ↓ opens
-  Weapons / Magic (equipped melee and ranged weapons inside, 7 spell-book
+  Weapons / Magic (equipped melee and ranged weapons inside, 8 spell-book
   slots outside). D-pad ↑/↓ also switches between the panels while one is open.
   Aim by right-stick angle and distance, press A or RT to use the selected slot,
   or B to cancel. Slots show **real 3D item icons**.
 - **Both panels fill automatically.** Items takes potions, food and torches
   from the live inventory (9 outer slots first, then 4 inner); a lit torch is
   added synthetically so it can be stowed again. Weapons / Magic uses the
-  equipped melee/ranged weapons and active spell-book slots 4–10.
+  equipped melee/ranged weapons and all active spell-book slots 3–10.
 - **Target lock-on** (R3) pins the current focus via the engine's native focus
   (not a camera hack); it auto-releases when the target dies or leaves. While
   locked, **D-pad ◀ / ▶** steps to the previous / next target.

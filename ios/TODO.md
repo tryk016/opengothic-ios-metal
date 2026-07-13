@@ -3,7 +3,7 @@
 Controller architecture and its device verification matrix are maintained in
 [`CONTROLLER-TECHNICAL.md`](CONTROLLER-TECHNICAL.md).
 
-## ⏳ Backlog — next round (updated 2026-07-12, device round 5)
+## ⏳ Backlog — next round (updated 2026-07-13, device round 5)
 - [ ] **Right-stick vertical camera — implementation complete, device
       confirmation pending.** The iOS backend already supplied `ry`, but the
       dispatcher sent it only to `PlayerControl`; normal gameplay discards
@@ -15,7 +15,7 @@ Controller architecture and its device verification matrix are maintained in
       complete, device confirmation pending.** LT blocks/aims, RT attacks,
       shoots or casts, LB/RB provide walk/look-back or melee side attacks, L3
       sneaks and X jumps. D-pad ↑ opens Items (automatic 4+9 slots), while
-      D-pad ↓ opens the separate Weapons / Magic panel (2 equipped weapons + 7
+      D-pad ↓ opens the separate Weapons / Magic panel (2 equipped weapons + 8
       spell-book slots); both use concentric radial selection. D-pad ←/→ opens
       status/log or switches combat focus. View tap/hold opens inventory/map;
       Menu opens the game menu. Controller quick save/load and FPP are not
@@ -91,8 +91,10 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
       while retaining `RotateL/RotateR` edges for classic combat, lockpicking
       and rotate+jump side-steps; the touch move-pad remains digital classic
       turning (`playercontrol.cpp:565`).
-- [x] **Runes & scrolls in the Weapons / Magic panel** — the seven outer
-      spell-book slots expose the magic assigned to keys 4–10.
+- [x] **Runes & scrolls in the Weapons / Magic panel** — all eight outer
+      spell-book slots expose the magic assigned to keys 3–10. Slot 3 is
+      included because automatic inventory assignment puts the first rune
+      there; omitting it made the first equipped rune invisible on the ring.
 - [x] **Mobsi levitation — round-2 diagnostics closed/superseded.** The added
       `[mobsi] attach:`/`[mobsi] quit:` data (`nodeDy≈97`, `fixMoved=0`) led to
       the root-vs-feet `Interactive::attach` fix documented above; the logs
@@ -276,7 +278,7 @@ Bug ids (B1–B9, N1–N5) refer to the code-review report; phases refer to the
 - [x] **Two radial panels** (spec §4) — D-pad ↑ opens Items with 4 inner + 9
       outer slots filled automatically from potions, food and torches; D-pad ↓
       opens Weapons / Magic with equipped melee
-      and ranged weapons inside + 7 spell-book slots outside. Right-stick
+      and ranged weapons inside + 8 spell-book slots outside. Right-stick
       angle selects a segment and distance selects a row; A/RT activates and B
       cancels. Live inventory objects render as 3D item icons.
 

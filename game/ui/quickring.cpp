@@ -88,6 +88,10 @@ int QuickRing::cellsCount() const {
   }
 
 void QuickRing::open(Npc& pl) {
+  static_assert(WEAPON_OUTER_CELLS==
+                int(KeyCodec::WeaponMage10)-int(KeyCodec::WeaponMage3)+1,
+                "the weapons ring must expose every native spell slot");
+
   cells = {};
   syntheticTorch.reset();
   sel    = -1;
@@ -111,12 +115,13 @@ void QuickRing::open(Npc& pl) {
     setAction(0,pl.currentMeleeWeapon(), KeyCodec::WeaponMele);
     setAction(1,pl.currentRangedWeapon(),KeyCodec::WeaponBow);
 
-    // Outer row follows zGamePad's spell-book slots 4..10. OpenGothic stores
-    // them at currentSpell indices 1..7 (index zero is keyboard slot 3).
+    // OpenGothic assigns spells to keyboard slots 3..10 and stores them at
+    // currentSpell indices 0..7. Include index zero: it is normally the first
+    // rune equipped through the inventory.
     for(int i=0;i<WEAPON_OUTER_CELLS;++i) {
-      const auto action = KeyCodec::Action(int(KeyCodec::WeaponMage4)+i);
+      const auto action = KeyCodec::Action(int(KeyCodec::WeaponMage3)+i);
       setAction(WEAPON_INNER_CELLS+i,
-                pl.inventory().currentSpell(uint8_t(i+1)), action);
+                pl.inventory().currentSpell(uint8_t(i)), action);
       }
     return;
     }

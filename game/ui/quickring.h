@@ -58,7 +58,10 @@ class QuickRing {
     static constexpr int ITEM_INNER_CELLS  = 4;
     static constexpr int ITEM_OUTER_CELLS  = 9;
     static constexpr int WEAPON_INNER_CELLS = 2;
-    static constexpr int WEAPON_OUTER_CELLS = 7;
+    // Gothic assigns the first equipped spell to keyboard slot 3. Keep all
+    // eight spell-book slots visible so the automatic first assignment can
+    // never fall outside the controller ring.
+    static constexpr int WEAPON_OUTER_CELLS = 8;
     static constexpr int MAX_CELLS = ITEM_INNER_CELLS + ITEM_OUTER_CELLS;
 
     static constexpr float SELECT_EPS       = 0.28f;

@@ -161,7 +161,7 @@
     <text x="96" y="751" class="footerText">4 inner + 9 outer slots · potions, food and torches</text>
     <rect x="825" y="700" width="705" height="72" rx="14" class="card"/>
     <text x="851" y="728" class="footerTitle">D-pad ↓ · Weapons / Magic ring</text>
-    <text x="851" y="751" class="footerText">melee + ranged inside · 7 spell-book slots outside</text>
+    <text x="851" y="751" class="footerText">melee + ranged inside · 8 spell-book slots outside</text>
 
     <rect x="475" y="792" width="650" height="48" rx="14" class="card"/>
     <text x="800" y="815" class="footerTitle" text-anchor="middle">Hold L3 + R3 (~2 s) · teleport when stuck</text>
