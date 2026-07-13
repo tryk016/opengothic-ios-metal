@@ -26,9 +26,8 @@ jobs:
     env:
       # Compile the real MetalFX path while keeping release publication gated.
       METALFX_SPATIAL_BUILD: 'true'
-      # Change to true only together with the complete renderer integration.
-      # Until then CI verifies the branch but intentionally publishes no IPA.
-      METALFX_SPATIAL_READY: 'false'
+      # The arm64 control build passed with the full MetalFX renderer path.
+      METALFX_SPATIAL_READY: 'true'
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
