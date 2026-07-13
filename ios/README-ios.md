@@ -1,8 +1,8 @@
 # OpenGothic on iOS — build & install guide
 
 Play OpenGothic (Gothic II: Night of the Raven) on iPhone/iPad with a Bluetooth
-controller. Two routes are documented: **no Mac** (recommended for you) and
-**with a Mac**.
+controller or the complete on-screen virtual gamepad. Two routes are documented:
+**no Mac** (recommended for you) and **with a Mac**.
 
 > You must legally own Gothic II: NotR. The game ships **no** assets; you supply
 > them from your own installation.
@@ -19,8 +19,10 @@ You do **not** need to fork or build anything. Two ways, easiest first:
   `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json`,
   then install **OpenGothic** from that source. New builds appear as updates.
 - **Direct download:** open the
-  **[Releases page](https://github.com/tryk016/opengothic-ios/releases/latest)** and
-  download the `OpenGothic-unsigned.ipa` asset.
+  **[Releases page](https://github.com/tryk016/opengothic-ios/releases/latest)** or
+  download **[OpenGothic-unsigned.ipa](https://github.com/tryk016/opengothic-ios/releases/download/latest/OpenGothic-unsigned.ipa)**
+  directly. An unsigned IPA cannot be launched by tapping it in Files; SideStore,
+  AltStore or Sideloadly must sign and install it first.
 
 > Maintainers only: the workflow `.github/workflows/ios.yml` (macos runner,
 > `cmake`+`glslang`, `iphoneos` arm64, signing disabled) builds the `.ipa` and
@@ -44,10 +46,19 @@ You do **not** need to fork or build anything. Two ways, easiest first:
 - The free cert **expires after 7 days**; SideStore/AltStore auto-refresh it.
   Free accounts allow **3 sideloaded apps** at a time.
 
+### Updating an existing installation
+
+When the SideStore source shows a new version, tap **Update**. The stable bundle
+identifier remains the same, so iOS preserves the app's `Documents` container,
+including copied game data, saves and `Gothic.ini`; you do not copy them again.
+Do not uninstall the app before updating unless those files are backed up, because
+deleting the app removes its Documents container. The same rule applies when
+installing a newer IPA over the existing app with AltStore/Sideloadly.
+
 ### 3. Copy game data (from Windows)
 The app enables File Sharing (`Info.plist`: `UIFileSharingEnabled`,
 `LSSupportsOpeningDocumentsInPlace`). Copy the **contents** of your Gothic II
-folder into the app's Documents:
+folder into the app's Documents on the first installation:
 - Source: `C:\Program Files (x86)\Steam\steamapps\common\Gothic II`
 - Copy the `Data/`, `_work/`, and `system/` folders in.
 - Options: **iTunes for Windows** → device → File Sharing → OpenGothic → Add;
@@ -66,9 +77,7 @@ on-screen alert instead of a crash.
 3. Xcode → Settings → Accounts → add your **free** Apple ID (a "Personal Team"
    appears). Target → Signing & Capabilities → **Automatically manage signing**,
    pick the personal team, set a unique bundle id if needed.
-4. If signing fails on `com.apple.developer.kernel.increased-memory-limit`,
-   remove that key from `Info.plist.in` (see below) and rebuild.
-5. Run on the device; trust the certificate as in Route A. Copy game data via
+4. Run on the device; trust the certificate as in Route A. Copy game data via
    Finder → device → Files. Same 7-day expiry (rebuild weekly, or use AltStore).
 
 ---
@@ -208,6 +217,11 @@ in Options → Video. Keep `releaseZone < deadZone`; `crossAxisGuard` rejects th
 small perpendicular component of imperfect cardinal stick motion (`0` disables
 the guard).
 
+Options → Video → **Drawing distance** now changes the world far plane immediately
+and persists through the existing `PERFORMANCE/sightValue` setting. 100% is
+approximately 1 km; 80%, 60% and 40% are approximately 800, 600 and 400 m. This
+controls the world view distance and is separate from object-specific fading.
+
 Optional overrides can be added to the same root file:
 
 ```ini
@@ -232,6 +246,12 @@ The iOS limiter changes the native `CADisplayLink` cadence; it does not sleep
 the render/UI thread. Off requests the adaptive 30–120 Hz ProMotion range, while
 30 and 60 request fixed display-link rates.
 
+The production iOS profile also uses three frames in flight, renders directly
+to the Metal drawable, allocates SSAO targets only when SSAO is enabled, and
+avoids unnecessary full skeletal-pose work for distant/offscreen NPCs while
+preserving their animation events. These are build-level optimizations and do
+not require additional `Gothic.ini` entries.
+
 Saving now shows its banner immediately. The slot preview is captured through a
 small render attachment and read back only after the frame fence, avoiding the
 old synchronous Metal-driver abort. If preview capture fails, saving still
@@ -243,8 +263,9 @@ continues with a placeholder. This path has been confirmed on a physical device.
 - **No TestFlight / App Store** — requires a paid Apple Developer account and
   App Review (which would reject an engine reimplementation + copyrighted data).
   Sideloading for personal use avoids review entirely.
-- `increased-memory-limit` entitlement may be stripped under free signing; large
-  worlds rely on the device's default per-app limit (fine on modern devices).
+- Free Apple ID provisioning does not grant the `increased-memory-limit`
+  entitlement. SideStore/AltStore builds therefore use the device's normal
+  per-app memory ceiling; this is expected and does not prevent installation.
 
 > Quick save/load and native target lock-on were previously listed here as
 > unfinished. Both engine features are **device-confirmed** — the earlier save
@@ -252,9 +273,12 @@ continues with a placeholder. This path has been confirmed on a physical device.
 > save/load is intentionally not mapped to the controller. See
 > [`TODO.md`](TODO.md) for the full status.
 
-## Disabling the increased-memory-limit entitlement
-If free signing rejects it, delete these two lines from `Info.plist.in`:
-```xml
-  <key>com.apple.developer.kernel.increased-memory-limit</key>
-  <true/>
-```
+## Increased memory limit and free signing
+
+An `Info.plist` key cannot grant an entitlement. Entitlements come from the
+provisioning profile and the app's final code signature. SideStore re-signs the
+downloaded IPA with the capabilities available to your Apple ID; with a free
+account, `com.apple.developer.kernel.increased-memory-limit` is normally absent.
+The game detects that condition and runs against the normal iOS memory ceiling.
+No file needs to be removed from the downloaded IPA or from `Info.plist.in` to
+install the regular release.

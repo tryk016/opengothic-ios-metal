@@ -6,9 +6,10 @@ and play OpenGothic on iPhone/iPad with a Bluetooth controller **or** a full on-
 
 > ### ⚠️ Work in progress
 > This fork is under **active development**. The core loop — gameplay, the on-screen virtual gamepad,
-> save/load and haptics — has been **tested and confirmed on a device**, and the hard 30 fps cap is
-> lifted (ProMotion). The physical-controller movement response and jump landing are also
-> device-confirmed. It is still rough in places and being tuned, so expect bugs. See
+> save/load with slot previews, haptics and the stable iOS performance profile — has been **tested and
+> confirmed on a device**. The hard 30 fps cap is lifted (ProMotion), with optional Off/30/60 FPS
+> pacing. The physical-controller movement response and jump landing are also device-confirmed. It is
+> still rough in places and being tuned, so expect bugs. See
 > [`ios/TODO.md`](ios/TODO.md) for the current status and remaining gaps.
 
 > ### Credit
@@ -43,7 +44,11 @@ No fork, no compiling — a prebuilt **unsigned `.ipa`** is published on every u
    over Wi-Fi** — no manual reinstalling. *(AltStore or Sideloadly also work, using the `.ipa` from the
    [Releases page](https://github.com/tryk016/opengothic-ios/releases/latest).)*
 2. **Add your game data.** Copy the `Data/`, `_work/`, and `system/` folders from your own Gothic II
-   install into the app's **Documents** folder (Files app on iOS). Launch and play.
+   install into the app's **Documents** folder (Files app on iOS). This is needed only for the first
+   install; normal SideStore updates preserve Documents, saves and settings. Launch and play.
+
+Already installed from the SideStore source? Tap **Update** there. Do not delete the app first: deleting
+an iOS app also removes its Documents container unless you have backed it up.
 
 <sub>Building it yourself (maintainers only): trigger the [`iOS build`](.github/workflows/ios.yml) Action, or use [`ios/build-ios.sh`](ios/build-ios.sh) + Xcode on a Mac — see the guide.</sub>
 
@@ -132,12 +137,14 @@ The generated profile, upgrade note, override priority, optional FPS cap and
 diagnostic settings are documented in the
 [iOS configuration reference](ios/README-ios.md#ios-configuration).
 
+Options → Video → **Drawing distance** is live on iOS: 100% corresponds to an
+approximately 1 km world far plane, while 80%/60%/40% correspond to roughly
+800/600/400 m. Options → Game → **FPS limit** provides Off, 30 and 60 FPS.
+
 ### Known limitations
 
 - **Still a work in progress** — the core game loop is device-tested, but expect rough edges and
   ongoing tuning (see the notice above and `ios/TODO.md`).
-- Save-slot preview thumbnails are not captured on iOS yet (slots show name, date and in-game time, but a
-  blank picture).
 - Sideload certificate expires weekly (auto-refresh via AltStore/SideStore).
 - Mesh shaders are disabled on iOS for GPU compatibility.
 - On-screen virtual-pad button layout is a first pass and still needs on-device tuning.
@@ -157,10 +164,12 @@ diagnostic settings are documented in the
   screen and a lock-on reticle.
 - **iOS lifecycle/robustness:** graceful "data not found" message instead of a crash
   (`game/utils/systemmsg.*`), audio-session setup (`game/utils/audiosession.*`), landscape lock, keep
-  the screen awake, Game Mode keys, a save-crash fix, and dialogue voice-over on ≥4 GB devices.
-- **Performance & display:** ProMotion unlock + triple-buffered Metal swapchain (lifts the hard 30 fps
-  cap), safe-area-aware HUD (nothing hides under the notch / Dynamic Island), configurable shadow
-  resolution, and the upscale-based render-scale guide.
+  the screen awake, Game Mode keys, fence-safe save-slot previews with immediate save feedback, and
+  dialogue voice-over on ≥4 GB devices.
+- **Performance & display:** ProMotion with native Off/30/60 display-link pacing, triple buffering,
+  direct Metal drawable rendering, on-demand SSAO buffers, reduced offscreen/distant NPC pose work,
+  live menu-controlled drawing distance, safe-area-aware HUD, configurable shadow resolution, and
+  the upscale-based render-scale guide.
 ---
 
 *For the engine itself — Windows/Linux/macOS builds, features, mods, command-line arguments, graphics
