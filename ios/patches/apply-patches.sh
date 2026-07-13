@@ -215,3 +215,35 @@ else
     exit 1
   fi
 fi
+
+# Combined iOS performance experiment: expose an opt-in path that renders the
+# final pass directly into CAMetalDrawable. The patch is always present after
+# this script, but production and the stable performance branch keep the path
+# dormant unless CMake defines TEMPEST_METAL_DIRECT_DRAWABLE.
+DIRECT_DRAWABLE_PATCH="$ROOT/ios/patches/tempest-metal-direct-drawable-v2.patch"
+if grep -q 'Direct-drawable v2 experiment' "$MTS"; then
+  echo "skip: mtswapchain.mm direct drawable v2 support (already patched)"
+else
+  if [ ! -f "$DIRECT_DRAWABLE_PATCH" ]; then
+    echo "ERROR: not found: $DIRECT_DRAWABLE_PATCH" >&2
+    exit 1
+  fi
+  EXPECTED_TEMPEST_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
+  ACTUAL_TEMPEST_COMMIT="$(git -C "$ROOT/lib/Tempest" rev-parse HEAD)"
+  if [ "$ACTUAL_TEMPEST_COMMIT" != "$EXPECTED_TEMPEST_COMMIT" ]; then
+    echo "ERROR: Tempest changed ($ACTUAL_TEMPEST_COMMIT); refresh direct drawable v2 patch" >&2
+    exit 1
+  fi
+  if git -C "$ROOT/lib/Tempest" apply --unidiff-zero --check "$DIRECT_DRAWABLE_PATCH"; then
+    git -C "$ROOT/lib/Tempest" apply --unidiff-zero "$DIRECT_DRAWABLE_PATCH"
+  else
+    echo "ERROR: failed to apply Tempest direct drawable v2 support patch" >&2
+    exit 1
+  fi
+  if grep -q 'Direct-drawable v2 experiment' "$MTS"; then
+    echo "patched: mtswapchain.mm direct drawable v2 support"
+  else
+    echo "ERROR: direct drawable v2 marker missing after patch" >&2
+    exit 1
+  fi
+fi

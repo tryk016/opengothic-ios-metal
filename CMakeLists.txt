@@ -61,6 +61,8 @@ elseif(IOS)
          "Keep distant NPC pose culling active during dialogs and cutscenes" OFF)
   option(OPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT
          "Use three OpenGothic frame-resource slots on iOS" OFF)
+  option(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO
+         "Render directly into CAMetalDrawable and allocate SSAO buffers on demand" OFF)
   # App version. CI passes -DOPENGOTHIC_IOS_VERSION=1.0.<run> so the bundle's
   # CFBundleShortVersionString matches the "version" field in apps.json —
   # otherwise SideStore/AltStore rejects the download as a version mismatch.
@@ -100,6 +102,10 @@ elseif(IOS)
   if(OPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT=1)
+  endif()
+  if(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO=1)
   endif()
   # App icon: Xcode's actool compiles this asset catalog on the CI runner and
   # injects the CFBundleIcons keys, so the icon shows on the home screen.
@@ -182,6 +188,9 @@ else()
   set(TEMPEST_BUILD_SHARED OFF CACHE INTERNAL "")
 endif()
 add_subdirectory(lib/Tempest/Engine)
+if(IOS AND OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+  target_compile_definitions(Tempest PRIVATE TEMPEST_METAL_DIRECT_DRAWABLE=1)
+endif()
 include_directories(lib/Tempest/Engine/include)
 target_link_libraries(${PROJECT_NAME} Tempest)
 

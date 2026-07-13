@@ -1119,9 +1119,15 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
 #else
   constexpr const char* perfExperiment = "control";
 #endif
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+  constexpr const char* gpuExperiment = "direct_drawable_v2_lazy_ssao";
+#else
+  constexpr const char* gpuExperiment = "control";
+#endif
 
   string_frm<1024> line("PERF v=1 scene=",perfWindow.scene,
                         " perf_exp=",perfExperiment,
+                        " gpu_exp=",gpuExperiment,
                         " window_ms=",size_t(elapsedUs/1000u),
                         " fps=",measuredFps,
                         " frame_p50_ms=",percentileMs(perfWindow.frameUs,50u),
@@ -1134,6 +1140,7 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
                         " frame_submitted=",perfWindow.framesSubmitted,
                         " fence_miss=",perfWindow.fenceMisses,
                         " frames_in_flight=",Resources::MaxFramesInFlight,
+                        " ssao_buffers=",renderer.ssaoBuffersAllocated() ? 1 : 0,
                         " npc=",npcCount,
                         " npc_full_pose=",npcAnimation.fullPose,
                         " npc_events_only=",npcAnimation.eventsOnly,

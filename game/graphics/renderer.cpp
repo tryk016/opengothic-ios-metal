@@ -109,6 +109,10 @@ Renderer::~Renderer() {
   Gothic::inst().onSettingsChanged.ubind(this,&Renderer::setupSettings);
   }
 
+bool Renderer::ssaoBuffersAllocated() const {
+  return !ssao.ssaoBuf.isEmpty() && !ssao.ssaoBlur.isEmpty();
+  }
+
 void Renderer::resetSwapchain() {
   auto& device = Resources::device();
   device.waitIdle();
@@ -159,8 +163,18 @@ void Renderer::resetSwapchain() {
   gbufDiffuse   = device.attachment(TextureFormat::RGBA8,w,h);
   gbufNormal    = device.attachment(TextureFormat::R32U, w,h);
 
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+  if(settings.zCloudShadowScale) {
+    ssao.ssaoBuf  = device.image2d(ssao.aoFormat, w, h);
+    ssao.ssaoBlur = device.image2d(ssao.aoFormat, w, h);
+    } else {
+    ssao.ssaoBuf  = StorageImage();
+    ssao.ssaoBlur = StorageImage();
+    }
+#else
   ssao.ssaoBuf  = device.image2d(ssao.aoFormat, w, h);
   ssao.ssaoBlur = device.image2d(ssao.aoFormat, w, h);
+#endif
 
   epipolar = decltype(epipolar)();
   vsm      = decltype(vsm)();
@@ -177,6 +191,9 @@ void Renderer::resetSwapchain() {
   }
 
 void Renderer::setupSettings() {
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+  const bool prevSsaoEnabled = settings.zCloudShadowScale;
+#endif
   settings.zEnvMappingEnabled = Gothic::settingsGetI("ENGINE","zEnvMappingEnabled")!=0;
   settings.zCloudShadowScale  = Gothic::settingsGetI("ENGINE","zCloudShadowScale") !=0;
 
@@ -241,7 +258,11 @@ void Renderer::setupSettings() {
     settings.giMethod = GiMethod::None;
     }
 
-  if(prevVidResIndex!=settings.vidResIndex) {
+  bool swapchainResourcesChanged = prevVidResIndex!=settings.vidResIndex;
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+  swapchainResourcesChanged = swapchainResourcesChanged || prevSsaoEnabled!=settings.zCloudShadowScale;
+#endif
+  if(swapchainResourcesChanged) {
     resetSwapchain();
     }
   if(settings.giMethod!=GiMethod::None) {

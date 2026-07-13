@@ -22,6 +22,7 @@ class Renderer final {
 
     void resetSwapchain();
     void onWorldChanged();
+    bool ssaoBuffersAllocated() const;
 
     void draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t cmdId, size_t imgId,
               Tempest::VectorImage::Mesh& uiLayer, Tempest::VectorImage::Mesh& numOverlay,
