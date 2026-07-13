@@ -6,9 +6,9 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <Security/SecTask.h>
 
 #include <atomic>
+#include <dlfcn.h>
 #include <mach/mach.h>
 #include <mutex>
 #include <os/proc.h>
@@ -112,10 +112,20 @@ MemoryInfo::Snapshot MemoryInfo::snapshot() {
     case NSProcessInfoThermalStateCritical: ret.thermal = ThermalState::Critical; break;
     }
 
-  SecTaskRef task = SecTaskCreateFromSelf(kCFAllocatorDefault);
-  if(task!=nullptr) {
+  // SecTask is available at runtime on iOS but its header is not part of the
+  // public iPhoneOS SDK. Resolve it lazily so newer SDKs can still compile the
+  // diagnostics build, and degrade to "unchecked" if the symbols disappear.
+  using SecTaskCreateFromSelfFn = CFTypeRef (*)(CFAllocatorRef);
+  using SecTaskCopyValueForEntitlementFn = CFTypeRef (*)(CFTypeRef,CFStringRef,CFErrorRef*);
+  const auto createTask = reinterpret_cast<SecTaskCreateFromSelfFn>(
+      dlsym(RTLD_DEFAULT,"SecTaskCreateFromSelf"));
+  const auto copyEntitlement = reinterpret_cast<SecTaskCopyValueForEntitlementFn>(
+      dlsym(RTLD_DEFAULT,"SecTaskCopyValueForEntitlement"));
+
+  CFTypeRef task = createTask!=nullptr ? createTask(kCFAllocatorDefault) : nullptr;
+  if(task!=nullptr && copyEntitlement!=nullptr) {
     CFErrorRef error = nullptr;
-    CFTypeRef value = SecTaskCopyValueForEntitlement(
+    CFTypeRef value = copyEntitlement(
         task,CFSTR("com.apple.developer.kernel.increased-memory-limit"),&error);
     ret.increasedMemoryLimitChecked = (error==nullptr);
     if(value!=nullptr) {
@@ -126,8 +136,9 @@ MemoryInfo::Snapshot MemoryInfo::snapshot() {
       }
     if(error!=nullptr)
       CFRelease(error);
-    CFRelease(task);
     }
+  if(task!=nullptr)
+    CFRelease(task);
 
   return ret;
   }
