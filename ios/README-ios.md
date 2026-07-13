@@ -257,22 +257,6 @@ small render attachment and read back only after the frame fence, avoiding the
 old synchronous Metal-driver abort. If preview capture fails, saving still
 continues with a placeholder. This path has been confirmed on a physical device.
 
-## Known limitations / follow-ups
-- **Mesh shaders** are defaulted **off** on iOS for GPU compatibility; modern
-  Apple GPUs (A17 Pro / M-series) could re-enable them.
-- **No TestFlight / App Store** — requires a paid Apple Developer account and
-  App Review (which would reject an engine reimplementation + copyrighted data).
-  Sideloading for personal use avoids review entirely.
-- Free Apple ID provisioning does not grant the `increased-memory-limit`
-  entitlement. SideStore/AltStore builds therefore use the device's normal
-  per-app memory ceiling; this is expected and does not prevent installation.
-
-> Quick save/load and native target lock-on were previously listed here as
-> unfinished. Both engine features are **device-confirmed** — the earlier save
-> crash-to-home is fixed and lock-on uses the engine's native focus. Quick
-> save/load is intentionally not mapped to the controller. See
-> [`TODO.md`](TODO.md) for the full status.
-
 ## Increased memory limit and free signing
 
 An `Info.plist` key cannot grant an entitlement. Entitlements come from the

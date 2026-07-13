@@ -1,8 +1,8 @@
 # Controller and quick-ring architecture
 
 This is the maintainer reference for the iOS controller implementation. User-facing
-controls remain in [`README-ios.md`](README-ios.md); current verification work remains
-in [`TODO.md`](TODO.md).
+controls remain in [`README-ios.md`](README-ios.md); device verification details are
+recorded here alongside the relevant implementation notes.
 
 The current implementation was introduced by commit `60ce08a2` and compiled,
 packaged and published successfully by GitHub Actions run `29211433774`.

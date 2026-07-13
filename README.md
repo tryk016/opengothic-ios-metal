@@ -9,8 +9,7 @@ and play OpenGothic on iPhone/iPad with a Bluetooth controller **or** a full on-
 > save/load with slot previews, haptics and the stable iOS performance profile — has been **tested and
 > confirmed on a device**. The hard 30 fps cap is lifted (ProMotion), with optional Off/30/60 FPS
 > pacing. The physical-controller movement response and jump landing are also device-confirmed. It is
-> still rough in places and being tuned, so expect bugs. See
-> [`ios/TODO.md`](ios/TODO.md) for the current status and remaining gaps.
+> still rough in places and being tuned, so expect bugs.
 
 > ### Credit
 > **The entire engine is the work of [Try](https://github.com/Try) and the OpenGothic contributors.**
@@ -144,11 +143,9 @@ approximately 1 km world far plane, while 80%/60%/40% correspond to roughly
 ### Known limitations
 
 - **Still a work in progress** — the core game loop is device-tested, but expect rough edges and
-  ongoing tuning (see the notice above and `ios/TODO.md`).
-- Sideload certificate expires weekly (auto-refresh via AltStore/SideStore).
+  ongoing tuning.
 - Mesh shaders are disabled on iOS for GPU compatibility.
 - On-screen virtual-pad button layout is a first pass and still needs on-device tuning.
-- Some smaller controller-polish items in `ios/TODO.md` are not done yet.
 
 ### What this fork adds on top of upstream
 
