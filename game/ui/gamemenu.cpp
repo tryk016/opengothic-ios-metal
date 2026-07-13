@@ -42,15 +42,6 @@ static bool asciiEqualNoCase(std::string_view lhs, std::string_view rhs) {
   return true;
   }
 
-static bool asciiContainsNoCase(std::string_view text, std::string_view needle) {
-  if(needle.empty() || needle.size()>text.size())
-    return false;
-  for(size_t i=0; i+needle.size()<=text.size(); ++i)
-    if(asciiEqualNoCase(text.substr(i,needle.size()),needle))
-      return true;
-  return false;
-  }
-
 struct GameMenu::ListContentDialog : Dialog {
   ListContentDialog(Item& textView):textView(textView) {
     setFocusPolicy(ClickFocus);
@@ -415,12 +406,15 @@ void GameMenu::initItems() {
 void GameMenu::setupIosFpsLimitOption() {
 #if defined(__IOS__)
   Item* fpsChoice = nullptr;
-  for(auto& item:hItems) {
+  size_t fpsChoiceIndex = zenkit::IMenu::item_count;
+  for(size_t i=0; i<zenkit::IMenu::item_count; ++i) {
+    auto& item = hItems[i];
     if(item.handle==nullptr)
       continue;
     if(asciiEqualNoCase(item.handle->on_chg_set_option_section,"GAME") &&
        asciiEqualNoCase(item.handle->on_chg_set_option,"useGothic1Controls")) {
-      fpsChoice = &item;
+      fpsChoice      = &item;
+      fpsChoiceIndex = i;
       break;
       }
     }
@@ -455,23 +449,40 @@ void GameMenu::setupIosFpsLimitOption() {
   choice.text[1] = help;
   fpsChoice->value = std::clamp(Gothic::settingsGetI("ENGINE","zMaxFpsMode"),0,2);
 
-  // Stock MENU.DAT variants usually keep the label in a separate TEXT item on
-  // the same row. Update it when recognizable, while the embedded label above
-  // remains a safe fallback for other menu layouts and mods.
-  for(auto& item:hItems) {
-    if(&item==fpsChoice || item.handle==nullptr)
-      continue;
-    auto& candidate = *item.handle;
-    if(candidate.type!=zenkit::MenuItemType::TEXT || candidate.pos_y!=choice.pos_y)
-      continue;
-    if(!asciiContainsNoCase(item.name,"GOTHIC") &&
-       !asciiContainsNoCase(candidate.text[0],"GOTHIC"))
-      continue;
-    candidate.text[0] = label;
-    candidate.text[1] = help;
+  // Stock MENU.DAT stores a row as two consecutive items, for example
+  // MENUITEM_GAME_OLDCONTROLS and MENUITEM_GAME_OLDCONTROLS_CHOICE. Their
+  // vertical positions differ by MENU_CHOICE_YPLUS, so matching pos_y misses
+  // the visible label. Prefer the paired instance name and retain the adjacent
+  // TEXT item as a fallback for localized or modified menu scripts.
+  Item* fpsLabel = nullptr;
+  constexpr std::string_view choiceSuffix = "_CHOICE";
+  if(fpsChoice->name.size()>choiceSuffix.size() &&
+     asciiEqualNoCase(std::string_view(fpsChoice->name).substr(fpsChoice->name.size()-choiceSuffix.size()),choiceSuffix)) {
+    const std::string_view labelName(fpsChoice->name.data(),fpsChoice->name.size()-choiceSuffix.size());
+    for(auto& item:hItems) {
+      if(item.handle!=nullptr && item.handle->type==zenkit::MenuItemType::TEXT &&
+         asciiEqualNoCase(item.name,labelName)) {
+        fpsLabel = &item;
+        break;
+        }
+      }
+    }
+  if(fpsLabel==nullptr && fpsChoiceIndex>0) {
+    for(size_t i=fpsChoiceIndex; i>0; --i) {
+      auto& candidate = hItems[i-1];
+      if(candidate.handle!=nullptr && candidate.handle->type==zenkit::MenuItemType::TEXT) {
+        fpsLabel = &candidate;
+        break;
+        }
+      }
+    }
+  if(fpsLabel!=nullptr) {
+    fpsLabel->handle->text[0] = label;
+    fpsLabel->handle->text[1] = help;
     }
 
-  Log::i("iOS menu: replaced GAME/useGothic1Controls with ENGINE/zMaxFpsMode");
+  Log::i("iOS menu: replaced GAME/useGothic1Controls with ENGINE/zMaxFpsMode, label=",
+         fpsLabel!=nullptr ? fpsLabel->name : "embedded-only");
 #endif
   }
 
