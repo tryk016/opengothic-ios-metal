@@ -63,6 +63,8 @@ elseif(IOS)
          "Use three OpenGothic frame-resource slots on iOS" OFF)
   option(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO
          "Render directly into CAMetalDrawable and allocate SSAO buffers on demand" OFF)
+  option(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000
+         "Limit the iOS world camera far plane to 60000 Gothic units" OFF)
   # App version. CI passes -DOPENGOTHIC_IOS_VERSION=1.0.<run> so the bundle's
   # CFBundleShortVersionString matches the "version" field in apps.json —
   # otherwise SideStore/AltStore rejects the download as a version mismatch.
@@ -106,6 +108,10 @@ elseif(IOS)
   if(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO=1)
+  endif()
+  if(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000=1)
   endif()
   # App icon: Xcode's actool compiles this asset catalog on the CI runner and
   # injects the CFBundleIcons keys, so the icon shows on the home screen.

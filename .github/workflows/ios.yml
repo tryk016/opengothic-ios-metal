@@ -45,6 +45,7 @@ jobs:
       NPC_DIALOG_CULLING: ${{ startsWith(github.ref, 'refs/heads/codex/ios-performance') }}
       THREE_FRAMES_IN_FLIGHT: ${{ startsWith(github.ref, 'refs/heads/codex/ios-performance') }}
       DIRECT_DRAWABLE_LAZY_SSAO: ${{ startsWith(github.ref, 'refs/heads/codex/ios-performance') }}
+      WORLD_FAR_PLANE_60000: ${{ github.ref == 'refs/heads/codex/ios-performance-far-plane-60000' }}
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
@@ -69,7 +70,8 @@ jobs:
             -DOPENGOTHIC_NPC_ANIMATION_CULLING="$SIDESTORE_MEMORY_TEST" \
             -DOPENGOTHIC_NPC_DIALOG_CULLING="$NPC_DIALOG_CULLING" \
             -DOPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT="$THREE_FRAMES_IN_FLIGHT" \
-            -DOPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO="$DIRECT_DRAWABLE_LAZY_SSAO"
+            -DOPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO="$DIRECT_DRAWABLE_LAZY_SSAO" \
+            -DOPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000="$WORLD_FAR_PLANE_60000"
 
       - name: Build (code signing disabled)
         run: |

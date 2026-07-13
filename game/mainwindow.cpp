@@ -1119,15 +1119,27 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
 #else
   constexpr const char* perfExperiment = "control";
 #endif
-#if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
+  constexpr const char* gpuExperiment = "world_far_plane_60000";
+  constexpr uint32_t worldFarPlane = 60000u;
+#elif defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
   constexpr const char* gpuExperiment = "direct_drawable_v2_lazy_ssao";
+  constexpr uint32_t worldFarPlane = 100000u;
 #else
   constexpr const char* gpuExperiment = "control";
+  constexpr uint32_t worldFarPlane = 100000u;
+#endif
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
+  constexpr int directDrawable = 1;
+#else
+  constexpr int directDrawable = 0;
 #endif
 
   string_frm<1024> line("PERF v=1 scene=",perfWindow.scene,
                         " perf_exp=",perfExperiment,
                         " gpu_exp=",gpuExperiment,
+                        " direct_drawable=",directDrawable,
+                        " world_far_plane=",worldFarPlane,
                         " window_ms=",size_t(elapsedUs/1000u),
                         " fps=",measuredFps,
                         " frame_p50_ms=",percentileMs(perfWindow.frameUs,50u),

@@ -148,7 +148,11 @@ float Camera::zNear() const {
   }
 
 float Camera::zFar() const {
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
+  static float far = 60000.0f;
+#else
   static float far = 100000.0f;
+#endif
   return far;
   }
 
