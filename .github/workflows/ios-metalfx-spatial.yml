@@ -1,0 +1,168 @@
+name: iOS MetalFX Spatial
+
+# Dedicated experimental channel. It never reads, edits, or uploads assets to
+# the stable "latest" release. Keep the readiness gate false until the MetalFX
+# renderer path and its runtime Lanczos fallback are both implemented.
+
+on:
+  push:
+    branches: [ 'codex/metalfx-spatial' ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'scr0.png'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ios-metalfx-spatial-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-latest
+    env:
+      # Change to true only together with the complete renderer integration.
+      # Until then CI verifies the branch but intentionally publishes no IPA.
+      METALFX_SPATIAL_READY: 'false'
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: brew install cmake glslang
+
+      - name: Apply submodule patches
+        run: bash ios/patches/apply-patches.sh
+
+      - name: Configure (Xcode generator, iOS arm64)
+        run: |
+          METALFX_ARGS=()
+          if [ "$METALFX_SPATIAL_READY" = "true" ]; then
+            METALFX_ARGS=(-DOPENGOTHIC_METALFX_SPATIAL=ON)
+          fi
+          cmake -S . -B build-ios -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
+            -DOPENGOTHIC_IOS_VERSION="1.0.${{ github.run_number }}" \
+            -DOPENGOTHIC_IOS_INCREASED_MEMORY_REQUESTED=OFF \
+            -DOPENGOTHIC_PERF_DIAGNOSTICS=OFF \
+            -DOPENGOTHIC_NPC_ANIMATION_CULLING=ON \
+            -DOPENGOTHIC_NPC_DIALOG_CULLING=ON \
+            -DOPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT=ON \
+            -DOPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO=ON \
+            -DOPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000=OFF \
+            -DOPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE=ON \
+            "${METALFX_ARGS[@]}"
+
+      - name: Build (code signing disabled)
+        run: |
+          cmake --build build-ios --config Release -- \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+      - name: MetalFX release channel pending implementation
+        if: env.METALFX_SPATIAL_READY != 'true'
+        run: |
+          echo "Build verified. IPA/release publishing remains disabled until MetalFX Spatial and the Lanczos fallback are implemented."
+
+      - name: Package MetalFX Spatial .ipa
+        if: env.METALFX_SPATIAL_READY == 'true'
+        run: |
+          APP="$(find build-ios -name '*.app' -type d | head -n1)"
+          if [ -z "$APP" ]; then echo "no .app produced"; exit 1; fi
+          echo "Packaging: $APP"
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -r OpenGothic-MetalFX-Spatial.ipa Payload >/dev/null
+
+      - name: Generate MetalFX SideStore/AltStore source
+        if: env.METALFX_SPATIAL_READY == 'true'
+        run: |
+          VERSION="1.0.${{ github.run_number }}"
+          DATE="$(date -u +%Y-%m-%d)"
+          SIZE="$(stat -f%z OpenGothic-MetalFX-Spatial.ipa)"
+          BASE="${{ github.server_url }}/${{ github.repository }}"
+          IPA_URL="$BASE/releases/download/metalfx-spatial/OpenGothic-MetalFX-Spatial.ipa"
+          SOURCE_URL="$BASE/releases/download/metalfx-spatial/apps.json"
+          ICON_URL="$BASE/raw/master/ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          cat > apps.json <<EOF
+          {
+            "name": "OpenGothic iOS — MetalFX Spatial",
+            "identifier": "opengothic.gothic2.metalfx.source",
+            "sourceURL": "$SOURCE_URL",
+            "apps": [
+              {
+                "name": "OpenGothic MetalFX Spatial",
+                "bundleIdentifier": "opengothic.gothic2",
+                "developerName": "Try (engine) · iOS port",
+                "subtitle": "Experimental MetalFX Spatial iOS build",
+                "localizedDescription": "Experimental MetalFX Spatial variant of the unofficial OpenGothic iOS port. Requires your own legally-owned Gothic II game data; no game assets are included. Uses Lanczos automatically when MetalFX is unavailable.",
+                "iconURL": "$ICON_URL",
+                "tintColor": "8B0000",
+                "category": "games",
+                "version": "$VERSION",
+                "versionDate": "$DATE",
+                "versionDescription": "MetalFX Spatial development build $VERSION.",
+                "downloadURL": "$IPA_URL",
+                "size": $SIZE,
+                "versions": [
+                  {
+                    "version": "$VERSION",
+                    "date": "$DATE",
+                    "localizedDescription": "MetalFX Spatial development build $VERSION.",
+                    "downloadURL": "$IPA_URL",
+                    "size": $SIZE
+                  }
+                ]
+              }
+            ],
+            "news": []
+          }
+          EOF
+          echo "----- apps.json -----"
+          cat apps.json
+
+      - name: Publish MetalFX Spatial prerelease
+        if: env.METALFX_SPATIAL_READY == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          NOTES="Unsigned MetalFX Spatial iOS build \`1.0.${{ github.run_number }}\` (commit ${{ github.sha }}).
+
+          This is an experimental channel with an automatic Lanczos fallback when MetalFX is unavailable.
+
+          **Download:** \`OpenGothic-MetalFX-Spatial.ipa\` below, then sideload with your own free Apple ID via SideStore / AltStore / Sideloadly.
+          **SideStore source:** add this URL in SideStore → Sources → +
+          \`${{ github.server_url }}/${{ github.repository }}/releases/download/metalfx-spatial/apps.json\`
+
+          Requires your own legally-owned Gothic II data. No game assets are included."
+
+          if gh release view metalfx-spatial >/dev/null 2>&1; then
+            gh release edit metalfx-spatial --prerelease \
+              --title "OpenGothic iOS — MetalFX Spatial" --notes "$NOTES"
+            for asset in OpenGothic-MetalFX-Spatial.ipa apps.json; do
+              gh release delete-asset metalfx-spatial "$asset" --yes || true
+            done
+            gh release upload metalfx-spatial OpenGothic-MetalFX-Spatial.ipa apps.json ||
+              { sleep 10; gh release upload metalfx-spatial OpenGothic-MetalFX-Spatial.ipa apps.json --clobber; }
+          else
+            gh release create metalfx-spatial OpenGothic-MetalFX-Spatial.ipa apps.json \
+              --title "OpenGothic iOS — MetalFX Spatial" --prerelease --notes "$NOTES"
+          fi
+
+      - name: Upload MetalFX .ipa artifact (backup)
+        if: env.METALFX_SPATIAL_READY == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenGothic-MetalFX-Spatial-ipa
+          path: OpenGothic-MetalFX-Spatial.ipa
+          if-no-files-found: error
