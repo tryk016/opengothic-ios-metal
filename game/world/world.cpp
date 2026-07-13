@@ -292,6 +292,14 @@ void World::updateAnimation(uint64_t dt) {
   wobj.updateAnimation(dt);
   }
 
+void World::refreshAnimationPose() {
+  wobj.refreshAnimationPose();
+  }
+
+WorldObjects::AnimationStats World::animationStats() const {
+  return wobj.animationStats();
+  }
+
 void World::resetPositionToTA() {
   wobj.resetPositionToTA();
   }

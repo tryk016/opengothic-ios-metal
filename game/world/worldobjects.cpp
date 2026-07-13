@@ -15,6 +15,8 @@
 #include "utils/workers.h"
 #include "utils/dbgpainter.h"
 #include "gothic.h"
+#include "camera.h"
+#include "graphics/dynamic/frustrum.h"
 
 #include <Tempest/Painter>
 #include <Tempest/Application>
@@ -424,12 +426,69 @@ void WorldObjects::updateAnimation(uint64_t dt) {
     return;
   if(dt==0)
     return;
+#if defined(OPENGOTHIC_NPC_ANIMATION_CULLING)
+  const bool forceAll = owner.isInDialog() || owner.currentCs()!=nullptr;
+  Npc* const player = owner.player();
+  Workers::parallelTasks(npcArr,[dt,forceAll,player](std::unique_ptr<Npc>& i){
+    const bool playerRelevant = player!=nullptr && (i->target()==player || player->target()==i.get());
+    const bool full = forceAll || i->isPlayer() ||
+                      i->processPolicy()==NpcProcessPolicy::AiNormal || playerRelevant;
+    if(full)
+      i->updateAnimation(dt);
+    else
+      i->updateAnimation(dt,false,Npc::PoseUpdate::EventsOnly);
+    });
+  animationWork = {};
+  for(const auto& i:npcArr) {
+    if(i->animationPoseDeferred())
+      animationWork.eventsOnly++; else
+      animationWork.fullPose++;
+    }
+  animationRefreshPending  = !forceAll && animationWork.eventsOnly>0;
+  if(!animationRefreshPending)
+    animationLast = animationWork;
+#else
   Workers::parallelTasks(npcArr,[dt](std::unique_ptr<Npc>& i){
     i->updateAnimation(dt);
     });
+  animationWork.fullPose   = npcArr.size();
+  animationWork.eventsOnly = 0;
+  animationLast            = animationWork;
+  animationRefreshPending  = false;
+#endif
   interactiveObj.parallelFor([dt](Interactive& i){
     i.updateAnimation(dt);
     });
+  }
+
+void WorldObjects::refreshAnimationPose() {
+#if defined(OPENGOTHIC_NPC_ANIMATION_CULLING)
+  if(!animationRefreshPending)
+    return;
+
+  Camera* const camera = Gothic::inst().camera();
+  if(camera==nullptr) {
+    animationLast = animationWork;
+    animationRefreshPending = false;
+    return;
+    }
+
+  Frustrum frustrum;
+  frustrum.make(camera->viewProj(),1,1);
+  Workers::parallelTasks(npcArr,[&frustrum](std::unique_ptr<Npc>& i){
+    if(!i->animationPoseDeferred() || !i->isInAnimationFrustrum(frustrum))
+      return;
+    i->refreshAnimationPose();
+    });
+
+  animationLast = {};
+  for(const auto& i:npcArr) {
+    if(i->animationPoseDeferred())
+      animationLast.eventsOnly++; else
+      animationLast.fullPose++;
+    }
+  animationRefreshPending  = false;
+#endif
   }
 
 bool WorldObjects::isTargeted(Npc& dst) {

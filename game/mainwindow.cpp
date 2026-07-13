@@ -18,6 +18,7 @@
 #include "utils/string_frm.h"
 #include "world/triggers/abstracttrigger.h"
 #include "world/objects/npc.h"
+#include "world/world.h"
 #include "game/serialize.h"
 #include "game/globaleffects.h"
 #include "utils/gthfont.h"
@@ -1061,9 +1062,11 @@ void MainWindow::resetPerfWindow(uint64_t nowUs) {
   perfWindow.frameUs.clear();
   perfWindow.tickUs.clear();
   perfWindow.animationUs.clear();
+  perfWindow.poseRefreshUs.clear();
   perfWindow.frameUs.reserve(2048);
   perfWindow.tickUs.reserve(2048);
   perfWindow.animationUs.reserve(2048);
+  perfWindow.poseRefreshUs.reserve(2048);
   perfWindow.startedUs       = nowUs;
   perfWindow.lastSubmittedUs = 0;
   perfWindow.framesStarted   = 0;
@@ -1105,8 +1108,9 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
   const uint64_t ceiling = ceilingValid ? mem.footprintBytes+mem.availableBytes : 0;
   const int entitlementPresent = !mem.increasedMemoryLimitChecked ? -1 :
                                  (mem.increasedMemoryLimitPresent ? 1 : 0);
-  const size_t npcCount = Gothic::inst().world()!=nullptr ?
-                          size_t(Gothic::inst().world()->npcCount()) : 0u;
+  auto* const world = Gothic::inst().world();
+  const size_t npcCount = world!=nullptr ? size_t(world->npcCount()) : 0u;
+  const auto npcAnimation = world!=nullptr ? world->animationStats() : WorldObjects::AnimationStats{};
   const double measuredFps = double(perfWindow.framesSubmitted)*1000000.0/double(elapsedUs);
 
   string_frm<1024> line("PERF v=1 scene=",perfWindow.scene,
@@ -1117,10 +1121,13 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
                         " frame_p99_ms=",percentileMs(perfWindow.frameUs,99u),
                         " cpu_tick_p95_ms=",percentileMs(perfWindow.tickUs,95u),
                         " cpu_anim_p95_ms=",percentileMs(perfWindow.animationUs,95u),
+                        " cpu_pose_refresh_p95_ms=",percentileMs(perfWindow.poseRefreshUs,95u),
                         " frame_started=",perfWindow.framesStarted,
                         " frame_submitted=",perfWindow.framesSubmitted,
                         " fence_miss=",perfWindow.fenceMisses,
                         " npc=",npcCount,
+                        " npc_full_pose=",npcAnimation.fullPose,
+                        " npc_events_only=",npcAnimation.eventsOnly,
                         " mem_footprint_mb=",memoryMiB(mem.footprintBytes,mem.footprintValid),
                         " mem_available_mb=",memoryMiB(mem.availableBytes,mem.availableValid),
                         " mem_ceiling_mb=",memoryMiB(ceiling,ceilingValid),
@@ -1688,6 +1695,15 @@ void MainWindow::render(){
       return;
       }
     Resources::resetRecycled(cmdId);
+
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+    const uint64_t poseRefreshStart = perfNowUs();
+#endif
+    if(auto* world = Gothic::inst().world())
+      world->refreshAnimationPose();
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+    perfWindow.poseRefreshUs.push_back(perfSample(perfNowUs()-poseRefreshStart));
+#endif
 
     if(video.isActive()) {
       video.paint(device,cmdId);

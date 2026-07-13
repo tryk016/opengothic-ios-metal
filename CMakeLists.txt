@@ -55,6 +55,8 @@ elseif(IOS)
          "Mark SideStore test builds as requesting Increased Memory Limit" OFF)
   option(OPENGOTHIC_PERF_DIAGNOSTICS
          "Enable low-frequency performance and memory telemetry" OFF)
+  option(OPENGOTHIC_NPC_ANIMATION_CULLING
+         "Skip full skeletal pose updates for distant offscreen NPCs" OFF)
   # App version. CI passes -DOPENGOTHIC_IOS_VERSION=1.0.<run> so the bundle's
   # CFBundleShortVersionString matches the "version" field in apps.json —
   # otherwise SideStore/AltStore rejects the download as a version mismatch.
@@ -79,6 +81,10 @@ elseif(IOS)
   if(OPENGOTHIC_PERF_DIAGNOSTICS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_PERF_DIAGNOSTICS=1)
+  endif()
+  if(OPENGOTHIC_NPC_ANIMATION_CULLING)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_NPC_ANIMATION_CULLING=1)
   endif()
   # App icon: Xcode's actool compiles this asset catalog on the CI runner and
   # injects the CFBundleIcons keys, so the icon shows on the home screen.

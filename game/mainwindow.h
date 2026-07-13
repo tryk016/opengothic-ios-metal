@@ -207,6 +207,7 @@ class MainWindow : public Tempest::Window {
       std::vector<uint32_t> frameUs;
       std::vector<uint32_t> tickUs;
       std::vector<uint32_t> animationUs;
+      std::vector<uint32_t> poseRefreshUs;
       uint64_t              startedUs       = 0;
       uint64_t              lastSubmittedUs = 0;
       size_t                framesStarted   = 0;
