@@ -234,5 +234,6 @@ class MainWindow : public Tempest::Window {
       };
     Fps           fps;
     BenchmarkData benchmark;
+    uint32_t      maxFpsTarget = 0;
     uint64_t      maxFpsInv = 0;
   };

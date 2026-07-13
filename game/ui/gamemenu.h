@@ -120,6 +120,7 @@ class GameMenu : public Tempest::Widget {
 
     void                                  updateValues();
     void                                  updateItem    (Item &item);
+    void                                  setupIosFpsLimitOption();
     void                                  updateSavTitle(Item& sel);
     void                                  updateSavThumb(Item& sel);
     void                                  updateVideo();

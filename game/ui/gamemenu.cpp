@@ -30,6 +30,27 @@ using namespace Tempest;
 
 static const float scriptDiv=8192.0f;
 
+static bool asciiEqualNoCase(std::string_view lhs, std::string_view rhs) {
+  if(lhs.size()!=rhs.size())
+    return false;
+  for(size_t i=0; i<lhs.size(); ++i) {
+    const auto l = char(std::toupper(static_cast<unsigned char>(lhs[i])));
+    const auto r = char(std::toupper(static_cast<unsigned char>(rhs[i])));
+    if(l!=r)
+      return false;
+    }
+  return true;
+  }
+
+static bool asciiContainsNoCase(std::string_view text, std::string_view needle) {
+  if(needle.empty() || needle.size()>text.size())
+    return false;
+  for(size_t i=0; i+needle.size()<=text.size(); ++i)
+    if(asciiEqualNoCase(text.substr(i,needle.size()),needle))
+      return true;
+  return false;
+  }
+
 struct GameMenu::ListContentDialog : Dialog {
   ListContentDialog(Item& textView):textView(textView) {
     setFocusPolicy(ClickFocus);
@@ -388,6 +409,70 @@ void GameMenu::initItems() {
       }
     updateItem(hItems[i]);
     }
+  setupIosFpsLimitOption();
+  }
+
+void GameMenu::setupIosFpsLimitOption() {
+#if defined(__IOS__)
+  Item* fpsChoice = nullptr;
+  for(auto& item:hItems) {
+    if(item.handle==nullptr)
+      continue;
+    if(asciiEqualNoCase(item.handle->on_chg_set_option_section,"GAME") &&
+       asciiEqualNoCase(item.handle->on_chg_set_option,"useGothic1Controls")) {
+      fpsChoice = &item;
+      break;
+      }
+    }
+  if(fpsChoice==nullptr)
+    return;
+
+  const char* label = "FPS limit";
+  const char* off   = "Off";
+  const char* help  = "Limits rendered frames per second";
+  switch(padDiagramLanguage()) {
+    case ScriptLang::PL:
+      label = "Limit FPS";
+      off   = "Wylaczony";
+      help  = "Ogranicza liczbe klatek na sekunde";
+      break;
+    case ScriptLang::DE:
+      label = "FPS-Limit";
+      off   = "Aus";
+      help  = "Begrenzt die Bilder pro Sekunde";
+      break;
+    default:
+      break;
+    }
+
+  auto& choice = *fpsChoice->handle;
+  choice.on_chg_set_option_section = "ENGINE";
+  choice.on_chg_set_option         = "zMaxFpsMode";
+  choice.text[0] = label;
+  choice.text[0] += "#";
+  choice.text[0] += off;
+  choice.text[0] += "|30|60";
+  choice.text[1] = help;
+  fpsChoice->value = std::clamp(Gothic::settingsGetI("ENGINE","zMaxFpsMode"),0,2);
+
+  // Stock MENU.DAT variants usually keep the label in a separate TEXT item on
+  // the same row. Update it when recognizable, while the embedded label above
+  // remains a safe fallback for other menu layouts and mods.
+  for(auto& item:hItems) {
+    if(&item==fpsChoice || item.handle==nullptr)
+      continue;
+    auto& candidate = *item.handle;
+    if(candidate.type!=zenkit::MenuItemType::TEXT || candidate.pos_y!=choice.pos_y)
+      continue;
+    if(!asciiContainsNoCase(item.name,"GOTHIC") &&
+       !asciiContainsNoCase(candidate.text[0],"GOTHIC"))
+      continue;
+    candidate.text[0] = label;
+    candidate.text[1] = help;
+    }
+
+  Log::i("iOS menu: replaced GAME/useGothic1Controls with ENGINE/zMaxFpsMode");
+#endif
   }
 
 ScriptLang GameMenu::padDiagramLanguage() const {
@@ -983,13 +1068,21 @@ void GameMenu::execChgOption(Item &item, int slideDx) {
   if(item.handle->type==zenkit::MenuItemType::CHOICEBOX) {
     updateItem(item);
     const int cnt = int(strEnumSize(item.handle->text[0]));
-    if(slideDx==0 && cnt==2)
-      slideDx = 1; // QoL: on/off toggle
+    const bool fpsLimit = asciiEqualNoCase(sec,"ENGINE") &&
+                          asciiEqualNoCase(opt,"zMaxFpsMode");
+    if(slideDx==0 && (cnt==2 || fpsLimit))
+      slideDx = 1; // QoL: toggle or advance the FPS choice on tap
 
     item.value += slideDx; // next value
-    if(cnt>0)
-      item.value = std::clamp(item.value,0,cnt-1);  else
+    if(cnt>0 && fpsLimit) {
+      item.value = (item.value%cnt+cnt)%cnt;
+      }
+    else if(cnt>0) {
+      item.value = std::clamp(item.value,0,cnt-1);
+      }
+    else {
       item.value = 0;
+      }
     Gothic::settingsSetI(sec, opt, item.value);
     }
   }

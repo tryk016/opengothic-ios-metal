@@ -472,9 +472,17 @@ void MainWindow::tickMouse(uint64_t dt) {
   }
 
 void MainWindow::onSettings() {
-  auto zMaxFps = Gothic::options().fpsLimit;
+  int zMaxFps = 0;
+#if defined(__IOS__)
+  constexpr int fpsLimits[] = {0,30,60};
+  const int fpsMode = std::clamp(Gothic::inst().settingsGetI("ENGINE", "zMaxFpsMode"),0,2);
+  zMaxFps = fpsLimits[fpsMode];
+#else
+  zMaxFps = Gothic::options().fpsLimit;
   if(zMaxFps<=0)
     zMaxFps = Gothic::inst().settingsGetI("ENGINE", "zMaxFps");
+#endif
+  maxFpsTarget = uint32_t(std::max(zMaxFps,0));
   if(zMaxFps>0)
     maxFpsInv = 1000u/uint64_t(zMaxFps); else
     maxFpsInv = 0;
@@ -1140,6 +1148,7 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
                         " gpu_exp=",gpuExperiment,
                         " direct_drawable=",directDrawable,
                         " world_far_plane=",worldFarPlane,
+                        " fps_limit=",maxFpsTarget,
                         " window_ms=",size_t(elapsedUs/1000u),
                         " fps=",measuredFps,
                         " frame_p50_ms=",percentileMs(perfWindow.frameUs,50u),

@@ -223,13 +223,12 @@ debugInput=1            ; transition-only controller trace in stderr.log
 The controller does not reserve any shortcut for quick save/load. The
 `useQuickSaveKeys` engine option above remains available for keyboard F5/F9.
 
-The build runs uncapped by default for ProMotion. An optional display-rate cap
-uses a different file, `Documents/system/SystemPack.ini`:
-
-```ini
-[PARAMETERS]
-FPS_Limit=60            ; 0 = uncapped; do not cap below normal in-game fps
-```
+The build runs uncapped by default for ProMotion. On iOS, Options → Game
+repurposes the existing “Gothic 1 controls” choice as
+“FPS limit”, with Off, 30 and 60 FPS values. The selection is applied
+immediately and persisted in the root `Documents/Gothic.ini` as
+`ENGINE/zMaxFpsMode` (`0`, `1` or `2`). The original `GAME/useGothic1Controls`
+value remains unchanged, so the selected combat-control scheme is preserved.
 
 ## Known limitations / follow-ups
 - **Save-slot thumbnails** are not captured on iOS yet — slots show name, date
