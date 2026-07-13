@@ -1666,6 +1666,13 @@ void Renderer::drawGWater(Encoder<CommandBuffer>& cmd, WorldView& view) {
   }
 
 void Renderer::drawReflections(Encoder<CommandBuffer>& cmd, const WorldView& wview) {
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_REFLECTIONS_OFF)
+  // Isolated iOS GPU experiment. Keep GWater, fog, underwater and every other
+  // pass unchanged so the previous diagnostic build remains a valid control.
+  (void)cmd;
+  (void)wview;
+  return;
+#else
   auto& pso = settings.zEnvMappingEnabled ? shaders.waterReflectionSSR : shaders.waterReflection;
 
   cmd.setDebugMarker("Reflections");
@@ -1682,6 +1689,7 @@ void Renderer::drawReflections(Encoder<CommandBuffer>& cmd, const WorldView& wvi
     } else {
     cmd.draw(nullptr, 0, 3);
     }
+#endif
   }
 
 void Renderer::drawUnderwater(Encoder<CommandBuffer>& cmd, const WorldView& wview) {
