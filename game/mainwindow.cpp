@@ -1112,7 +1112,9 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
   const size_t npcCount = world!=nullptr ? size_t(world->npcCount()) : 0u;
   const auto npcAnimation = world!=nullptr ? world->animationStats() : WorldObjects::AnimationStats{};
   const double measuredFps = double(perfWindow.framesSubmitted)*1000000.0/double(elapsedUs);
-#if defined(OPENGOTHIC_NPC_DIALOG_CULLING)
+#if defined(OPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT)
+  constexpr const char* perfExperiment = "three_frames_in_flight";
+#elif defined(OPENGOTHIC_NPC_DIALOG_CULLING)
   constexpr const char* perfExperiment = "npc_dialog_culling";
 #else
   constexpr const char* perfExperiment = "control";
@@ -1131,6 +1133,7 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
                         " frame_started=",perfWindow.framesStarted,
                         " frame_submitted=",perfWindow.framesSubmitted,
                         " fence_miss=",perfWindow.fenceMisses,
+                        " frames_in_flight=",Resources::MaxFramesInFlight,
                         " npc=",npcCount,
                         " npc_full_pose=",npcAnimation.fullPose,
                         " npc_events_only=",npcAnimation.eventsOnly,
