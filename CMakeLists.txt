@@ -65,6 +65,8 @@ elseif(IOS)
          "Render directly into CAMetalDrawable and allocate SSAO buffers on demand" OFF)
   option(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000
          "Limit the iOS world camera far plane to 60000 Gothic units" OFF)
+  option(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE
+         "Map the Gothic draw-distance menu setting to the world camera far plane" OFF)
   # App version. CI passes -DOPENGOTHIC_IOS_VERSION=1.0.<run> so the bundle's
   # CFBundleShortVersionString matches the "version" field in apps.json —
   # otherwise SideStore/AltStore rejects the download as a version mismatch.
@@ -109,9 +111,17 @@ elseif(IOS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO=1)
   endif()
+  if(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000 AND
+     OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
+    message(FATAL_ERROR "Fixed and dynamic world far-plane experiments are mutually exclusive")
+  endif()
   if(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000=1)
+  endif()
+  if(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE=1)
   endif()
   # App icon: Xcode's actool compiles this asset catalog on the CI runner and
   # injects the CFBundleIcons keys, so the icon shows on the home screen.

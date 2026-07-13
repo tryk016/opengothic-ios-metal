@@ -486,6 +486,14 @@ void MainWindow::onSettings() {
   if(zMaxFps>0)
     maxFpsPeriodUs = (1000000u+uint64_t(zMaxFps)-1u)/uint64_t(zMaxFps); else
     maxFpsPeriodUs = 0;
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
+  // settingsSetI() emits onSettingsChanged immediately, so rebuilding the
+  // projection here makes the stock Draw distance choice live in-game.
+  const uint32_t farPlane = Camera::configuredFarPlane();
+  if(auto* camera = Gothic::inst().camera())
+    camera->setViewport(swapchain.w(),swapchain.h());
+  Log::i("iOS draw distance: percent=",farPlane/1000u," world_far_plane=",farPlane);
+#endif
   }
 
 void MainWindow::mouseWheelEvent(MouseEvent &event) {
@@ -1127,15 +1135,22 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
 #else
   constexpr const char* perfExperiment = "control";
 #endif
-#if defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
+  constexpr const char* gpuExperiment = "dynamic_draw_distance";
+  const uint32_t worldFarPlane = Camera::configuredFarPlane();
+  const uint32_t drawDistancePercent = worldFarPlane/1000u;
+#elif defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
   constexpr const char* gpuExperiment = "world_far_plane_60000";
   constexpr uint32_t worldFarPlane = 60000u;
+  constexpr uint32_t drawDistancePercent = 60u;
 #elif defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
   constexpr const char* gpuExperiment = "direct_drawable_v2_lazy_ssao";
   constexpr uint32_t worldFarPlane = 100000u;
+  constexpr uint32_t drawDistancePercent = 100u;
 #else
   constexpr const char* gpuExperiment = "control";
   constexpr uint32_t worldFarPlane = 100000u;
+  constexpr uint32_t drawDistancePercent = 100u;
 #endif
 #if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
   constexpr int directDrawable = 1;
@@ -1148,6 +1163,7 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
                         " gpu_exp=",gpuExperiment,
                         " direct_drawable=",directDrawable,
                         " world_far_plane=",worldFarPlane,
+                        " draw_distance_percent=",drawDistancePercent,
                         " fps_limit=",maxFpsTarget,
                         " window_ms=",size_t(elapsedUs/1000u),
                         " fps=",measuredFps,
