@@ -33,8 +33,8 @@
 
 #include <algorithm>
 #include <array>
-#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
 #include <chrono>
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
 #include <limits>
 #endif
 
@@ -484,8 +484,8 @@ void MainWindow::onSettings() {
 #endif
   maxFpsTarget = uint32_t(std::max(zMaxFps,0));
   if(zMaxFps>0)
-    maxFpsInv = 1000u/uint64_t(zMaxFps); else
-    maxFpsInv = 0;
+    maxFpsPeriodUs = (1000000u+uint64_t(zMaxFps)-1u)/uint64_t(zMaxFps); else
+    maxFpsPeriodUs = 0;
   }
 
 void MainWindow::mouseWheelEvent(MouseEvent &event) {
@@ -1680,6 +1680,7 @@ void MainWindow::setFullscreen(bool fs) {
 void MainWindow::render(){
   try {
     static uint64_t time=Application::tickCount();
+    const auto frameStart = std::chrono::steady_clock::now();
 
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     processMemoryEvents();
@@ -1773,17 +1774,21 @@ void MainWindow::render(){
 #endif
     cmdId = (cmdId+1u)%Resources::MaxFramesInFlight;
 
-    auto t = Application::tickCount();
-    if(t-time<16 && !Gothic::inst().isInGame() && !video.isActive()) {
-      uint32_t delay = uint32_t(16-(t-time));
-      Application::sleep(delay);
-      t += delay;
+    // Keep the legacy 16 ms menu cadence when uncapped, but never let it take
+    // precedence over an explicit 30 FPS target. Microsecond timing also avoids
+    // mapping 60 FPS to 16 ms (62.5 FPS) through integer truncation.
+    uint64_t targetPeriodUs = 0;
+    if(!Gothic::inst().isInGame() && !video.isActive())
+      targetPeriodUs = 16000u;
+    targetPeriodUs = std::max(targetPeriodUs,maxFpsPeriodUs);
+    if(targetPeriodUs>0) {
+      const auto now = std::chrono::steady_clock::now();
+      const auto elapsedUs = uint64_t(std::chrono::duration_cast<std::chrono::microseconds>(now-frameStart).count());
+      if(elapsedUs<targetPeriodUs)
+        std::this_thread::sleep_for(std::chrono::microseconds(targetPeriodUs-elapsedUs));
       }
-    else if(maxFpsInv>0 && t-time<maxFpsInv) {
-      uint32_t delay = uint32_t(maxFpsInv-(t-time));
-      Application::sleep(delay);
-      t += delay;
-      }
+
+    const auto t = Application::tickCount();
     fps.push(t-time);
     if(Gothic::inst().isBenchmarkMode() && Gothic::inst().world()!=nullptr && Gothic::inst().world()->currentCs()!=nullptr)
       benchmark.push(t-time);
