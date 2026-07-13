@@ -24,6 +24,8 @@ jobs:
   build:
     runs-on: macos-latest
     env:
+      # Compile the real MetalFX path while keeping release publication gated.
+      METALFX_SPATIAL_BUILD: 'true'
       # Change to true only together with the complete renderer integration.
       # Until then CI verifies the branch but intentionally publishes no IPA.
       METALFX_SPATIAL_READY: 'false'
@@ -42,7 +44,7 @@ jobs:
       - name: Configure (Xcode generator, iOS arm64)
         run: |
           METALFX_ARGS=()
-          if [ "$METALFX_SPATIAL_READY" = "true" ]; then
+          if [ "$METALFX_SPATIAL_BUILD" = "true" ]; then
             METALFX_ARGS=(-DOPENGOTHIC_METALFX_SPATIAL=ON)
           fi
           cmake -S . -B build-ios -G Xcode \

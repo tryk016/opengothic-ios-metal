@@ -124,6 +124,31 @@ void Renderer::resetSwapchain() {
 
   sceneLinear = device.attachment(TextureFormat::R11G11B10UF,w,h);
 
+#if defined(OPENGOTHIC_METALFX_SPATIAL)
+  metalFxScaler = SpatialScaler();
+  metalFxOutput = StorageImage();
+  metalFxEncodeFailed = false;
+  if(w!=swapchain.w() || h!=swapchain.h()) {
+    SpatialScalerDesc desc;
+    desc.inputFormat  = TextureFormat::R11G11B10UF;
+    desc.outputFormat = TextureFormat::R11G11B10UF;
+    desc.inputWidth   = w;
+    desc.inputHeight  = h;
+    desc.outputWidth  = swapchain.w();
+    desc.outputHeight = swapchain.h();
+    desc.colorMode    = SpatialScalerColorMode::HDR;
+
+    metalFxOutput = device.image2d(desc.outputFormat,desc.outputWidth,desc.outputHeight);
+    metalFxScaler = device.spatialScaler(desc);
+    if(metalFxScaler.isEmpty()) {
+      metalFxOutput = StorageImage();
+      Log::i("MetalFX Spatial unavailable; using Lanczos fallback");
+      } else {
+      Log::i("MetalFX Spatial ready: ",w,"x",h," -> ",swapchain.w(),"x",swapchain.h()," HDR");
+      }
+    }
+#endif
+
   if(settings.aaEnabled) {
     cmaa2.workingEdges               = device.image2d(TextureFormat::R8, (w + 1) / 2, h);
     cmaa2.shapeCandidates            = device.ssbo(Tempest::Uninitialized, w * h / 4 * sizeof(uint32_t));
@@ -696,7 +721,7 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
   if(settings.pathTraceEnabled) {
     drawPathtrace(cmd, *wview, fId);
     cmd.setDebugMarker("Tonemapping");
-    drawTonemapping(result, cmd, *wview);
+    drawFinalTonemapping(result, cmd, *wview);
     wview->postFrameupdate();
     return;
     }
@@ -767,7 +792,7 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
     drawCMAA2(result, cmd, *wview);
     } else {
     cmd.setDebugMarker("Tonemapping");
-    drawTonemapping(result, cmd, *wview);
+    drawFinalTonemapping(result, cmd, *wview);
     }
 
   //drawRayQueryDbg(cmd, *wview);
@@ -777,6 +802,28 @@ void Renderer::draw(Tempest::Attachment& result, Encoder<CommandBuffer>& cmd, ui
   }
 
 void Renderer::drawTonemapping(Attachment& result, Encoder<CommandBuffer>& cmd, const WorldView& wview) {
+  drawTonemappingPass(result,cmd,wview,textureCast<const Texture2d&>(sceneLinear),settings.vidResIndex!=0);
+  }
+
+void Renderer::drawFinalTonemapping(Attachment& result, Encoder<CommandBuffer>& cmd, const WorldView& wview) {
+#if defined(OPENGOTHIC_METALFX_SPATIAL)
+  if(settings.vidResIndex!=0 && !metalFxScaler.isEmpty() && !metalFxOutput.isEmpty()) {
+    cmd.setDebugMarker("MetalFX Spatial HDR");
+    if(cmd.spatialUpscale(metalFxScaler,sceneLinear,metalFxOutput)) {
+      drawTonemappingPass(result,cmd,wview,textureCast<const Texture2d&>(metalFxOutput),false);
+      return;
+      }
+    if(!metalFxEncodeFailed) {
+      metalFxEncodeFailed = true;
+      Log::i("MetalFX Spatial encode rejected texture configuration; using Lanczos fallback");
+      }
+    }
+#endif
+  drawTonemapping(result,cmd,wview);
+  }
+
+void Renderer::drawTonemappingPass(Attachment& result, Encoder<CommandBuffer>& cmd,
+                                   const WorldView& wview, const Texture2d& input, bool upscale) {
   struct Push {
     float brightness = 0;
     float contrast   = 1;
@@ -793,10 +840,10 @@ void Renderer::drawTonemapping(Attachment& result, Encoder<CommandBuffer>& cmd, 
   if(mul>0)
     p.mul = mul;
 
-  auto& pso = (settings.vidResIndex==0) ? shaders.tonemapping : shaders.tonemappingUpscale;
+  auto& pso = upscale ? shaders.tonemappingUpscale : shaders.tonemapping;
   cmd.setFramebuffer({ {result, Tempest::Discard, Tempest::Preserve} });
   cmd.setBinding(0, wview.sceneGlobals().uboGlobal[SceneGlobals::V_Main]);
-  cmd.setBinding(1, sceneLinear, Sampler::nearest(ClampMode::ClampToEdge)); // Lanczos upscale requires nearest sampling
+  cmd.setBinding(1, input, Sampler::nearest(ClampMode::ClampToEdge)); // Lanczos upscale requires nearest sampling
   cmd.setPushData(p);
   cmd.setPipeline(pso);
   cmd.draw(nullptr, 0, 3);
