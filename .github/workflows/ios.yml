@@ -43,7 +43,7 @@ jobs:
     env:
       SIDESTORE_MEMORY_TEST: ${{ startsWith(github.ref, 'refs/heads/codex/ios-performance') || (github.event_name == 'workflow_dispatch' && inputs.sidestore_memory_test) }}
       NPC_DIALOG_CULLING: ${{ startsWith(github.ref, 'refs/heads/codex/ios-performance') }}
-      THREE_FRAMES_IN_FLIGHT: ${{ github.ref == 'refs/heads/codex/ios-performance-three-frames-in-flight' }}
+      THREE_FRAMES_IN_FLIGHT: ${{ startsWith(github.ref, 'refs/heads/codex/ios-performance') }}
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
