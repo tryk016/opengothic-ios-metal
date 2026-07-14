@@ -11,34 +11,49 @@ controller or the complete on-screen virtual gamepad. Two routes are documented:
 
 ## Route A — No Mac, no build (download + sideload)
 
-### 1. Get the unsigned .ipa
-You do **not** need to fork or build anything. Two ways, easiest first:
+### 1. Choose and get the unsigned .ipa
 
-- **SideStore source (recommended — one tap + auto-updates):** in SideStore →
-  **Sources → +**, paste
-  `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json`,
-  then install **OpenGothic** from that source. New builds appear as updates.
-- **Direct download:** open the
-  **[Releases page](https://github.com/tryk016/opengothic-ios/releases/latest)** or
-  download **[OpenGothic-unsigned.ipa](https://github.com/tryk016/opengothic-ios/releases/download/latest/OpenGothic-unsigned.ipa)**
-  directly. An unsigned IPA cannot be launched by tapping it in Files; SideStore,
-  AltStore or Sideloadly must sign and install it first.
+You do **not** need to fork or build anything. Two maintained variants use the
+same game code, controls, saves and iOS performance profile:
 
-> Maintainers only: the workflow `.github/workflows/ios.yml` (macos runner,
-> `cmake`+`glslang`, `iphoneos` arm64, signing disabled) builds the `.ipa` and
-> **publishes it to the `latest` Release automatically** on every push, plus
-> uploads it as an artifact. Trigger via push or Actions → "iOS build" → Run
-> workflow. Regular users never need this.
+| Variant | When to use it | SideStore source | Direct IPA |
+|---|---|---|---|
+| **MetalFX Temporal — recommended** | First choice on supported iPhones/iPads; best reconstruction quality available in this port | `https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/apps.json` | [OpenGothic-MetalFX-Temporal.ipa](https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/OpenGothic-MetalFX-Temporal.ipa) |
+| **Lanczos compatibility** | Use if the Temporal build crashes or shows a device-specific graphics problem | `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json` | [OpenGothic-unsigned.ipa](https://github.com/tryk016/opengothic-ios/releases/download/latest/OpenGothic-unsigned.ipa) |
+
+In SideStore open **Sources → +**, paste the selected source URL, then install
+OpenGothic. New builds from that source appear as updates.
+
+The recommended build uses Apple's MetalFX Temporal upscaler, which combines
+the current image with depth, motion information and frame history. At the same
+50% or 75% internal render scale it should provide the best image reconstruction
+of the available variants. If Temporal is unavailable at runtime, the build
+automatically tries MetalFX Spatial and then the existing Lanczos path. This is
+an image-quality recommendation, not a guarantee of higher FPS on every device.
+The path has been device-tested on Apple A17 Pro at half resolution with water
+reflections, sky effects and additional shadows enabled, without observed
+artifacts.
+
+The compatibility build always uses the established single-frame Lanczos
+upscaler for reduced-resolution rendering and has no MetalFX dependency.
+
+An unsigned IPA cannot be launched by tapping it in Files; SideStore, AltStore
+or Sideloadly must sign and install it first.
+
+> Maintainers only: `.github/workflows/ios-metalfx-temporal.yml` publishes the
+> recommended MetalFX build, while `.github/workflows/ios.yml` publishes the
+> Lanczos compatibility build to the `latest` release. Both use a macOS runner,
+> `cmake` + `glslang`, `iphoneos` arm64 and disabled code signing.
 
 ### 2. Sign & install with your own free Apple ID
 - **SideStore (recommended, refreshes on-device over Wi‑Fi):** after adding the
-  source above, tap install. SideStore re-signs with your free Apple ID **and
+  selected source above, tap install. SideStore re-signs with your free Apple ID **and
   auto-refreshes the 7-day certificate itself over any Wi‑Fi — no PC needed**
   after the one-time pairing setup. See https://sidestore.io.
 - **AltStore / Sideloadly (alternative):** install **AltServer for Windows**
   (needs iTunes + iCloud from Apple's site — **not** the Microsoft Store
   versions) and **AltStore** on the iPhone; sign in with a **free Apple ID**;
-  choose **Install .ipa** → `OpenGothic-unsigned.ipa`. AltServer re-signs and
+  choose **Install .ipa** and select the downloaded Temporal or Lanczos IPA. AltServer re-signs and
   installs over USB/Wi‑Fi, but auto-refresh needs the PC running on the same
   Wi‑Fi. See https://altstore.io.
 - On the phone: Settings → General → VPN & Device Management → **trust** your
@@ -48,12 +63,17 @@ You do **not** need to fork or build anything. Two ways, easiest first:
 
 ### Updating an existing installation
 
-When the SideStore source shows a new version, tap **Update**. The stable bundle
-identifier remains the same, so iOS preserves the app's `Documents` container,
-including copied game data, saves and `Gothic.ini`; you do not copy them again.
-Do not uninstall the app before updating unless those files are backed up, because
-deleting the app removes its Documents container. The same rule applies when
-installing a newer IPA over the existing app with AltStore/Sideloadly.
+When the selected SideStore source shows a new version, tap **Update**. Both
+variants use the same bundle identifier, so installing one over the other
+preserves the app's `Documents` container, including copied game data, saves and
+`Gothic.ini`; you do not copy them again.
+
+The Temporal version line is intentionally higher than the Lanczos line.
+SideStore may therefore not offer Lanczos as an automatic update after Temporal.
+If you need the compatibility build, download its IPA and sign/install it over
+the existing app with SideStore, AltStore or Sideloadly. **Do not uninstall the
+app first** unless the Documents folder is backed up: uninstalling removes the
+game data and saves.
 
 ### 3. Copy game data (from Windows)
 The app enables File Sharing (`Info.plist`: `UIFileSharingEnabled`,

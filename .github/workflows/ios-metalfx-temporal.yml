@@ -1,7 +1,8 @@
 name: iOS MetalFX Temporal
 
-# Permanent experimental channel derived from MetalFX Spatial. It publishes to
-# its own prerelease and never replaces the stable or Spatial release assets.
+# Recommended high-quality channel. MetalFX Temporal uses current-frame color,
+# depth, motion vectors and frame history; unsupported devices fall back to
+# MetalFX Spatial and then Lanczos. It never replaces the compatibility release.
 
 on:
   push:
@@ -85,7 +86,7 @@ jobs:
           ICON_URL="$BASE/raw/master/ios/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
           cat > apps.json <<EOF
           {
-            "name": "OpenGothic iOS — MetalFX Temporal",
+            "name": "OpenGothic iOS — MetalFX Temporal (Recommended)",
             "identifier": "opengothic.gothic2.metalfx.temporal.source",
             "sourceURL": "$SOURCE_URL",
             "apps": [
@@ -93,21 +94,21 @@ jobs:
                 "name": "OpenGothic MetalFX Temporal",
                 "bundleIdentifier": "opengothic.gothic2",
                 "developerName": "Try (engine) · iOS port",
-                "subtitle": "Experimental MetalFX Temporal iOS build",
-                "localizedDescription": "Permanent experimental MetalFX Temporal variant of the unofficial OpenGothic iOS port. Requires your own legally-owned Gothic II game data; no game assets are included. Falls back to MetalFX Spatial and then Lanczos when Temporal is unavailable.",
+                "subtitle": "Recommended high-quality iOS build",
+                "localizedDescription": "Recommended OpenGothic iOS build using Apple MetalFX Temporal upscaling for the best reconstruction quality available in this port. It automatically falls back to MetalFX Spatial and then Lanczos when required. Requires your own legally-owned Gothic II game data; no game assets are included.",
                 "iconURL": "$ICON_URL",
                 "tintColor": "8B0000",
                 "category": "games",
                 "version": "$VERSION",
                 "versionDate": "$DATE",
-                "versionDescription": "MetalFX Temporal development build $VERSION.",
+                "versionDescription": "Recommended MetalFX Temporal build $VERSION.",
                 "downloadURL": "$IPA_URL",
                 "size": $SIZE,
                 "versions": [
                   {
                     "version": "$VERSION",
                     "date": "$DATE",
-                    "localizedDescription": "MetalFX Temporal development build $VERSION.",
+                    "localizedDescription": "Recommended MetalFX Temporal build $VERSION.",
                     "downloadURL": "$IPA_URL",
                     "size": $SIZE
                   }
@@ -120,14 +121,14 @@ jobs:
           echo "----- apps.json -----"
           cat apps.json
 
-      - name: Publish MetalFX Temporal prerelease
+      - name: Publish MetalFX Temporal release
         if: env.METALFX_TEMPORAL_READY == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           NOTES="Unsigned MetalFX Temporal iOS build \`1.2.${{ github.run_number }}\` (commit ${{ github.sha }}).
 
-          This permanent experimental channel uses MetalFX Temporal with automatic MetalFX Spatial and Lanczos fallbacks. The first prototype supplies camera/static-world motion vectors; moving NPCs and animated objects need device testing for ghosting.
+          **Recommended build.** Uses Apple's MetalFX Temporal upscaling for the best reconstruction quality available in this port, with automatic MetalFX Spatial and Lanczos fallbacks. Device-tested on Apple A17 Pro with half-resolution rendering and the extended graphics options enabled; no visual artifacts were observed.
 
           **Download:** \`OpenGothic-MetalFX-Temporal.ipa\` below, then sideload with your own free Apple ID via SideStore / AltStore / Sideloadly.
           **SideStore source:** add this URL in SideStore → Sources → +
@@ -136,8 +137,8 @@ jobs:
           Requires your own legally-owned Gothic II data. No game assets are included."
 
           if gh release view metalfx-temporal >/dev/null 2>&1; then
-            gh release edit metalfx-temporal --prerelease \
-              --title "OpenGothic iOS — MetalFX Temporal" --notes "$NOTES"
+            gh release edit metalfx-temporal --prerelease=false \
+              --title "OpenGothic iOS — MetalFX Temporal (Recommended)" --notes "$NOTES"
             for asset in OpenGothic-MetalFX-Temporal.ipa apps.json; do
               gh release delete-asset metalfx-temporal "$asset" --yes || true
             done
@@ -145,7 +146,7 @@ jobs:
               { sleep 10; gh release upload metalfx-temporal OpenGothic-MetalFX-Temporal.ipa apps.json --clobber; }
           else
             gh release create metalfx-temporal OpenGothic-MetalFX-Temporal.ipa apps.json \
-              --title "OpenGothic iOS — MetalFX Temporal" --prerelease --notes "$NOTES"
+              --title "OpenGothic iOS — MetalFX Temporal (Recommended)" --notes "$NOTES"
           fi
 
       - name: Upload MetalFX Temporal .ipa artifact (backup)

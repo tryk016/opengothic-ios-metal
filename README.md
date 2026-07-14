@@ -34,22 +34,29 @@ Target: iPhone/iPad on **iOS 15+**, arm64. Best on modern GPUs (A-series / M-ser
 
 ### Install — download & play (no Mac, no build)
 
-No fork, no compiling — a prebuilt **unsigned `.ipa`** is published on every update. Detailed guide:
+No fork, no compiling — two prebuilt **unsigned `.ipa`** variants are maintained. Detailed guide:
 **[ios/README-ios.md](ios/README-ios.md)**.
 
-1. **Install with SideStore** (recommended). In SideStore: **Sources → +**, paste
-   `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json`, then install
-   OpenGothic. SideStore signs it with your **free Apple ID** and **auto-refreshes the 7-day certificate
-   over Wi-Fi** — no manual reinstalling. *(AltStore or Sideloadly also work, using the `.ipa` from the
-   [Releases page](https://github.com/tryk016/opengothic-ios/releases/latest).)*
-2. **Add your game data.** Copy the `Data/`, `_work/`, and `system/` folders from your own Gothic II
+1. **Install MetalFX Temporal (recommended).** In SideStore: **Sources → +**, paste
+   `https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/apps.json`, then
+   install OpenGothic MetalFX Temporal. It uses Apple's temporal upscaler for the best reconstruction
+   quality available in this port and automatically falls back to MetalFX Spatial and then Lanczos if
+   required.
+2. **Use the Lanczos compatibility build only if Temporal causes a crash or graphics problem.** Add
+   `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json`, or download the IPA
+   from the [Lanczos compatibility release](https://github.com/tryk016/opengothic-ios/releases/latest).
+3. **Add your game data.** Copy the `Data/`, `_work/`, and `system/` folders from your own Gothic II
    install into the app's **Documents** folder (Files app on iOS). This is needed only for the first
    install; normal SideStore updates preserve Documents, saves and settings. Launch and play.
 
-Already installed from the SideStore source? Tap **Update** there. Do not delete the app first: deleting
-an iOS app also removes its Documents container unless you have backed it up.
+Both variants use the same bundle identifier. Updates and installs over the existing app preserve its
+Documents container, but **do not uninstall the app when switching variants**: uninstalling removes
+the copied game data and saves unless they are backed up. See the detailed guide if SideStore does not
+offer the lower-version Lanczos build as an automatic update.
 
-<sub>Building it yourself (maintainers only): trigger the [`iOS build`](.github/workflows/ios.yml) Action, or use [`ios/build-ios.sh`](ios/build-ios.sh) + Xcode on a Mac — see the guide.</sub>
+<sub>Maintainers: trigger the [`MetalFX Temporal`](.github/workflows/ios-metalfx-temporal.yml)
+or [`Lanczos compatibility`](.github/workflows/ios.yml) workflow, or use
+[`ios/build-ios.sh`](ios/build-ios.sh) + Xcode on a Mac — see the guide.</sub>
 
 ### Controls
 
@@ -166,7 +173,9 @@ approximately 1 km world far plane, while 80%/60%/40% correspond to roughly
 - **Performance & display:** ProMotion with native Off/30/60 display-link pacing, triple buffering,
   direct Metal drawable rendering, on-demand SSAO buffers, reduced offscreen/distant NPC pose work,
   live menu-controlled drawing distance, safe-area-aware HUD, configurable shadow resolution, and
-  the upscale-based render-scale guide.
+  the upscale-based render-scale guide. The recommended build adds Apple MetalFX Temporal upscaling
+  with automatic MetalFX Spatial and Lanczos fallbacks; a separate Lanczos-only compatibility build
+  remains available.
 ---
 
 *For the engine itself — Windows/Linux/macOS builds, features, mods, command-line arguments, graphics
