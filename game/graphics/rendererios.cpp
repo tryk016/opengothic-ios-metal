@@ -40,7 +40,7 @@ using namespace Tempest;
 #define OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME "none"
 #endif
 
-#if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID < 0 || OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID > 6
+#if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID < 0 || OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID > 7
 #error "Unsupported RendererIOS fault mode id"
 #endif
 
@@ -66,7 +66,22 @@ enum class RendererIOSFaultMode : uint8_t {
   FrameFenceErrorAfterTerminal   = 4,
   PostSubmitSuboptimal           = 5,
   ShutdownIdleUnconfirmedOnce    = 6,
+  AsyncPresentErrorAfterTerminal = 7,
   };
+
+const char* presentFailureName(PresentFailureKind kind) noexcept {
+  switch(kind) {
+    case PresentFailureKind::None:             return "none";
+    case PresentFailureKind::DeviceLost:       return "device-lost";
+    case PresentFailureKind::Timeout:          return "timeout";
+    case PresentFailureKind::OutOfMemory:      return "out-of-memory";
+    case PresentFailureKind::InvalidResource:  return "invalid-resource";
+    case PresentFailureKind::Internal:         return "internal";
+    case PresentFailureKind::UnexpectedStatus: return "unexpected-status";
+    case PresentFailureKind::Unknown:          return "unknown";
+    }
+  return "unknown";
+  }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 constexpr auto ConfiguredFaultMode =
@@ -109,6 +124,16 @@ struct FaultInjection final {
       return false;
     return consume(RendererIOSFaultMode::ShutdownIdleUnconfirmedOnce,
                    "shutdown-before-device-idle");
+    }
+
+  void observeAsyncPresentError(int64_t nativeCode) noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    if(nativeCode==-1)
+      (void)consume(RendererIOSFaultMode::AsyncPresentErrorAfterTerminal,
+                    "tempest-present-completion");
+#else
+    (void)nativeCode;
+#endif
     }
 
   private:
@@ -361,6 +386,34 @@ struct RendererIOS::Impl final {
       releaseVideoFrame(slot);
     }
 
+  void releaseRetainedPreviewAfterIdle() noexcept {
+    if(!previewAttachmentRetained)
+      return;
+    savePreview               = Attachment();
+    previewTargetAllocated    = false;
+    previewAttachmentRetained = false;
+    }
+
+  bool pollPresentFailure(const char* operation) noexcept {
+    const PresentFailure failure = device.takePresentFailure();
+    if(!failure)
+      return !failed;
+
+    fault.observeAsyncPresentError(failure.nativeCode);
+    forcePreviewPlaceholder();
+    if(failed)
+      return false;
+
+    std::array<char,256> detail = {};
+    std::snprintf(detail.data(),detail.size(),
+                  "kind=%s status=%d native=%lld serial=%llu",
+                  presentFailureName(failure.kind),failure.statusCode,
+                  static_cast<long long>(failure.nativeCode),
+                  static_cast<unsigned long long>(failure.serial));
+    fail(operation,detail.data());
+    return false;
+    }
+
   bool settleGpu(SettleReason reason, const char* operation,
                  bool* idleConfirmed = nullptr) noexcept {
     if(idleConfirmed!=nullptr)
@@ -390,6 +443,10 @@ struct RendererIOS::Impl final {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = true;
 
+    const bool presentHealthy = pollPresentFailure(
+      "RendererIOS asynchronous Metal present failed");
+    releaseRetainedPreviewAfterIdle();
+
     // Metal Device::waitIdle() only waits for completion. Error propagation is
     // owned by Fence::wait(), so inspect every terminal fence before releasing
     // the wrappers or claiming a clean lifecycle transition.
@@ -399,6 +456,7 @@ struct RendererIOS::Impl final {
           neutralizeFences();
           releaseVideoFrames();
           forcePreviewPlaceholder();
+          releaseRetainedPreviewAfterIdle();
           fail(operation,"frame fence was not terminal after device idle");
           return false;
           }
@@ -407,6 +465,7 @@ struct RendererIOS::Impl final {
         neutralizeFences();
         releaseVideoFrames();
         forcePreviewPlaceholder();
+        releaseRetainedPreviewAfterIdle();
         fail(operation,e.what());
         return false;
         }
@@ -414,6 +473,7 @@ struct RendererIOS::Impl final {
         neutralizeFences();
         releaseVideoFrames();
         forcePreviewPlaceholder();
+        releaseRetainedPreviewAfterIdle();
         fail(operation);
         return false;
         }
@@ -421,7 +481,7 @@ struct RendererIOS::Impl final {
 
     neutralizeFences();
     releaseVideoFrames();
-    return true;
+    return presentHealthy;
     }
 
   bool confirmGpuIdle(SettleReason reason, const char* operation,
@@ -520,7 +580,7 @@ RendererIOS::~RendererIOS() {
   }
 
 std::optional<RendererIOS::FrameTicket> RendererIOS::beginFrame() {
-  if(impl->failed)
+  if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
     return std::nullopt;
   if(impl->frameActive)
     throw std::logic_error("RendererIOS frame ticket is already active");
@@ -604,6 +664,11 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
     throw std::logic_error("RendererIOS received an invalid frame ticket");
 
   const uint8_t slot = frame.frameSlot;
+  if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")) {
+    impl->releaseVideoFrame(slot);
+    frame.disarm();
+    return {};
+    }
   bool previewAccepted = false;
   bool previewFallback = false;
 
@@ -732,6 +797,9 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
       }
 #endif
 
+    (void)impl->pollPresentFailure(
+      "RendererIOS asynchronous Metal present failed");
+
     return SubmitResult{previewAccepted};
     }
   catch(const SwapchainSuboptimal&) {
@@ -741,7 +809,8 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
     }
   catch(const std::exception& e) {
     impl->forcePreviewPlaceholder();
-    impl->fail("RendererIOS frame submission failed",e.what());
+    if(impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
+      impl->fail("RendererIOS frame submission failed",e.what());
     throw;
     }
   catch(...) {
@@ -753,6 +822,11 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
 
 Size RendererIOS::drawableSize() const {
   return Size(static_cast<int>(impl->swapchain.w()),static_cast<int>(impl->swapchain.h()));
+  }
+
+bool RendererIOS::pollDeviceFailure() noexcept {
+  return impl->pollPresentFailure(
+    "RendererIOS asynchronous Metal present failed");
   }
 
 std::string_view RendererIOS::failureReason() const noexcept {
@@ -838,6 +912,8 @@ void RendererIOS::onWorldChanged() {
   }
 
 bool RendererIOS::savePreviewReady() {
+  (void)impl->pollPresentFailure(
+    "RendererIOS asynchronous Metal present failed");
   if(impl->previewState==Impl::PreviewState::ReadyCpu ||
      impl->previewState==Impl::PreviewState::ReadyPlaceholder)
     return true;

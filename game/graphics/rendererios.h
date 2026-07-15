@@ -67,6 +67,7 @@ class RendererIOS final {
     SubmitResult submitFrame(FrameTicket&& frame, const FrameInput& input);
 
     Tempest::Size   drawableSize() const;
+    bool            pollDeviceFailure() noexcept;
     std::string_view failureReason() const noexcept;
     void            resize();
     bool            waitIdle() noexcept;

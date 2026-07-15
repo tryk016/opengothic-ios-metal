@@ -1560,6 +1560,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   pendingSave.name        = std::string(name);
   pendingSave.stage       = PendingSave::Stage::CaptureRequested;
   Gothic::inst().setLoadingProgress(0);
+  (void)renderer.pollDeviceFailure();
   if(!renderer.failureReason().empty()) {
     if(!rendererFailureSettled) {
       rendererFailureSettled = renderer.waitIdle();
@@ -1638,6 +1639,7 @@ void MainWindow::startPendingSave() {
   }
 
 void MainWindow::processPendingSave() {
+  (void)renderer.pollDeviceFailure();
   if(pendingSave.stage==PendingSave::Stage::ReadyCpu) {
     if(!renderer.failureReason().empty() && !rendererFailureSettled)
       return;
@@ -1810,6 +1812,7 @@ void MainWindow::setFullscreen(bool fs) {
   }
 
 bool MainWindow::rendererOperational() {
+  (void)renderer.pollDeviceFailure();
   const auto reason = renderer.failureReason();
   if(reason.empty())
     return true;
@@ -1876,6 +1879,8 @@ void MainWindow::render(){
     static uint64_t time=Application::tickCount();
 
 #if defined(__IOS__)
+    if(!rendererOperational())
+      return;
     // No render encoder exists at this point. A preview submitted by an older
     // regular frame may therefore be read back safely once its fence signals.
     processPendingSave();
@@ -1974,6 +1979,8 @@ void MainWindow::render(){
     if(captureSavePreview && result.savePreviewQueued)
       pendingSave.stage   = PendingSave::Stage::AwaitingGpu;
 #endif
+    if(!rendererOperational())
+      return;
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     submitPerfFrame(perfNowUs());
 #endif

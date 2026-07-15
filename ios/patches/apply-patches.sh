@@ -10,7 +10,7 @@ TEMPEST_ROOT="${TEMPEST_ROOT:-$ROOT/lib/Tempest}"
 
 EXPECTED_URL="https://github.com/tryk016/Tempest.git"
 BASE_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
-EXPECTED_COMMIT="0dc656a9342156a99a82cec43ef4aa797b350529"
+EXPECTED_COMMIT="2053f21d1f11887379ef17c2e7029b959246ab61"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -67,6 +67,8 @@ SWAPCHAIN="$TEMPEST_ROOT/Engine/gapi/metal/mtswapchain.mm"
 SPATIAL="$TEMPEST_ROOT/Engine/gapi/metal/mtspatialscaler.mm"
 TEMPORAL="$TEMPEST_ROOT/Engine/gapi/metal/mttemporalscaler.mm"
 TEMPEST_CMAKE="$TEMPEST_ROOT/Engine/CMakeLists.txt"
+ASYNC_STATE="$TEMPEST_ROOT/Engine/gapi/metal/mtasyncstate.h"
+ABSTRACT_API="$TEMPEST_ROOT/Engine/gapi/abstractgraphicsapi.h"
 
 require_file "$IOS_API"
 require_file "$RFILE"
@@ -74,6 +76,8 @@ require_file "$SWAPCHAIN"
 require_file "$SPATIAL"
 require_file "$TEMPORAL"
 require_file "$TEMPEST_CMAKE"
+require_file "$ASYNC_STATE"
+require_file "$ABSTRACT_API"
 require_file "$TEMPEST_ROOT/Engine/include/Tempest/SpatialScaler"
 require_file "$TEMPEST_ROOT/Engine/include/Tempest/TemporalScaler"
 
@@ -93,5 +97,10 @@ require_literal "$SPATIAL" "MetalApi::createSpatialScaler" "MetalFX Spatial"
 require_literal "$TEMPORAL" "MetalApi::createTemporalScaler" "MetalFX Temporal"
 require_literal "$TEMPEST_CMAKE" "OPENGOTHIC_METALFX_SPATIAL" "Spatial build option"
 require_literal "$TEMPEST_CMAKE" "OPENGOTHIC_METALFX_TEMPORAL" "Temporal build option"
+require_literal "$ABSTRACT_API" "takePresentFailure" "asynchronous present failure API"
+require_literal "$ASYNC_STATE" "SubmissionToken" "exactly-once Metal completion token"
+require_literal "$ASYNC_STATE" "takePresentFailure" "present failure mailbox"
+require_literal "$ASYNC_STATE" "presentFatal" "persistent post-failure submission gate"
+require_literal "$SWAPCHAIN" "TEMPEST_METAL_FAULT_ASYNC_PRESENT_AFTER_TERMINAL" "async present fault seam"
 
-echo "verified: Tempest renderer-ios fork $actual_commit (clean, patch stack v1)"
+echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present bridge)"

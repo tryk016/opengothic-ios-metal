@@ -28,6 +28,7 @@ on:
           - frame-fence-error-after-terminal
           - post-submit-suboptimal
           - shutdown-idle-unconfirmed-once
+          - async-present-error-after-terminal
 
 permissions:
   contents: read

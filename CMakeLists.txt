@@ -64,7 +64,8 @@ elseif(IOS)
       preview-fence-error-after-terminal
       frame-fence-error-after-terminal
       post-submit-suboptimal
-      shutdown-idle-unconfirmed-once)
+      shutdown-idle-unconfirmed-once
+      async-present-error-after-terminal)
   set(OPENGOTHIC_RENDERER_IOS_FAULT_MODE "none" CACHE STRING
       "RendererIOS one-shot diagnostics fault mode")
   set_property(CACHE OPENGOTHIC_RENDERER_IOS_FAULT_MODE PROPERTY STRINGS
@@ -141,6 +142,8 @@ elseif(IOS)
     set(_renderer_ios_fault_mode_id 5)
   elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "shutdown-idle-unconfirmed-once")
     set(_renderer_ios_fault_mode_id 6)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "async-present-error-after-terminal")
+    set(_renderer_ios_fault_mode_id 7)
   endif()
   if(NOT DEFINED _renderer_ios_fault_mode_id)
     message(FATAL_ERROR "RendererIOS fault mode is allowlisted but has no stable id")
@@ -281,6 +284,10 @@ endif()
 add_subdirectory(lib/Tempest/Engine)
 if(IOS AND OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
   target_compile_definitions(Tempest PRIVATE TEMPEST_METAL_DIRECT_DRAWABLE=1)
+endif()
+if(IOS AND OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "async-present-error-after-terminal")
+  target_compile_definitions(Tempest PRIVATE
+    TEMPEST_METAL_FAULT_ASYNC_PRESENT_AFTER_TERMINAL=1)
 endif()
 include_directories(lib/Tempest/Engine/include)
 target_link_libraries(${PROJECT_NAME} Tempest)
