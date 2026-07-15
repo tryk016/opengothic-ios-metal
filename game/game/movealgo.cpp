@@ -249,7 +249,7 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
     return false;
 
   // jump animation (lift off)
-  if(bs==BS_JUMP && !npc.isJumpLandingAnim() &&
+  if(bs==BS_JUMP && npc.isFlyAnim() && !npc.isJumpLandingAnim() &&
      state!=InAir && state!=Jump && state!=JumpUp) {
     setState(Jump);
     return true;
@@ -257,6 +257,10 @@ bool MoveAlgo::implTick(uint64_t dt, MvFlags moveFlg) {
 
   // jump animation
   if(state==Jump) {
+    if(gValid && dY<0) {
+      npc.tryMove(Tempest::Vec3(0,-dY,0));
+      }
+
     if(npc.isJumpAnim()) {
       fallSpeed += dp;
       fallCount += float(dt);
@@ -1092,4 +1096,3 @@ std::string_view MoveAlgo::portalName() {
 std::string_view MoveAlgo::formerPortalName() {
   return formerPortal;
   }
-
