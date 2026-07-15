@@ -5,6 +5,16 @@ on:
     branches: [ main ]
   workflow_dispatch:
     inputs:
+      tempest_profile:
+        description: 'Pinned Tempest feature profile'
+        required: true
+        default: 'baseline'
+        type: choice
+        options:
+          - baseline
+          - direct-drawable
+          - metalfx-spatial
+          - metalfx-temporal
       fault_mode:
         description: 'One-shot RendererIOS diagnostics fault mode (ON build only)'
         required: true
@@ -23,12 +33,12 @@ permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: iOS Release diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
+    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -39,13 +49,16 @@ jobs:
       - name: Checkout with submodules
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Install build prerequisites
         run: brew install cmake glslang
 
-      - name: Apply Tempest patches
-        run: bash ios/patches/apply-patches.sh
+      - name: Verify pinned Tempest fork twice
+        run: |
+          bash ios/patches/apply-patches.sh
+          bash ios/patches/apply-patches.sh
 
       - name: Configure RendererIOS
         run: |
@@ -54,6 +67,9 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DOPENGOTHIC_IOS_VERSION="1.0.${{ github.run_number }}" \
+            -DOPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO="${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile == 'direct-drawable' && 'ON' || 'OFF' }}" \
+            -DOPENGOTHIC_METALFX_SPATIAL="${{ github.event_name == 'workflow_dispatch' && (inputs.tempest_profile == 'metalfx-spatial' || inputs.tempest_profile == 'metalfx-temporal') && 'ON' || 'OFF' }}" \
+            -DOPENGOTHIC_METALFX_TEMPORAL="${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile == 'metalfx-temporal' && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="${{ matrix.diagnostics }}" \
             -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="${GITHUB_SHA}"

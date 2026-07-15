@@ -54,13 +54,16 @@ jobs:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
           submodules: recursive
 
       - name: Install build tools
         run: brew install cmake glslang
 
-      - name: Apply submodule patches
-        run: bash ios/patches/apply-patches.sh
+      - name: Verify pinned Tempest fork twice
+        run: |
+          bash ios/patches/apply-patches.sh
+          bash ios/patches/apply-patches.sh
 
       - name: Configure (Xcode generator, iOS arm64)
         run: |
