@@ -1,5 +1,11 @@
 # OpenGothic for iOS
 
+> **Dedicated RendererIOS line.** This repository owns the native iOS/Metal
+> renderer and ships from `main`. The Android/Vulkan integration line remains in
+> [`tryk016/opengothic-ios`](https://github.com/tryk016/opengothic-ios). Upstream
+> changes may be integrated into this repository deliberately, but RendererIOS
+> is not merged back into that cross-platform `master`.
+
 An **unofficial iOS port** of [OpenGothic](https://github.com/Try/OpenGothic) — the open-source
 re-implementation of *Gothic II: Night of the Raven*. This fork adds the plumbing to build, sideload,
 and play OpenGothic on iPhone/iPad with a Bluetooth controller **or** a full on-screen virtual gamepad.

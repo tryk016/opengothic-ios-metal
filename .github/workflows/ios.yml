@@ -18,7 +18,7 @@ name: iOS Lanczos compatibility build
 
 on:
   push:
-    branches: [ master, main, ios, 'codex/ios-performance*' ]
+    branches: [ master, ios, 'codex/ios-performance*' ]
     paths-ignore:
       - '**.md'
       - 'docs/**'

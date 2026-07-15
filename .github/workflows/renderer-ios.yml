@@ -2,7 +2,7 @@ name: RendererIOS validation
 
 on:
   push:
-    branches: [ 'codex/renderer-ios' ]
+    branches: [ main ]
   workflow_dispatch:
     inputs:
       fault_mode:
