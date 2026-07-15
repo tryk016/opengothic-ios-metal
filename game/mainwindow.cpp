@@ -123,9 +123,11 @@ MainWindow::MainWindow(Device& device)
   Gothic::inst().onLoadGame    .bind(this,&MainWindow::loadGame);
   Gothic::inst().onSaveGame    .bind(this,&MainWindow::saveGame);
 
-  Gothic::inst().onStartLoading.bind(this,&MainWindow::onStartLoading);
-  Gothic::inst().onWorldLoaded .bind(this,&MainWindow::onWorldLoaded);
-  Gothic::inst().onSessionExit .bind(this,&MainWindow::onSessionExit);
+  Gothic::inst().onStartLoading       .bind(this,&MainWindow::onStartLoading);
+  Gothic::inst().onBeforeWorldFinalize.bind(this,&MainWindow::onBeforeWorldFinalize);
+  Gothic::inst().onWorldLoaded        .bind(this,&MainWindow::onWorldLoaded);
+  Gothic::inst().onBeforeSessionExit  .bind(this,&MainWindow::onBeforeSessionExit);
+  Gothic::inst().onSessionExit        .bind(this,&MainWindow::onSessionExit);
 
   Gothic::inst().onVideo       .bind(this,&MainWindow::onVideo);
 
@@ -181,7 +183,10 @@ MainWindow::~MainWindow() {
 #endif
   GameMusic::inst().stopMusic();
   Gothic::inst().cancelLoading();
-  renderer.waitIdle();
+  // This is a hard ownership gate: shutdown retries transient idle failures
+  // and fail-stops the process before any GPU-referenced widget/world owner is
+  // destroyed if device idle can never be confirmed.
+  renderer.shutdown();
   takeWidget(&dialogs);
   takeWidget(&inventory);
   takeWidget(&chapter);
@@ -1505,10 +1510,6 @@ void MainWindow::startGame(std::string_view slot) {
   logMemorySnapshot("new_game_requested");
 #endif
 
-  if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle){
-    setGameImpl(nullptr);
-    }
-
   Gothic::inst().startLoad("LOADING.TGA",[slot=std::string(slot)](std::unique_ptr<GameSession>&& game){
     game = nullptr; // clear world-memory now
     std::unique_ptr<GameSession> w(new GameSession(slot));
@@ -1523,10 +1524,6 @@ void MainWindow::loadGame(std::string_view slot) {
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   logMemorySnapshot("load_game_requested");
 #endif
-
-  if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle){
-    setGameImpl(nullptr);
-    }
 
   Gothic::inst().setBenchmarkMode(Benchmark::None);
   Gothic::inst().startLoad("LOADING.TGA",[slot=std::string(slot)](std::unique_ptr<GameSession>&& game){
@@ -1584,7 +1581,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
 #endif
 
   auto screen = std::make_shared<Pixmap>(renderer.screenshot());
-  Gothic::inst().startSave(Texture2d(),
+  if(!Gothic::inst().startSave(Texture2d(),
     [slot=std::string(slot),name=std::string(name),screen=std::move(screen)](std::unique_ptr<GameSession>&& game){
     if(!game)
       return std::move(game);
@@ -1596,7 +1593,8 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
     // no print yet, because threading
     // gothic.print("Game saved");
     return std::move(game);
-    });
+    }))
+    return;
 
   update();
   }
@@ -1619,7 +1617,7 @@ void MainWindow::startPendingSave() {
   auto slot   = pendingSave.slot;
   auto name   = pendingSave.name;
 
-  Gothic::inst().startSave(Texture2d(),
+  if(!Gothic::inst().startSave(Texture2d(),
     [slot=std::move(slot),name=std::move(name),screen=std::move(screen)](std::unique_ptr<GameSession>&& game){
       if(!game)
         return std::move(game);
@@ -1627,10 +1625,11 @@ void MainWindow::startPendingSave() {
       Serialize      s(f);
       game->save(s,name,*screen);
       return std::move(game);
-      });
-  // Keep the request intact until startSave has accepted the callback. If an
-  // allocation/thread-start failure escapes, the next frame can retry the same
-  // slot instead of silently losing it or saving to an empty path.
+      }))
+    return;
+  // Keep the request intact until startSave has accepted the callback. A busy
+  // loader or synchronous allocation/thread-start failure returns false, so the
+  // next frame retries the same slot instead of silently losing the save.
   pendingSave.preview = Pixmap();
   pendingSave.slot.clear();
   pendingSave.name.clear();
@@ -1691,10 +1690,17 @@ void MainWindow::onVideo(std::string_view fname) {
   }
 
 void MainWindow::onStartLoading() {
+  // This signal is synchronous and precedes Gothic::clearGame(). Establish the
+  // owner-release barrier before the active session can move to the loader.
+  renderer.prepareForOwnerRelease();
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   flushPerfWindow(perfNowUs(),true);
   logMemorySnapshot("loadsave_begin");
 #endif
+  detachWorldOwners();
+  }
+
+void MainWindow::detachWorldOwners() {
   player   .clearInput();
 #if defined(__MOBILE_PLATFORM__)
   // A ring can own a display-only Item tied to the outgoing World. Destroy it
@@ -1703,6 +1709,12 @@ void MainWindow::onStartLoading() {
 #endif
   inventory.onWorldChanged();
   dialogs  .onWorldChanged();
+  }
+
+void MainWindow::onBeforeWorldFinalize() {
+  // Gothic emits this after joining the loader and before publishing pendingGame
+  // or releasing load/save textures referenced by the loading UI.
+  renderer.prepareForOwnerRelease();
   }
 
 void MainWindow::onWorldLoaded() {
@@ -1742,6 +1754,13 @@ void MainWindow::onWorldLoaded() {
 #endif
   }
 
+void MainWindow::onBeforeSessionExit() {
+  // GameSession emits this before clearGame(), so the final in-flight frame of
+  // the exiting world is terminal before its owners are released.
+  renderer.prepareForOwnerRelease();
+  detachWorldOwners();
+  }
+
 void MainWindow::onSessionExit() {
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   flushPerfWindow(perfNowUs(),true);
@@ -1779,10 +1798,6 @@ void MainWindow::onBenchmarkFinished() {
 
   console.setFocus(true);
   console.exec();
-  }
-
-void MainWindow::setGameImpl(std::unique_ptr<GameSession> &&w) {
-  Gothic::inst().setGame(std::move(w));
   }
 
 void MainWindow::clearInput() {

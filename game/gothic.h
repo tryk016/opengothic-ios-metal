@@ -151,7 +151,7 @@ class Gothic final {
     LoadState    checkLoading() const;
     bool         finishLoading();
     void         startLoad(std::string_view banner, const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f);
-    void         startSave(Tempest::Texture2d&& tex, const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f);
+    bool         startSave(Tempest::Texture2d&& tex, const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f);
     void         cancelLoading();
 
     void         tick(uint64_t dt);
@@ -184,6 +184,8 @@ class Gothic final {
     Tempest::Signal<void(const DocumentMenu::Show&)>                    onShowDocument;
     Tempest::Signal<void()>                                             onWorldLoaded;
     Tempest::Signal<void()>                                             onStartLoading;
+    Tempest::Signal<void()>                                             onBeforeWorldFinalize;
+    Tempest::Signal<void()>                                             onBeforeSessionExit;
     Tempest::Signal<void()>                                             onSessionExit;
     Tempest::Signal<void()>                                             onSettingsChanged;
 
@@ -264,7 +266,8 @@ class Gothic final {
 
     static Gothic*                          instance;
 
-    void                                    implStartLoadSave(std::string_view banner,
+    bool                                    implStartLoadSave(std::string_view banner,
+                                                              Tempest::Texture2d&& saveTexture,
                                                               bool load,
                                                               const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f);
 

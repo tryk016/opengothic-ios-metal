@@ -70,6 +70,8 @@ class RendererIOS final {
     std::string_view failureReason() const noexcept;
     void            resize();
     bool            waitIdle() noexcept;
+    void            shutdown() noexcept;
+    void            prepareForOwnerRelease() noexcept;
     void            onWorldChanged();
 
     bool            savePreviewReady();

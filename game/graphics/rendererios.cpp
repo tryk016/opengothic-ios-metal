@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -31,7 +32,109 @@ using namespace Tempest;
 #define OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local"
 #endif
 
+#if !defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID)
+#define OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID 0
+#endif
+
+#if !defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME)
+#define OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME "none"
+#endif
+
+#if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID < 0 || OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID > 6
+#error "Unsupported RendererIOS fault mode id"
+#endif
+
+#if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0 && !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS fault injection requires diagnostics"
+#endif
+
 namespace {
+
+enum class SettleReason : uint8_t {
+  Resize,
+  ExternalWait,
+  OwnerRelease,
+  Shutdown,
+  FinalDestruction,
+  };
+
+enum class RendererIOSFaultMode : uint8_t {
+  None                           = 0,
+  PreviewAttachmentMissing       = 1,
+  PreviewReadbackError           = 2,
+  PreviewFenceErrorAfterTerminal = 3,
+  FrameFenceErrorAfterTerminal   = 4,
+  PostSubmitSuboptimal           = 5,
+  ShutdownIdleUnconfirmedOnce    = 6,
+  };
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+constexpr auto ConfiguredFaultMode =
+  static_cast<RendererIOSFaultMode>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID);
+#endif
+
+struct FaultInjection final {
+  const char* name() const noexcept {
+    return OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME;
+    }
+
+  bool previewAttachmentMissing() noexcept {
+    return consume(RendererIOSFaultMode::PreviewAttachmentMissing,
+                   "preview-attachment-missing");
+    }
+
+  bool previewReadbackError() noexcept {
+    return consume(RendererIOSFaultMode::PreviewReadbackError,
+                   "preview-readback-after-terminal-fence");
+    }
+
+  bool previewFenceErrorAfterTerminal() noexcept {
+    return consume(RendererIOSFaultMode::PreviewFenceErrorAfterTerminal,
+                   "preview-fence-after-terminal");
+    }
+
+  bool frameFenceErrorAfterTerminal() noexcept {
+    return consume(RendererIOSFaultMode::FrameFenceErrorAfterTerminal,
+                   "frame-fence-after-terminal");
+    }
+
+  bool postSubmitSuboptimal() noexcept {
+    return consume(RendererIOSFaultMode::PostSubmitSuboptimal,
+                   "post-submit-pre-present");
+    }
+
+  bool shutdownIdleUnconfirmedOnce(SettleReason reason,
+                                   uint64_t presentedFrames) noexcept {
+    if(reason!=SettleReason::Shutdown || presentedFrames==0u)
+      return false;
+    return consume(RendererIOSFaultMode::ShutdownIdleUnconfirmedOnce,
+                   "shutdown-before-device-idle");
+    }
+
+  private:
+    bool consume(RendererIOSFaultMode expected, const char* point) noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(ConfiguredFaultMode!=expected || fired)
+        return false;
+      fired = true;
+      try {
+        Log::e("RendererIOS fault injection fired: mode=",name(),
+               " point=",point," build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+        }
+      catch(...) {
+        }
+      return true;
+#else
+      (void)expected;
+      (void)point;
+      return false;
+#endif
+      }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    bool fired = false;
+#endif
+  };
 
 const Vec4 OpaqueBlack(0.f,0.f,0.f,1.f);
 
@@ -93,10 +196,14 @@ struct RendererIOS::Impl final {
     try {
       Log::i("RendererIOS shell: version=1 profile=Safe features=clear,ui,inventory,save-placeholder build=",
              OPENGOTHIC_RENDERER_IOS_BUILD_SHA," gpu=",device.properties().name,
-             " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data());
+             " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data(),
+             " faultMode=",fault.name());
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       Log::i("RendererIOS diagnostics: ON frames-in-flight=",Resources::MaxFramesInFlight,
              " bootstrap=Tempest");
+      if(ConfiguredFaultMode!=RendererIOSFaultMode::None)
+        Log::i("RendererIOS fault injection armed: mode=",fault.name(),
+               " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
 #else
       Log::i("RendererIOS diagnostics: OFF");
 #endif
@@ -106,7 +213,10 @@ struct RendererIOS::Impl final {
     }
 
   ~Impl() noexcept {
-    const bool clean = settleGpu("RendererIOS GPU shutdown failed");
+    bool clean = false;
+    if(!confirmGpuIdle(SettleReason::FinalDestruction,
+                       "RendererIOS GPU shutdown failed",&clean))
+      terminateWithoutTeardown("RendererIOS final GPU shutdown could not confirm device idle");
     if(clean && !failed) {
       try {
         Log::i("RendererIOS shell: clean shutdown after ",presentedFrames," present calls");
@@ -114,6 +224,16 @@ struct RendererIOS::Impl final {
       catch(...) {
         }
       }
+    }
+
+  [[noreturn]] void terminateWithoutTeardown(const char* operation) noexcept {
+    try {
+      Log::e(operation,
+             "; terminating without C++ teardown so in-flight GPU owners remain alive");
+      }
+    catch(...) {
+      }
+    std::_Exit(EXIT_FAILURE);
     }
 
   void resetTargets() {
@@ -158,8 +278,10 @@ struct RendererIOS::Impl final {
       previewAttachmentRetained = false;
       previewState              = PreviewState::ReadyPlaceholder;
       return;
-      }
+    }
     try {
+      if(fault.previewReadbackError())
+        throw std::runtime_error("RendererIOS diagnostics injected a recoverable save-preview readback error");
       completedPreview          = device.readPixels(savePreview);
       savePreview               = Attachment();
       previewTargetAllocated    = false;
@@ -224,8 +346,10 @@ struct RendererIOS::Impl final {
   void neutralizeFences() noexcept {
     // Tempest::Fence::~Fence() waits and can throw for a completed Metal error.
     // Move-assigning an empty wrapper releases it without invoking that wait.
-    for(auto& fence:fences)
-      fence = Fence();
+    for(size_t i=0; i<fences.size(); ++i) {
+      fences[i]        = Fence();
+      slotSubmitted[i] = false;
+      }
     }
 
   void releaseVideoFrame(uint8_t slot) noexcept {
@@ -237,9 +361,16 @@ struct RendererIOS::Impl final {
       releaseVideoFrame(slot);
     }
 
-  bool settleGpu(const char* operation, bool* idleConfirmed = nullptr) noexcept {
+  bool settleGpu(SettleReason reason, const char* operation,
+                 bool* idleConfirmed = nullptr) noexcept {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = false;
+    if(fault.shutdownIdleUnconfirmedOnce(reason,presentedFrames)) {
+      neutralizeFences();
+      forcePreviewPlaceholder();
+      fail(operation,"fault injection: device idle deliberately left unconfirmed once");
+      return false;
+      }
     try {
       device.waitIdle();
       }
@@ -293,6 +424,23 @@ struct RendererIOS::Impl final {
     return true;
     }
 
+  bool confirmGpuIdle(SettleReason reason, const char* operation,
+                      bool* cleanResult = nullptr) noexcept {
+    if(cleanResult!=nullptr)
+      *cleanResult = false;
+    constexpr uint32_t MaxIdleAttempts = 3u;
+    for(uint32_t attempt=0; attempt<MaxIdleAttempts; ++attempt) {
+      bool idleConfirmed = false;
+      const bool clean = settleGpu(reason,operation,&idleConfirmed);
+      if(!idleConfirmed)
+        continue;
+      if(cleanResult!=nullptr)
+        *cleanResult = clean;
+      return true;
+      }
+    return false;
+    }
+
   Device&                                      device;
   Swapchain                                    swapchain;
 
@@ -304,8 +452,10 @@ struct RendererIOS::Impl final {
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> uiMeshes;
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> numberMeshes;
   std::array<Fence,Resources::MaxFramesInFlight>              fences;
+  std::array<bool,Resources::MaxFramesInFlight>               slotSubmitted = {};
   std::array<CommandBuffer,Resources::MaxFramesInFlight>      commands;
   std::array<VideoWidget::PreparedFrame,Resources::MaxFramesInFlight> videoFrames;
+  FaultInjection                               fault;
 
   ZBuffer                                      overlayDepth;
   TextureFormat                                depthFormat = TextureFormat::Depth16;
@@ -376,26 +526,43 @@ std::optional<RendererIOS::FrameTicket> RendererIOS::beginFrame() {
     throw std::logic_error("RendererIOS frame ticket is already active");
 
   const uint8_t slot = impl->nextSlot;
+  bool previewFenceFault = false;
   try {
     if(!impl->fences[slot].wait(0))
       return std::nullopt;
+    if(impl->slotSubmitted[slot] &&
+       impl->previewState==Impl::PreviewState::AwaitingGpu &&
+       impl->previewSlot==slot &&
+       impl->fault.previewFenceErrorAfterTerminal()) {
+      previewFenceFault = true;
+      throw DeviceLostException(
+        "RendererIOS diagnostics injected a terminal save-preview fence error");
+      }
+    if(impl->slotSubmitted[slot] && impl->fault.frameFenceErrorAfterTerminal())
+      throw DeviceLostException("RendererIOS diagnostics injected a terminal frame-fence error");
     }
   catch(const std::exception& e) {
     // Do not retry a Metal error command buffer: Tempest maps it to device
     // lost/hang. Dropping the fence also prevents its throwing destructor.
     impl->fences[slot] = Fence();
+    impl->slotSubmitted[slot] = false;
     impl->releaseVideoFrame(slot);
     impl->forcePreviewPlaceholder();
-    impl->fail("RendererIOS Metal frame fence failed",e.what());
+    impl->fail(previewFenceFault ? "RendererIOS Metal save-preview fence failed"
+                                : "RendererIOS Metal frame fence failed",
+               e.what());
     return std::nullopt;
     }
   catch(...) {
     impl->fences[slot] = Fence();
+    impl->slotSubmitted[slot] = false;
     impl->releaseVideoFrame(slot);
     impl->forcePreviewPlaceholder();
-    impl->fail("RendererIOS Metal frame fence failed");
+    impl->fail(previewFenceFault ? "RendererIOS Metal save-preview fence failed"
+                                : "RendererIOS Metal frame fence failed");
     return std::nullopt;
     }
+  impl->slotSubmitted[slot] = false;
   impl->releaseVideoFrame(slot);
   if(impl->previewState==Impl::PreviewState::AwaitingGpu && impl->previewSlot==slot)
     impl->materializePreviewSafely("RendererIOS save-preview materialization failed");
@@ -441,121 +608,131 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
   bool previewFallback = false;
 
   try {
-  if(input.captureSavePreview && impl->previewState==Impl::PreviewState::Idle) {
-    previewAccepted = true;
-    try {
-      constexpr uint32_t thumbnailWidth = 800u;
-      const uint32_t srcW = std::max(impl->swapchain.w(),1u);
-      const uint32_t srcH = std::max(impl->swapchain.h(),1u);
-      const uint32_t dstW = std::min(thumbnailWidth,srcW);
-      const uint32_t dstH = std::max(uint32_t((uint64_t(srcH)*uint64_t(dstW))/uint64_t(srcW)),1u);
-      impl->savePreview = impl->device.attachment(TextureFormat::RGBA8,dstW,dstH);
-      impl->previewTargetAllocated = !impl->savePreview.isEmpty();
-      previewFallback = !impl->previewTargetAllocated;
-      if(previewFallback) {
+    if(input.captureSavePreview && impl->previewState==Impl::PreviewState::Idle) {
+      previewAccepted = true;
+      if(impl->fault.previewAttachmentMissing()) {
+        previewFallback = true;
+        impl->savePreview = Attachment();
+        impl->previewTargetAllocated = false;
+        }
+      else {
         try {
-          Log::e("[RendererIOS] save preview allocation returned an empty image; deferring placeholder to the frame fence");
+          constexpr uint32_t thumbnailWidth = 800u;
+          const uint32_t srcW = std::max(impl->swapchain.w(),1u);
+          const uint32_t srcH = std::max(impl->swapchain.h(),1u);
+          const uint32_t dstW = std::min(thumbnailWidth,srcW);
+          const uint32_t dstH = std::max(uint32_t((uint64_t(srcH)*uint64_t(dstW))/uint64_t(srcW)),1u);
+          impl->savePreview = impl->device.attachment(TextureFormat::RGBA8,dstW,dstH);
+          impl->previewTargetAllocated = !impl->savePreview.isEmpty();
+          previewFallback = !impl->previewTargetAllocated;
+          if(previewFallback) {
+            try {
+              Log::e("[RendererIOS] save preview allocation returned an empty image; deferring placeholder to the frame fence");
+              }
+            catch(...) {
+              }
+            }
+          }
+        catch(const std::exception& e) {
+          previewFallback = true;
+          impl->savePreview = Attachment();
+          impl->previewTargetAllocated = false;
+          try {
+            Log::e("[RendererIOS] save preview allocation failed; deferring placeholder to the frame fence: ",e.what());
+            }
+          catch(...) {
+            }
           }
         catch(...) {
+          previewFallback = true;
+          impl->savePreview = Attachment();
+          impl->previewTargetAllocated = false;
+          try {
+            Log::e("[RendererIOS] save preview allocation failed; deferring placeholder to the frame fence");
+            }
+          catch(...) {
+            }
           }
         }
       }
-    catch(const std::exception& e) {
-      previewFallback = true;
-      impl->savePreview = Attachment();
-      impl->previewTargetAllocated = false;
-      try {
-        Log::e("[RendererIOS] save preview allocation failed; deferring placeholder to the frame fence: ",e.what());
+
+    impl->uiMeshes[slot].update(impl->device,input.uiLayer);
+    impl->numberMeshes[slot].update(impl->device,input.numberOverlay);
+
+    auto& command = impl->commands[slot];
+    {
+      auto encoder = command.startEncoding(impl->device);
+      if(impl->videoFrames[slot])
+        VideoWidget::encodePrepared(encoder,slot,impl->videoFrames[slot]);
+      auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
+
+      encoder.setDebugMarker("RendererIOS shell clear/UI");
+      encoder.setFramebuffer({{drawable,OpaqueBlack,Tempest::Preserve}});
+      impl->uiMeshes[slot].draw(encoder);
+
+      const bool ringIcons = !input.videoActive && input.inventory.itemRenderer().hasItems();
+      const bool inventoryVisible = input.inventory.isOpen()!=InventoryMenu::State::Closed || ringIcons;
+      if(inventoryVisible) {
+        if(!impl->overlayDepth.isEmpty()) {
+          encoder.setDebugMarker("RendererIOS bootstrap inventory");
+          encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}},
+                                 {impl->overlayDepth,1.f,Tempest::Preserve});
+          input.inventory.draw(encoder);
+          }
+
+        encoder.setDebugMarker("RendererIOS bootstrap inventory counters");
+        encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}});
+        impl->numberMeshes[slot].draw(encoder);
         }
-      catch(...) {
+
+      if(previewAccepted && !previewFallback) {
+        encoder.setDebugMarker("RendererIOS save preview placeholder");
+        encoder.setFramebuffer({{impl->savePreview,OpaqueBlack,Tempest::Preserve}});
         }
       }
-    catch(...) {
-      previewFallback = true;
-      impl->savePreview = Attachment();
-      impl->previewTargetAllocated = false;
-      try {
-        Log::e("[RendererIOS] save preview allocation failed; deferring placeholder to the frame fence");
-        }
-      catch(...) {
-        }
-      }
-    }
 
-  impl->uiMeshes[slot].update(impl->device,input.uiLayer);
-  impl->numberMeshes[slot].update(impl->device,input.numberOverlay);
-
-  auto& command = impl->commands[slot];
-  {
-    auto encoder = command.startEncoding(impl->device);
-    if(impl->videoFrames[slot])
-      VideoWidget::encodePrepared(encoder,slot,impl->videoFrames[slot]);
-    auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
-
-    encoder.setDebugMarker("RendererIOS shell clear/UI");
-    encoder.setFramebuffer({{drawable,OpaqueBlack,Tempest::Preserve}});
-    impl->uiMeshes[slot].draw(encoder);
-
-    const bool ringIcons = !input.videoActive && input.inventory.itemRenderer().hasItems();
-    const bool inventoryVisible = input.inventory.isOpen()!=InventoryMenu::State::Closed || ringIcons;
-    if(inventoryVisible) {
-      if(!impl->overlayDepth.isEmpty()) {
-        encoder.setDebugMarker("RendererIOS bootstrap inventory");
-        encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}},
-                               {impl->overlayDepth,1.f,Tempest::Preserve});
-        input.inventory.draw(encoder);
-        }
-
-      encoder.setDebugMarker("RendererIOS bootstrap inventory counters");
-      encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}});
-      impl->numberMeshes[slot].draw(encoder);
-      }
-
-    if(previewAccepted && !previewFallback) {
-      encoder.setDebugMarker("RendererIOS save preview placeholder");
-      encoder.setFramebuffer({{impl->savePreview,OpaqueBlack,Tempest::Preserve}});
-      }
-    }
-
-  impl->fences[slot] = impl->device.submit(command);
+    impl->fences[slot]        = impl->device.submit(command);
+    impl->slotSubmitted[slot] = true;
 
   // Submission consumes the ticket even if drawable presentation subsequently
   // reports SwapchainSuboptimal. The command already references per-slot video
   // and UI resources, so cancelFrame() must not release their keep-alives.
-  impl->frameActive  = false;
-  impl->activeSerial = 0;
-  frame.disarm();
+    impl->frameActive  = false;
+    impl->activeSerial = 0;
+    frame.disarm();
 
-  impl->device.present(impl->swapchain);
+    if(impl->fault.postSubmitSuboptimal())
+      throw SwapchainSuboptimal();
+    impl->device.present(impl->swapchain);
 
-  if(previewAccepted) {
-    impl->previewState    = Impl::PreviewState::AwaitingGpu;
-    impl->previewSlot     = slot;
-    impl->previewFallback = previewFallback;
-    }
-
-  impl->nextSlot = static_cast<uint8_t>((uint32_t(slot)+1u)%uint32_t(Resources::MaxFramesInFlight));
-
-  ++impl->presentedFrames;
-  if(impl->presentedFrames==300u) {
-    try {
-      Log::i("RendererIOS shell: 300 present calls submitted");
+    if(previewAccepted) {
+      impl->previewState    = Impl::PreviewState::AwaitingGpu;
+      impl->previewSlot     = slot;
+      impl->previewFallback = previewFallback;
       }
-    catch(...) {
+
+    impl->nextSlot = static_cast<uint8_t>((uint32_t(slot)+1u)%uint32_t(Resources::MaxFramesInFlight));
+
+    ++impl->presentedFrames;
+    if(impl->presentedFrames==300u) {
+      try {
+        Log::i("RendererIOS shell: 300 present calls submitted");
+        }
+      catch(...) {
+        }
       }
-    }
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-  if(impl->presentedFrames==1u || impl->presentedFrames%300u==0u) {
-    try {
-      Log::d("RendererIOS lifecycle: presents=",impl->presentedFrames,
-             " next-slot=",uint32_t(impl->nextSlot));
+    if(impl->presentedFrames==1u || impl->presentedFrames%300u==0u) {
+      try {
+        Log::d("RendererIOS lifecycle: presents=",impl->presentedFrames,
+               " next-slot=",uint32_t(impl->nextSlot));
+        }
+      catch(...) {
+        }
       }
-    catch(...) {
-      }
-    }
 #endif
 
-  return SubmitResult{previewAccepted};
+    return SubmitResult{previewAccepted};
     }
   catch(const SwapchainSuboptimal&) {
     // Drawable replacement is a recoverable surface lifecycle event. The
@@ -583,7 +760,8 @@ std::string_view RendererIOS::failureReason() const noexcept {
   }
 
 void RendererIOS::resize() {
-  if(impl->failed || !impl->settleGpu("RendererIOS resize GPU settle failed"))
+  if(impl->failed ||
+     !impl->settleGpu(SettleReason::Resize,"RendererIOS resize GPU settle failed"))
     return;
   impl->materializePreviewSafely("RendererIOS resize preview finalization failed");
   if(impl->failed)
@@ -615,16 +793,31 @@ void RendererIOS::resize() {
 
 bool RendererIOS::waitIdle() noexcept {
   bool idleConfirmed = false;
-  impl->settleGpu("RendererIOS wait-idle failed",&idleConfirmed);
+  impl->settleGpu(SettleReason::ExternalWait,
+                  "RendererIOS wait-idle failed",&idleConfirmed);
   if(idleConfirmed)
     impl->materializePreviewSafely("RendererIOS wait-idle preview finalization failed");
   return idleConfirmed;
   }
 
+void RendererIOS::shutdown() noexcept {
+  if(!impl->confirmGpuIdle(SettleReason::Shutdown,
+                           "RendererIOS shutdown GPU settle failed"))
+    impl->terminateWithoutTeardown(
+      "RendererIOS shutdown could not confirm device idle after three attempts");
+  impl->materializePreviewSafely("RendererIOS shutdown preview finalization failed");
+  }
+
+void RendererIOS::prepareForOwnerRelease() noexcept {
+  if(!impl->confirmGpuIdle(SettleReason::OwnerRelease,
+                           "RendererIOS owner-release GPU settle failed"))
+    impl->terminateWithoutTeardown(
+      "RendererIOS owner release could not confirm device idle after three attempts");
+  impl->materializePreviewSafely("RendererIOS owner-release preview finalization failed");
+  }
+
 void RendererIOS::onWorldChanged() {
-  if(impl->failed || !impl->settleGpu("RendererIOS world-change GPU settle failed"))
-    return;
-  impl->materializePreviewSafely("RendererIOS world-change preview finalization failed");
+  prepareForOwnerRelease();
   if(impl->failed)
     return;
   impl->frameActive  = false;
@@ -657,18 +850,26 @@ bool RendererIOS::savePreviewReady() {
   try {
     if(!impl->fences[impl->previewSlot].wait(0))
       return false;
+    if(impl->slotSubmitted[impl->previewSlot] &&
+       impl->fault.previewFenceErrorAfterTerminal())
+      throw DeviceLostException(
+        "RendererIOS diagnostics injected a terminal save-preview fence error");
     impl->materializePreviewSafely("RendererIOS save-preview materialization failed");
     return impl->previewState==Impl::PreviewState::ReadyCpu ||
            impl->previewState==Impl::PreviewState::ReadyPlaceholder;
     }
   catch(const std::exception& e) {
     impl->fences[impl->previewSlot] = Fence();
+    impl->slotSubmitted[impl->previewSlot] = false;
+    impl->releaseVideoFrame(impl->previewSlot);
     impl->forcePreviewPlaceholder();
     impl->fail("RendererIOS Metal save-preview fence failed",e.what());
     return true;
     }
   catch(...) {
     impl->fences[impl->previewSlot] = Fence();
+    impl->slotSubmitted[impl->previewSlot] = false;
+    impl->releaseVideoFrame(impl->previewSlot);
     impl->forcePreviewPlaceholder();
     impl->fail("RendererIOS Metal save-preview fence failed");
     return true;

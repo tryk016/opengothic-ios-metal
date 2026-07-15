@@ -112,10 +112,12 @@ class MainWindow : public Tempest::Window {
 
     void onVideo(std::string_view fname);
     void onStartLoading();
+    void onBeforeWorldFinalize();
     void onWorldLoaded();
+    void onBeforeSessionExit();
     void onSessionExit();
     void onBenchmarkFinished();
-    void setGameImpl(std::unique_ptr<GameSession>&& w);
+    void detachWorldOwners();
     void clearInput();
     void setFullscreen(bool fs);
     bool rendererOperational();

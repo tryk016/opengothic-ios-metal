@@ -553,7 +553,12 @@ bool Gothic::finishLoading() {
   if(state!=LoadState::Finalize && state!=LoadState::FailedLoad && state!=LoadState::FailedSave)
     return false;
   if(loadingFlag.compare_exchange_strong(state,LoadState::Idle)){
-    loaderTh.join();
+    if(loaderTh.joinable())
+      loaderTh.join();
+    // The loader is now unable to submit more uploads. Give the renderer a
+    // synchronous ownership barrier before publishing a new GameSession or
+    // releasing loading/save textures used by an older in-flight frame.
+    onBeforeWorldFinalize();
     if(pendingGame!=nullptr)
       game = std::move(pendingGame);
     saveTex = Texture2d();
@@ -564,32 +569,40 @@ bool Gothic::finishLoading() {
   return false;
   }
 
-void Gothic::startSave(Tempest::Texture2d&& tex,
+bool Gothic::startSave(Tempest::Texture2d&& tex,
                        const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f) {
-  saveTex = std::move(tex);
-  implStartLoadSave("",false,f);
+  return implStartLoadSave("",std::move(tex),false,f);
   }
 
 void Gothic::startLoad(std::string_view banner,
                        const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f) {
-  implStartLoadSave(banner,true,f);
+  (void)implStartLoadSave(banner,Texture2d(),true,f);
   }
 
-void Gothic::implStartLoadSave(std::string_view banner,
+bool Gothic::implStartLoadSave(std::string_view banner,
+                               Tempest::Texture2d&& saveTexture,
                                bool load,
                                const std::function<std::unique_ptr<GameSession>(std::unique_ptr<GameSession>&&)> f) {
-  loadTex = banner.empty() ? Texture2d() : Resources::loadTextureUncached(banner);
-  loadProgress.store(0);
-
   auto zero=LoadState::Idle;
   auto one =load ? LoadState::Loading : LoadState::Saving;
   if(!loadingFlag.compare_exchange_strong(zero,one)){
-    return; // loading already
+    return false; // loading already
     }
 
-  onStartLoading();
-  auto g = clearGame().release();
+  const auto threadFailure = load ? LoadState::FailedLoad : LoadState::FailedSave;
+  GameSession* g = nullptr;
   try{
+    // The synchronous signal establishes renderer idle before any texture or
+    // GameSession owner is replaced. A rejected re-entrant request never reaches
+    // this point and therefore cannot invalidate an in-flight loading frame.
+    onStartLoading();
+    if(load)
+      loadTex = banner.empty() ? Texture2d() : Resources::loadTextureUncached(banner);
+    else
+      saveTex = std::move(saveTexture);
+    loadProgress.store(0);
+    g = clearGame().release();
+
     auto l = std::thread([this,f,g,one]() noexcept {
       Workers::setThreadName("Loading thread");
       std::unique_ptr<GameSession> game(g);
@@ -636,17 +649,32 @@ void Gothic::implStartLoadSave(std::string_view banner,
     loaderTh=std::move(l);
     //loaderTh.join();
     //loaderTh = std::thread([](){});
+    return true;
     }
   catch(...){
-    delete g; // delete manually, if we can't start thread
+    // Allocation, the synchronous start hook, or thread construction can fail
+    // after the request was accepted. Restore a detached session and expose a
+    // normal terminal state; finishLoading() runs the joined finalization gate
+    // without trying to join a non-joinable thread.
+    if(g!=nullptr)
+      game.reset(g);
+    loadingFlag.store(load ? threadFailure : LoadState::Idle);
+    if(!load)
+      saveTex = Texture2d();
+    try {
+      Log::e("unable to start load/save: ",ExceptionDump::describe(std::current_exception()));
+      }
+    catch(...) {
+      }
+    return false;
     }
   }
 
 void Gothic::cancelLoading() {
-  if(loadingFlag.load()!=LoadState::Idle){
+  if(loaderTh.joinable())
     loaderTh.join();
+  if(loadingFlag.load()!=LoadState::Idle)
     loadingFlag.store(LoadState::Idle);
-    }
   }
 
 void Gothic::tick(uint64_t dt) {

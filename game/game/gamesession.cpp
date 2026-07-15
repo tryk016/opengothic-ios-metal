@@ -359,6 +359,10 @@ void GameSession::tick(uint64_t dt) {
   // std::this_thread::sleep_for(std::chrono::milliseconds(60));
 
   if(exitSessionFlg) {
+    // The synchronous callback establishes GPU-idle before this GameSession and
+    // its world-owned resources are released. Keep onSessionExit after clearGame
+    // so menu callbacks retain their established no-active-session semantics.
+    Gothic::inst().onBeforeSessionExit();
     exitSessionFlg = false;
     Gothic::inst().clearGame();
     Gothic::inst().onSessionExit();

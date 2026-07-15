@@ -57,6 +57,18 @@ elseif(IOS)
          "Enable low-frequency performance and memory telemetry" OFF)
   option(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS
          "Enable RendererIOS lifecycle markers and validation diagnostics" OFF)
+  set(_renderer_ios_fault_modes
+      none
+      preview-attachment-missing
+      preview-readback-error
+      preview-fence-error-after-terminal
+      frame-fence-error-after-terminal
+      post-submit-suboptimal
+      shutdown-idle-unconfirmed-once)
+  set(OPENGOTHIC_RENDERER_IOS_FAULT_MODE "none" CACHE STRING
+      "RendererIOS one-shot diagnostics fault mode")
+  set_property(CACHE OPENGOTHIC_RENDERER_IOS_FAULT_MODE PROPERTY STRINGS
+      ${_renderer_ios_fault_modes})
   option(OPENGOTHIC_NPC_ANIMATION_CULLING
          "Skip full skeletal pose updates for distant offscreen NPCs" OFF)
   option(OPENGOTHIC_NPC_DIALOG_CULLING
@@ -102,6 +114,40 @@ elseif(IOS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=1)
   endif()
+  list(FIND _renderer_ios_fault_modes
+       "${OPENGOTHIC_RENDERER_IOS_FAULT_MODE}"
+       _renderer_ios_fault_mode_index)
+  if(_renderer_ios_fault_mode_index EQUAL -1)
+    message(FATAL_ERROR
+      "Unsupported OPENGOTHIC_RENDERER_IOS_FAULT_MODE: ${OPENGOTHIC_RENDERER_IOS_FAULT_MODE}")
+  endif()
+  if(NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none" AND
+     NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    message(FATAL_ERROR
+      "RendererIOS fault injection requires OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
+  endif()
+
+  if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
+    set(_renderer_ios_fault_mode_id 0)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "preview-attachment-missing")
+    set(_renderer_ios_fault_mode_id 1)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "preview-readback-error")
+    set(_renderer_ios_fault_mode_id 2)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "preview-fence-error-after-terminal")
+    set(_renderer_ios_fault_mode_id 3)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "frame-fence-error-after-terminal")
+    set(_renderer_ios_fault_mode_id 4)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "post-submit-suboptimal")
+    set(_renderer_ios_fault_mode_id 5)
+  elseif(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "shutdown-idle-unconfirmed-once")
+    set(_renderer_ios_fault_mode_id 6)
+  endif()
+  if(NOT DEFINED _renderer_ios_fault_mode_id)
+    message(FATAL_ERROR "RendererIOS fault mode is allowlisted but has no stable id")
+  endif()
+  target_compile_definitions(${PROJECT_NAME} PRIVATE
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID=${_renderer_ios_fault_mode_id}
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME="${OPENGOTHIC_RENDERER_IOS_FAULT_MODE}")
   if(NOT DEFINED OPENGOTHIC_RENDERER_IOS_BUILD_SHA)
     set(OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local")
   endif()
