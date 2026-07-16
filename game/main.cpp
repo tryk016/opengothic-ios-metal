@@ -30,6 +30,26 @@
 
 #include <dmusic.h>
 
+namespace {
+
+constexpr bool shouldFlushLogLine(Tempest::Log::Mode mode) noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  (void)mode;
+  return true;
+#else
+  return mode==Tempest::Log::Error;
+#endif
+  }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+static_assert(shouldFlushLogLine(Tempest::Log::Info));
+#else
+static_assert(!shouldFlushLogLine(Tempest::Log::Info));
+#endif
+static_assert(shouldFlushLogLine(Tempest::Log::Error));
+
+}
+
 std::string_view selectDevice(const Tempest::AbstractGraphicsApi& api) {
   auto d = api.devices();
 
@@ -90,7 +110,10 @@ int main(int argc,const char** argv) {
     Tempest::Log::setOutputCallback([](Tempest::Log::Mode mode, const char* text) {
       logFile.write(text,std::strlen(text));
       logFile.write("\n",1);
-      if(mode==Tempest::Log::Error)
+      // Diagnostic device runs are evidence-producing builds: make every
+      // marker visible while the app is still alive. Production keeps the
+      // cheaper error-only flush policy.
+      if(shouldFlushLogLine(mode))
         logFile.flush();
       });
     }
