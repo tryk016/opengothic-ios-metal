@@ -52,6 +52,8 @@ namespace {
 
 enum class SettleReason : uint8_t {
   Resize,
+  Suspend,
+  Resume,
   ExternalWait,
   OwnerRelease,
   Shutdown,
@@ -198,6 +200,20 @@ struct RendererIOS::Impl final {
     ReadyPlaceholder,
     };
 
+  enum class LifecycleState : uint8_t {
+    Active,
+    Suspended,
+    Fatal,
+    Stopped,
+    };
+
+  struct SubmissionCounters final {
+    uint64_t submitAttempts  = 0;
+    uint64_t submitAccepted  = 0;
+    uint64_t presentAttempts = 0;
+    uint64_t presentAccepted = 0;
+    };
+
   Impl(Device& device, SystemApi::Window* window)
     : device(device), swapchain(device,window) {
     (void)legacyShaders;
@@ -238,17 +254,21 @@ struct RendererIOS::Impl final {
     }
 
   ~Impl() noexcept {
-    bool clean = false;
+    stopFrameAdmission(LifecycleState::Stopped);
     if(!confirmGpuIdle(SettleReason::FinalDestruction,
-                       "RendererIOS GPU shutdown failed",&clean))
+                       "RendererIOS GPU shutdown failed")) {
+      logShutdownCountsOnce("idle-unconfirmed");
       terminateWithoutTeardown("RendererIOS final GPU shutdown could not confirm device idle");
-    if(clean && !failed) {
+      }
+    if(!failed) {
       try {
-        Log::i("RendererIOS shell: clean shutdown after ",presentedFrames," present calls");
+        Log::i("RendererIOS shell: clean shutdown after ",
+               counters.presentAccepted," present calls");
         }
       catch(...) {
         }
       }
+    logShutdownCountsOnce(failed ? "fatal" : "clean");
     }
 
   [[noreturn]] void terminateWithoutTeardown(const char* operation) noexcept {
@@ -348,12 +368,99 @@ struct RendererIOS::Impl final {
       }
     }
 
+  static uint64_t counterDelta(uint64_t value, uint64_t snapshot) noexcept {
+    return value>=snapshot ? value-snapshot : 0u;
+    }
+
+  void captureFatalCounters() noexcept {
+    if(fatalCountersCaptured)
+      return;
+    fatalCounters         = counters;
+    fatalCountersCaptured = true;
+    }
+
+  void logFatalSnapshot() noexcept {
+    if(!fatalCountersCaptured)
+      return;
+    try {
+      Log::e("RendererIOS fatal snapshot: submit-attempts=",fatalCounters.submitAttempts,
+             " submit-accepted=",fatalCounters.submitAccepted,
+             " present-attempts=",fatalCounters.presentAttempts,
+             " present-accepted=",fatalCounters.presentAccepted);
+      }
+    catch(...) {
+      }
+    }
+
+  void logFatalSettledOnce() noexcept {
+    if(!failed || fatalSettledLogged || !fatalCountersCaptured)
+      return;
+    fatalSettledLogged = true;
+    try {
+      Log::e("RendererIOS fatal settled: idle-confirmed=1",
+             " submit-attempts=",counters.submitAttempts,
+             " submit-accepted=",counters.submitAccepted,
+             " present-attempts=",counters.presentAttempts,
+             " present-accepted=",counters.presentAccepted);
+      Log::e("RendererIOS fatal post-delta: submit-attempts=",
+             counterDelta(counters.submitAttempts,fatalCounters.submitAttempts),
+             " submit-accepted=",counterDelta(counters.submitAccepted,fatalCounters.submitAccepted),
+             " present-attempts=",counterDelta(counters.presentAttempts,fatalCounters.presentAttempts),
+             " present-accepted=",counterDelta(counters.presentAccepted,fatalCounters.presentAccepted));
+      }
+    catch(...) {
+      }
+    }
+
+  void logShutdownCountsOnce(const char* outcome) noexcept {
+    if(shutdownCountsLogged)
+      return;
+    shutdownCountsLogged = true;
+    try {
+      Log::i("RendererIOS shutdown counters: outcome=",outcome,
+             " submit-attempts=",counters.submitAttempts,
+             " submit-accepted=",counters.submitAccepted,
+             " present-attempts=",counters.presentAttempts,
+             " present-accepted=",counters.presentAccepted);
+      Log::i("RendererIOS shutdown post-fatal delta: submit-attempts=",
+             fatalCountersCaptured ?
+               counterDelta(counters.submitAttempts,fatalCounters.submitAttempts) : 0u,
+             " submit-accepted=",fatalCountersCaptured ?
+               counterDelta(counters.submitAccepted,fatalCounters.submitAccepted) : 0u,
+             " present-attempts=",fatalCountersCaptured ?
+               counterDelta(counters.presentAttempts,fatalCounters.presentAttempts) : 0u,
+             " present-accepted=",fatalCountersCaptured ?
+               counterDelta(counters.presentAccepted,fatalCounters.presentAccepted) : 0u);
+      }
+    catch(...) {
+      }
+    }
+
+  void logLifecycleCounts(const char* transition, bool idleConfirmed) noexcept {
+    try {
+      Log::i("RendererIOS lifecycle counters: transition=",transition,
+             " idle-confirmed=",idleConfirmed ? 1 : 0,
+             " submit-attempts=",counters.submitAttempts,
+             " submit-accepted=",counters.submitAccepted,
+             " present-attempts=",counters.presentAttempts,
+             " present-accepted=",counters.presentAccepted);
+      }
+    catch(...) {
+      }
+    }
+
   void fail(const char* operation, const char* detail = nullptr) noexcept {
+    // Fatal means no further GPU work, including save-preview readback. Keep
+    // an allocated attachment alive until confirmed idle, but publish only the
+    // CPU placeholder to the save pipeline.
+    forcePreviewPlaceholder();
     frameActive  = false;
     activeSerial = 0;
+    lifecycleState = LifecycleState::Fatal;
     if(failed)
       return;
 
+    captureFatalCounters();
     failed = true;
     if(detail!=nullptr && detail[0]!='\0')
       std::snprintf(fatalMessage.data(),fatalMessage.size(),"%s: %s",operation,detail);
@@ -366,6 +473,7 @@ struct RendererIOS::Impl final {
       // Failure handling must remain noexcept even if diagnostics allocation
       // itself fails under memory pressure.
       }
+    logFatalSnapshot();
     }
 
   void neutralizeFences() noexcept {
@@ -384,6 +492,14 @@ struct RendererIOS::Impl final {
   void releaseVideoFrames() noexcept {
     for(uint8_t slot=0; slot<uint8_t(videoFrames.size()); ++slot)
       releaseVideoFrame(slot);
+    }
+
+  void stopFrameAdmission(LifecycleState state) noexcept {
+    lifecycleState = state;
+    if(frameActive)
+      releaseVideoFrame(nextSlot);
+    frameActive  = false;
+    activeSerial = 0;
     }
 
   void releaseRetainedPreviewAfterIdle() noexcept {
@@ -418,7 +534,7 @@ struct RendererIOS::Impl final {
                  bool* idleConfirmed = nullptr) noexcept {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = false;
-    if(fault.shutdownIdleUnconfirmedOnce(reason,presentedFrames)) {
+    if(fault.shutdownIdleUnconfirmedOnce(reason,counters.presentAccepted)) {
       neutralizeFences();
       forcePreviewPlaceholder();
       fail(operation,"fault injection: device idle deliberately left unconfirmed once");
@@ -458,6 +574,7 @@ struct RendererIOS::Impl final {
           forcePreviewPlaceholder();
           releaseRetainedPreviewAfterIdle();
           fail(operation,"frame fence was not terminal after device idle");
+          logFatalSettledOnce();
           return false;
           }
         }
@@ -467,6 +584,7 @@ struct RendererIOS::Impl final {
         forcePreviewPlaceholder();
         releaseRetainedPreviewAfterIdle();
         fail(operation,e.what());
+        logFatalSettledOnce();
         return false;
         }
       catch(...) {
@@ -475,12 +593,14 @@ struct RendererIOS::Impl final {
         forcePreviewPlaceholder();
         releaseRetainedPreviewAfterIdle();
         fail(operation);
+        logFatalSettledOnce();
         return false;
         }
       }
 
     neutralizeFences();
     releaseVideoFrames();
+    logFatalSettledOnce();
     return presentHealthy;
     }
 
@@ -533,7 +653,12 @@ struct RendererIOS::Impl final {
   uint64_t                                     nextSerial = 1;
   uint64_t                                     activeSerial = 0;
   bool                                         frameActive = false;
-  uint64_t                                     presentedFrames = 0;
+  LifecycleState                               lifecycleState = LifecycleState::Active;
+  SubmissionCounters                           counters;
+  SubmissionCounters                           fatalCounters;
+  bool                                         fatalCountersCaptured = false;
+  bool                                         fatalSettledLogged = false;
+  bool                                         shutdownCountsLogged = false;
   std::array<char,512>                         fatalMessage = {};
   bool                                         failed = false;
   };
@@ -580,6 +705,8 @@ RendererIOS::~RendererIOS() {
   }
 
 std::optional<RendererIOS::FrameTicket> RendererIOS::beginFrame() {
+  if(impl->lifecycleState!=Impl::LifecycleState::Active)
+    return std::nullopt;
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
     return std::nullopt;
   if(impl->frameActive)
@@ -636,6 +763,8 @@ std::optional<RendererIOS::FrameTicket> RendererIOS::beginFrame() {
   }
 
 void RendererIOS::prepareVideo(FrameTicket& frame, VideoWidget& video) {
+  if(impl->lifecycleState!=Impl::LifecycleState::Active)
+    return;
   const auto control = frame.control.lock();
   if(control.get()!=ticketControl.get() || !impl->frameActive ||
      frame.serial!=impl->activeSerial || frame.frameSlot!=impl->nextSlot)
@@ -658,6 +787,11 @@ void RendererIOS::prepareVideo(FrameTicket& frame, VideoWidget& video) {
   }
 
 RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const FrameInput& input) {
+  if(impl->lifecycleState!=Impl::LifecycleState::Active) {
+    cancelFrame(frame.serial);
+    frame.disarm();
+    return {};
+    }
   const auto control = frame.control.lock();
   if(control.get()!=ticketControl.get() || !impl->frameActive ||
      frame.serial!=impl->activeSerial || frame.frameSlot!=impl->nextSlot)
@@ -756,7 +890,9 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
         }
       }
 
+    ++impl->counters.submitAttempts;
     impl->fences[slot]        = impl->device.submit(command);
+    ++impl->counters.submitAccepted;
     impl->slotSubmitted[slot] = true;
 
   // Submission consumes the ticket even if drawable presentation subsequently
@@ -768,7 +904,9 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
 
     if(impl->fault.postSubmitSuboptimal())
       throw SwapchainSuboptimal();
+    ++impl->counters.presentAttempts;
     impl->device.present(impl->swapchain);
+    ++impl->counters.presentAccepted;
 
     if(previewAccepted) {
       impl->previewState    = Impl::PreviewState::AwaitingGpu;
@@ -778,8 +916,7 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
 
     impl->nextSlot = static_cast<uint8_t>((uint32_t(slot)+1u)%uint32_t(Resources::MaxFramesInFlight));
 
-    ++impl->presentedFrames;
-    if(impl->presentedFrames==300u) {
+    if(impl->counters.presentAccepted==300u) {
       try {
         Log::i("RendererIOS shell: 300 present calls submitted");
         }
@@ -787,9 +924,9 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const Fr
         }
       }
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-    if(impl->presentedFrames==1u || impl->presentedFrames%300u==0u) {
+    if(impl->counters.presentAccepted==1u || impl->counters.presentAccepted%300u==0u) {
       try {
-        Log::d("RendererIOS lifecycle: presents=",impl->presentedFrames,
+        Log::d("RendererIOS lifecycle: presents=",impl->counters.presentAccepted,
                " next-slot=",uint32_t(impl->nextSlot));
         }
       catch(...) {
@@ -834,6 +971,8 @@ std::string_view RendererIOS::failureReason() const noexcept {
   }
 
 void RendererIOS::resize() {
+  if(impl->lifecycleState!=Impl::LifecycleState::Active)
+    return;
   if(impl->failed ||
      !impl->settleGpu(SettleReason::Resize,"RendererIOS resize GPU settle failed"))
     return;
@@ -865,21 +1004,109 @@ void RendererIOS::resize() {
     }
   }
 
+bool RendererIOS::suspend() noexcept {
+  if(impl->lifecycleState==Impl::LifecycleState::Stopped)
+    return false;
+  if(impl->lifecycleState==Impl::LifecycleState::Active) {
+    impl->lifecycleState = Impl::LifecycleState::Suspended;
+    }
+
+  if(impl->frameActive) {
+    impl->releaseVideoFrame(impl->nextSlot);
+    impl->frameActive  = false;
+    impl->activeSerial = 0;
+    }
+
+  bool idleConfirmed = false;
+  impl->settleGpu(SettleReason::Suspend,
+                  "RendererIOS suspend GPU settle failed",&idleConfirmed);
+  impl->logLifecycleCounts("suspend-settled",idleConfirmed);
+  if(idleConfirmed) {
+    impl->materializePreviewSafely(
+      "RendererIOS suspend preview finalization failed");
+    impl->logFatalSettledOnce();
+    }
+  return idleConfirmed;
+  }
+
+bool RendererIOS::resume() noexcept {
+  if(impl->failed || impl->lifecycleState==Impl::LifecycleState::Fatal ||
+     impl->lifecycleState==Impl::LifecycleState::Stopped)
+    return false;
+  if(impl->lifecycleState==Impl::LifecycleState::Active) {
+    impl->lifecycleState = Impl::LifecycleState::Suspended;
+    }
+
+  if(impl->frameActive) {
+    impl->releaseVideoFrame(impl->nextSlot);
+    impl->frameActive  = false;
+    impl->activeSerial = 0;
+    }
+
+  bool idleConfirmed = false;
+  impl->settleGpu(SettleReason::Resume,
+                  "RendererIOS resume GPU settle failed",&idleConfirmed);
+  impl->logLifecycleCounts("resume-settled",idleConfirmed);
+  if(!idleConfirmed || impl->failed)
+    return false;
+
+  impl->materializePreviewSafely(
+    "RendererIOS resume preview finalization failed");
+  if(impl->failed) {
+    impl->logFatalSettledOnce();
+    return false;
+    }
+
+  impl->frameActive  = false;
+  impl->activeSerial = 0;
+  impl->nextSlot     = 0;
+  if(impl->previewState==Impl::PreviewState::Idle) {
+    impl->savePreview               = Attachment();
+    impl->previewTargetAllocated    = false;
+    impl->previewAttachmentRetained = false;
+    }
+  try {
+    impl->swapchain.reset();
+    impl->resetTargets();
+    impl->lifecycleState = Impl::LifecycleState::Active;
+    return true;
+    }
+  catch(const std::exception& e) {
+    impl->forcePreviewPlaceholder();
+    impl->fail("RendererIOS resume swapchain reset failed",e.what());
+    impl->logFatalSettledOnce();
+    }
+  catch(...) {
+    impl->forcePreviewPlaceholder();
+    impl->fail("RendererIOS resume swapchain reset failed");
+    impl->logFatalSettledOnce();
+    }
+  return false;
+  }
+
 bool RendererIOS::waitIdle() noexcept {
   bool idleConfirmed = false;
   impl->settleGpu(SettleReason::ExternalWait,
                   "RendererIOS wait-idle failed",&idleConfirmed);
   if(idleConfirmed)
     impl->materializePreviewSafely("RendererIOS wait-idle preview finalization failed");
+  if(idleConfirmed) {
+    impl->logFatalSettledOnce();
+    }
   return idleConfirmed;
   }
 
 void RendererIOS::shutdown() noexcept {
+  impl->stopFrameAdmission(Impl::LifecycleState::Stopped);
   if(!impl->confirmGpuIdle(SettleReason::Shutdown,
-                           "RendererIOS shutdown GPU settle failed"))
+                           "RendererIOS shutdown GPU settle failed")) {
+    impl->logShutdownCountsOnce("idle-unconfirmed");
     impl->terminateWithoutTeardown(
       "RendererIOS shutdown could not confirm device idle after three attempts");
+    }
   impl->materializePreviewSafely("RendererIOS shutdown preview finalization failed");
+  impl->logFatalSettledOnce();
+  impl->logShutdownCountsOnce(impl->failed ? "fatal" : "clean");
   }
 
 void RendererIOS::prepareForOwnerRelease() noexcept {
@@ -888,11 +1115,12 @@ void RendererIOS::prepareForOwnerRelease() noexcept {
     impl->terminateWithoutTeardown(
       "RendererIOS owner release could not confirm device idle after three attempts");
   impl->materializePreviewSafely("RendererIOS owner-release preview finalization failed");
+  impl->logFatalSettledOnce();
   }
 
 void RendererIOS::onWorldChanged() {
   prepareForOwnerRelease();
-  if(impl->failed)
+  if(impl->failed || impl->lifecycleState==Impl::LifecycleState::Stopped)
     return;
   impl->frameActive  = false;
   impl->activeSerial = 0;
@@ -950,6 +1178,10 @@ bool RendererIOS::savePreviewReady() {
     impl->fail("RendererIOS Metal save-preview fence failed");
     return true;
     }
+  }
+
+bool RendererIOS::savePreviewIsPlaceholder() const noexcept {
+  return impl->previewState==Impl::PreviewState::ReadyPlaceholder;
   }
 
 Pixmap RendererIOS::takeSavePreview() {

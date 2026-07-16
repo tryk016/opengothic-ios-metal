@@ -406,6 +406,89 @@ void MainWindow::resizeEvent(SizeEvent&) {
   dMouse = Point();
   }
 
+void MainWindow::appStateEvent(AppStateEvent& event) {
+  event.accept();
+  switch(event.state) {
+    case AppStateEvent::State::WillResignActive: {
+      if(appLifecycleState==AppLifecycleState::Inactive ||
+         appLifecycleState==AppLifecycleState::Background)
+        return;
+      // Gate the root loop before waiting. The synchronous app-state bridge
+      // cannot start another frame until this transition has settled the GPU.
+      appLifecycleState = AppLifecycleState::Inactive;
+      clearInput();
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+      flushPerfWindow(perfNowUs(),true);
+#endif
+      const bool idleConfirmed = renderer.suspend();
+      try {
+        Log::i("RendererIOS app lifecycle: will-resign-active idle-confirmed=",
+               idleConfirmed ? 1 : 0);
+        }
+      catch(...) {
+        }
+      return;
+      }
+    case AppStateEvent::State::DidEnterBackground: {
+      if(appLifecycleState==AppLifecycleState::Background)
+        return;
+      appLifecycleState = AppLifecycleState::Background;
+      const bool idleConfirmed = renderer.suspend();
+      try {
+        Log::i("RendererIOS app lifecycle: did-enter-background idle-confirmed=",
+               idleConfirmed ? 1 : 0);
+        }
+      catch(...) {
+        }
+      return;
+      }
+    case AppStateEvent::State::WillEnterForeground:
+      if(appLifecycleState==AppLifecycleState::Foreground)
+        return;
+      appLifecycleState = AppLifecycleState::Foreground;
+      try {
+        Log::i("RendererIOS app lifecycle: will-enter-foreground");
+        }
+      catch(...) {
+        }
+      return;
+    case AppStateEvent::State::DidBecomeActive: {
+      if(appLifecycleState==AppLifecycleState::Active)
+        return;
+
+      // RendererIOS remains gated while reset() rebuilds drawable-backed
+      // targets. Publish Active only after resume has completed or latched a
+      // fatal error that rendererOperational() can report on the next turn.
+      const bool resumed = renderer.resume();
+      const uint64_t now = Application::tickCount();
+      lastTick      = now;
+      lastFrameTick = now;
+      fps            = Fps{};
+      dMouse         = Point();
+      safeArea       = SafeArea::insets();
+      const auto size = renderer.drawableSize();
+      if(resumed) {
+        if(auto* camera = Gothic::inst().camera()) {
+          camera->setViewport(uint32_t(size.w),uint32_t(size.h));
+          }
+        }
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+      resetPerfWindow(perfNowUs());
+#endif
+      appLifecycleState = AppLifecycleState::Active;
+      try {
+        Log::i("RendererIOS app lifecycle: did-become-active resumed=",
+               resumed ? 1 : 0,
+               " viewport=",size.w,"x",size.h);
+        }
+      catch(...) {
+        }
+      update();
+      return;
+      }
+    }
+  }
+
 void MainWindow::mouseDownEvent(MouseEvent &event) {
   if(event.button<sizeof(mouseP))
     mouseP[event.button]=true;
@@ -1558,6 +1641,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   // before screenshot preparation or save serialization can do any work.
   pendingSave.slot        = std::string(slot);
   pendingSave.name        = std::string(name);
+  pendingSave.previewPlaceholder = false;
   pendingSave.stage       = PendingSave::Stage::CaptureRequested;
   Gothic::inst().setLoadingProgress(0);
   (void)renderer.pollDeviceFailure();
@@ -1569,7 +1653,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
         return;
         }
       }
-    startPendingSave(Pixmap(4,4,TextureFormat::RGBA8));
+    startPendingSave(Pixmap(4,4,TextureFormat::RGBA8),true);
     try {
       Log::e("[save] RendererIOS is stopped; saving with a CPU placeholder");
       }
@@ -1601,9 +1685,10 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   }
 
 #if defined(__IOS__)
-void MainWindow::startPendingSave(Pixmap&& preview) {
-  pendingSave.preview = std::move(preview);
-  pendingSave.stage   = PendingSave::Stage::ReadyCpu;
+void MainWindow::startPendingSave(Pixmap&& preview, bool placeholder) {
+  pendingSave.preview            = std::move(preview);
+  pendingSave.previewPlaceholder = placeholder;
+  pendingSave.stage              = PendingSave::Stage::ReadyCpu;
   startPendingSave();
   }
 
@@ -1617,23 +1702,42 @@ void MainWindow::startPendingSave() {
   auto screen = std::make_shared<Pixmap>(pendingSave.preview);
   auto slot   = pendingSave.slot;
   auto name   = pendingSave.name;
+  const bool placeholder = pendingSave.previewPlaceholder;
 
   if(!Gothic::inst().startSave(Texture2d(),
-    [slot=std::move(slot),name=std::move(name),screen=std::move(screen)](std::unique_ptr<GameSession>&& game){
+    [slot=std::move(slot),name=std::move(name),screen=std::move(screen),placeholder](std::unique_ptr<GameSession>&& game){
+      (void)placeholder;
       if(!game)
         return std::move(game);
       Tempest::WFile f(slot);
       Serialize      s(f);
       game->save(s,name,*screen);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      try {
+        Log::i("[save] RendererIOS save completed: source=",
+               placeholder ? "placeholder" : "preview"," slot=",slot);
+        }
+      catch(...) {
+        }
+#endif
       return std::move(game);
       }))
     return;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  try {
+    Log::i("[save] RendererIOS startSave accepted: source=",
+           placeholder ? "placeholder" : "preview"," slot=",pendingSave.slot);
+    }
+  catch(...) {
+    }
+#endif
   // Keep the request intact until startSave has accepted the callback. A busy
   // loader or synchronous allocation/thread-start failure returns false, so the
   // next frame retries the same slot instead of silently losing the save.
   pendingSave.preview = Pixmap();
   pendingSave.slot.clear();
   pendingSave.name.clear();
+  pendingSave.previewPlaceholder = false;
   pendingSave.stage = PendingSave::Stage::None;
   update();
   }
@@ -1650,6 +1754,7 @@ void MainWindow::processPendingSave() {
     return;
 
   Pixmap preview;
+  bool placeholder = false;
   try {
     if(!renderer.savePreviewReady())
       return;
@@ -1658,12 +1763,14 @@ void MainWindow::processPendingSave() {
     // fatal path has settled every older slot.
     if(!renderer.failureReason().empty() && !rendererFailureSettled)
       return;
+    placeholder = renderer.savePreviewIsPlaceholder();
     preview = renderer.takeSavePreview();
     }
   catch(const std::exception& e) {
     if(!renderer.failureReason().empty() && !rendererFailureSettled)
       return;
     preview = Pixmap(4,4,TextureFormat::RGBA8);
+    placeholder = true;
     try {
       Log::e("[save] preview readback failed; using placeholder: ",e.what());
       }
@@ -1674,6 +1781,7 @@ void MainWindow::processPendingSave() {
     if(!renderer.failureReason().empty() && !rendererFailureSettled)
       return;
     preview = Pixmap(4,4,TextureFormat::RGBA8);
+    placeholder = true;
     try {
       Log::e("[save] preview readback failed; using placeholder: ",
              ExceptionDump::describe(std::current_exception()));
@@ -1681,7 +1789,7 @@ void MainWindow::processPendingSave() {
     catch(...) {
       }
     }
-  startPendingSave(std::move(preview));
+  startPendingSave(std::move(preview),placeholder);
   }
 #endif
 
@@ -1844,7 +1952,7 @@ bool MainWindow::rendererOperational() {
 
 #if defined(__IOS__)
   if(pendingSave.stage==PendingSave::Stage::CaptureRequested) {
-    startPendingSave(Pixmap(4,4,TextureFormat::RGBA8));
+    startPendingSave(Pixmap(4,4,TextureFormat::RGBA8),true);
     try {
       Log::e("[save] RendererIOS stopped before capture; using a CPU placeholder");
       }
@@ -1876,7 +1984,10 @@ void MainWindow::pumpLoadingAfterRendererFailure() {
 
 void MainWindow::render(){
   try {
-    static uint64_t time=Application::tickCount();
+    if(appLifecycleState!=AppLifecycleState::Active)
+      return;
+    if(lastFrameTick==0)
+      lastFrameTick = Application::tickCount();
 
 #if defined(__IOS__)
     if(!rendererOperational())
@@ -2007,17 +2118,17 @@ void MainWindow::render(){
     targetPeriodMs = std::max(targetPeriodMs,maxFpsInv);
 
     auto t = Application::tickCount();
-    if(targetPeriodMs>0 && t-time<targetPeriodMs) {
-      const uint32_t delay = uint32_t(targetPeriodMs-(t-time));
+    if(targetPeriodMs>0 && t-lastFrameTick<targetPeriodMs) {
+      const uint32_t delay = uint32_t(targetPeriodMs-(t-lastFrameTick));
       Application::sleep(delay);
       t += delay;
       }
 #endif
 
-    fps.push(t-time);
+    fps.push(t-lastFrameTick);
     if(Gothic::inst().isBenchmarkMode() && Gothic::inst().world()!=nullptr && Gothic::inst().world()->currentCs()!=nullptr)
-      benchmark.push(t-time);
-    time = t;
+      benchmark.push(t-lastFrameTick);
+    lastFrameTick = t;
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     flushPerfWindow(perfNowUs(),false);
 #endif

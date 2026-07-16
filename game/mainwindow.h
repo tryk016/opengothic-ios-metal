@@ -75,6 +75,7 @@ class MainWindow : public Tempest::Window {
   private:
     void paintEvent     (Tempest::PaintEvent& event) override;
     void resizeEvent    (Tempest::SizeEvent & event) override;
+    void appStateEvent  (Tempest::AppStateEvent& event) override;
 
     void mouseDownEvent (Tempest::MouseEvent& event) override;
     void mouseUpEvent   (Tempest::MouseEvent& event) override;
@@ -106,7 +107,7 @@ class MainWindow : public Tempest::Window {
     void saveGame (std::string_view slot, std::string_view name);
 #if defined(__IOS__)
     void processPendingSave();
-    void startPendingSave(Tempest::Pixmap&& preview);
+    void startPendingSave(Tempest::Pixmap&& preview, bool placeholder);
     void startPendingSave();
 #endif
 
@@ -157,6 +158,13 @@ class MainWindow : public Tempest::Window {
       R_Step,
       };
 
+    enum class AppLifecycleState : uint8_t {
+      Active,
+      Inactive,
+      Background,
+      Foreground,
+      };
+
     Tempest::TextureAtlas atlas;
     Tempest::Font         font;
     RendererIOS           renderer;
@@ -189,6 +197,7 @@ class MainWindow : public Tempest::Window {
       std::string         slot;
       std::string         name;
       Tempest::Pixmap     preview;
+      bool                previewPlaceholder = false;
 
       bool active() const { return stage!=Stage::None; }
       } pendingSave;
@@ -214,6 +223,7 @@ class MainWindow : public Tempest::Window {
     int                       lastPlayerHp = -1;  // for damage haptics
 #endif
     RuntimeMode               runtimeMode = R_Normal;
+    AppLifecycleState         appLifecycleState = AppLifecycleState::Active;
     bool                      rendererFailureReported = false;
     bool                      rendererFailureSettled  = false;
     SafeArea::Insets          safeArea;           // display cutouts, px; zero off-iOS
@@ -221,6 +231,7 @@ class MainWindow : public Tempest::Window {
     Tempest::Widget*          uiKeyUp=nullptr;
     Tempest::Point            dMouse;
     uint64_t                  lastTick=0;
+    uint64_t                  lastFrameTick=0;
 
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     struct PerfWindow final {

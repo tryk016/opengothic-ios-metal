@@ -70,12 +70,15 @@ class RendererIOS final {
     bool            pollDeviceFailure() noexcept;
     std::string_view failureReason() const noexcept;
     void            resize();
+    bool            suspend() noexcept;
+    bool            resume() noexcept;
     bool            waitIdle() noexcept;
     void            shutdown() noexcept;
     void            prepareForOwnerRelease() noexcept;
     void            onWorldChanged();
 
     bool            savePreviewReady();
+    bool            savePreviewIsPlaceholder() const noexcept;
     Tempest::Pixmap takeSavePreview();
     Tempest::Pixmap screenshot();
 

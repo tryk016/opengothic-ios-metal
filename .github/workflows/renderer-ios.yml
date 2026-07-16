@@ -29,12 +29,17 @@ on:
           - post-submit-suboptimal
           - shutdown-idle-unconfirmed-once
           - async-present-error-after-terminal
+      package_device_ipa:
+        description: 'Package unsigned ON/OFF IPA artifacts for physical-device validation'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
   cancel-in-progress: true
 
 jobs:
@@ -90,3 +95,96 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
+
+      - name: Package unsigned device-test IPA
+        if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
+        env:
+          ACTIVE_FAULT_MODE: ${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}
+          DIAGNOSTICS: ${{ matrix.diagnostics }}
+          IOS_VERSION: 1.0.${{ github.run_number }}
+          TEMPEST_PROFILE: ${{ inputs.tempest_profile }}
+        run: |
+          HEAD_SHA="$(git rev-parse HEAD)"
+          if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then
+            echo "checkout SHA $HEAD_SHA does not match workflow SHA $GITHUB_SHA"
+            exit 1
+          fi
+
+          APP_LIST="$(find build-renderer-ios -type d -name 'Gothic2Notr.app' -path '*Release-iphoneos*' -print)"
+          APP_COUNT="$(printf '%s\n' "$APP_LIST" | sed '/^$/d' | wc -l | tr -d ' ')"
+          if [ "$APP_COUNT" -ne 1 ]; then
+            echo "expected exactly one Release-iphoneos/Gothic2Notr.app, found $APP_COUNT"
+            printf '%s\n' "$APP_LIST"
+            exit 1
+          fi
+          APP="$APP_LIST"
+          INFO_PLIST="$APP/Info.plist"
+          if [ ! -f "$INFO_PLIST" ]; then
+            echo "missing app Info.plist: $INFO_PLIST"
+            exit 1
+          fi
+
+          BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")"
+          BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")"
+          if [ "$BUNDLE_ID" != 'opengothic.gothic2' ]; then
+            echo "unexpected bundle identifier: $BUNDLE_ID"
+            exit 1
+          fi
+          if [ "$BUNDLE_VERSION" != "$IOS_VERSION" ]; then
+            echo "unexpected bundle version: $BUNDLE_VERSION (expected $IOS_VERSION)"
+            exit 1
+          fi
+          if [ ! -f "$APP/$EXECUTABLE" ]; then
+            echo "missing app executable: $APP/$EXECUTABLE"
+            exit 1
+          fi
+          if ! file "$APP/$EXECUTABLE" | grep -Eq 'arm64'; then
+            echo "app executable is not arm64"
+            file "$APP/$EXECUTABLE"
+            exit 1
+          fi
+          if [ -e "$APP/embedded.mobileprovision" ]; then
+            echo 'device-test artifact unexpectedly contains a provisioning profile'
+            exit 1
+          fi
+          if codesign --verify --deep --strict "$APP" >/dev/null 2>&1; then
+            echo 'device-test artifact unexpectedly contains a valid code signature'
+            exit 1
+          fi
+
+          SHORT_SHA="${GITHUB_SHA:0:12}"
+          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}"
+          ARTIFACT_DIR="$GITHUB_WORKSPACE/device-artifact"
+          PACKAGE_ROOT="$RUNNER_TEMP/renderer-ios-device-package"
+          rm -rf "$ARTIFACT_DIR" "$PACKAGE_ROOT"
+          mkdir -p "$ARTIFACT_DIR" "$PACKAGE_ROOT/Payload"
+          cp -R "$APP" "$PACKAGE_ROOT/Payload/"
+          (cd "$PACKAGE_ROOT" && /usr/bin/zip -qry "$ARTIFACT_DIR/$BASENAME.ipa" Payload)
+
+          TEMPEST_SHA="$(git -C lib/Tempest rev-parse HEAD)"
+          IPA_SHA256="$(shasum -a 256 "$ARTIFACT_DIR/$BASENAME.ipa" | awk '{print $1}')"
+          cat > "$ARTIFACT_DIR/$BASENAME-provenance.txt" <<EOF
+          repository=$GITHUB_REPOSITORY
+          workflow_run_id=$GITHUB_RUN_ID
+          workflow_run_attempt=$GITHUB_RUN_ATTEMPT
+          commit_sha=$GITHUB_SHA
+          tempest_sha=$TEMPEST_SHA
+          tempest_profile=$TEMPEST_PROFILE
+          diagnostics=$DIAGNOSTICS
+          fault_mode=$ACTIVE_FAULT_MODE
+          bundle_id=$BUNDLE_ID
+          bundle_version=$BUNDLE_VERSION
+          signed=false
+          ipa_sha256=$IPA_SHA256
+          runtime_evidence_required=true
+          EOF
+
+      - name: Upload unsigned device-test IPA
+        if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}
+          path: device-artifact/
+          if-no-files-found: error
+          retention-days: 14
