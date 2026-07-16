@@ -110,14 +110,18 @@ jobs:
             exit 1
           fi
 
-          APP_LIST="$(find build-renderer-ios -type d -name 'Gothic2Notr.app' -path '*Release-iphoneos*' -print)"
+          APP_LIST="$(find build-renderer-ios -type d -name 'Gothic2Notr.app' -print)"
           APP_COUNT="$(printf '%s\n' "$APP_LIST" | sed '/^$/d' | wc -l | tr -d ' ')"
           if [ "$APP_COUNT" -ne 1 ]; then
-            echo "expected exactly one Release-iphoneos/Gothic2Notr.app, found $APP_COUNT"
+            echo "expected exactly one Gothic2Notr.app, found $APP_COUNT"
             printf '%s\n' "$APP_LIST"
             exit 1
           fi
           APP="$APP_LIST"
+          if [ "$APP" != 'build-renderer-ios/opengothic/Release/Gothic2Notr.app' ]; then
+            echo "unexpected Release app path: $APP"
+            exit 1
+          fi
           INFO_PLIST="$APP/Info.plist"
           if [ ! -f "$INFO_PLIST" ]; then
             echo "missing app Info.plist: $INFO_PLIST"
@@ -127,12 +131,17 @@ jobs:
           BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO_PLIST")"
           BUNDLE_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO_PLIST")"
           EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO_PLIST")"
+          PLATFORM_NAME="$(/usr/libexec/PlistBuddy -c 'Print :DTPlatformName' "$INFO_PLIST")"
           if [ "$BUNDLE_ID" != 'opengothic.gothic2' ]; then
             echo "unexpected bundle identifier: $BUNDLE_ID"
             exit 1
           fi
           if [ "$BUNDLE_VERSION" != "$IOS_VERSION" ]; then
             echo "unexpected bundle version: $BUNDLE_VERSION (expected $IOS_VERSION)"
+            exit 1
+          fi
+          if [ "$PLATFORM_NAME" != 'iphoneos' ]; then
+            echo "unexpected bundle platform: $PLATFORM_NAME"
             exit 1
           fi
           if [ ! -f "$APP/$EXECUTABLE" ]; then
