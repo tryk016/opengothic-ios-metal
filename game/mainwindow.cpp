@@ -1608,12 +1608,42 @@ void MainWindow::loadGame(std::string_view slot) {
   logMemorySnapshot("load_game_requested");
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+  try {
+    Log::i("[load] RendererIOS load requested:",
+           " slot=",slot,
+           " active-session=",Gothic::inst().gameSession()!=nullptr ? 1 : 0);
+    }
+  catch(...) {
+    }
+#endif
+
   Gothic::inst().setBenchmarkMode(Benchmark::None);
   Gothic::inst().startLoad("LOADING.TGA",[slot=std::string(slot)](std::unique_ptr<GameSession>&& game){
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    try {
+      Log::i("[load] RendererIOS load callback entered: slot=",slot);
+      }
+    catch(...) {
+      }
+#endif
     game = nullptr; // clear world-memory now
     Tempest::RFile file(slot);
     Serialize      s(file);
     std::unique_ptr<GameSession> w(new GameSession(s));
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    try {
+      Log::i("[load] RendererIOS load completed: slot=",slot);
+      }
+    catch(...) {
+      }
+#endif
     return w;
     });
 
@@ -1721,8 +1751,22 @@ void MainWindow::startPendingSave() {
         }
 #endif
       return std::move(game);
-      }))
+      })) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    try {
+      Log::i("[save] RendererIOS startSave deferred:",
+             " source=",placeholder ? "placeholder" : "preview",
+             " slot=",pendingSave.slot,
+             " stage=ready-cpu",
+             " reason=loader-start-not-accepted");
+      }
+    catch(...) {
+      }
+#endif
     return;
+    }
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   try {
     Log::i("[save] RendererIOS startSave accepted: source=",

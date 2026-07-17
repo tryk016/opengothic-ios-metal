@@ -29,6 +29,7 @@ on:
           - post-submit-suboptimal
           - shutdown-idle-unconfirmed-once
           - async-present-error-after-terminal
+          - loader-thread-start-failure-once
       package_device_ipa:
         description: 'Package unsigned ON/OFF IPA artifacts for physical-device validation'
         required: true

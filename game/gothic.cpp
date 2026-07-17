@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cctype>
 #include <cassert>
+#include <system_error>
 
 #include <zenkit/addon/daedalus.hh>
 
@@ -28,6 +29,10 @@
 
 using namespace Tempest;
 using namespace FileUtil;
+
+#if !defined(OPENGOTHIC_RENDERER_IOS_BUILD_SHA)
+#define OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local"
+#endif
 
 Gothic* Gothic::instance = nullptr;
 
@@ -564,6 +569,42 @@ bool Gothic::finishLoading() {
     saveTex = Texture2d();
     loadTex = Texture2d();
     onWorldLoaded();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    const auto request = loaderFaultActiveRequest.load();
+    const auto operationId = loaderFaultActiveOperation.load();
+    const char* operation = operationId==1 ? "load" :
+                            operationId==2 ? "save" : "unknown";
+    const char* terminal = state==LoadState::Finalize   ? "finalize" :
+                           state==LoadState::FailedLoad ? "failed-load" :
+                                                         "failed-save";
+    try {
+      Log::i("RendererIOS loader finalization: mode=loader-thread-start-failure-once",
+             " operation=",operation,
+             " request=",request,
+             " terminal=",terminal,
+             " state=idle",
+             " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+      Log::i("RendererIOS loader final ownership:",
+             " request=",request,
+             " session-present=",game!=nullptr ? 1 : 0,
+             " pending-game=",pendingGame!=nullptr ? 1 : 0,
+             " loader-joinable=",loaderTh.joinable() ? 1 : 0,
+             " post-loader-owner-gate=passed");
+      Log::i("RendererIOS loader final counters:",
+             " request=",request,
+             " start-attempts=",loaderFaultStartAttempts.load(),
+             " start-accepted=",loaderFaultStartAccepted.load(),
+             " injected-failures=",loaderFaultInjectedFailures.load(),
+             " rollbacks=",loaderFaultRollbacks.load(),
+             " worker-entries=",loaderFaultWorkerEntries.load());
+      }
+    catch(...) {
+      }
+    loaderFaultActiveRequest.store(0);
+    loaderFaultActiveOperation.store(0);
+#endif
     return true;
     }
   return false;
@@ -589,6 +630,17 @@ bool Gothic::implStartLoadSave(std::string_view banner,
     return false; // loading already
     }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+  const auto diagnosticRequest = loaderFaultRequestSerial.fetch_add(1)+1;
+  loaderFaultStartAttempts.fetch_add(1);
+  loaderFaultActiveRequest.store(diagnosticRequest);
+  loaderFaultActiveOperation.store(load ? 1 : 2);
+  bool diagnosticPreDetachOwnerGatePassed = false;
+  bool diagnosticInjectedThisRequest = false;
+#endif
+
   const auto threadFailure = load ? LoadState::FailedLoad : LoadState::FailedSave;
   GameSession* g = nullptr;
   try{
@@ -596,6 +648,11 @@ bool Gothic::implStartLoadSave(std::string_view banner,
     // GameSession owner is replaced. A rejected re-entrant request never reaches
     // this point and therefore cannot invalidate an in-flight loading frame.
     onStartLoading();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    diagnosticPreDetachOwnerGatePassed = true;
+#endif
     if(load)
       loadTex = banner.empty() ? Texture2d() : Resources::loadTextureUncached(banner);
     else
@@ -603,8 +660,56 @@ bool Gothic::implStartLoadSave(std::string_view banner,
     loadProgress.store(0);
     g = clearGame().release();
 
-    auto l = std::thread([this,f,g,one]() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    // Do not consume the one-shot while starting a new game: without an
+    // existing session there is no detached owner to restore, so that would
+    // not exercise the rollback this fault mode is intended to validate.
+    bool expected = false;
+    if(g!=nullptr && loaderFaultFired.compare_exchange_strong(expected,true)) {
+      diagnosticInjectedThisRequest = true;
+      loaderFaultInjectedFailures.fetch_add(1);
+      try {
+        Log::e("RendererIOS fault injection fired:",
+               " mode=loader-thread-start-failure-once",
+               " point=loader-thread-before-create",
+               " operation=",load ? "load" : "save",
+               " request=",diagnosticRequest,
+               " had-session=1",
+               " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+        }
+      catch(...) {
+        }
+      throw std::system_error(
+        std::make_error_code(std::errc::resource_unavailable_try_again),
+        "RendererIOS diagnostics injected loader thread start failure");
+      }
+#endif
+
+    auto l = std::thread([this,f,g,one
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+                         ,diagnosticRequest
+#endif
+                         ]() noexcept {
       Workers::setThreadName("Loading thread");
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+      const auto workerEntries = loaderFaultWorkerEntries.fetch_add(1)+1;
+      try {
+        Log::i("RendererIOS loader worker entered:",
+               " mode=loader-thread-start-failure-once",
+               " operation=",one==LoadState::Loading ? "load" : "save",
+               " request=",diagnosticRequest,
+               " worker-entries=",workerEntries,
+               " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+        }
+      catch(...) {
+        }
+#endif
       std::unique_ptr<GameSession> game(g);
       std::unique_ptr<GameSession> next;
       auto curState = one;
@@ -647,20 +752,68 @@ bool Gothic::implStartLoadSave(std::string_view banner,
         }
       });
     loaderTh=std::move(l);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    const auto accepted = loaderFaultStartAccepted.fetch_add(1)+1;
+    try {
+      Log::i("RendererIOS loader thread start accepted:",
+             " mode=loader-thread-start-failure-once",
+             " operation=",load ? "load" : "save",
+             " request=",diagnosticRequest,
+             " start-accepted=",accepted,
+             " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+      }
+    catch(...) {
+      }
+#endif
     //loaderTh.join();
     //loaderTh = std::thread([](){});
     return true;
     }
   catch(...){
     // Allocation, the synchronous start hook, or thread construction can fail
-    // after the request was accepted. Restore a detached session and expose a
-    // normal terminal state; finishLoading() runs the joined finalization gate
-    // without trying to join a non-joinable thread.
+    // after the request was accepted. Restore a detached session. LOAD exposes
+    // a terminal state for finishLoading(); SAVE returns to Idle so the retained
+    // PendingSave request can retry without joining a non-joinable thread.
     if(g!=nullptr)
       game.reset(g);
     loadingFlag.store(load ? threadFailure : LoadState::Idle);
     if(!load)
       saveTex = Texture2d();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    loaderFaultRollbacks.fetch_add(1);
+    try {
+      Log::i("RendererIOS loader start rollback:",
+             " mode=loader-thread-start-failure-once",
+             " operation=",load ? "load" : "save",
+             " request=",diagnosticRequest,
+             " state=",load ? "failed-load" : "idle",
+             " injected=",diagnosticInjectedThisRequest ? 1 : 0,
+             " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+      Log::i("RendererIOS loader rollback ownership:",
+             " request=",diagnosticRequest,
+             " had-session=",g!=nullptr ? 1 : 0,
+             " session-restored=",g!=nullptr && game.get()==g ? 1 : 0,
+             " pending-game=",pendingGame!=nullptr ? 1 : 0,
+             " loader-joinable=",loaderTh.joinable() ? 1 : 0,
+             " thread-created=0",
+             " fault-request-worker-entries=0",
+             " pre-detach-owner-gate=",
+             diagnosticPreDetachOwnerGatePassed ? "passed" : "not-reached");
+      Log::i("RendererIOS loader rollback counters:",
+             " request=",diagnosticRequest,
+             " start-attempts=",loaderFaultStartAttempts.load(),
+             " start-accepted=",loaderFaultStartAccepted.load(),
+             " injected-failures=",loaderFaultInjectedFailures.load(),
+             " rollbacks=",loaderFaultRollbacks.load(),
+             " worker-entries=",loaderFaultWorkerEntries.load());
+      }
+    catch(...) {
+      }
+#endif
     try {
       Log::e("unable to start load/save: ",ExceptionDump::describe(std::current_exception()));
       }

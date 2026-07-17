@@ -40,7 +40,7 @@ using namespace Tempest;
 #define OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME "none"
 #endif
 
-#if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID < 0 || OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID > 7
+#if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID < 0 || OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID > 8
 #error "Unsupported RendererIOS fault mode id"
 #endif
 
@@ -69,6 +69,7 @@ enum class RendererIOSFaultMode : uint8_t {
   PostSubmitSuboptimal           = 5,
   ShutdownIdleUnconfirmedOnce    = 6,
   AsyncPresentErrorAfterTerminal = 7,
+  LoaderThreadStartFailureOnce   = 8,
   };
 
 const char* presentFailureName(PresentFailureKind kind) noexcept {

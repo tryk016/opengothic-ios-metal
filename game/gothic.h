@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <memory>
 #include <thread>
@@ -243,6 +244,20 @@ class Gothic final {
     std::atomic_int                         loadProgress{0};
     std::thread                             loaderTh;
     std::atomic<LoadState>                  loadingFlag{LoadState::Idle};
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
+    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+    std::atomic_uint64_t                    loaderFaultRequestSerial{0};
+    std::atomic_uint64_t                    loaderFaultStartAttempts{0};
+    std::atomic_uint64_t                    loaderFaultStartAccepted{0};
+    std::atomic_uint64_t                    loaderFaultInjectedFailures{0};
+    std::atomic_uint64_t                    loaderFaultRollbacks{0};
+    std::atomic_uint64_t                    loaderFaultWorkerEntries{0};
+    std::atomic_uint64_t                    loaderFaultActiveRequest{0};
+    std::atomic_int                         loaderFaultActiveOperation{0};
+    std::atomic_bool                        loaderFaultFired{false};
+#endif
 
     std::unique_ptr<GameSession>            game, pendingGame;
     std::unique_ptr<FightAi>                fight;
