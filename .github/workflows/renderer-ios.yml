@@ -140,6 +140,12 @@ jobs:
             -o "$RUNNER_TEMP/iossceneconversion"
           "$RUNNER_TEMP/iossceneconversion"
 
+          test -f lib/Tempest/Tests/tests/metalapi_borrowed_handle_compile_test.cpp
+          xcrun clang++ -std=c++17 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Ilib/Tempest/Engine/include -fsyntax-only \
+            lib/Tempest/Tests/tests/metalapi_borrowed_handle_compile_test.cpp
+
       - name: Configure RendererIOS
         run: |
           cmake -S . -B build-renderer-ios -G Xcode \
