@@ -13,7 +13,7 @@
 
 #include "resources.h"
 
-class RendererIOS;
+class IOSMetalContext;
 
 class VideoWidget : public Tempest::Widget {
   private:
@@ -76,6 +76,6 @@ class VideoWidget : public Tempest::Widget {
     std::mutex                    syncVideo;
     std::queue<std::string>       pendingVideo;
 
-  friend class RendererIOS;
+  friend class IOSMetalContext;
   };
 
