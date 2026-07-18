@@ -28,8 +28,10 @@ class DrawBuckets {
 
         uint16_t toInt() const { return id; }
 
-        Bucket& operator *  () { return  owner->bucketsCpu[id]; }
-        Bucket* operator -> () { return &owner->bucketsCpu[id]; }
+        Bucket&       operator *  ()       { return  owner->bucketsCpu[id]; }
+        Bucket*       operator -> ()       { return &owner->bucketsCpu[id]; }
+        const Bucket& operator *  () const { return  owner->bucketsCpu[id]; }
+        const Bucket* operator -> () const { return &owner->bucketsCpu[id]; }
 
       private:
         Id(DrawBuckets* owner, size_t id);
