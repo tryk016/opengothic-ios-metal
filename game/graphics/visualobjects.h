@@ -4,6 +4,7 @@
 #include "drawclusters.h"
 #include "drawcommands.h"
 #include "instancestorage.h"
+#include "iosscenesource.h"
 
 #include <unordered_set>
 
@@ -36,6 +37,7 @@ class VisualObjects final {
         }
 
       bool     isEmpty() const { return owner==nullptr; }
+      uint64_t sourceId() const noexcept;
 
       void     setObjMatrix(const Tempest::Matrix4x4& mt);
       void     setAsGhost  (bool g);
@@ -60,6 +62,8 @@ class VisualObjects final {
     Item   get(const StaticMesh& mesh, const Material& mat, size_t iboOffset, size_t iboLength, bool staticDraw);
     Item   get(const AnimMesh& mesh,   const Material& mat, size_t iboOff, size_t iboLen, const InstanceStorage::Id& anim);
     Item   get(const StaticMesh& mesh, const Material& mat, size_t iboOff, size_t iboLen, const PackedMesh::Cluster* cluster, DrawCommands::Type type);
+
+    void visitIOSSceneSources(void* context, IOSSceneSourceVisitor visitor) const;
 
     InstanceStorage::Id alloc(size_t size);
     bool                realloc(InstanceStorage::Id& id, size_t size);
@@ -104,6 +108,9 @@ class VisualObjects final {
     struct Object {
       bool     isEmpty() const { return cmdId==uint16_t(-1); }
 
+      uint64_t            sourceId    = 0;
+      const StaticMesh*   sourceMesh  = nullptr;
+      const Bounds*       sourceBounds = nullptr;
       Tempest::Matrix4x4  pos;
       InstanceStorage::Id objInstance;
       InstanceStorage::Id objMorphAnim;
@@ -129,6 +136,7 @@ class VisualObjects final {
     void     preFrameUpdateMorph();
 
     size_t   implAlloc();
+    void     recycle(size_t id);
     void     free(size_t id);
 
     uint32_t clusterId(const PackedMesh::Cluster* cx, size_t firstMeshlet, size_t meshletCount, uint16_t bucketId, uint16_t commandId);
@@ -155,6 +163,7 @@ class VisualObjects final {
     std::unordered_set<size_t> objectsWind;
     std::unordered_set<size_t> objectsMorph;
     std::unordered_set<size_t> objectsFree;
+    IOSSceneSourceIdentityAllocator sourceIdentity;
 
     friend class Item;
   };

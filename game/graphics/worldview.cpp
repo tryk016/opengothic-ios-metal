@@ -214,6 +214,10 @@ void WorldView::dbgClusters(Tempest::Painter& p, Vec2 wsz) {
   visuals.dbgClusters(p, wsz);
   }
 
+void WorldView::visitIOSSceneSources(void* context, IOSSceneSourceVisitor visitor) const {
+  visuals.visitIOSSceneSources(context,visitor);
+  }
+
 const DrawClusters& WorldView::clusters() const {
   return visuals.clusters();
   }

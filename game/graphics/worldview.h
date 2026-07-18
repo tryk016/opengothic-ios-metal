@@ -79,6 +79,7 @@ class WorldView {
     LightGroup::Light   addLight     (std::string_view preset);
 
     void                dbgClusters(Tempest::Painter& p, Tempest::Vec2 wsz);
+    void                visitIOSSceneSources(void* context, IOSSceneSourceVisitor visitor) const;
 
     const SceneGlobals& sceneGlobals() const { return sGlobal; }
     const Sky&          sky() const { return gSky; }

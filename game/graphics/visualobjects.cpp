@@ -20,6 +20,18 @@ static RtScene::Category toRtCategory(DrawCommands::Type t) {
   return RtScene::None;
   }
 
+static IOSSceneSourceKind toIOSSceneSourceKind(DrawCommands::Type type) noexcept {
+  switch(type) {
+    case DrawCommands::Landscape: return IOSSceneSourceKind::Landscape;
+    case DrawCommands::Static:    return IOSSceneSourceKind::Static;
+    case DrawCommands::Movable:   return IOSSceneSourceKind::Movable;
+    case DrawCommands::Animated:  return IOSSceneSourceKind::Animated;
+    case DrawCommands::Pfx:       return IOSSceneSourceKind::Particle;
+    case DrawCommands::Morph:     return IOSSceneSourceKind::Morph;
+    }
+  return IOSSceneSourceKind::Static;
+  }
+
 
 struct VisualObjects::InstanceDesc {
   void setPosition(const Tempest::Matrix4x4& m) {
@@ -46,6 +58,11 @@ struct VisualObjects::MorphData {
   MorphDesc morph[Resources::MAX_MORPH_LAYERS];
   };
 
+uint64_t VisualObjects::Item::sourceId() const noexcept {
+  if(owner==nullptr)
+    return 0;
+  return owner->objects[id].sourceId;
+  }
 
 void VisualObjects::Item::setObjMatrix(const Tempest::Matrix4x4& pos) {
   if(owner!=nullptr) {
@@ -132,8 +149,7 @@ Matrix4x4 VisualObjects::Item::position() const {
 const StaticMesh* VisualObjects::Item::mesh() const {
   if(owner==nullptr)
     return nullptr;
-  auto& bx = *owner->objects[id].bucketId;
-  return bx.staticMesh;
+  return owner->objects[id].sourceMesh;
   }
 
 std::pair<uint32_t, uint32_t> VisualObjects::Item::meshSlice() const {
@@ -212,6 +228,8 @@ VisualObjects::Item VisualObjects::get(const StaticMesh& mesh, const Material& m
     type = DrawCommands::Morph;
     }
 
+  obj.sourceMesh   = &mesh;
+  obj.sourceBounds = mesh.localBounds(iboOff,iboLen);
   obj.type      = type;
   obj.iboOff    = uint32_t(iboOff);
   obj.iboLen    = uint32_t(iboLen);
@@ -221,8 +239,10 @@ VisualObjects::Item VisualObjects::get(const StaticMesh& mesh, const Material& m
   obj.alpha     = mat.alpha;
   obj.timeShift = -scene.tickCount;
 
-  if(obj.isEmpty())
+  if(obj.isEmpty()) {
+    recycle(id);
     return Item(); // null command
+    }
 
   obj.objInstance = instanceMem.alloc(sizeof(InstanceDesc));
   clustersMem[obj.clusterId].instanceId = obj.objInstance.offsetId<InstanceDesc>();
@@ -256,6 +276,7 @@ VisualObjects::Item VisualObjects::get(const AnimMesh& mesh, const Material& mat
 
   Object& obj = objects[id];
 
+  obj.sourceBounds = &mesh.bbox;
   obj.type      = DrawCommands::Type::Animated;
   obj.iboOff    = uint32_t(iboOff);
   obj.iboLen    = uint32_t(iboLen);
@@ -265,8 +286,10 @@ VisualObjects::Item VisualObjects::get(const AnimMesh& mesh, const Material& mat
   obj.alpha     = mat.alpha;
   obj.timeShift = -scene.tickCount;
 
-  if(obj.isEmpty())
+  if(obj.isEmpty()) {
+    recycle(id);
     return Item(); // null command
+    }
   obj.animPtr     = anim.offsetId<Matrix4x4>();
   obj.objInstance = instanceMem.alloc(sizeof(InstanceDesc));
   clustersMem[obj.clusterId].instanceId = obj.objInstance.offsetId<InstanceDesc>();
@@ -288,6 +311,8 @@ VisualObjects::Item VisualObjects::get(const StaticMesh& mesh, const Material& m
 
   Object& obj = objects[id];
 
+  obj.sourceMesh   = &mesh;
+  obj.sourceBounds = mesh.localBounds(iboOff,iboLen);
   obj.type      = DrawCommands::Type::Landscape;
   obj.iboOff    = uint32_t(iboOff);
   obj.iboLen    = uint32_t(iboLen);
@@ -297,21 +322,42 @@ VisualObjects::Item VisualObjects::get(const StaticMesh& mesh, const Material& m
   obj.alpha     = mat.alpha;
   obj.timeShift = -scene.tickCount;
 
-  if(obj.isEmpty())
+  if(obj.isEmpty()) {
+    recycle(id);
     return Item(); // null command
+    }
   updateRtAs(id);
   return Item(*this, id);
   }
 
 size_t VisualObjects::implAlloc() {
+  size_t id = 0;
   if(!objectsFree.empty()) {
-    auto id = *objectsFree.begin();
+    id = *objectsFree.begin();
     objectsFree.erase(objectsFree.begin());
-    return id;
+    }
+  else {
+    objects.resize(objects.size()+1);
+    id = objects.size()-1;
     }
 
-  objects.resize(objects.size()+1);
-  return objects.size()-1;
+  assert(objects[id].isEmpty());
+  assert(objects[id].sourceId==0);
+  (void)sourceIdentity.assign(objects[id].sourceId);
+  return id;
+  }
+
+void VisualObjects::recycle(size_t id) {
+  sourceIdentity.release(objects[id].sourceId);
+  objects[id] = Object();
+  while(!objects.empty()) {
+    if(!objects.back().isEmpty())
+      break;
+    objects.pop_back();
+    objectsFree.erase(objects.size());
+    }
+  if(id<objects.size())
+    objectsFree.insert(id);
   }
 
 void VisualObjects::free(size_t id) {
@@ -328,15 +374,30 @@ void VisualObjects::free(size_t id) {
   if(obj.type==DrawCommands::Morph)
     objectsMorph.erase(id);
 
-  obj = Object();
-  while(objects.size()>0) {
-    if(!objects.back().isEmpty())
-      break;
-    objects.pop_back();
-    objectsFree.erase(objects.size());
+  recycle(id);
+  }
+
+void VisualObjects::visitIOSSceneSources(void* context, IOSSceneSourceVisitor visitor) const {
+  if(visitor==nullptr)
+    return;
+
+  for(const auto& object:objects) {
+    if(object.isEmpty() || object.sourceId==0 || object.sourceBounds==nullptr)
+      continue;
+
+    const auto& bucket = *object.bucketId;
+    IOSSceneSource source;
+    source.kind           = toIOSSceneSourceKind(object.type);
+    source.sourceId       = object.sourceId;
+    source.mesh           = object.sourceMesh;
+    source.material       = &bucket.mat;
+    source.transform      = object.pos;
+    source.localBoundsMin = object.sourceBounds->bbox[0];
+    source.localBoundsMax = object.sourceBounds->bbox[1];
+    source.firstIndex     = object.iboOff;
+    source.indexCount     = object.iboLen;
+    emitIOSSceneSource(context,visitor,source);
     }
-  if(id<objects.size())
-    objectsFree.insert(id);
   }
 
 InstanceStorage::Id VisualObjects::alloc(size_t size) {
