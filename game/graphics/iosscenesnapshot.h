@@ -54,6 +54,7 @@ struct IOSFloat4 final {
   };
 
 struct IOSMatrix4x4 final {
+  // Column-major storage with conventional logical (row,column) access.
   std::array<float,16> elements = {
     1.f,0.f,0.f,0.f,
     0.f,1.f,0.f,0.f,
@@ -62,11 +63,11 @@ struct IOSMatrix4x4 final {
     };
 
   constexpr float at(std::size_t row, std::size_t column) const noexcept {
-    return elements[row*4u+column];
+    return elements[column*4u+row];
     }
 
   constexpr void set(std::size_t row, std::size_t column, float value) noexcept {
-    elements[row*4u+column] = value;
+    elements[column*4u+row] = value;
     }
 
   constexpr bool operator==(const IOSMatrix4x4&) const noexcept = default;
@@ -194,6 +195,14 @@ enum IOSSceneFeature : uint64_t {
   IOSSceneFeatureRayTracing      = uint64_t(1) << 6u,
   };
 
+enum IOSSceneVisibility : uint64_t {
+  IOSSceneVisibilityNone       = 0,
+  IOSSceneVisibilityMain       = uint64_t(1) << 0u,
+  IOSSceneVisibilityShadow     = uint64_t(1) << 1u,
+  IOSSceneVisibilityReflection = uint64_t(1) << 2u,
+  IOSSceneVisibilityRayTracing = uint64_t(1) << 3u,
+  };
+
 struct IOSCameraState final {
   IOSMatrix4x4 view;
   IOSMatrix4x4 projection;
@@ -215,7 +224,7 @@ struct IOSRenderEntityState final {
   IOSBounds         bounds;
   IOSIndexRange     boneRange;
   IOSIndexRange     morphRange;
-  uint64_t          visibilityMask = 0;
+  uint64_t          visibilityMask = IOSSceneVisibilityMain;
 
   constexpr bool operator==(const IOSRenderEntityState&) const noexcept = default;
   };
@@ -229,7 +238,7 @@ struct IOSRenderEntity final {
   IOSBounds         bounds;
   IOSIndexRange     boneRange;
   IOSIndexRange     morphRange;
-  uint64_t          visibilityMask = 0;
+  uint64_t          visibilityMask = IOSSceneVisibilityMain;
 
   constexpr bool operator==(const IOSRenderEntity&) const noexcept = default;
   };
@@ -258,9 +267,9 @@ struct IOSLight final {
   IOSFloat3      color     = {1.f,1.f,1.f};
   float          intensity = 1.f;
   float          range     = 0.f;
-  float          innerCone = 0.f;
-  float          outerCone = 0.f;
-  uint64_t       visibilityMask = 0;
+  float          innerConeRadians = 0.f;
+  float          outerConeRadians = 0.f;
+  uint64_t       visibilityMask = IOSSceneVisibilityMain;
 
   constexpr bool operator==(const IOSLight&) const noexcept = default;
   };

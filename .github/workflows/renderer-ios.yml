@@ -129,6 +129,17 @@ jobs:
             -o "$RUNNER_TEMP/iosscenecontract"
           "$RUNNER_TEMP/iosscenecontract"
 
+          test -f game/graphics/iossceneconversion.h
+          test -f game/graphics/iossceneconversion.cpp
+          test -f ios/tests/iossceneconversion.cpp
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -Ilib/Tempest/Engine/include \
+            ios/tests/iossceneconversion.cpp \
+            game/graphics/iossceneconversion.cpp \
+            -o "$RUNNER_TEMP/iossceneconversion"
+          "$RUNNER_TEMP/iossceneconversion"
+
       - name: Configure RendererIOS
         run: |
           cmake -S . -B build-renderer-ios -G Xcode \
@@ -154,6 +165,7 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosframeinput\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosrenderworld\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosscenesnapshot\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iossceneconversion\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
 
       - name: Build iOS Release
         run: |

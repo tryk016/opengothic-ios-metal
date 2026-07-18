@@ -27,6 +27,7 @@ void advanceNonZero(uint64_t& value) noexcept {
 
 template<class Handle>
 Handle resolveStableHandle(std::unordered_map<uint64_t,Handle>& registry,
+                           std::unordered_set<uint64_t>& issuedIds,
                            uint64_t stableKey,
                            IOSWorldGeneration generation,
                            uint64_t& nextId) {
@@ -35,8 +36,29 @@ Handle resolveStableHandle(std::unordered_map<uint64_t,Handle>& registry,
   if(const auto found=registry.find(stableKey); found!=registry.end())
     return found->second;
   const Handle handle = {generation,nextNonZero(nextId)};
-  registry.emplace(stableKey,handle);
+  const auto inserted = registry.emplace(stableKey,handle);
+  if(!inserted.second)
+    return inserted.first->second;
+  try {
+    if(!issuedIds.emplace(handle.value).second)
+      throw std::overflow_error("RendererIOS exhausted stable scene handle IDs");
+    }
+  catch(...) {
+    registry.erase(inserted.first);
+    throw;
+    }
   return handle;
+  }
+
+template<class Handle>
+bool isIssuedHandle(const std::unordered_set<uint64_t>& issuedIds,
+                    const Handle& handle,
+                    IOSWorldGeneration generation,
+                    bool allowEmpty = false) noexcept {
+  if(!handle)
+    return allowEmpty && handle.generation.value==0 && handle.value==0;
+  return handle.generation==generation &&
+         issuedIds.find(handle.value)!=issuedIds.end();
   }
 
 bool compatibleRange(IOSIndexRange current, IOSIndexRange previous,
@@ -60,15 +82,33 @@ IOSWorldGeneration IOSRenderWorld::generation() const noexcept {
   }
 
 IOSRenderEntityId IOSRenderWorld::resolveEntity(uint64_t stableKey) {
-  return resolveStableHandle(entityRegistry,stableKey,worldGeneration,nextEntityId);
+  return resolveStableHandle(entityRegistry,issuedEntityIds,stableKey,
+                             worldGeneration,nextEntityId);
   }
 
 IOSMeshHandle IOSRenderWorld::resolveMesh(uint64_t stableKey) {
-  return resolveStableHandle(meshRegistry,stableKey,worldGeneration,nextMeshId);
+  return resolveStableHandle(meshRegistry,issuedMeshIds,stableKey,
+                             worldGeneration,nextMeshId);
   }
 
 IOSMaterialHandle IOSRenderWorld::resolveMaterial(uint64_t stableKey) {
-  return resolveStableHandle(materialRegistry,stableKey,worldGeneration,nextMaterialId);
+  return resolveStableHandle(materialRegistry,issuedMaterialIds,stableKey,
+                             worldGeneration,nextMaterialId);
+  }
+
+IOSTextureHandle IOSRenderWorld::resolveTexture(uint64_t stableKey) {
+  return resolveStableHandle(textureRegistry,issuedTextureIds,stableKey,
+                             worldGeneration,nextTextureId);
+  }
+
+IOSLightHandle IOSRenderWorld::resolveLight(uint64_t stableKey) {
+  return resolveStableHandle(lightRegistry,issuedLightIds,stableKey,
+                             worldGeneration,nextLightId);
+  }
+
+IOSParticleHandle IOSRenderWorld::resolveParticle(uint64_t stableKey) {
+  return resolveStableHandle(particleRegistry,issuedParticleIds,stableKey,
+                             worldGeneration,nextParticleId);
   }
 
 IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
@@ -147,7 +187,9 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       const auto& previous = committedSnapshot->entities[previousEntity];
       entity.previousTransform = previous.currentTransform;
 
-      if(compatibleRange(entity.boneRange,previous.boneRange,
+      const bool meshHistoryCompatible = entity.mesh==previous.mesh;
+      if(meshHistoryCompatible &&
+         compatibleRange(entity.boneRange,previous.boneRange,
                          snapshot->previousBones.size(),
                          committedSnapshot->currentBones.size())) {
         const auto src = committedSnapshot->currentBones.begin()+
@@ -156,7 +198,8 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
                          std::ptrdiff_t(entity.boneRange.offset);
         std::copy_n(src,entity.boneRange.count,dst);
         }
-      if(compatibleRange(entity.morphRange,previous.morphRange,
+      if(meshHistoryCompatible &&
+         compatibleRange(entity.morphRange,previous.morphRange,
                          snapshot->previousMorphWeights.size(),
                          committedSnapshot->currentMorphWeights.size())) {
         const auto src = committedSnapshot->currentMorphWeights.begin()+
@@ -179,6 +222,36 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       }
     }
 
+  const bool issuedHandlesValid = std::all_of(
+    snapshot->entities.begin(),snapshot->entities.end(),
+    [&](const IOSRenderEntity& entity) {
+      return isIssuedHandle(issuedEntityIds,entity.id,worldGeneration) &&
+             isIssuedHandle(issuedMeshIds,entity.mesh,worldGeneration) &&
+             isIssuedHandle(issuedMaterialIds,entity.material,worldGeneration);
+      }) &&
+    std::all_of(snapshot->materials.begin(),snapshot->materials.end(),
+      [&](const IOSMaterial& material) {
+        return isIssuedHandle(issuedMaterialIds,material.id,worldGeneration) &&
+               isIssuedHandle(issuedTextureIds,material.baseColorTexture,
+                              worldGeneration,true) &&
+               isIssuedHandle(issuedTextureIds,material.normalTexture,
+                              worldGeneration,true) &&
+               isIssuedHandle(issuedTextureIds,material.emissiveTexture,
+                              worldGeneration,true);
+        }) &&
+    std::all_of(snapshot->lights.begin(),snapshot->lights.end(),
+      [&](const IOSLight& light) {
+        return isIssuedHandle(issuedLightIds,light.id,worldGeneration);
+        }) &&
+    std::all_of(snapshot->particles.begin(),snapshot->particles.end(),
+      [&](const IOSParticleSnapshot& particle) {
+        return isIssuedHandle(issuedParticleIds,particle.id,worldGeneration) &&
+               isIssuedHandle(issuedTextureIds,particle.texture,
+                              worldGeneration,true);
+        });
+
+  if(!issuedHandlesValid)
+    throw std::invalid_argument("RendererIOS scene snapshot contains an unissued handle");
   if(!snapshot->isStructurallyValid())
     throw std::invalid_argument("RendererIOS scene snapshot failed structural validation");
 
@@ -217,6 +290,15 @@ void IOSRenderWorld::resetWorld() noexcept {
   entityRegistry.clear();
   meshRegistry.clear();
   materialRegistry.clear();
+  textureRegistry.clear();
+  lightRegistry.clear();
+  particleRegistry.clear();
+  issuedEntityIds.clear();
+  issuedMeshIds.clear();
+  issuedMaterialIds.clear();
+  issuedTextureIds.clear();
+  issuedLightIds.clear();
+  issuedParticleIds.clear();
   worldGeneration = allocateGeneration();
   nextSequence     = {1};
   lastBuiltSequence = {};

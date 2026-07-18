@@ -31,6 +31,7 @@
 #endif
 #include "utils/systemmsg.h"
 #include "ui/padglyph.h"
+#include "graphics/iossceneconversion.h"
 
 #include <algorithm>
 #include <array>
@@ -48,15 +49,6 @@ using namespace Tempest;
 
 namespace {
 
-IOSMatrix4x4 iosSceneMatrix(const Matrix4x4& source) noexcept {
-  IOSMatrix4x4 result;
-  for(size_t row=0; row<4u; ++row) {
-    for(size_t column=0; column<4u; ++column)
-      result.set(row,column,source.at(int(row),int(column)));
-    }
-  return result;
-  }
-
 IOSSceneFrameState iosSceneFrameState(const Camera* camera, Size drawable) {
   IOSSceneFrameState frame;
   frame.camera.viewport.width  = uint32_t(std::max(drawable.w,1));
@@ -65,9 +57,9 @@ IOSSceneFrameState iosSceneFrameState(const Camera* camera, Size drawable) {
     return frame;
 
   const auto position = camera->originLwc();
-  frame.camera.view           = iosSceneMatrix(camera->view());
-  frame.camera.projection     = iosSceneMatrix(camera->projective());
-  frame.camera.viewProjection = iosSceneMatrix(camera->viewProj());
+  frame.camera.view           = IOSSceneConversion::matrix(camera->view());
+  frame.camera.projection     = IOSSceneConversion::matrix(camera->projective());
+  frame.camera.viewProjection = IOSSceneConversion::matrix(camera->viewProj());
   frame.camera.position       = {position.x,position.y,position.z};
   frame.camera.nearPlane      = camera->zNear();
   frame.camera.farPlane       = camera->zFar();
