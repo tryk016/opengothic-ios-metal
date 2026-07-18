@@ -10,7 +10,7 @@ TEMPEST_ROOT="${TEMPEST_ROOT:-$ROOT/lib/Tempest}"
 
 EXPECTED_URL="https://github.com/tryk016/Tempest.git"
 BASE_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
-EXPECTED_COMMIT="08624ab2608002c9d98fd209fe0c4b4213168175"
+EXPECTED_COMMIT="f87495f4aeaf8f583d06a29de82305d0e57c4453"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -138,10 +138,18 @@ require_literal "$METAL_API_HEADER" "BorrowedMetalDevice" "borrowed Metal device
 require_literal "$METAL_API_HEADER" "borrowDevice" "borrowed Metal device API"
 require_literal "$METAL_API_HEADER" "borrowBuffer" "borrowed Metal buffer API"
 require_literal "$METAL_API_HEADER" "borrowTexture" "borrowed Metal texture API"
+require_literal "$METAL_API_HEADER" "MetalRenderEncodeCallback" "scoped Metal render callback ABI"
+require_literal "$METAL_API_HEADER" "withActiveRenderEncoder" "active Metal render encoder API"
 require_literal "$METAL_API_IMPL" "nativeBuffer->dev!=nativeDevice" "foreign Metal buffer rejection"
 require_literal "$METAL_API_IMPL" "&nativeTexture->dev!=nativeDevice" "foreign Metal texture rejection"
+require_literal "$METAL_API_IMPL" "&nativeCommand->device!=nativeDevice" "foreign Metal command rejection"
+require_literal "$METAL_API_IMPL" "nativeCommand->encDraw==nullptr" "active Metal render-pass gate"
+require_literal "$METAL_API_IMPL" "invalidateState();" "Tempest render-cache invalidation"
 require_literal "$METAL_BORROW_COMPILE_TEST" "isBorrowedHandleContract" "borrowed Metal handle compile contract"
+require_literal "$METAL_BORROW_COMPILE_TEST" "MetalRenderEncodeCallback" "active Metal callback compile contract"
 require_literal "$METAL_TEST" "BorrowedNativeHandles" "borrowed Metal runtime test"
 require_literal "$METAL_TEST" "nativeIbo" "borrowed Metal index-buffer coverage"
+require_literal "$METAL_TEST" "ActiveRenderEncoderScope" "active Metal encoder runtime test"
+require_literal "$METAL_TEST" "throwFromActiveRenderEncoder" "active Metal encoder exception recovery"
 
-echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource bridges)"
+echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource/encoder bridges)"
