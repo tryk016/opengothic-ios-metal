@@ -134,8 +134,8 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
       Log::d("RendererIOS scene snapshot: generation=",snapshot->generation.value,
              " sequence=",snapshot->sequence.value,
              " slot=",uint32_t(frame.frameSlot),
-             " entities=",snapshot->entities.size(),
-             " lights=",snapshot->lights.size(),
+             " entities=",uint64_t(snapshot->entities.size()),
+             " lights=",uint64_t(snapshot->lights.size()),
              " history-valid=",snapshot->historyValid ? 1 : 0);
       }
     catch(...) {
@@ -286,7 +286,7 @@ void RendererIOS::prepareForOwnerRelease() noexcept {
   try {
     Log::i("RendererIOS scene world detach: old-generation=",oldGeneration.value,
            " detached-generation=",impl->renderWorld.generation().value,
-           " retained-after=",impl->context.retainedSceneCount(),
+           " retained-after=",uint64_t(impl->context.retainedSceneCount()),
            " idle-confirmed=1");
     }
   catch(...) {
@@ -308,7 +308,7 @@ void RendererIOS::onWorldChanged() {
   try {
     Log::i("RendererIOS scene world gate: old-generation=",oldGeneration.value,
            " new-generation=",impl->renderWorld.generation().value,
-           " retained-after=",impl->context.retainedSceneCount(),
+           " retained-after=",uint64_t(impl->context.retainedSceneCount()),
            " idle-confirmed=1");
     }
   catch(...) {

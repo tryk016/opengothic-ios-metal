@@ -526,10 +526,11 @@ struct IOSMetalContext::Impl final {
   void logSceneLifetime(SettleReason reason) noexcept {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     try {
-      const auto live = std::count_if(sceneFrames.begin(),sceneFrames.end(),
+      const uint64_t live = uint64_t(std::count_if(
+        sceneFrames.begin(),sceneFrames.end(),
         [](const IOSSceneSnapshotPtr& scene) {
           return scene!=nullptr;
-          });
+          }));
       Log::i("RendererIOS scene lifetime: reason=",settleReasonName(reason),
              " retained=",sceneRetainCount,
              " released=",sceneReleaseCount,
