@@ -46,6 +46,36 @@
 
 using namespace Tempest;
 
+namespace {
+
+IOSMatrix4x4 iosSceneMatrix(const Matrix4x4& source) noexcept {
+  IOSMatrix4x4 result;
+  for(size_t row=0; row<4u; ++row) {
+    for(size_t column=0; column<4u; ++column)
+      result.set(row,column,source.at(int(row),int(column)));
+    }
+  return result;
+  }
+
+IOSSceneFrameState iosSceneFrameState(const Camera* camera, Size drawable) {
+  IOSSceneFrameState frame;
+  frame.camera.viewport.width  = uint32_t(std::max(drawable.w,1));
+  frame.camera.viewport.height = uint32_t(std::max(drawable.h,1));
+  if(camera==nullptr)
+    return frame;
+
+  const auto position = camera->originLwc();
+  frame.camera.view           = iosSceneMatrix(camera->view());
+  frame.camera.projection     = iosSceneMatrix(camera->projective());
+  frame.camera.viewProjection = iosSceneMatrix(camera->viewProj());
+  frame.camera.position       = {position.x,position.y,position.z};
+  frame.camera.nearPlane      = camera->zNear();
+  frame.camera.farPlane       = camera->zFar();
+  return frame;
+  }
+
+}
+
 #if defined(__IOS__)
 extern "C" void tempestIosSetPreferredFrameRate(int fps);
 #endif
@@ -2104,8 +2134,13 @@ void MainWindow::render(){
     perfWindow.poseRefreshUs.push_back(perfSample(perfNowUs()-poseRefreshStart));
 #endif
 
-    if(video.isActive()) {
-      renderer.prepareVideo(*frame,video);
+    auto scene = renderer.buildSceneSnapshot(
+      *frame,iosSceneFrameState(Gothic::inst().camera(),renderer.drawableSize()));
+
+    const bool videoActive = video.isActive();
+    IOSVideoPacket videoPacket;
+    if(videoActive) {
+      videoPacket = renderer.prepareVideo(*frame,video);
       uiLayer.clear();
       PaintEvent p(uiLayer,atlas,this->w(),this->h());
       video.paintEvent(p);
@@ -2127,9 +2162,15 @@ void MainWindow::render(){
     constexpr bool captureSavePreview = false;
 #endif
 
+    auto uiPacket = renderer.prepareUi(
+      *frame,uiLayer,numOverlay,inventory,videoActive);
+    const auto captureRequest = captureSavePreview
+      ? IOSCaptureRequest::savePreview()
+      : IOSCaptureRequest{};
     [[maybe_unused]] const auto result = renderer.submitFrame(
       std::move(*frame),
-      RendererIOS::FrameInput{uiLayer,numOverlay,inventory,video.isActive(),captureSavePreview});
+      IOSFrameInput(std::move(scene),std::move(uiPacket),
+                    std::move(videoPacket),captureRequest));
 #if defined(__IOS__)
     if(captureSavePreview && result.savePreviewQueued)
       pendingSave.stage   = PendingSave::Stage::AwaitingGpu;

@@ -1,6 +1,7 @@
 #include "rendererios.h"
 
 #include <Tempest/Device>
+#include <Tempest/Log>
 #include <Tempest/Painter>
 
 #include <stdexcept>
@@ -8,6 +9,7 @@
 #include <utility>
 
 #include "iosmetalcontext.h"
+#include "iosrenderworld.h"
 
 using namespace Tempest;
 
@@ -16,6 +18,8 @@ namespace {
 static_assert(!std::is_copy_constructible_v<RendererIOS::FrameTicket>);
 static_assert(std::is_nothrow_move_constructible_v<RendererIOS::FrameTicket>);
 static_assert(std::is_nothrow_move_assignable_v<RendererIOS::FrameTicket>);
+static_assert(!std::is_copy_constructible_v<IOSFrameInput>);
+static_assert(std::is_nothrow_move_constructible_v<IOSFrameInput>);
 
 }
 
@@ -31,7 +35,26 @@ struct RendererIOS::Impl final {
     : context(device,window) {
     }
 
+  IOSRenderWorld renderWorld;
   IOSMetalContext context;
+  bool            worldOwnersDetached = false;
+  uint64_t        preparedSceneSerial  = 0;
+  IOSSceneSnapshotPtr preparedScene;
+
+  bool matchesPreparedScene(uint64_t serial,
+                            const IOSSceneSnapshotPtr& scene) const noexcept {
+    return serial!=0 && preparedSceneSerial==serial &&
+           preparedScene!=nullptr && preparedScene.get()==scene.get() &&
+           !preparedScene.owner_before(scene) &&
+           !scene.owner_before(preparedScene);
+    }
+
+  void clearPreparedScene(uint64_t serial = 0) noexcept {
+    if(serial!=0 && preparedSceneSerial!=serial)
+      return;
+    preparedScene.reset();
+    preparedSceneSerial = 0;
+    }
   };
 
 RendererIOS::FrameTicket::FrameTicket(const std::shared_ptr<TicketControl>& control,
@@ -69,6 +92,13 @@ void RendererIOS::FrameTicket::disarm() noexcept {
 RendererIOS::RendererIOS(Device& device, SystemApi::Window* window)
   : ticketControl(std::make_shared<TicketControl>(*this)),
     impl(std::make_unique<Impl>(device,window)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  try {
+    Log::i("RendererIOS scene boundary: input=IOSFrameInput world=IOSRenderWorld snapshot=IOSSceneSnapshot");
+    }
+  catch(...) {
+    }
+#endif
   }
 
 RendererIOS::~RendererIOS() {
@@ -82,43 +112,116 @@ std::optional<RendererIOS::FrameTicket> RendererIOS::beginFrame() {
   return FrameTicket(ticketControl,frame->slot,frame->serial);
   }
 
-void RendererIOS::prepareVideo(FrameTicket& frame, VideoWidget& video) {
+IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
+                                                    IOSSceneFrameState&& scene) {
   if(!impl->context.frameAdmissionActive())
-    return;
+    throw std::logic_error("RendererIOS cannot build a scene snapshot while frame admission is closed");
+  const auto control = frame.control.lock();
+  const IOSMetalContext::FrameLease lease = {frame.frameSlot,frame.serial};
+  if(control.get()!=ticketControl.get() ||
+     !impl->context.ownsActiveFrame(lease))
+    throw std::logic_error("RendererIOS received an invalid frame ticket for scene preparation");
+  if(impl->preparedSceneSerial!=0)
+    throw std::logic_error("RendererIOS scene snapshot was already prepared for this frame");
+
+  auto snapshot = impl->renderWorld.buildSnapshot(std::move(scene));
+  impl->preparedScene       = snapshot;
+  impl->preparedSceneSerial = frame.serial;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  if(impl->renderWorld.lastAcceptedSequence().value==0u ||
+     snapshot->sequence.value%300u==0u) {
+    try {
+      Log::d("RendererIOS scene snapshot: generation=",snapshot->generation.value,
+             " sequence=",snapshot->sequence.value,
+             " slot=",uint32_t(frame.frameSlot),
+             " entities=",snapshot->entities.size(),
+             " lights=",snapshot->lights.size(),
+             " history-valid=",snapshot->historyValid ? 1 : 0);
+      }
+    catch(...) {
+      }
+    }
+#endif
+  return snapshot;
+  }
+
+IOSUIPacket RendererIOS::prepareUi(FrameTicket& frame,
+                                   const VectorImage& uiLayer,
+                                   const VectorImage& numberOverlay,
+                                   InventoryMenu& inventory,
+                                   bool videoActive) {
+  if(!impl->context.frameAdmissionActive())
+    return {};
+  const auto control = frame.control.lock();
+  if(control.get()!=ticketControl.get())
+    throw std::logic_error("RendererIOS received an invalid frame ticket for UI preparation");
+  return impl->context.prepareUi({frame.frameSlot,frame.serial},
+                                 uiLayer,numberOverlay,inventory,videoActive);
+  }
+
+IOSVideoPacket RendererIOS::prepareVideo(FrameTicket& frame, VideoWidget& video) {
+  if(!impl->context.frameAdmissionActive())
+    return {};
   const auto control = frame.control.lock();
   if(control.get()!=ticketControl.get())
     throw std::logic_error("RendererIOS received an invalid frame ticket for video preparation");
-  impl->context.prepareVideo({frame.frameSlot,frame.serial},video);
+  return impl->context.prepareVideo({frame.frameSlot,frame.serial},video);
   }
 
-RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame, const FrameInput& input) {
+RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
+                                                   IOSFrameInput input) {
   if(!impl->context.frameAdmissionActive()) {
     impl->context.cancelFrame(frame.serial);
+    impl->clearPreparedScene(frame.serial);
     frame.disarm();
     return {};
     }
   const auto control = frame.control.lock();
   if(control.get()!=ticketControl.get())
     throw std::logic_error("RendererIOS received an invalid frame ticket");
+  if(!impl->matchesPreparedScene(frame.serial,input.sceneSnapshot()) ||
+     !impl->renderWorld.acceptsForSubmit(input.sceneSnapshot())) {
+    impl->context.cancelFrame(frame.serial);
+    impl->clearPreparedScene(frame.serial);
+    frame.disarm();
+    throw std::logic_error("RendererIOS received a stale or foreign scene snapshot");
+    }
+  input.transportSerial = frame.serial;
+
+  struct FrameCompletion final {
+    FrameTicket*               ticket = nullptr;
+    Impl*                      renderer = nullptr;
+    IOSRenderWorld*            world  = nullptr;
+    const IOSSceneSnapshotPtr* scene  = nullptr;
+    uint64_t                   serial = 0;
+    };
 
   const IOSMetalContext::FrameLease lease = {frame.frameSlot,frame.serial};
-  const IOSMetalContext::FrameInputView frameInput = {
-    input.uiLayer,
-    input.numberOverlay,
-    input.inventory,
-    input.videoActive,
-    input.captureSavePreview,
+  FrameCompletion completion = {
+    &frame,
+    impl.get(),
+    &impl->renderWorld,
+    &input.sceneSnapshot(),
+    frame.serial,
     };
-  const auto consumeFrame = [](void* ticket) noexcept {
-    static_cast<FrameTicket*>(ticket)->disarm();
+  const auto completeFrame = [](void* opaque, bool submitted) noexcept -> bool {
+    auto& state = *static_cast<FrameCompletion*>(opaque);
+    const bool accepted = !submitted || state.world->commitAccepted(*state.scene);
+    state.renderer->clearPreparedScene(state.serial);
+    state.ticket->disarm();
+    return accepted;
     };
   const auto result = impl->context.submitFrame(
-    lease,frameInput,&frame,consumeFrame);
+    lease,input,&completion,completeFrame);
   return SubmitResult{result.savePreviewQueued};
   }
 
 Size RendererIOS::drawableSize() const {
   return impl->context.drawableSize();
+  }
+
+IOSWorldGeneration RendererIOS::sceneGeneration() const noexcept {
+  return impl->renderWorld.generation();
   }
 
 bool RendererIOS::pollDeviceFailure() noexcept {
@@ -130,31 +233,87 @@ std::string_view RendererIOS::failureReason() const noexcept {
   }
 
 void RendererIOS::resize() {
-  impl->context.resize();
+  try {
+    impl->context.resize();
+    }
+  catch(...) {
+    impl->clearPreparedScene();
+    impl->renderWorld.resetHistory();
+    throw;
+    }
+  impl->clearPreparedScene();
+  impl->renderWorld.resetHistory();
   }
 
 bool RendererIOS::suspend() noexcept {
-  return impl->context.suspend();
+  const bool suspended = impl->context.suspend();
+  impl->clearPreparedScene();
+  impl->renderWorld.resetHistory();
+  return suspended;
   }
 
 bool RendererIOS::resume() noexcept {
-  return impl->context.resume();
+  const bool resumed = impl->context.resume();
+  impl->clearPreparedScene();
+  if(resumed)
+    impl->renderWorld.resetHistory();
+  return resumed;
   }
 
 bool RendererIOS::waitIdle() noexcept {
-  return impl->context.waitIdle();
+  const bool idle = impl->context.waitIdle();
+  impl->clearPreparedScene();
+  impl->renderWorld.resetHistory();
+  return idle;
   }
 
 void RendererIOS::shutdown() noexcept {
   impl->context.shutdown();
+  impl->clearPreparedScene();
   }
 
 void RendererIOS::prepareForOwnerRelease() noexcept {
   impl->context.prepareForOwnerRelease();
+  impl->clearPreparedScene();
+  if(!impl->context.failureReason().empty() || impl->worldOwnersDetached)
+    return;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  const auto oldGeneration = impl->renderWorld.generation();
+#endif
+  impl->renderWorld.resetWorld();
+  impl->worldOwnersDetached = true;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  try {
+    Log::i("RendererIOS scene world detach: old-generation=",oldGeneration.value,
+           " detached-generation=",impl->renderWorld.generation().value,
+           " retained-after=",impl->context.retainedSceneCount(),
+           " idle-confirmed=1");
+    }
+  catch(...) {
+    }
+#endif
   }
 
 void RendererIOS::onWorldChanged() {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  const auto oldGeneration = impl->renderWorld.generation();
+#endif
   impl->context.onWorldChanged();
+  impl->clearPreparedScene();
+  if(!impl->context.failureReason().empty())
+    return;
+  impl->renderWorld.resetWorld();
+  impl->worldOwnersDetached = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  try {
+    Log::i("RendererIOS scene world gate: old-generation=",oldGeneration.value,
+           " new-generation=",impl->renderWorld.generation().value,
+           " retained-after=",impl->context.retainedSceneCount(),
+           " idle-confirmed=1");
+    }
+  catch(...) {
+    }
+#endif
   }
 
 bool RendererIOS::savePreviewReady() {
@@ -182,6 +341,8 @@ bool RendererIOS::ssaoBuffersAllocated() const noexcept {
   }
 
 void RendererIOS::cancelFrame(uint64_t serial) noexcept {
-  if(impl)
+  if(impl) {
     impl->context.cancelFrame(serial);
+    impl->clearPreparedScene(serial);
+    }
   }

@@ -9,6 +9,8 @@
 #include <optional>
 #include <string_view>
 
+#include "iosframeinput.h"
+
 namespace Tempest {
 class Device;
 class Painter;
@@ -44,14 +46,6 @@ class RendererIOS final {
       friend class RendererIOS;
       };
 
-    struct FrameInput final {
-      const Tempest::VectorImage& uiLayer;
-      const Tempest::VectorImage& numberOverlay;
-      InventoryMenu&              inventory;
-      bool                        videoActive       = false;
-      bool                        captureSavePreview = false;
-      };
-
     struct SubmitResult final {
       bool savePreviewQueued = false;
       };
@@ -63,10 +57,18 @@ class RendererIOS final {
     RendererIOS& operator=(const RendererIOS&) = delete;
 
     std::optional<FrameTicket> beginFrame();
-    void         prepareVideo(FrameTicket& frame, VideoWidget& video);
-    SubmitResult submitFrame(FrameTicket&& frame, const FrameInput& input);
+    IOSSceneSnapshotPtr buildSceneSnapshot(FrameTicket& frame,
+                                           IOSSceneFrameState&& scene);
+    IOSUIPacket         prepareUi(FrameTicket& frame,
+                                  const Tempest::VectorImage& uiLayer,
+                                  const Tempest::VectorImage& numberOverlay,
+                                  InventoryMenu& inventory,
+                                  bool videoActive);
+    IOSVideoPacket      prepareVideo(FrameTicket& frame, VideoWidget& video);
+    SubmitResult        submitFrame(FrameTicket&& frame, IOSFrameInput input);
 
     Tempest::Size   drawableSize() const;
+    IOSWorldGeneration sceneGeneration() const noexcept;
     bool            pollDeviceFailure() noexcept;
     std::string_view failureReason() const noexcept;
     void            resize();

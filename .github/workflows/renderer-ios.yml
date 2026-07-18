@@ -67,6 +67,68 @@ jobs:
           bash ios/patches/apply-patches.sh
           bash ios/patches/apply-patches.sh
 
+      - name: Verify neutral P2.1 scene boundary
+        run: |
+          set -euo pipefail
+
+          headers=(
+            game/graphics/iosframeinput.h
+            game/graphics/iosrenderworld.h
+            game/graphics/iosscenesnapshot.h
+          )
+          sources=(
+            game/graphics/iosframeinput.cpp
+            game/graphics/iosrenderworld.cpp
+            game/graphics/iosscenesnapshot.cpp
+          )
+
+          for file in "${headers[@]}" "${sources[@]}"; do
+            test -f "$file" || {
+              echo "missing P2.1 scene-boundary file: $file"
+              exit 1
+            }
+          done
+
+          obsolete="$(
+            find game -type f \( -name '*.h' -o -name '*.cpp' \) \
+              -exec grep -nHF 'RendererIOS::FrameInput' {} + || true
+          )"
+          if [ -n "$obsolete" ]; then
+            printf '%s\n' "$obsolete"
+            echo 'obsolete RendererIOS::FrameInput remains in product code'
+            exit 1
+          fi
+
+          if grep -nE \
+              'Tempest|WorldView|DrawCommands|Shaders|VectorImage|InventoryMenu|VideoWidget' \
+              "${headers[@]}"; then
+            echo 'neutral P2.1 headers leak legacy, transport, or UI types'
+            exit 1
+          fi
+
+          for header in iosframeinput.h iosrenderworld.h iosscenesnapshot.h; do
+            printf '#include "graphics/%s"\nint main() { return 0; }\n' "$header" |
+              xcrun clang++ -x c++ -std=c++20 \
+                -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+                -Igame -fsyntax-only -
+          done
+
+          for source in "${sources[@]}"; do
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only "$source"
+          done
+
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosscenecontract.cpp \
+            game/graphics/iosframeinput.cpp \
+            game/graphics/iosrenderworld.cpp \
+            game/graphics/iosscenesnapshot.cpp \
+            -o "$RUNNER_TEMP/iosscenecontract"
+          "$RUNNER_TEMP/iosscenecontract"
+
       - name: Configure RendererIOS
         run: |
           cmake -S . -B build-renderer-ios -G Xcode \
@@ -89,6 +151,9 @@ jobs:
           fi
           grep -Eq '(^|[^[:alnum:]_])rendererios\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalcontext\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosframeinput\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosrenderworld\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosscenesnapshot\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
 
       - name: Build iOS Release
         run: |
