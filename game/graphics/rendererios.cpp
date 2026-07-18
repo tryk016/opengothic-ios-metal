@@ -230,7 +230,7 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     return accepted;
     };
   const auto result = impl->context.submitFrame(
-    lease,input,&completion,completeFrame);
+    lease,input,impl->assets,&completion,completeFrame);
   return SubmitResult{result.savePreviewQueued};
   }
 

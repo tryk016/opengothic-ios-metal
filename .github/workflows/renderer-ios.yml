@@ -219,6 +219,75 @@ jobs:
             exit 1
           fi
 
+      - name: Verify P2.1 native Landscape GPU contract
+        run: |
+          set -euo pipefail
+
+          test -f game/graphics/iosgpusceneplan.h
+          test -f game/graphics/iosgpuscene.h
+          test -f game/graphics/iosgpuscene.mm
+          test -f ios/tests/iosgpusceneplan.cpp
+
+          printf '#include "graphics/iosgpusceneplan.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          printf '#include "graphics/iosgpuscene.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosgpusceneplan.cpp \
+            -o "$RUNNER_TEMP/iosgpusceneplan"
+          "$RUNNER_TEMP/iosgpusceneplan"
+
+          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios15.0 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -isystem lib/ZenKit/include \
+            -fsyntax-only game/graphics/iosgpuscene.mm
+
+          python3 - "$RUNNER_TEMP/ios-landscape.metal" <<'PY'
+          from pathlib import Path
+          import sys
+
+          source = Path("game/graphics/iosgpuscene.mm").read_text(
+              encoding="utf-8")
+          begin_marker = (
+              'constexpr char LandscapeShaderSource[] = R"metal(\n')
+          end_marker = '\n)metal";'
+          begin = source.index(begin_marker)+len(begin_marker)
+          end = source.index(end_marker,begin)
+          Path(sys.argv[1]).write_text(
+              source[begin:end]+"\n",encoding="utf-8")
+          PY
+          xcrun --sdk iphoneos metal \
+            -c "$RUNNER_TEMP/ios-landscape.metal" \
+            -o "$RUNNER_TEMP/ios-landscape.air"
+          xcrun --sdk iphoneos metallib \
+            "$RUNNER_TEMP/ios-landscape.air" \
+            -o "$RUNNER_TEMP/ios-landscape.metallib"
+
+          if grep -Eq \
+              'newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|MTLCommandBuffer|gapi/metal/mt' \
+              game/graphics/iosgpuscene.mm; then
+            echo 'IOSGPUScene bypasses the scoped Tempest Metal encoder bridge'
+            exit 1
+          fi
+          if grep -Eq \
+              'WorldView|DrawCommands|DrawBuckets|Shaders|InventoryMenu|VideoWidget' \
+              game/graphics/iosgpusceneplan.h \
+              game/graphics/iosgpuscene.h; then
+            echo 'IOSGPUScene public contract leaks legacy renderer internals'
+            exit 1
+          fi
+
       - name: Configure RendererIOS
         run: |
           cmake -S . -B build-renderer-ios -G Xcode \
@@ -247,6 +316,7 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iossceneconversion\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iossceneassetregistry\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iossceneextractor\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq 'iosgpuscene\.mm in Sources' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
 
       - name: Build iOS Release
         run: |

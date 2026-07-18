@@ -19,6 +19,7 @@ class VectorImage;
 }
 
 class InventoryMenu;
+class IOSSceneAssetRegistry;
 class VideoWidget;
 
 class IOSMetalContext final {
@@ -52,6 +53,7 @@ class IOSMetalContext final {
                                            VideoWidget& video);
     SubmitResult              submitFrame(const FrameLease& frame,
                                           const IOSFrameInput& input,
+                                          const IOSSceneAssetRegistry& assets,
                                           void* completion,
                                           CompleteFrame completeFrame);
     void                      cancelFrame(uint64_t serial) noexcept;

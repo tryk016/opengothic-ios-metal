@@ -17,9 +17,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 
+#include "iosgpuscene.h"
+#include "iossceneassetregistry.h"
 #include "resources.h"
 #include "rendereriosplatform.h"
 #include "shaders.h"
@@ -27,6 +30,8 @@
 #include "ui/videowidget.h"
 
 using namespace Tempest;
+
+static_assert(std::is_nothrow_move_assignable_v<CommandBuffer>);
 
 #if !defined(OPENGOTHIC_RENDERER_IOS_BUILD_SHA)
 #define OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local"
@@ -49,6 +54,18 @@ using namespace Tempest;
 #endif
 
 namespace {
+
+IOSGPUScene::DepthFormat iosGPUSceneDepthFormat(TextureFormat format) {
+  switch(format) {
+    case TextureFormat::Depth16:
+      return IOSGPUScene::DepthFormat::Depth16Unorm;
+    case TextureFormat::Depth32F:
+      return IOSGPUScene::DepthFormat::Depth32Float;
+    default:
+      throw std::runtime_error(
+        "RendererIOS IOSGPUScene requires Depth16 or Depth32F");
+    }
+  }
 
 enum class SettleReason : uint8_t {
   Resize,
@@ -241,13 +258,23 @@ struct IOSMetalContext::Impl final {
         break;
         }
       }
+    if(!depthSupported)
+      throw std::runtime_error(
+        "RendererIOS IOSGPUScene requires a supported Metal depth format");
+    gpuScene = std::make_unique<IOSGPUScene>(
+      device,
+      IOSGPUScene::TargetLayout{
+        IOSGPUScene::ColorFormat::Bgra8Unorm,
+        iosGPUSceneDepthFormat(depthFormat),
+        1u,
+        });
 
     for(auto& command:commands)
       command = device.commandBuffer();
     resetTargets();
     const auto platform = rendererIOSPlatformInfo();
     try {
-      Log::i("RendererIOS shell: version=1 profile=Safe features=clear,ui,inventory,save-placeholder build=",
+      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape,ui,inventory,save-placeholder build=",
              OPENGOTHIC_RENDERER_IOS_BUILD_SHA," gpu=",device.properties().name,
              " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data(),
              " faultMode=",fault.name());
@@ -547,6 +574,41 @@ struct IOSMetalContext::Impl final {
     preparedUi[slot] = {};
     }
 
+  void discardUnsubmittedCommand(uint8_t slot) noexcept {
+    // Metal command buffers use retainedReferences=false. Once native borrowed
+    // VBO/IBO handles have been encoded, an unsubmitted command must not
+    // survive the scene owners that back those handles. Moving an empty wrapper
+    // here synchronously destroys the native command without allocating.
+    commands[slot] = CommandBuffer();
+    commandDiscardAfterIdle[slot] = false;
+    commandNeedsRebuild[slot] = true;
+    }
+
+  void discardAmbiguousCommandsAfterConfirmedIdle() noexcept {
+    for(uint8_t slot=0; slot<uint8_t(commandDiscardAfterIdle.size()); ++slot) {
+      if(commandDiscardAfterIdle[slot])
+        discardUnsubmittedCommand(slot);
+      }
+    }
+
+  void rebuildCommandIfDiscarded(uint8_t slot) {
+    if(!commandNeedsRebuild[slot])
+      return;
+    commands[slot] = device.commandBuffer();
+    commandNeedsRebuild[slot] = false;
+    }
+
+  void cancelActiveFrameKeepingSlotResources(uint8_t slot) noexcept {
+    // A throwing Metal commit has an ambiguous disposition: it may already be
+    // enqueued even though no Fence wrapper was returned. Keep video/scene
+    // resources alive until device.waitIdle() establishes the terminal point.
+    if(frameActive && nextSlot==slot)
+      clearPreparedUi(slot);
+    commandDiscardAfterIdle[slot] = true;
+    frameActive  = false;
+    activeSerial = 0;
+    }
+
   void cancelActiveFrame() noexcept {
     if(frameActive) {
       clearPreparedUi(nextSlot);
@@ -624,6 +686,11 @@ struct IOSMetalContext::Impl final {
 
     if(idleConfirmed!=nullptr)
       *idleConfirmed = true;
+
+    // An exception from Metal commit has ambiguous disposition. Only after
+    // waitIdle succeeds may the encoded command be destroyed; do that before
+    // releasing the borrowed buffers' scene/video owners below.
+    discardAmbiguousCommandsAfterConfirmedIdle();
 
     const bool presentHealthy = pollPresentFailure(
       "RendererIOS asynchronous Metal present failed");
@@ -707,6 +774,8 @@ struct IOSMetalContext::Impl final {
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> numberMeshes;
   std::array<Fence,Resources::MaxFramesInFlight>              fences;
   std::array<bool,Resources::MaxFramesInFlight>               slotSubmitted = {};
+  std::array<bool,Resources::MaxFramesInFlight>               commandDiscardAfterIdle = {};
+  std::array<bool,Resources::MaxFramesInFlight>               commandNeedsRebuild = {};
   std::array<CommandBuffer,Resources::MaxFramesInFlight>      commands;
   std::array<VideoWidget::PreparedFrame,Resources::MaxFramesInFlight> videoFrames;
   std::array<uint64_t,Resources::MaxFramesInFlight>           videoSerials = {};
@@ -719,6 +788,7 @@ struct IOSMetalContext::Impl final {
   ZBuffer                                      overlayDepth;
   TextureFormat                                depthFormat = TextureFormat::Depth16;
   bool                                         depthSupported = false;
+  std::unique_ptr<IOSGPUScene>                  gpuScene;
 
   Attachment                                   savePreview;
   Pixmap                                       completedPreview;
@@ -757,6 +827,15 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     throw std::logic_error("RendererIOS frame ticket is already active");
 
   const uint8_t slot = impl->nextSlot;
+  if(impl->commandDiscardAfterIdle[slot]) {
+    // An ambiguous Metal commit may still own this slot's unretained native
+    // resources. Admission is forbidden until a lifecycle settle confirms
+    // device idle and discards that command.
+    impl->forcePreviewPlaceholder();
+    impl->fail(
+      "RendererIOS command buffer requires confirmed idle before reuse");
+    return std::nullopt;
+    }
   bool previewFenceFault = false;
   try {
     if(!impl->fences[slot].wait(0))
@@ -797,6 +876,20 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     impl->materializePreviewSafely("RendererIOS save-preview materialization failed");
   if(impl->failed)
     return std::nullopt;
+
+  try {
+    impl->rebuildCommandIfDiscarded(slot);
+    }
+  catch(const std::exception& e) {
+    impl->forcePreviewPlaceholder();
+    impl->fail("RendererIOS command-buffer rebuild failed",e.what());
+    return std::nullopt;
+    }
+  catch(...) {
+    impl->forcePreviewPlaceholder();
+    impl->fail("RendererIOS command-buffer rebuild failed");
+    return std::nullopt;
+    }
 
   Resources::resetRecycled(slot);
   impl->frameActive  = true;
@@ -878,6 +971,7 @@ IOSVideoPacket IOSMetalContext::prepareVideo(const FrameLease& frame,
 
 IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     const FrameLease& frame, const IOSFrameInput& input,
+    const IOSSceneAssetRegistry& assets,
     void* completion, CompleteFrame completeFrame) {
   if(completeFrame==nullptr)
     throw std::logic_error("RendererIOS received an empty frame completion");
@@ -899,6 +993,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 
   const auto abandonFrame = [&]() noexcept {
     cancelFrame(frame.serial);
+    (void)completeFrame(completion,false);
+    };
+  const auto abandonFrameKeepingSlotResources = [&]() noexcept {
+    impl->cancelActiveFrameKeepingSlotResources(slot);
     (void)completeFrame(completion,false);
     };
 
@@ -944,6 +1042,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 
   bool previewAccepted = false;
   bool previewFallback = false;
+  bool submissionAttempted = false;
 
   try {
     if(input.capture.kind==IOSCaptureRequest::Kind::SavePreview &&
@@ -1002,8 +1101,47 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         VideoWidget::encodePrepared(encoder,slot,impl->videoFrames[slot]);
       auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
 
-      encoder.setDebugMarker("RendererIOS shell clear/UI");
-      encoder.setFramebuffer({{drawable,OpaqueBlack,Tempest::Preserve}});
+      const bool sceneVisible = !videoActive &&
+        std::any_of(input.snapshot->entities.begin(),
+                    input.snapshot->entities.end(),
+                    [](const IOSRenderEntity& entity) {
+                      return (entity.visibilityMask&
+                              IOSSceneVisibilityMain)!=0;
+                    });
+      if(sceneVisible) {
+        if(impl->overlayDepth.isEmpty())
+          throw std::runtime_error(
+            "RendererIOS native Landscape pass has no depth attachment");
+        encoder.setDebugMarker("RendererIOS native Landscape");
+        encoder.setFramebuffer(
+          {{drawable,OpaqueBlack,Tempest::Preserve}},
+          {impl->overlayDepth,1.f,Tempest::Preserve});
+        const auto report =
+          impl->gpuScene->encode(encoder,*input.snapshot,assets);
+        if(report.result!=IOSGPUScene::Result::Success) {
+          throw std::runtime_error(
+            std::string("RendererIOS native Landscape encode failed: ")+
+            iosGPUSceneResultName(report.result)+
+            " handle="+std::to_string(report.failingHandle));
+          }
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        if(input.snapshot->sequence.value==1u ||
+           input.snapshot->sequence.value%300u==0u) {
+          Log::d("RendererIOS native Landscape: generation=",
+                 input.snapshot->generation.value,
+                 " sequence=",input.snapshot->sequence.value,
+                 " draws=",uint64_t(report.drawCount));
+          }
+#endif
+        encoder.setDebugMarker("RendererIOS UI over native Landscape");
+        encoder.setFramebuffer(
+          {{drawable,Tempest::Preserve,Tempest::Preserve}});
+        }
+      else {
+        encoder.setDebugMarker("RendererIOS shell clear/UI");
+        encoder.setFramebuffer(
+          {{drawable,OpaqueBlack,Tempest::Preserve}});
+        }
       impl->uiMeshes[slot].draw(encoder);
 
       const bool ringIcons = !videoActive && inventory.itemRenderer().hasItems();
@@ -1028,6 +1166,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       }
 
     ++impl->counters.submitAttempts;
+    submissionAttempted = true;
     Fence submittedFence = impl->device.submit(command);
     impl->fences[slot] = std::move(submittedFence);
     impl->slotSubmitted[slot] = true;
@@ -1083,16 +1222,28 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   catch(const SwapchainSuboptimal&) {
     // Drawable replacement is a recoverable surface lifecycle event. The
     // submitted frame, if any, is settled by resize() before targets are reused.
-    if(!impl->slotSubmitted[slot])
-      impl->releaseSceneFrame(slot);
-    if(!impl->slotSubmitted[slot])
-      abandonFrame();
+    if(!impl->slotSubmitted[slot]) {
+      if(submissionAttempted) {
+        abandonFrameKeepingSlotResources();
+        }
+      else {
+        impl->discardUnsubmittedCommand(slot);
+        impl->releaseSceneFrame(slot);
+        abandonFrame();
+        }
+      }
     throw;
     }
   catch(const std::exception& e) {
     if(!impl->slotSubmitted[slot]) {
-      impl->releaseSceneFrame(slot);
-      abandonFrame();
+      if(submissionAttempted) {
+        abandonFrameKeepingSlotResources();
+        }
+      else {
+        impl->discardUnsubmittedCommand(slot);
+        impl->releaseSceneFrame(slot);
+        abandonFrame();
+        }
       }
     impl->forcePreviewPlaceholder();
     if(impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
@@ -1101,8 +1252,14 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     }
   catch(...) {
     if(!impl->slotSubmitted[slot]) {
-      impl->releaseSceneFrame(slot);
-      abandonFrame();
+      if(submissionAttempted) {
+        abandonFrameKeepingSlotResources();
+        }
+      else {
+        impl->discardUnsubmittedCommand(slot);
+        impl->releaseSceneFrame(slot);
+        abandonFrame();
+        }
       }
     impl->forcePreviewPlaceholder();
     impl->fail("RendererIOS frame submission failed");
@@ -1276,6 +1433,8 @@ void IOSMetalContext::onWorldChanged() {
   try {
     for(auto& command:impl->commands)
       command = impl->device.commandBuffer();
+    impl->commandDiscardAfterIdle.fill(false);
+    impl->commandNeedsRebuild.fill(false);
     }
   catch(const std::exception& e) {
     impl->forcePreviewPlaceholder();
