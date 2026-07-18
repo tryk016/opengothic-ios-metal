@@ -19,6 +19,7 @@ class VectorImage;
 
 class InventoryMenu;
 class VideoWidget;
+struct IOSSceneSourceProvider;
 
 class RendererIOS final {
   private:
@@ -58,6 +59,7 @@ class RendererIOS final {
 
     std::optional<FrameTicket> beginFrame();
     IOSSceneSnapshotPtr buildSceneSnapshot(FrameTicket& frame,
+                                           const IOSSceneSourceProvider& source,
                                            IOSSceneFrameState&& scene);
     IOSUIPacket         prepareUi(FrameTicket& frame,
                                   const Tempest::VectorImage& uiLayer,
@@ -77,6 +79,7 @@ class RendererIOS final {
     bool            waitIdle() noexcept;
     void            shutdown() noexcept;
     void            prepareForOwnerRelease() noexcept;
+    bool            restoreAfterOwnerRelease() noexcept;
     void            onWorldChanged();
 
     bool            savePreviewReady();

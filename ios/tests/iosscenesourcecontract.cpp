@@ -20,6 +20,13 @@ void collectSource(void* context, const IOSSceneSource& source) {
   ++state.visits;
   }
 
+void enumerateOneSource(const void* sourceContext,
+                        void* visitorContext,
+                        IOSSceneSourceVisitor visitor) {
+  const auto& source = *static_cast<const IOSSceneSource*>(sourceContext);
+  emitIOSSceneSource(visitorContext,visitor,source);
+  }
+
 Resources::Vertex vertex(float x, float y, float z) {
   Resources::Vertex result = {};
   result.pos[0] = x;
@@ -34,6 +41,9 @@ int main() {
   static_assert(std::is_same_v<
       IOSSceneSourceVisitor,
       void (*)(void*,const IOSSceneSource&)>);
+  static_assert(std::is_same_v<
+      IOSSceneSourceEnumerator,
+      void (*)(const void*,void*,IOSSceneSourceVisitor)>);
   using WorldVisitor = void (WorldView::*)(
       void*,IOSSceneSourceVisitor) const;
   static_assert(std::is_same_v<
@@ -46,6 +56,7 @@ int main() {
 
   IOSSceneSource source;
   source.kind       = IOSSceneSourceKind::Landscape;
+  source.hasLocalBounds = true;
   source.firstIndex = 3;
   source.indexCount = 6;
 
@@ -77,6 +88,17 @@ int main() {
   emitIOSSceneSource(&state,visitor,source);
   assert(state.sourceId==recycledIdentity);
   assert(state.visits==2);
+
+  const IOSSceneSourceProvider provider = {
+    &source,
+    &enumerateOneSource,
+    };
+  provider.visit(&state,visitor);
+  assert(state.sourceId==recycledIdentity);
+  assert(state.visits==3);
+  IOSSceneSourceProvider().visit(&state,visitor);
+  provider.visit(&state,nullptr);
+  assert(state.visits==3);
 
   const std::vector<Resources::Vertex> vertices = {
     vertex(-2.f, 1.f,  4.f),

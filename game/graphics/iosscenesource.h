@@ -30,6 +30,7 @@ struct IOSSceneSource final {
   Tempest::Matrix4x4 transform;
   Tempest::Vec3      localBoundsMin;
   Tempest::Vec3      localBoundsMax;
+  bool               hasLocalBounds = false;
 
   // Element offsets into StaticMesh::ibo; never byte offsets.
   uint32_t           firstIndex = 0;
@@ -40,6 +41,28 @@ struct IOSSceneSource final {
 // not allocate. Pointers in IOSSceneSource are borrowed for the callback; the
 // extractor must resolve/copy what it needs before returning.
 using IOSSceneSourceVisitor = void (*)(void* context, const IOSSceneSource& source);
+
+// A synchronous, non-owning source enumerator. RendererIOS consumes the
+// provider during the buildSceneSnapshot call and never retains sourceContext
+// or any pointers yielded to the visitor.
+using IOSSceneSourceEnumerator = void (*)(
+    const void* sourceContext,
+    void* visitorContext,
+    IOSSceneSourceVisitor visitor);
+
+struct IOSSceneSourceProvider final {
+  const void*              sourceContext = nullptr;
+  IOSSceneSourceEnumerator enumerate     = nullptr;
+
+  constexpr explicit operator bool() const noexcept {
+    return sourceContext!=nullptr && enumerate!=nullptr;
+    }
+
+  void visit(void* visitorContext, IOSSceneSourceVisitor visitor) const {
+    if(bool(*this) && visitor!=nullptr)
+      enumerate(sourceContext,visitorContext,visitor);
+    }
+  };
 
 class IOSSceneSourceIdentityAllocator final {
   public:

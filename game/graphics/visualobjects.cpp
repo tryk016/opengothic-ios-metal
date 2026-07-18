@@ -382,7 +382,7 @@ void VisualObjects::visitIOSSceneSources(void* context, IOSSceneSourceVisitor vi
     return;
 
   for(const auto& object:objects) {
-    if(object.isEmpty() || object.sourceId==0 || object.sourceBounds==nullptr)
+    if(object.isEmpty() || object.sourceId==0)
       continue;
 
     const auto& bucket = *object.bucketId;
@@ -392,8 +392,11 @@ void VisualObjects::visitIOSSceneSources(void* context, IOSSceneSourceVisitor vi
     source.mesh           = object.sourceMesh;
     source.material       = &bucket.mat;
     source.transform      = object.pos;
-    source.localBoundsMin = object.sourceBounds->bbox[0];
-    source.localBoundsMax = object.sourceBounds->bbox[1];
+    source.hasLocalBounds = object.sourceBounds!=nullptr;
+    if(source.hasLocalBounds) {
+      source.localBoundsMin = object.sourceBounds->bbox[0];
+      source.localBoundsMax = object.sourceBounds->bbox[1];
+      }
     source.firstIndex     = object.iboOff;
     source.indexCount     = object.iboLen;
     emitIOSSceneSource(context,visitor,source);

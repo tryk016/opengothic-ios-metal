@@ -32,6 +32,7 @@
 #include "utils/systemmsg.h"
 #include "ui/padglyph.h"
 #include "graphics/iossceneconversion.h"
+#include "graphics/iosscenesource.h"
 
 #include <algorithm>
 #include <array>
@@ -64,6 +65,19 @@ IOSSceneFrameState iosSceneFrameState(const Camera* camera, Size drawable) {
   frame.camera.nearPlane      = camera->zNear();
   frame.camera.farPlane       = camera->zFar();
   return frame;
+  }
+
+void visitIOSWorldSources(const void* sourceContext,
+                          void* visitorContext,
+                          IOSSceneSourceVisitor visitor) {
+  const auto& source = *static_cast<const WorldView*>(sourceContext);
+  source.visitIOSSceneSources(visitorContext,visitor);
+  }
+
+IOSSceneSourceProvider iosSceneSourceProvider(const WorldView* source) noexcept {
+  if(source==nullptr)
+    return {};
+  return {source,&visitIOSWorldSources};
   }
 
 }
@@ -1787,6 +1801,9 @@ void MainWindow::startPendingSave() {
     catch(...) {
       }
 #endif
+    if(Gothic::inst().checkLoading()==Gothic::LoadState::Idle &&
+       Gothic::inst().worldView()!=nullptr)
+      (void)renderer.restoreAfterOwnerRelease();
     return;
     }
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -2127,7 +2144,8 @@ void MainWindow::render(){
 #endif
 
     auto scene = renderer.buildSceneSnapshot(
-      *frame,iosSceneFrameState(Gothic::inst().camera(),renderer.drawableSize()));
+      *frame,iosSceneSourceProvider(Gothic::inst().worldView()),
+      iosSceneFrameState(Gothic::inst().camera(),renderer.drawableSize()));
 
     const bool videoActive = video.isActive();
     IOSVideoPacket videoPacket;

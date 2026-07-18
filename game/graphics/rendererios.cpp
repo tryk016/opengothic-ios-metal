@@ -10,6 +10,8 @@
 
 #include "iosmetalcontext.h"
 #include "iosrenderworld.h"
+#include "iossceneassetregistry.h"
+#include "iossceneextractor.h"
 
 using namespace Tempest;
 
@@ -32,10 +34,15 @@ struct RendererIOS::TicketControl final {
 
 struct RendererIOS::Impl final {
   Impl(Device& device, SystemApi::Window* window)
-    : context(device,window) {
+    : device(device),
+      assets(device,renderWorld.generation()),
+      context(device,window) {
     }
 
+  Device&          device;
   IOSRenderWorld renderWorld;
+  IOSSceneAssetRegistry assets;
+  IOSSceneExtractor extractor;
   IOSMetalContext context;
   bool            worldOwnersDetached = false;
   uint64_t        preparedSceneSerial  = 0;
@@ -113,6 +120,7 @@ std::optional<RendererIOS::FrameTicket> RendererIOS::beginFrame() {
   }
 
 IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
+                                                    const IOSSceneSourceProvider& source,
                                                     IOSSceneFrameState&& scene) {
   if(!impl->context.frameAdmissionActive())
     throw std::logic_error("RendererIOS cannot build a scene snapshot while frame admission is closed");
@@ -123,6 +131,16 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
     throw std::logic_error("RendererIOS received an invalid frame ticket for scene preparation");
   if(impl->preparedSceneSerial!=0)
     throw std::logic_error("RendererIOS scene snapshot was already prepared for this frame");
+  if(bool(source) && impl->worldOwnersDetached)
+    throw std::logic_error(
+      "RendererIOS cannot extract an attached world while its owners are detached");
+
+  if(bool(source)) {
+    const auto extraction = impl->extractor.extractLandscape(
+      source,impl->device,impl->renderWorld,impl->assets,scene);
+    if(extraction.result!=IOSSceneExtractionResult::Success)
+      throw std::runtime_error("RendererIOS Landscape scene extraction failed");
+    }
 
   auto snapshot = impl->renderWorld.buildSnapshot(std::move(scene));
   impl->preparedScene       = snapshot;
@@ -270,16 +288,19 @@ bool RendererIOS::waitIdle() noexcept {
 void RendererIOS::shutdown() noexcept {
   impl->context.shutdown();
   impl->clearPreparedScene();
+  impl->assets.clearAfterConfirmedIdle();
+  impl->worldOwnersDetached = true;
   }
 
 void RendererIOS::prepareForOwnerRelease() noexcept {
   impl->context.prepareForOwnerRelease();
   impl->clearPreparedScene();
-  if(!impl->context.failureReason().empty() || impl->worldOwnersDetached)
+  if(impl->worldOwnersDetached)
     return;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   const auto oldGeneration = impl->renderWorld.generation();
 #endif
+  impl->assets.clearAfterConfirmedIdle();
   impl->renderWorld.resetWorld();
   impl->worldOwnersDetached = true;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -294,15 +315,44 @@ void RendererIOS::prepareForOwnerRelease() noexcept {
 #endif
   }
 
+bool RendererIOS::restoreAfterOwnerRelease() noexcept {
+  if(!impl->worldOwnersDetached)
+    return true;
+  if(!impl->context.frameAdmissionActive() ||
+     !impl->context.failureReason().empty())
+    return false;
+  if(!impl->assets.resetGeneration(impl->device,
+                                   impl->renderWorld.generation()))
+    return false;
+  impl->worldOwnersDetached = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  try {
+    Log::i("RendererIOS scene world rollback: generation=",
+           impl->renderWorld.generation().value,
+           " retained-after=",uint64_t(impl->context.retainedSceneCount()),
+           " idle-confirmed=1");
+    }
+  catch(...) {
+    }
+#endif
+  return true;
+  }
+
 void RendererIOS::onWorldChanged() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   const auto oldGeneration = impl->renderWorld.generation();
 #endif
   impl->context.onWorldChanged();
   impl->clearPreparedScene();
+  impl->assets.clearAfterConfirmedIdle();
+  impl->renderWorld.resetWorld();
+  impl->worldOwnersDetached = true;
   if(!impl->context.failureReason().empty())
     return;
-  impl->renderWorld.resetWorld();
+  if(!impl->assets.resetGeneration(impl->device,
+                                   impl->renderWorld.generation()))
+    throw std::runtime_error(
+      "RendererIOS could not reset native scene assets for the new world");
   impl->worldOwnersDetached = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   try {
