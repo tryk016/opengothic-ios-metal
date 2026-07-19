@@ -325,6 +325,32 @@ jobs:
             exit 1
           fi
 
+      - name: Verify physical-device smoke cleanup contract
+        run: |
+          set -euo pipefail
+
+          test -x ios/device-test/run-smoke-test.sh
+          bash -n ios/device-test/run-smoke-test.sh
+          grep -Fq 'trap cleanup EXIT' ios/device-test/run-smoke-test.sh
+          grep -Fq 'stop_running_app 1 || fail "pre-launch application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'stop_running_app 1 || fail "application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq -- '--kill --quiet' ios/device-test/run-smoke-test.sh
+          grep -Fq 'original_exit_status=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'device_process_stopped=1' ios/device-test/run-smoke-test.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("ios/device-test/run-smoke-test.sh").read_text()
+          stopped = source.index('stop_running_app 1 || fail "application cleanup failed"')
+          result = source.index('echo "result=PASS"')
+          passed = source.index('echo "PASS — offline metallib')
+          if not stopped < result < passed:
+              raise SystemExit("device PASS is emitted before cleanup proof")
+          PY
+
       - name: Configure RendererIOS
         run: |
           cmake -S . -B build-renderer-ios -G Xcode \

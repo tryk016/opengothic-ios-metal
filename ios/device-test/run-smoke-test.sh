@@ -42,10 +42,137 @@ done
 [[ -f "$APP_INPUT/RendererIOS.metallib" ]] || fail "app has no RendererIOS.metallib"
 
 WORK="$(mktemp -d -t opengothic-device-smoke)"
+DEVICE=""
+APP_EXECUTABLE=""
+BUNDLE_ID=""
+EXPECTED_SHA=""
+RUNTIME_ARMED=0
+PRE_CRASH_SHA=""
+POST_CRASH_SHA=""
+
+stop_running_app() {
+  local strict="${1:-0}"
+  local attempt json mode pid pids
+
+  [[ -n "$DEVICE" && -n "$APP_EXECUTABLE" ]] || return 0
+  for attempt in 1 2 3 4 5; do
+    json="$WORK/processes-stop-$(uuidgen).json"
+    if ! xcrun devicectl device info processes --device "$DEVICE" \
+        --json-output "$json" >/dev/null 2>>"$WORK/cleanup.log"; then
+      [[ "$strict" == 0 ]] ||
+        echo "FAIL: could not query processes while stopping $APP_EXECUTABLE" >&2
+      return 1
+    fi
+    if ! pids="$(python3 - "$json" "$APP_EXECUTABLE" <<'PY'
+import json, pathlib, sys
+processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
+expected = sys.argv[2]
+for process in processes:
+    if pathlib.PurePosixPath(process.get("executable", "")).name == expected:
+        pid = process.get("processIdentifier")
+        if not isinstance(pid, int):
+            raise SystemExit("non-numeric process identifier")
+        print(pid)
+PY
+    )"; then
+      [[ "$strict" == 0 ]] ||
+        echo "FAIL: invalid process list while stopping $APP_EXECUTABLE" >&2
+      return 1
+    fi
+    [[ -n "$pids" ]] || return 0
+    ((attempt < 5)) || break
+
+    mode="terminate"
+    ((attempt < 4)) || mode="kill"
+    while IFS= read -r pid; do
+      [[ -n "$pid" ]] || continue
+      echo "attempt=$attempt mode=$mode executable=$APP_EXECUTABLE pid=$pid" \
+        >>"$WORK/cleanup.log"
+      if [[ "$mode" == "kill" ]]; then
+        xcrun devicectl device process terminate --device "$DEVICE" --pid "$pid" \
+          --kill --quiet >/dev/null 2>>"$WORK/cleanup.log" || true
+      else
+        xcrun devicectl device process terminate --device "$DEVICE" --pid "$pid" \
+          --quiet >/dev/null 2>>"$WORK/cleanup.log" || true
+      fi
+    done <<<"$pids"
+    sleep 1
+  done
+
+  [[ "$strict" == 0 ]] ||
+    echo "FAIL: $APP_EXECUTABLE is still running on the device" >&2
+  return 1
+}
+
+pull_runtime_logs() {
+  local suffix="$1"
+  local name stem extension
+
+  [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 0
+  for name in log.txt stderr.log crash.log; do
+    stem="${name%.*}"
+    extension="${name##*.}"
+    xcrun devicectl device copy from --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+      --source "Documents/$name" \
+      --destination "$WORK/$stem-$suffix.$extension" >/dev/null 2>&1 || true
+  done
+}
+
+preserve_failure_evidence() {
+  local original_status="$1"
+  local cleanup_status="$2"
+  local candidate failure_dir timestamp
+
+  [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || return 0
+  timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  failure_dir="$ROOT/build/device-smoke/$EXPECTED_SHA/failure-$timestamp-$$"
+  mkdir -p "$failure_dir"
+  for candidate in \
+      launch.log cleanup.log \
+      log.txt stderr.log crash.log crash-before.log \
+      log-before-cleanup.txt stderr-before-cleanup.log crash-before-cleanup.log \
+      log-after-cleanup.txt stderr-after-cleanup.log crash-after-cleanup.log; do
+    [[ -f "$WORK/$candidate" ]] || continue
+    ditto "$WORK/$candidate" "$failure_dir/$candidate"
+  done
+  {
+    echo "result=FAIL"
+    echo "source_sha=$EXPECTED_SHA"
+    echo "original_exit_status=$original_status"
+    echo "cleanup_status=$cleanup_status"
+    echo "pre_crash_sha256=$PRE_CRASH_SHA"
+    echo "post_crash_sha256=$POST_CRASH_SHA"
+  } >"$failure_dir/result.txt"
+  echo "failure evidence: $failure_dir" >&2
+}
+
 cleanup() {
+  local status=$?
+  local cleanup_status=0 final_status="$status"
+  trap - EXIT INT TERM HUP
+  set +e
+  if ((RUNTIME_ARMED != 0)); then
+    pull_runtime_logs before-cleanup
+    stop_running_app 0 || cleanup_status=1
+    pull_runtime_logs after-cleanup
+  fi
+  if ((status != 0 || cleanup_status != 0)); then
+    preserve_failure_evidence "$status" "$cleanup_status"
+  fi
+  if ((status == 0 && cleanup_status != 0)); then
+    final_status=1
+  fi
+  if ((cleanup_status != 0)); then
+    echo "WARNING: could not confirm device app cleanup" >&2
+  fi
   [[ "$WORK" == /var/folders/*/T/opengothic-device-smoke.* ]] && rm -rf "$WORK"
+  exit "$final_status"
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+trap 'exit 129' HUP
 
 REQUESTED_DEVICE="${OPENGOTHIC_IOS_DEVICE:-}"
 xcrun devicectl list devices --json-output "$WORK/devices.json" >/dev/null
@@ -148,6 +275,8 @@ IFS=$'\t' read -r PROFILE IDENTITY <<<"$PROFILE_RECORD"
 APP="$WORK/Gothic2Notr.app"
 ditto "$APP_INPUT" "$APP"
 /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $BUNDLE_ID" "$APP/Info.plist"
+APP_EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+  "$APP/Info.plist")"
 cp "$PROFILE" "$APP/embedded.mobileprovision"
 security cms -D -i "$PROFILE" >"$WORK/profile.plist"
 /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' \
@@ -160,17 +289,20 @@ EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
   fail "expected source SHA must be exactly 40 lowercase hexadecimal characters"
 METALLIB_SHA="$(shasum -a 256 "$APP/RendererIOS.metallib" | awk '{print $1}')"
-PRE_CRASH_SHA=""
 if xcrun devicectl device copy from --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source Documents/crash.log --destination "$WORK/crash-before.log" >/dev/null 2>&1; then
   PRE_CRASH_SHA="$(shasum -a 256 "$WORK/crash-before.log" | awk '{print $1}')"
 fi
 
+echo "== stopping any previous $BUNDLE_ID process =="
+stop_running_app 1 || fail "pre-launch application cleanup failed"
+
 echo "== installing $BUNDLE_ID =="
 xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null
 
 echo "== unattended launch: save slot $SAVE_SLOT, ${DURATION}s =="
+RUNTIME_ARMED=1
 if ! xcrun devicectl device process launch --device "$DEVICE" \
     --terminate-existing -- "$BUNDLE_ID" -nomenu -save "$SAVE_SLOT" \
     >"$WORK/launch.log" 2>&1; then
@@ -184,8 +316,7 @@ sleep "$DURATION"
 
 xcrun devicectl device info processes --device "$DEVICE" \
   --json-output "$WORK/processes.json" >/dev/null
-python3 - "$WORK/processes.json" \
-  "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")" <<'PY' ||
+python3 - "$WORK/processes.json" "$APP_EXECUTABLE" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
@@ -220,12 +351,15 @@ if rg -i 'RendererIOS (fatal|GPU shutdown failed|native Landscape encode failed|
   fail "fatal RendererIOS/runtime signature found in device logs"
 fi
 
-POST_CRASH_SHA=""
 [[ -s "$WORK/crash.log" ]] &&
   POST_CRASH_SHA="$(shasum -a 256 "$WORK/crash.log" | awk '{print $1}')"
 if [[ -n "$POST_CRASH_SHA" && "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
   fail "crash.log changed during the smoke run"
 fi
+
+echo "== stopping $BUNDLE_ID after evidence collection =="
+stop_running_app 1 || fail "application cleanup failed"
+RUNTIME_ARMED=0
 
 OUT="$ROOT/build/device-smoke/$EXPECTED_SHA"
 mkdir -p "$OUT"
@@ -239,7 +373,8 @@ ditto "$WORK/log.txt" "$OUT/log.txt"
   echo "duration_seconds=$DURATION"
   echo "metallib_sha256=$METALLIB_SHA"
   echo "log_sha256=$(shasum -a 256 "$WORK/log.txt" | awk '{print $1}')"
+  echo "device_process_stopped=1"
 } >"$OUT/result.txt"
 
-echo "PASS — offline metallib + disabled legacy batch + native textured Landscape proven"
+echo "PASS — offline metallib + disabled legacy batch + native textured Landscape proven; app stopped"
 echo "evidence: $OUT"
