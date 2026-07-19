@@ -105,6 +105,39 @@ on-screen alert instead of a crash.
 4. Run on the device; trust the certificate as in Route A. Copy game data via
    Finder → device → Files. Same 7-day expiry (rebuild weekly, or use AltStore).
 
+### Maintainer device smoke test
+
+`ios/device-test/run-smoke-test.sh` provides a non-interactive physical-device
+gate for diagnostics-enabled RendererIOS builds:
+
+```sh
+ios/device-test/run-smoke-test.sh \
+  build/p2-4-local-on/opengothic/Release/Gothic2Notr.app
+```
+
+The script discovers one connected physical iOS device and the already
+installed, team-suffixed OpenGothic bundle identifier. It never revokes or
+replaces certificates and never invents entitlements: when needed, a throwaway
+Xcode target obtains a profile for the existing App ID, and signing uses the
+entitlements decoded from that profile. The suffixed identifier is preserved,
+so the existing Documents container, game data and saves remain attached.
+
+After installation it launches `-nomenu -save 20`, waits 45 seconds and pulls
+`log.txt`, `stderr.log` and `crash.log`. PASS requires the exact source SHA,
+RendererIOS diagnostics, the offline-metallib ABI marker and at least one
+textured native Landscape frame, with no new crash log or fatal RendererIOS
+signature. Evidence is written under `build/device-smoke/<source-sha>/`.
+
+The only unavoidable manual precondition is that iOS must already trust the
+Mac/development identity and the device must be unlocked at launch time.
+`OPENGOTHIC_IOS_DEVICE`, `OPENGOTHIC_IOS_BUNDLE_ID` and
+`OPENGOTHIC_IOS_TEAM_ID` can override discovery.
+Every override is still checked against the connected device and its existing
+installed app; it cannot select a new App ID or container.
+`OPENGOTHIC_IOS_EXPECTED_SHA` accepts only an exact 40-character commit SHA and
+defaults to `HEAD`.
+`--save-slot` and `--duration` select the unattended scenario.
+
 ---
 
 ## Controls (contextual Gothic scheme)

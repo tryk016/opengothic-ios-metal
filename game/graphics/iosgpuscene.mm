@@ -8,6 +8,7 @@
 #include <Tempest/CommandBuffer>
 #include <Tempest/Device>
 #include <Tempest/Encoder>
+#include <Tempest/Log>
 #include <Tempest/MetalApi>
 
 #import <Foundation/Foundation.h>
@@ -301,6 +302,10 @@ struct IOSGPUScene::Impl final {
         throw std::runtime_error(
           metalFailure("RendererIOS IOSGPUScene metallib loading failed",
                        libraryError));
+      Tempest::Log::i(
+        "RendererIOS shader library: source=offline-metallib resource=",
+        RendererIOSShader::LibraryName,".metallib abi=",
+        RendererIOSShader::AbiVersion);
 
       OwnedObjectiveC vertexName(
           [[NSString alloc]
