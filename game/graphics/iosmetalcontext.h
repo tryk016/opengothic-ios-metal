@@ -70,6 +70,7 @@ class IOSMetalContext final {
     void             onWorldChanged();
     std::size_t      retainedSceneCount() const noexcept;
 
+    bool             requiresGpuSavePreviewCapture() const noexcept;
     bool             savePreviewReady();
     bool             savePreviewIsPlaceholder() const noexcept;
     Tempest::Pixmap  takeSavePreview();

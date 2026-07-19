@@ -14,6 +14,7 @@
 #include <Tempest/TextureAtlas>
 #include <Tempest/Timer>
 
+#include <cstdint>
 #include <vector>
 #include <optional>
 #include <string>
@@ -198,9 +199,12 @@ class MainWindow : public Tempest::Window {
       std::string         name;
       Tempest::Pixmap     preview;
       bool                previewPlaceholder = false;
+      uint64_t            requestSerial       = 0;
+      uint64_t            requestStartedUs    = 0;
 
       bool active() const { return stage!=Stage::None; }
       } pendingSave;
+    uint64_t                  nextPendingSaveSerial = 0;
 #endif
 
     bool                      mouseP[Tempest::MouseEvent::ButtonBack]={};

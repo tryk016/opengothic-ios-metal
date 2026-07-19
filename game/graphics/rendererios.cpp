@@ -387,6 +387,10 @@ void RendererIOS::onWorldChanged() {
 #endif
   }
 
+bool RendererIOS::requiresGpuSavePreviewCapture() const noexcept {
+  return impl->context.requiresGpuSavePreviewCapture();
+  }
+
 bool RendererIOS::savePreviewReady() {
   return impl->context.savePreviewReady();
   }

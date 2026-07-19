@@ -146,6 +146,37 @@ jobs:
             -Ilib/Tempest/Engine/include -fsyntax-only \
             lib/Tempest/Tests/tests/metalapi_borrowed_handle_compile_test.cpp
 
+      - name: Verify RendererIOS save-preview routing policy
+        run: |
+          set -euo pipefail
+
+          test -f game/graphics/iossavepreviewpolicy.h
+          test -f ios/tests/iossavepreviewpolicy.cpp
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iossavepreviewpolicy.cpp \
+            -o "$RUNNER_TEMP/iossavepreviewpolicy"
+          "$RUNNER_TEMP/iossavepreviewpolicy"
+
+          grep -Fq 'requiresGpuSavePreviewCapture()' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'if(!renderer.requiresGpuSavePreviewCapture())' game/mainwindow.cpp
+          grep -Fq 'save-cpu-fastpath' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'savePreviewRoute=' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'route=cpu-placeholder' game/mainwindow.cpp
+          grep -Fq 'route=gpu-diagnostic' game/mainwindow.cpp
+          grep -Fq 'pixels[i*4u+3u] = 255u;' game/mainwindow.cpp
+          grep -Fq 'request-to-accepted-us=' game/mainwindow.cpp
+          grep -Fq 'serialize-us=' game/mainwindow.cpp
+          grep -Fq 'request-to-complete-us=' game/mainwindow.cpp
+          grep -Fq 'wait-idle-us=' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'RendererIOS save preview diagnostic capture' game/graphics/iosmetalcontext.cpp
+          ! grep -Fq 'RendererIOS save preview placeholder' game/graphics/iosmetalcontext.cpp
+          test "$(grep -Fc '!configuredSavePreviewNeedsGpuCapture() ||' game/graphics/iosmetalcontext.cpp)" -eq 1
+          test "$(grep -Fc 'impl->device.attachment(TextureFormat::RGBA8,dstW,dstH)' game/graphics/iosmetalcontext.cpp)" -eq 1
+          test "$(grep -Fc 'device.readPixels(savePreview)' game/graphics/iosmetalcontext.cpp)" -eq 1
+          grep -Fq 'previewFenceErrorAfterTerminal()' game/graphics/iosmetalcontext.cpp
+
       - name: Verify P2.1 native asset registry contract
         run: |
           set -euo pipefail
@@ -403,6 +434,14 @@ jobs:
 
           TEMPEST_SHA="$(git -C lib/Tempest rev-parse HEAD)"
           IPA_SHA256="$(shasum -a 256 "$ARTIFACT_DIR/$BASENAME.ipa" | awk '{print $1}')"
+          SAVE_PREVIEW_ROUTE='cpu-placeholder'
+          if [ "$DIAGNOSTICS" = 'ON' ]; then
+            case "$ACTIVE_FAULT_MODE" in
+              preview-attachment-missing|preview-readback-error|preview-fence-error-after-terminal)
+                SAVE_PREVIEW_ROUTE='gpu-diagnostic'
+                ;;
+            esac
+          fi
           cat > "$ARTIFACT_DIR/$BASENAME-provenance.txt" <<EOF
           repository=$GITHUB_REPOSITORY
           workflow_run_id=$GITHUB_RUN_ID
@@ -412,6 +451,7 @@ jobs:
           tempest_profile=$TEMPEST_PROFILE
           diagnostics=$DIAGNOSTICS
           fault_mode=$ACTIVE_FAULT_MODE
+          save_preview_route=$SAVE_PREVIEW_ROUTE
           bundle_id=$BUNDLE_ID
           bundle_version=$BUNDLE_VERSION
           minimum_ios_version=$MINIMUM_OS

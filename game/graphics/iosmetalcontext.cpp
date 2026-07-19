@@ -14,6 +14,9 @@
 
 #include <algorithm>
 #include <array>
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#include <chrono>
+#endif
 #include <cstdio>
 #include <cstdlib>
 #include <stdexcept>
@@ -22,6 +25,7 @@
 #include <utility>
 
 #include "iosgpuscene.h"
+#include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
 #include "resources.h"
 #include "rendereriosplatform.h"
@@ -104,6 +108,13 @@ enum class RendererIOSFaultMode : uint8_t {
   LoaderThreadStartFailureOnce   = 8,
   };
 
+static_assert(static_cast<uint8_t>(
+                RendererIOSFaultMode::PreviewAttachmentMissing)==1u);
+static_assert(static_cast<uint8_t>(
+                RendererIOSFaultMode::PreviewReadbackError)==2u);
+static_assert(static_cast<uint8_t>(
+                RendererIOSFaultMode::PreviewFenceErrorAfterTerminal)==3u);
+
 const char* presentFailureName(PresentFailureKind kind) noexcept {
   switch(kind) {
     case PresentFailureKind::None:             return "none";
@@ -121,6 +132,25 @@ const char* presentFailureName(PresentFailureKind kind) noexcept {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 constexpr auto ConfiguredFaultMode =
   static_cast<RendererIOSFaultMode>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID);
+#endif
+
+constexpr bool configuredSavePreviewNeedsGpuCapture() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  return iosSavePreviewNeedsGpuCapture(
+    true,static_cast<uint32_t>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID));
+#else
+  return iosSavePreviewNeedsGpuCapture(
+    false,static_cast<uint32_t>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID));
+#endif
+  }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+uint64_t rendererIOSClockUs() noexcept {
+  using Clock = std::chrono::steady_clock;
+  return static_cast<uint64_t>(
+    std::chrono::duration_cast<std::chrono::microseconds>(
+      Clock::now().time_since_epoch()).count());
+  }
 #endif
 
 struct FaultInjection final {
@@ -274,10 +304,14 @@ struct IOSMetalContext::Impl final {
     resetTargets();
     const auto platform = rendererIOSPlatformInfo();
     try {
-      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui,inventory,save-placeholder build=",
+      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui,inventory,save-placeholder,save-cpu-fastpath build=",
              OPENGOTHIC_RENDERER_IOS_BUILD_SHA," gpu=",device.properties().name,
              " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data(),
-             " faultMode=",fault.name());
+             " faultMode=",fault.name(),
+             " savePreviewRoute=",
+             configuredSavePreviewNeedsGpuCapture()
+               ? "gpu-diagnostic"
+               : "cpu-placeholder");
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       Log::i("RendererIOS diagnostics: ON frames-in-flight=",Resources::MaxFramesInFlight,
              " context=IOSMetalContext transport=Tempest");
@@ -659,7 +693,7 @@ struct IOSMetalContext::Impl final {
     }
 
   bool settleGpu(SettleReason reason, const char* operation,
-                 bool* idleConfirmed = nullptr) noexcept {
+                  bool* idleConfirmed = nullptr) noexcept {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = false;
     if(fault.shutdownIdleUnconfirmedOnce(reason,counters.presentAccepted)) {
@@ -668,6 +702,9 @@ struct IOSMetalContext::Impl final {
       fail(operation,"fault injection: device idle deliberately left unconfirmed once");
       return false;
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    const uint64_t waitStartedUs = rendererIOSClockUs();
+#endif
     try {
       device.waitIdle();
       }
@@ -683,6 +720,15 @@ struct IOSMetalContext::Impl final {
       fail(operation);
       return false;
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    try {
+      Log::i("RendererIOS GPU settle timing: reason=",settleReasonName(reason),
+             " wait-idle-us=",rendererIOSClockUs()-waitStartedUs,
+             " idle-confirmed=1");
+      }
+    catch(...) {
+      }
+#endif
 
     if(idleConfirmed!=nullptr)
       *idleConfirmed = true;
@@ -1048,7 +1094,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     if(input.capture.kind==IOSCaptureRequest::Kind::SavePreview &&
        impl->previewState==Impl::PreviewState::Idle) {
       previewAccepted = true;
-      if(impl->fault.previewAttachmentMissing()) {
+      if(!configuredSavePreviewNeedsGpuCapture() ||
+         impl->fault.previewAttachmentMissing()) {
         previewFallback = true;
         impl->savePreview = Attachment();
         impl->previewTargetAllocated = false;
@@ -1169,7 +1216,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         }
 
       if(previewAccepted && !previewFallback) {
-        encoder.setDebugMarker("RendererIOS save preview placeholder");
+        encoder.setDebugMarker("RendererIOS save preview diagnostic capture");
         encoder.setFramebuffer({{impl->savePreview,OpaqueBlack,Tempest::Preserve}});
         }
       }
@@ -1494,6 +1541,10 @@ bool IOSMetalContext::savePreviewReady() {
     }
   }
 
+bool IOSMetalContext::requiresGpuSavePreviewCapture() const noexcept {
+  return configuredSavePreviewNeedsGpuCapture();
+  }
+
 bool IOSMetalContext::savePreviewIsPlaceholder() const noexcept {
   return impl->previewState==Impl::PreviewState::ReadyPlaceholder;
   }
@@ -1506,7 +1557,8 @@ Pixmap IOSMetalContext::takeSavePreview() {
     }
   if(impl->previewState==Impl::PreviewState::ReadyPlaceholder) {
     impl->clearPreview();
-    return blackPixmap(4u,4u);
+    return blackPixmap(IOSSavePreviewPlaceholderWidth,
+                       IOSSavePreviewPlaceholderHeight);
     }
   throw std::logic_error("RendererIOS save preview is not ready");
   }

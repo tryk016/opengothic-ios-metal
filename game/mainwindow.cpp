@@ -33,13 +33,19 @@
 #include "ui/padglyph.h"
 #include "graphics/iossceneconversion.h"
 #include "graphics/iosscenesource.h"
+#if defined(__IOS__)
+#include "graphics/iossavepreviewpolicy.h"
+#endif
 
 #include <algorithm>
 #include <array>
 #include <cstring>
 #include <memory>
-#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS) || \
+    (defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS))
 #include <chrono>
+#endif
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
 #include <limits>
 #endif
 
@@ -79,6 +85,31 @@ IOSSceneSourceProvider iosSceneSourceProvider(const WorldView* source) noexcept 
     return {};
   return {source,&visitIOSWorldSources};
   }
+
+#if defined(__IOS__)
+uint64_t rendererIOSSaveClockUs() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  using Clock = std::chrono::steady_clock;
+  return static_cast<uint64_t>(
+    std::chrono::duration_cast<std::chrono::microseconds>(
+      Clock::now().time_since_epoch()).count());
+#else
+  return 0u;
+#endif
+  }
+
+Pixmap iosSavePreviewPlaceholder() {
+  Pixmap image(IOSSavePreviewPlaceholderWidth,
+               IOSSavePreviewPlaceholderHeight,
+               TextureFormat::RGBA8);
+  auto* pixels = static_cast<uint8_t*>(image.data());
+  const size_t count = size_t(IOSSavePreviewPlaceholderWidth)*
+                       size_t(IOSSavePreviewPlaceholderHeight);
+  for(size_t i=0; i<count; ++i)
+    pixels[i*4u+3u] = 255u;
+  return image;
+  }
+#endif
 
 }
 
@@ -1475,9 +1506,9 @@ uint64_t MainWindow::tick() {
     }
 
 #if defined(__IOS__)
-  // The save request owns the next rendered frame while its thumbnail is
-  // captured. Keep gameplay frozen, but continue rendering the immediate
-  // saving feedback until the regular GPU fence permits a safe readback.
+  // A save request owns the next render boundary. Product builds start their
+  // queued CPU placeholder before beginFrame; preview fault builds keep
+  // rendering the immediate saving feedback until the diagnostic GPU fence.
   if(pendingSave.active())
     return 0;
 #endif
@@ -1701,13 +1732,15 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   if(pendingSave.active() || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle)
     return;
 
-  // A GPU readback from this input callback used to collide with Metal's
-  // active encoder. Queue it for the normal render command instead. The local
-  // pending state makes the saving banner visible on the very next frame,
-  // before screenshot preparation or save serialization can do any work.
+  // The native renderer does not compose a real thumbnail yet. Product builds
+  // start from a tiny CPU placeholder and avoid allocating/clearing/reading
+  // back a black GPU attachment. Preview-specific fault builds keep the queued
+  // GPU path so ID1-ID3 remain executable until real preview composition lands.
   pendingSave.slot        = std::string(slot);
   pendingSave.name        = std::string(name);
   pendingSave.previewPlaceholder = false;
+  pendingSave.requestSerial = ++nextPendingSaveSerial;
+  pendingSave.requestStartedUs = rendererIOSSaveClockUs();
   pendingSave.stage       = PendingSave::Stage::CaptureRequested;
   Gothic::inst().setLoadingProgress(0);
   (void)renderer.pollDeviceFailure();
@@ -1719,7 +1752,7 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
         return;
         }
       }
-    startPendingSave(Pixmap(4,4,TextureFormat::RGBA8),true);
+    startPendingSave(iosSavePreviewPlaceholder(),true);
     try {
       Log::e("[save] RendererIOS is stopped; saving with a CPU placeholder");
       }
@@ -1727,6 +1760,34 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
       }
     return;
     }
+  if(!renderer.requiresGpuSavePreviewCapture()) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    try {
+      Log::i("[save] RendererIOS request: request=",
+             pendingSave.requestSerial,
+             " route=cpu-placeholder reason=native-preview-unimplemented");
+      }
+    catch(...) {
+      }
+#endif
+    // Keep owner release at the established render-boundary gate. Starting
+    // Gothic::startSave directly from an input callback could cancel an active
+    // frame and let its outer render invocation continue with a stale ticket.
+    pendingSave.preview = iosSavePreviewPlaceholder();
+    pendingSave.previewPlaceholder = true;
+    pendingSave.stage = PendingSave::Stage::ReadyCpu;
+    update();
+    return;
+    }
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  try {
+    Log::i("[save] RendererIOS request: request=",
+           pendingSave.requestSerial,
+           " route=gpu-diagnostic");
+    }
+  catch(...) {
+    }
+#endif
   update();
   return;
 #endif
@@ -1769,32 +1830,48 @@ void MainWindow::startPendingSave() {
   auto slot   = pendingSave.slot;
   auto name   = pendingSave.name;
   const bool placeholder = pendingSave.previewPlaceholder;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  const uint64_t requestSerial    = pendingSave.requestSerial;
+  const uint64_t requestStartedUs = pendingSave.requestStartedUs;
+#endif
 
   if(!Gothic::inst().startSave(Texture2d(),
-    [slot=std::move(slot),name=std::move(name),screen=std::move(screen),placeholder](std::unique_ptr<GameSession>&& game){
+    [slot=std::move(slot),name=std::move(name),screen=std::move(screen),placeholder
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+     ,requestSerial,requestStartedUs
+#endif
+    ](std::unique_ptr<GameSession>&& game){
       (void)placeholder;
       if(!game)
         return std::move(game);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      const uint64_t serializeStartedUs = rendererIOSSaveClockUs();
+#endif
       Tempest::WFile f(slot);
       Serialize      s(f);
       game->save(s,name,*screen);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       try {
+        const uint64_t completedUs = rendererIOSSaveClockUs();
         Log::i("[save] RendererIOS save completed: source=",
-               placeholder ? "placeholder" : "preview"," slot=",slot);
+               placeholder ? "placeholder" : "preview"," slot=",slot,
+               " request=",requestSerial,
+               " serialize-us=",completedUs-serializeStartedUs,
+               " request-to-complete-us=",completedUs-requestStartedUs);
         }
       catch(...) {
         }
 #endif
       return std::move(game);
       })) {
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
-    defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
-    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     try {
       Log::i("[save] RendererIOS startSave deferred:",
              " source=",placeholder ? "placeholder" : "preview",
              " slot=",pendingSave.slot,
+             " request=",requestSerial,
+             " request-elapsed-us=",
+             rendererIOSSaveClockUs()-requestStartedUs,
              " stage=ready-cpu",
              " reason=loader-start-not-accepted");
       }
@@ -1809,7 +1886,10 @@ void MainWindow::startPendingSave() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   try {
     Log::i("[save] RendererIOS startSave accepted: source=",
-           placeholder ? "placeholder" : "preview"," slot=",pendingSave.slot);
+           placeholder ? "placeholder" : "preview"," slot=",pendingSave.slot,
+           " request=",requestSerial,
+           " request-to-accepted-us=",
+           rendererIOSSaveClockUs()-requestStartedUs);
     }
   catch(...) {
     }
@@ -1821,6 +1901,8 @@ void MainWindow::startPendingSave() {
   pendingSave.slot.clear();
   pendingSave.name.clear();
   pendingSave.previewPlaceholder = false;
+  pendingSave.requestSerial       = 0;
+  pendingSave.requestStartedUs    = 0;
   pendingSave.stage = PendingSave::Stage::None;
   update();
   }
@@ -1852,7 +1934,7 @@ void MainWindow::processPendingSave() {
   catch(const std::exception& e) {
     if(!renderer.failureReason().empty() && !rendererFailureSettled)
       return;
-    preview = Pixmap(4,4,TextureFormat::RGBA8);
+    preview = iosSavePreviewPlaceholder();
     placeholder = true;
     try {
       Log::e("[save] preview readback failed; using placeholder: ",e.what());
@@ -1863,7 +1945,7 @@ void MainWindow::processPendingSave() {
   catch(...) {
     if(!renderer.failureReason().empty() && !rendererFailureSettled)
       return;
-    preview = Pixmap(4,4,TextureFormat::RGBA8);
+    preview = iosSavePreviewPlaceholder();
     placeholder = true;
     try {
       Log::e("[save] preview readback failed; using placeholder: ",
@@ -2035,7 +2117,7 @@ bool MainWindow::rendererOperational() {
 
 #if defined(__IOS__)
   if(pendingSave.stage==PendingSave::Stage::CaptureRequested) {
-    startPendingSave(Pixmap(4,4,TextureFormat::RGBA8),true);
+    startPendingSave(iosSavePreviewPlaceholder(),true);
     try {
       Log::e("[save] RendererIOS stopped before capture; using a CPU placeholder");
       }
