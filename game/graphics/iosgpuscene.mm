@@ -341,7 +341,7 @@ struct IOSGPUScene::Impl final {
       pipelineDesc.vertexDescriptor = descriptor;
       pipelineDesc.colorAttachments[0].pixelFormat = colorFormat;
       pipelineDesc.depthAttachmentPixelFormat      = depthFormat;
-      pipelineDesc.sampleCount = NSUInteger(target.sampleCount);
+      pipelineDesc.rasterSampleCount = NSUInteger(target.sampleCount);
 
       NSError* pipelineError = nil;
       OwnedObjectiveC pipelineOwner(
