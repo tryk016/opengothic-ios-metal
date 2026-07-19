@@ -257,7 +257,8 @@ jobs:
           test -f game/graphics/iosgpusceneplan.h
           test -f game/graphics/iosgpuscene.h
           test -f game/graphics/iosgpuscene.mm
-          test -f game/graphics/ioslandscapeshader.h
+          test -f game/graphics/ioslandscapeshaderabi.h
+          test -f shader/ios-metal/landscape.metal
           test -f ios/tests/iosgpusceneplan.cpp
           test -f ios/tests/ioslandscapeshader.cpp
 
@@ -292,10 +293,14 @@ jobs:
             ios/tests/ioslandscapeshader.cpp \
             -o "$RUNNER_TEMP/ioslandscapeshader"
           "$RUNNER_TEMP/ioslandscapeshader" \
-            > "$RUNNER_TEMP/ios-landscape.metal"
+            shader/ios-metal/landscape.metal
           xcrun --sdk iphoneos metal \
-            -c "$RUNNER_TEMP/ios-landscape.metal" \
+            -target air64-apple-ios16.4 \
+            -c shader/ios-metal/landscape.metal \
             -o "$RUNNER_TEMP/ios-landscape.air"
+          LC_ALL=C grep -aFq \
+            'apple-ios16.4.0' \
+            "$RUNNER_TEMP/ios-landscape.air"
           xcrun --sdk iphoneos metallib \
             "$RUNNER_TEMP/ios-landscape.air" \
             -o "$RUNNER_TEMP/ios-landscape.metallib"
@@ -304,6 +309,12 @@ jobs:
               'newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|MTLCommandBuffer|gapi/metal/mt' \
               game/graphics/iosgpuscene.mm; then
             echo 'IOSGPUScene bypasses the scoped Tempest Metal encoder bridge'
+            exit 1
+          fi
+          if grep -Eq \
+              'newLibraryWithSource|compileSource|MTLCompileOptions' \
+              game/graphics/iosgpuscene.mm; then
+            echo 'IOSGPUScene performs forbidden runtime shader compilation'
             exit 1
           fi
           if grep -Eq \

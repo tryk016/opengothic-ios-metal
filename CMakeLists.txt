@@ -220,6 +220,38 @@ elseif(IOS)
   target_sources(${PROJECT_NAME} PRIVATE "${OPENGOTHIC_APPICON}")
   set_source_files_properties("${OPENGOTHIC_APPICON}" PROPERTIES
     MACOSX_PACKAGE_LOCATION Resources)
+
+  find_program(OPENGOTHIC_XCRUN_EXECUTABLE xcrun REQUIRED)
+  set(OPENGOTHIC_RENDERER_IOS_METAL_SOURCE
+      "${CMAKE_SOURCE_DIR}/shader/ios-metal/landscape.metal")
+  set(OPENGOTHIC_RENDERER_IOS_AIR
+      "${CMAKE_CURRENT_BINARY_DIR}/RendererIOS.air")
+  set(OPENGOTHIC_RENDERER_IOS_METALLIB
+      "${CMAKE_CURRENT_BINARY_DIR}/RendererIOS.metallib")
+  add_custom_command(
+    OUTPUT
+      "${OPENGOTHIC_RENDERER_IOS_AIR}"
+      "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
+            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+            -c "${OPENGOTHIC_RENDERER_IOS_METAL_SOURCE}"
+            -o "${OPENGOTHIC_RENDERER_IOS_AIR}"
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metallib
+            "${OPENGOTHIC_RENDERER_IOS_AIR}"
+            -o "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
+    DEPENDS "${OPENGOTHIC_RENDERER_IOS_METAL_SOURCE}"
+    COMMENT "Compiling RendererIOS offline Metal library"
+    VERBATIM)
+  add_custom_target(RendererIOSMetallib
+    DEPENDS "${OPENGOTHIC_RENDERER_IOS_METALLIB}")
+  add_dependencies(${PROJECT_NAME} RendererIOSMetallib)
+  set_source_files_properties(
+    "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
+    PROPERTIES
+      GENERATED TRUE
+      MACOSX_PACKAGE_LOCATION Resources)
+  target_sources(${PROJECT_NAME} PRIVATE
+    "${OPENGOTHIC_RENDERER_IOS_METALLIB}")
 elseif(APPLE)
   enable_language(OBJCXX)
 endif()

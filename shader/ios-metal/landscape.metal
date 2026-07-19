@@ -1,10 +1,3 @@
-#pragma once
-
-#include <string_view>
-
-namespace RendererIOSShader {
-
-inline constexpr std::string_view Landscape = R"metal(
 #include <metal_stdlib>
 using namespace metal;
 
@@ -46,7 +39,4 @@ fragment float4 riosLandscapeFragment(
     sampler baseColorSampler [[sampler(0)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
   return float4(texel.rgb*in.color.rgb,1.0);
-}
-)metal";
-
 }

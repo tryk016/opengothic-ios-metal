@@ -1,7 +1,7 @@
 #include "iosgpuscene.h"
 
 #include "iosgpusceneplan.h"
-#include "ioslandscapeshader.h"
+#include "ioslandscapeshaderabi.h"
 #include "iossceneassetregistry.h"
 #include "resources.h"
 
@@ -277,29 +277,41 @@ struct IOSGPUScene::Impl final {
       const MTLPixelFormat colorFormat = nativeColorFormat(target.color);
       const MTLPixelFormat depthFormat = nativeDepthFormat(target.depth);
 
-      OwnedObjectiveC source(
+      OwnedObjectiveC libraryName(
           [[NSString alloc]
-              initWithBytes:RendererIOSShader::Landscape.data()
-                     length:RendererIOSShader::Landscape.size()
+              initWithBytes:RendererIOSShader::LibraryName.data()
+                     length:RendererIOSShader::LibraryName.size()
                                 encoding:NSUTF8StringEncoding]);
-      if(source.get()==nil)
+      if(libraryName.get()==nil)
         throw std::runtime_error(
-          "RendererIOS IOSGPUScene could not create its Metal shader source");
+          "RendererIOS IOSGPUScene could not create its metallib resource name");
+
+      NSBundle* bundle = [NSBundle mainBundle];
+      NSURL* libraryUrl =
+          [bundle URLForResource:(NSString*)libraryName.get()
+                   withExtension:@"metallib"];
+      if(libraryUrl==nil)
+        throw std::runtime_error(
+          "RendererIOS IOSGPUScene could not find RendererIOS.metallib");
 
       NSError* libraryError = nil;
       OwnedObjectiveC library(
-          [device newLibraryWithSource:(NSString*)source.get()
-                               options:nil
-                                 error:&libraryError]);
+          [device newLibraryWithURL:libraryUrl error:&libraryError]);
       if(library.get()==nil)
         throw std::runtime_error(
-          metalFailure("RendererIOS IOSGPUScene shader compilation failed",
+          metalFailure("RendererIOS IOSGPUScene metallib loading failed",
                        libraryError));
 
       OwnedObjectiveC vertexName(
-          [[NSString alloc] initWithUTF8String:"riosLandscapeVertex"]);
+          [[NSString alloc]
+              initWithBytes:RendererIOSShader::VertexFunction.data()
+                     length:RendererIOSShader::VertexFunction.size()
+                                encoding:NSUTF8StringEncoding]);
       OwnedObjectiveC fragmentName(
-          [[NSString alloc] initWithUTF8String:"riosLandscapeFragment"]);
+          [[NSString alloc]
+              initWithBytes:RendererIOSShader::FragmentFunction.data()
+                     length:RendererIOSShader::FragmentFunction.size()
+                                encoding:NSUTF8StringEncoding]);
       id<MTLLibrary> nativeLibrary = (id<MTLLibrary>)library.get();
       OwnedObjectiveC vertexFunction(
           [nativeLibrary newFunctionWithName:(NSString*)vertexName.get()]);
