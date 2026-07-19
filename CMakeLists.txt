@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 
+set(OPENGOTHIC_IOS_MINIMUM_VERSION "16.4")
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  if(CMAKE_OSX_DEPLOYMENT_TARGET AND
+     CMAKE_OSX_DEPLOYMENT_TARGET VERSION_LESS OPENGOTHIC_IOS_MINIMUM_VERSION)
+    message(FATAL_ERROR
+            "OpenGothic iOS requires iOS ${OPENGOTHIC_IOS_MINIMUM_VERSION} or newer "
+            "(requested ${CMAKE_OSX_DEPLOYMENT_TARGET})")
+  endif()
+  if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "${OPENGOTHIC_IOS_MINIMUM_VERSION}"
+        CACHE STRING "Minimum iOS deployment target")
+  endif()
+endif()
+
 project(Gothic2Notr LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(BUILD_SHARED_LIBS OFF)
@@ -50,7 +64,6 @@ if(WIN32)
   endif()
 elseif(IOS)
   enable_language(OBJCXX)
-  set(CMAKE_OSX_DEPLOYMENT_TARGET 15.0)
   option(OPENGOTHIC_IOS_INCREASED_MEMORY_REQUESTED
          "Mark SideStore test builds as requesting Increased Memory Limit" OFF)
   option(OPENGOTHIC_PERF_DIAGNOSTICS

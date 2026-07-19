@@ -16,11 +16,11 @@ xcode-select -p             >/dev/null || { echo "Install Xcode + run 'xcode-sel
 echo "==> Applying submodule patches"
 bash "$ROOT/ios/patches/apply-patches.sh"
 
-echo "==> Configuring (Xcode generator, iOS arm64, deployment 15.0)"
+echo "==> Configuring (Xcode generator, iOS arm64, deployment 16.4)"
 cmake -S "$ROOT" -B "$BUILD" -G Xcode \
   -DCMAKE_SYSTEM_NAME=iOS \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4
 
 echo "==> Done. Next:"
 echo "    open \"$BUILD/Gothic2Notr.xcodeproj\""

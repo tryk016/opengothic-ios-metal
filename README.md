@@ -36,7 +36,7 @@ and play OpenGothic on iPhone/iPad with a Bluetooth controller **or** a full on-
 *Gothic II: Night of the Raven* is required — OpenGothic ships **no** game assets or scripts. You must
 legally own the game and supply its data yourself.
 
-Target: iPhone/iPad on **iOS 15+**, arm64. Best on modern GPUs (A-series / M-series). Locked to landscape.
+Target: iPhone/iPad on **iOS 16.4+**, arm64. Best on modern GPUs (A-series / M-series). Locked to landscape.
 
 ### Install — download & play (no Mac, no build)
 

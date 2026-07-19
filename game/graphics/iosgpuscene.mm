@@ -111,17 +111,11 @@ MTLPixelFormat nativeTextureFormat(IOSSceneTextureFormat format) noexcept {
     case IOSSceneTextureFormat::Rgba8Unorm:
       return MTLPixelFormatRGBA8Unorm;
     case IOSSceneTextureFormat::Bc1Rgba:
-      if (@available(iOS 16.4, *))
-        return MTLPixelFormatBC1_RGBA;
-      return MTLPixelFormatInvalid;
+      return MTLPixelFormatBC1_RGBA;
     case IOSSceneTextureFormat::Bc2Rgba:
-      if (@available(iOS 16.4, *))
-        return MTLPixelFormatBC2_RGBA;
-      return MTLPixelFormatInvalid;
+      return MTLPixelFormatBC2_RGBA;
     case IOSSceneTextureFormat::Bc3Rgba:
-      if (@available(iOS 16.4, *))
-        return MTLPixelFormatBC3_RGBA;
-      return MTLPixelFormatInvalid;
+      return MTLPixelFormatBC3_RGBA;
     case IOSSceneTextureFormat::Invalid:
       return MTLPixelFormatInvalid;
     }
