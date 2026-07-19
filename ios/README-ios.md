@@ -7,6 +7,10 @@ controller or the complete on-screen virtual gamepad. Two routes are documented:
 > You must legally own Gothic II: NotR. The game ships **no** assets; you supply
 > them from your own installation.
 
+> **System requirement:** iOS/iPadOS 16.4 or newer on an arm64 device. Builds
+> targeting iOS 15 are historical artifacts and are no longer supported by the
+> current port.
+
 ---
 
 ## Route A — No Mac, no build (download + sideload)
@@ -43,7 +47,8 @@ or Sideloadly must sign and install it first.
 > Maintainers only: `.github/workflows/ios-metalfx-temporal.yml` publishes the
 > recommended MetalFX build, while `.github/workflows/ios.yml` publishes the
 > Lanczos compatibility build to the `latest` release. Both use a macOS runner,
-> `cmake` + `glslang`, `iphoneos` arm64 and disabled code signing.
+> `cmake` + `glslang`, `iphoneos` arm64, deployment target 16.4 and disabled
+> code signing.
 
 ### 2. Sign & install with your own free Apple ID
 - **SideStore (recommended, refreshes on-device over Wi‑Fi):** after adding the
