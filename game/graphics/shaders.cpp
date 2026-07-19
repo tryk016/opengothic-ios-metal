@@ -14,8 +14,14 @@ using namespace Tempest;
 
 Shaders* Shaders::instance = nullptr;
 
-Shaders::Shaders() {
+Shaders::Shaders(CompilationProfile profile) {
   instance = this;
+  if(profile==CompilationProfile::RendererIOSBridge) {
+    compileRendererIOSBridgeShaders();
+    Log::i("RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled");
+    return;
+    }
+
   compileKeyShaders();
   deferredCompilation = std::async(std::launch::async, [this]() {
     Workers::setThreadName("Shader compilation");
@@ -28,12 +34,14 @@ Shaders::Shaders() {
   }
 
 Shaders::~Shaders() {
-  deferredCompilation.wait();
+  if(deferredCompilation.valid())
+    deferredCompilation.wait();
   instance = nullptr;
   }
 
 void Shaders::waitCompiler() {
-  deferredCompilation.wait();
+  if(deferredCompilation.valid())
+    deferredCompilation.wait();
   }
 
 Shaders& Shaders::inst() {
@@ -44,6 +52,25 @@ Shaders& Shaders::inst() {
 void Shaders::compileKeyShaders() {
   bink      = postEffect("bink");
   downscale = postEffect("downscale");
+  }
+
+void Shaders::compileRendererIOSBridgeShaders() {
+  bink = postEffect("bink");
+  compileInventoryShader();
+  }
+
+void Shaders::compileInventoryShader() {
+  auto& device = Resources::device();
+
+  RenderState state;
+  state.setCullFaceMode(RenderState::CullMode::Front);
+  state.setZTestMode   (RenderState::ZTestMode::LEqual);
+
+  auto sh = GothicShader::get("item.vert.sprv");
+  auto vs = device.shader(sh.data,sh.len);
+  sh = GothicShader::get("item.frag.sprv");
+  auto fs = device.shader(sh.data,sh.len);
+  inventory = device.pipeline(Triangles,state,vs,fs);
   }
 
 void Shaders::compileShaders() {
@@ -353,17 +380,7 @@ void Shaders::compileShaders() {
     swRenderingDbg = postEffect("vbuffer_blit", RenderState::ZTestMode::Always);
     }
 
-  {
-    RenderState state;
-    state.setCullFaceMode(RenderState::CullMode::Front);
-    state.setZTestMode   (RenderState::ZTestMode::LEqual);
-
-    auto sh = GothicShader::get("item.vert.sprv");
-    auto vs = device.shader(sh.data,sh.len);
-    sh = GothicShader::get("item.frag.sprv");
-    auto fs = device.shader(sh.data,sh.len);
-    inventory = device.pipeline(Triangles,state,vs,fs);
-  }
+  compileInventoryShader();
   }
 
 bool Shaders::isVsmSupported() {

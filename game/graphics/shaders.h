@@ -12,7 +12,12 @@
 
 class Shaders {
   public:
-    Shaders();
+    enum class CompilationProfile : uint8_t {
+      LegacyRenderer,
+      RendererIOSBridge,
+      };
+
+    explicit Shaders(CompilationProfile profile = CompilationProfile::LegacyRenderer);
     ~Shaders();
 
     void waitCompiler();
@@ -155,6 +160,8 @@ class Shaders {
       };
 
     void                     compileKeyShaders();
+    void                     compileRendererIOSBridgeShaders();
+    void                     compileInventoryShader();
     void                     compileShaders();
 
     Tempest::RenderPipeline  postEffect(std::string_view name);

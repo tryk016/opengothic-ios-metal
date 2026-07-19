@@ -208,6 +208,11 @@ rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
 rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=1' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
+rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled' \
+  "$WORK/log.txt" >/dev/null || fail "RendererIOS bridge-only shader policy marker is missing"
+if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
+  fail "legacy eager shader batch ran in RendererIOS"
+fi
 rg 'RendererIOS native Landscape: .*draws=[1-9][0-9]* textured=[1-9][0-9]*' \
   "$WORK/log.txt" >/dev/null || fail "no native textured Landscape frame was proven"
 if rg -i 'RendererIOS (fatal|GPU shutdown failed|native Landscape encode failed|IOSGPUScene metallib loading failed)|libc\\+\\+abi: terminating|SIGABRT' \
@@ -236,5 +241,5 @@ ditto "$WORK/log.txt" "$OUT/log.txt"
   echo "log_sha256=$(shasum -a 256 "$WORK/log.txt" | awk '{print $1}')"
 } >"$OUT/result.txt"
 
-echo "PASS — offline metallib + native textured Landscape runtime proven"
+echo "PASS — offline metallib + disabled legacy batch + native textured Landscape proven"
 echo "evidence: $OUT"

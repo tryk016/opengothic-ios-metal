@@ -274,8 +274,8 @@ struct IOSMetalContext::Impl final {
     };
 
   Impl(Device& device, SystemApi::Window* window)
-    : device(device), swapchain(device,window) {
-    (void)legacyShaders;
+    : device(device), swapchain(device,window),
+      legacyShaders(Shaders::CompilationProfile::RendererIOSBridge) {
     static constexpr TextureFormat depthCandidates[] = {
       TextureFormat::Depth16,
       TextureFormat::Depth32F,
@@ -813,7 +813,9 @@ struct IOSMetalContext::Impl final {
 
   // The P2.1a public frame ABI is neutral. VectorImage, InventoryRenderer and
   // VideoWidget remain a private transitional bridge until their data is
-  // exported into renderer-owned packets later in P2.1.
+  // exported into renderer-owned packets later in P2.1. RendererIOS selects
+  // the bridge-only shader profile so this ownership does not start the
+  // legacy renderer's eager shader compilation job.
   Shaders                                      legacyShaders;
 
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> uiMeshes;
