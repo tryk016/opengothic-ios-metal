@@ -6,6 +6,7 @@
 #include <Tempest/Except>
 #include <Tempest/Fence>
 #include <Tempest/Log>
+#include <Tempest/MetalApi>
 #include <Tempest/Painter>
 #include <Tempest/Pixmap>
 #include <Tempest/Swapchain>
@@ -275,7 +276,9 @@ struct IOSMetalContext::Impl final {
 
   Impl(Device& device, SystemApi::Window* window)
     : device(device), swapchain(device,window),
-      legacyShaders(Shaders::CompilationProfile::RendererIOSBridge) {
+      runtimeBeforeLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
+      legacyShaders(Shaders::CompilationProfile::RendererIOSBridge),
+      runtimeAfterLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)) {
     static constexpr TextureFormat depthCandidates[] = {
       TextureFormat::Depth16,
       TextureFormat::Depth32F,
@@ -315,6 +318,7 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       Log::i("RendererIOS diagnostics: ON frames-in-flight=",Resources::MaxFramesInFlight,
              " context=IOSMetalContext transport=Tempest");
+      logRuntimeCompilationBridge();
       if(ConfiguredFaultMode!=RendererIOSFaultMode::None)
         Log::i("RendererIOS fault injection armed: mode=",fault.name(),
                " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
@@ -324,6 +328,53 @@ struct IOSMetalContext::Impl final {
       }
     catch(...) {
       }
+    }
+
+  void logRuntimeCompilationBridge() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    try {
+      const bool available =
+        runtimeBeforeLegacyShaders.available &&
+        runtimeAfterLegacyShaders.available;
+      Log::i(
+        "RendererIOS runtime compilation: point=legacy-bridge available=",
+        available ? 1 : 0,
+        " source-before=",runtimeBeforeLegacyShaders.sourceLibraryRequests,
+        " source-after=",runtimeAfterLegacyShaders.sourceLibraryRequests,
+        " source-delta=",
+        counterDelta(runtimeAfterLegacyShaders.sourceLibraryRequests,
+                     runtimeBeforeLegacyShaders.sourceLibraryRequests),
+        " compute-before=",runtimeBeforeLegacyShaders.computePsoRequests,
+        " compute-after=",runtimeAfterLegacyShaders.computePsoRequests,
+        " compute-delta=",
+        counterDelta(runtimeAfterLegacyShaders.computePsoRequests,
+                     runtimeBeforeLegacyShaders.computePsoRequests),
+        " render-before=",runtimeBeforeLegacyShaders.renderPsoRequests,
+        " render-after=",runtimeAfterLegacyShaders.renderPsoRequests,
+        " render-delta=",
+        counterDelta(runtimeAfterLegacyShaders.renderPsoRequests,
+                     runtimeBeforeLegacyShaders.renderPsoRequests));
+      }
+    catch(...) {
+      }
+#endif
+    }
+
+  void logRuntimeCompilationFrame(uint64_t presents) noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    try {
+      const auto snapshot = MetalApi::runtimeCompilationSnapshot(device);
+      Log::d("RendererIOS runtime compilation: point=frame presents=",presents,
+             " available=",snapshot.available ? 1 : 0,
+             " source=",snapshot.sourceLibraryRequests,
+             " compute=",snapshot.computePsoRequests,
+             " render=",snapshot.renderPsoRequests);
+      }
+    catch(...) {
+      }
+#else
+    (void)presents;
+#endif
     }
 
   ~Impl() noexcept {
@@ -816,7 +867,9 @@ struct IOSMetalContext::Impl final {
   // exported into renderer-owned packets later in P2.1. RendererIOS selects
   // the bridge-only shader profile so this ownership does not start the
   // legacy renderer's eager shader compilation job.
+  MetalRuntimeCompilationSnapshot              runtimeBeforeLegacyShaders;
   Shaders                                      legacyShaders;
+  MetalRuntimeCompilationSnapshot              runtimeAfterLegacyShaders;
 
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> uiMeshes;
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> numberMeshes;
@@ -1269,6 +1322,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         }
       catch(...) {
         }
+      impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);
       }
 #endif
 

@@ -382,6 +382,9 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosgpuscene\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Fq 'legacyShaders(Shaders::CompilationProfile::RendererIOSBridge)' game/graphics/iosmetalcontext.cpp
           grep -Fq 'profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled' game/graphics/shaders.cpp
+          grep -Fq 'runtimeCompilationSnapshot(device)' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'point=legacy-bridge available=' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'runtime_compilation_bridge_source_delta=' ios/device-test/run-smoke-test.sh
 
       - name: Build iOS Release
         run: |

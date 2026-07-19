@@ -344,6 +344,72 @@ rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipeli
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
 fi
+python3 - "$WORK/log.txt" "$WORK/runtime-compilation-summary.txt" <<'PY' ||
+import pathlib
+import re
+import sys
+
+log = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+summary = pathlib.Path(sys.argv[2])
+bridge_re = re.compile(
+    r"RendererIOS runtime compilation: point=legacy-bridge available=(\d+) "
+    r"source-before=(\d+) source-after=(\d+) source-delta=(\d+) "
+    r"compute-before=(\d+) compute-after=(\d+) compute-delta=(\d+) "
+    r"render-before=(\d+) render-after=(\d+) render-delta=(\d+)"
+)
+frame_re = re.compile(
+    r"RendererIOS runtime compilation: point=frame presents=(\d+) available=(\d+) "
+    r"source=(\d+) compute=(\d+) render=(\d+)"
+)
+
+bridges = [tuple(map(int, match.groups())) for match in bridge_re.finditer(log)]
+if len(bridges) != 1:
+    raise SystemExit(f"expected one runtime compilation bridge marker, found {len(bridges)}")
+
+(available, source_before, source_after, source_delta,
+ compute_before, compute_after, compute_delta,
+ render_before, render_after, render_delta) = bridges[0]
+if available != 1:
+    raise SystemExit("Metal runtime compilation counters are unavailable")
+if source_after < source_before or source_delta != source_after-source_before:
+    raise SystemExit("source-library bridge counters are inconsistent")
+if compute_after < compute_before or compute_delta != compute_after-compute_before:
+    raise SystemExit("compute-PSO bridge counters are inconsistent")
+if render_after < render_before or render_delta != render_after-render_before:
+    raise SystemExit("render-PSO bridge counters are inconsistent")
+if (source_delta, compute_delta, render_delta) != (4, 0, 0):
+    raise SystemExit(
+        "bridge-only construction must request exactly four source libraries "
+        "and no native PSO"
+    )
+
+frames = [tuple(map(int, match.groups())) for match in frame_re.finditer(log)]
+if len(frames) < 2 or frames[0][0] != 1 or frames[-1][0] < 300:
+    raise SystemExit("runtime compilation frame markers do not cover presents 1 through 300")
+previous = (0, source_after, compute_after, render_after)
+for present, frame_available, source, compute, render in frames:
+    if frame_available != 1:
+        raise SystemExit("Metal runtime compilation counters disappeared during frames")
+    if present <= previous[0]:
+        raise SystemExit("runtime compilation frame markers are not strictly ordered")
+    if (source < previous[1] or
+        compute < previous[2] or
+        render < previous[3]):
+        raise SystemExit("runtime compilation counters are not monotonic")
+    previous = (present, source, compute, render)
+
+last_present, _, last_source, last_compute, last_render = frames[-1]
+summary.write_text(
+    f"runtime_compilation_bridge_source_delta={source_delta}\n"
+    f"runtime_compilation_bridge_compute_delta={compute_delta}\n"
+    f"runtime_compilation_bridge_render_delta={render_delta}\n"
+    f"runtime_compilation_last_present={last_present}\n"
+    f"runtime_compilation_last_source={last_source}\n"
+    f"runtime_compilation_last_compute={last_compute}\n"
+    f"runtime_compilation_last_render={last_render}\n"
+)
+PY
+  fail "runtime compilation counter evidence is incomplete or inconsistent"
 rg 'RendererIOS native Landscape: .*draws=[1-9][0-9]* textured=[1-9][0-9]*' \
   "$WORK/log.txt" >/dev/null || fail "no native textured Landscape frame was proven"
 if rg -i 'RendererIOS (fatal|GPU shutdown failed|native Landscape encode failed|IOSGPUScene metallib loading failed)|libc\\+\\+abi: terminating|SIGABRT' \
@@ -374,7 +440,8 @@ ditto "$WORK/log.txt" "$OUT/log.txt"
   echo "metallib_sha256=$METALLIB_SHA"
   echo "log_sha256=$(shasum -a 256 "$WORK/log.txt" | awk '{print $1}')"
   echo "device_process_stopped=1"
+  cat "$WORK/runtime-compilation-summary.txt"
 } >"$OUT/result.txt"
 
-echo "PASS — offline metallib + disabled legacy batch + native textured Landscape proven; app stopped"
+echo "PASS — offline metallib + runtime compilation counters + native textured Landscape proven; app stopped"
 echo "evidence: $OUT"
