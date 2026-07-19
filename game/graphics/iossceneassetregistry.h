@@ -33,6 +33,26 @@ enum class IOSSceneMeshValidation : uint8_t {
   InvalidBounds,
   };
 
+enum class IOSSceneTextureFormat : uint8_t {
+  Invalid,
+  Rgba8Unorm,
+  Bc1Rgba,
+  Bc2Rgba,
+  Bc3Rgba,
+  };
+
+enum class IOSSceneTextureValidation : uint8_t {
+  Valid,
+  InvalidRegistryGeneration,
+  EmptyHandle,
+  GenerationMismatch,
+  EmptyWidth,
+  EmptyHeight,
+  EmptyMipCount,
+  ExcessiveMipCount,
+  UnsupportedFormat,
+  };
+
 enum class IOSSceneAssetBindResult : uint8_t {
   Bound,
   AlreadyBound,
@@ -64,9 +84,10 @@ struct IOSSceneMeshMetadata final {
   };
 
 struct IOSSceneTextureMetadata final {
-  uint32_t width    = 0;
-  uint32_t height   = 0;
-  uint32_t mipCount = 0;
+  uint32_t              width    = 0;
+  uint32_t              height   = 0;
+  uint32_t              mipCount = 0;
+  IOSSceneTextureFormat format   = IOSSceneTextureFormat::Invalid;
 
   constexpr bool operator==(const IOSSceneTextureMetadata&) const noexcept = default;
   };
@@ -158,6 +179,15 @@ class IOSSceneAssetRegistry final {
         IOSBounds bounds) noexcept;
 
     [[nodiscard]]
+    static IOSSceneTextureValidation validateTextureBinding(
+        IOSWorldGeneration registryGeneration,
+        IOSTextureHandle handle,
+        uint32_t width,
+        uint32_t height,
+        uint32_t mipCount,
+        IOSSceneTextureFormat format) noexcept;
+
+    [[nodiscard]]
     static constexpr bool canAdvanceGeneration(
         IOSWorldGeneration current,
         IOSWorldGeneration next) noexcept {
@@ -231,4 +261,49 @@ inline IOSSceneMeshValidation IOSSceneAssetRegistry::validateMeshBinding(
   if(!finiteBounds || !orderedBounds)
     return IOSSceneMeshValidation::InvalidBounds;
   return IOSSceneMeshValidation::Valid;
+  }
+
+inline IOSSceneTextureValidation IOSSceneAssetRegistry::validateTextureBinding(
+    IOSWorldGeneration registryGeneration,
+    IOSTextureHandle handle,
+    uint32_t width,
+    uint32_t height,
+    uint32_t mipCount,
+    IOSSceneTextureFormat format) noexcept {
+  if(!registryGeneration)
+    return IOSSceneTextureValidation::InvalidRegistryGeneration;
+  if(!handle)
+    return IOSSceneTextureValidation::EmptyHandle;
+  if(handle.generation!=registryGeneration)
+    return IOSSceneTextureValidation::GenerationMismatch;
+  if(width==0u)
+    return IOSSceneTextureValidation::EmptyWidth;
+  if(height==0u)
+    return IOSSceneTextureValidation::EmptyHeight;
+  if(mipCount==0u)
+    return IOSSceneTextureValidation::EmptyMipCount;
+
+  uint32_t maximumMipCount = 1u;
+  uint32_t maximumExtent = width>height ? width : height;
+  while(maximumExtent>1u) {
+    maximumExtent /= 2u;
+    ++maximumMipCount;
+    }
+  if(mipCount>maximumMipCount)
+    return IOSSceneTextureValidation::ExcessiveMipCount;
+  switch(format) {
+    case IOSSceneTextureFormat::Rgba8Unorm:
+    case IOSSceneTextureFormat::Bc1Rgba:
+    case IOSSceneTextureFormat::Bc2Rgba:
+    case IOSSceneTextureFormat::Bc3Rgba:
+      break;
+    case IOSSceneTextureFormat::Invalid:
+      return IOSSceneTextureValidation::UnsupportedFormat;
+    }
+  if(format!=IOSSceneTextureFormat::Rgba8Unorm &&
+     format!=IOSSceneTextureFormat::Bc1Rgba &&
+     format!=IOSSceneTextureFormat::Bc2Rgba &&
+     format!=IOSSceneTextureFormat::Bc3Rgba)
+    return IOSSceneTextureValidation::UnsupportedFormat;
+  return IOSSceneTextureValidation::Valid;
   }

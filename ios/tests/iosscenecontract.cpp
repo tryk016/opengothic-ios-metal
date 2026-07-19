@@ -256,10 +256,28 @@ int main() {
     (void)invalidWorld.buildSnapshot(std::move(foreignTexture));
     }));
 
+  auto fabricatedTexture = populatedFrame(invalidHandles,1.f,1.f);
+  fabricatedTexture.materials[0].baseColorTexture = {
+    invalidWorld.generation(),
+    invalidHandles.texture.value+1000u,
+    };
+  assert(rejectsFrame([&]() {
+    (void)invalidWorld.buildSnapshot(std::move(fabricatedTexture));
+    }));
+
   const auto firstValidAfterRejects =
     invalidWorld.buildSnapshot(populatedFrame(invalidHandles,1.f,1.f));
   assert(firstValidAfterRejects->sequence.value==1u);
   assert(firstValidAfterRejects->isStructurallyValid());
+
+  IOSRenderWorld optionalTextureWorld;
+  const auto optionalHandles = resolveScene(optionalTextureWorld,4000u);
+  auto optionalTextureFrame = populatedFrame(optionalHandles,1.f,1.f);
+  optionalTextureFrame.materials[0].baseColorTexture = {};
+  optionalTextureFrame.particles[0].texture = {};
+  const auto optionalTextureSnapshot =
+      optionalTextureWorld.buildSnapshot(std::move(optionalTextureFrame));
+  assert(optionalTextureSnapshot->isStructurallyValid());
 
   world.resetHistory();
   assert(!world.acceptsForSubmit(accepted));

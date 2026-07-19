@@ -140,6 +140,27 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
       source,impl->device,impl->renderWorld,impl->assets,scene);
     if(extraction.result!=IOSSceneExtractionResult::Success)
       throw std::runtime_error("RendererIOS Landscape scene extraction failed");
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    const auto nextSequence =
+        impl->renderWorld.lastAcceptedSequence().value+1u;
+    if(nextSequence==1u || nextSequence%300u==0u) {
+      try {
+        Log::d("RendererIOS Landscape extraction: visited=",
+               uint64_t(extraction.stats.visited),
+               " planned=",uint64_t(extraction.stats.planned),
+               " skipped-kind=",uint64_t(extraction.stats.skippedKind),
+               " skipped-material=",
+               uint64_t(extraction.stats.skippedMaterial),
+               " skipped-texture-animation=",
+               uint64_t(extraction.stats.skippedTextureAnimation),
+               " fallback-texture=",
+               uint64_t(extraction.stats.fallbackTexture),
+               " invalid=",uint64_t(extraction.stats.invalidSource));
+        }
+      catch(...) {
+        }
+      }
+#endif
     }
 
   auto snapshot = impl->renderWorld.buildSnapshot(std::move(scene));

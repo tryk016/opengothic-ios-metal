@@ -4,6 +4,7 @@
 #include "iossceneconversion.h"
 #include "material.h"
 #include "mesh/submesh/staticmesh.h"
+#include "resources.h"
 
 #include <Tempest/Device>
 
@@ -47,6 +48,12 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.hasMaterial    = source.material!=nullptr;
   candidate.isSolidMaterial =
       source.material!=nullptr && source.material->alpha==Material::Solid;
+  candidate.hasBaseColorTexture =
+      source.material!=nullptr && source.material->tex!=nullptr;
+  candidate.hasTextureAnimation =
+      source.material!=nullptr &&
+      (source.material->hasFrameAnimation() ||
+       source.material->hasUvAnimation());
   candidate.hasLocalBounds = source.hasLocalBounds;
   candidate.transform      = IOSSceneConversion::matrix(source.transform);
   candidate.localBounds    = bounds(source);
@@ -60,6 +67,9 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       return;
     case IOSSceneSourcePlanResult::SkippedMaterial:
       ++context.report.stats.skippedMaterial;
+      return;
+    case IOSSceneSourcePlanResult::SkippedTextureAnimation:
+      ++context.report.stats.skippedTextureAnimation;
       return;
     case IOSSceneSourcePlanResult::InvalidSource:
       ++context.report.stats.invalidSource;
@@ -75,6 +85,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       context.renderWorld->resolveMesh(plan.meshStableKey);
   const IOSMaterialHandle material =
       context.renderWorld->resolveMaterial(plan.materialStableKey);
+  const IOSTextureHandle texture =
+      context.renderWorld->resolveTexture(plan.textureStableKey);
 
   const auto bound = context.assets->bindMesh(
       *context.device,
@@ -92,9 +104,23 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     return;
     }
 
+  const Tempest::Texture2d& baseColorTexture =
+      source.material->tex!=nullptr
+        ? *source.material->tex
+        : Resources::fallbackTexture();
+  const auto textureBound = context.assets->bindTexture(
+      *context.device,texture,baseColorTexture);
+  if(textureBound!=IOSSceneAssetBindResult::Bound &&
+     textureBound!=IOSSceneAssetBindResult::AlreadyBound) {
+    context.report.result = IOSSceneExtractionResult::AssetBindFailed;
+    context.report.bindFailure = textureBound;
+    return;
+    }
+
   IOSMaterial materialRecord;
-  materialRecord.id       = material;
-  materialRecord.category = plan.materialCategory;
+  materialRecord.id               = material;
+  materialRecord.baseColorTexture = texture;
+  materialRecord.category         = plan.materialCategory;
   context.materials.push_back(materialRecord);
 
   IOSRenderEntityState entityRecord;
@@ -106,6 +132,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   entityRecord.visibilityMask = plan.visibilityMask;
   context.entities.push_back(entityRecord);
   ++context.report.stats.planned;
+  if(plan.usesFallbackTexture)
+    ++context.report.stats.fallbackTexture;
   }
 
 }

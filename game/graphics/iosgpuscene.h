@@ -38,6 +38,8 @@ class IOSGPUScene final {
       GenerationMismatch,
       MissingMaterial,
       UnsupportedMaterial,
+      MissingTexture,
+      InvalidTexture,
       MissingMesh,
       InvalidMesh,
       NoActiveRenderEncoder,
@@ -48,6 +50,7 @@ class IOSGPUScene final {
     struct Report final {
       Result   result = Result::Empty;
       uint32_t drawCount = 0;
+      uint32_t texturedDrawCount = 0;
       uint64_t failingHandle = 0;
       };
 

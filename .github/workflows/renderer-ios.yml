@@ -226,7 +226,9 @@ jobs:
           test -f game/graphics/iosgpusceneplan.h
           test -f game/graphics/iosgpuscene.h
           test -f game/graphics/iosgpuscene.mm
+          test -f game/graphics/ioslandscapeshader.h
           test -f ios/tests/iosgpusceneplan.cpp
+          test -f ios/tests/ioslandscapeshader.cpp
 
           printf '#include "graphics/iosgpusceneplan.h"\nint main() { return 0; }\n' |
             xcrun clang++ -x c++ -std=c++20 \
@@ -253,20 +255,13 @@ jobs:
             -isystem lib/ZenKit/include \
             -fsyntax-only game/graphics/iosgpuscene.mm
 
-          python3 - "$RUNNER_TEMP/ios-landscape.metal" <<'PY'
-          from pathlib import Path
-          import sys
-
-          source = Path("game/graphics/iosgpuscene.mm").read_text(
-              encoding="utf-8")
-          begin_marker = (
-              'constexpr char LandscapeShaderSource[] = R"metal(\n')
-          end_marker = '\n)metal";'
-          begin = source.index(begin_marker)+len(begin_marker)
-          end = source.index(end_marker,begin)
-          Path(sys.argv[1]).write_text(
-              source[begin:end]+"\n",encoding="utf-8")
-          PY
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/ioslandscapeshader.cpp \
+            -o "$RUNNER_TEMP/ioslandscapeshader"
+          "$RUNNER_TEMP/ioslandscapeshader" \
+            > "$RUNNER_TEMP/ios-landscape.metal"
           xcrun --sdk iphoneos metal \
             -c "$RUNNER_TEMP/ios-landscape.metal" \
             -o "$RUNNER_TEMP/ios-landscape.air"

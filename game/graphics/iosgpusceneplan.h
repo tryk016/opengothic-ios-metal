@@ -16,6 +16,8 @@ enum class IOSGPUSceneDrawPlanResult : uint8_t {
   GenerationMismatch,
   MissingMaterial,
   UnsupportedMaterial,
+  MissingTexture,
+  InvalidTexture,
   MissingMesh,
   InvalidMesh,
   };
@@ -26,6 +28,13 @@ struct IOSGPUSceneMeshCandidate final {
   IOSRenderEntity     entity;
   IOSMaterial         material;
   bool                hasMaterial = false;
+  bool                hasTexture = false;
+  bool                hasNativeTexture = false;
+  bool                hasSupportedTextureFormat = false;
+  bool                hasValidNativeTexture = false;
+  uint32_t            textureWidth = 0;
+  uint32_t            textureHeight = 0;
+  uint32_t            textureMipCount = 0;
   bool                hasMesh = false;
   bool                hasNativeVertexBuffer = false;
   bool                hasNativeIndexBuffer = false;
@@ -36,6 +45,37 @@ struct IOSGPUSceneMeshCandidate final {
   std::size_t         indexCount = 0;
   };
 
+inline uint64_t iosGPUSceneFailingHandle(
+    IOSGPUSceneDrawPlanResult result,
+    const IOSGPUSceneMeshCandidate& source) noexcept {
+  switch(result) {
+    case IOSGPUSceneDrawPlanResult::MissingMaterial:
+    case IOSGPUSceneDrawPlanResult::UnsupportedMaterial:
+      return source.entity.material.value;
+    case IOSGPUSceneDrawPlanResult::MissingTexture:
+      return source.material.baseColorTexture
+          ? source.material.baseColorTexture.value
+          : source.entity.material.value;
+    case IOSGPUSceneDrawPlanResult::InvalidTexture:
+      return source.material.baseColorTexture.value;
+    case IOSGPUSceneDrawPlanResult::GenerationMismatch:
+      if(source.material.baseColorTexture &&
+         source.material.baseColorTexture.generation!=
+             source.snapshotGeneration)
+        return source.material.baseColorTexture.value;
+      if(source.entity.material.generation!=source.snapshotGeneration)
+        return source.entity.material.value;
+      return source.entity.mesh.value;
+    case IOSGPUSceneDrawPlanResult::MissingMesh:
+    case IOSGPUSceneDrawPlanResult::InvalidMesh:
+      return source.entity.mesh.value;
+    case IOSGPUSceneDrawPlanResult::Draw:
+    case IOSGPUSceneDrawPlanResult::SkippedVisibility:
+      return 0;
+    }
+  return 0;
+  }
+
 struct alignas(16) IOSGPUSceneDrawConstants final {
   IOSMatrix4x4 viewProjection;
   IOSMatrix4x4 model;
@@ -44,6 +84,7 @@ struct alignas(16) IOSGPUSceneDrawConstants final {
 
 struct IOSGPUSceneDrawPlan final {
   IOSGPUSceneDrawConstants constants;
+  IOSTextureHandle         baseColorTexture;
   std::size_t              indexBufferOffset = 0;
   std::size_t              indexCount = 0;
   };
@@ -58,12 +99,32 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
   if(!source.snapshotGeneration || !source.registryGeneration ||
      source.snapshotGeneration!=source.registryGeneration ||
      source.entity.mesh.generation!=source.snapshotGeneration ||
-     source.entity.material.generation!=source.snapshotGeneration)
+     source.entity.material.generation!=source.snapshotGeneration ||
+     (source.material.baseColorTexture &&
+      source.material.baseColorTexture.generation!=source.snapshotGeneration))
     return IOSGPUSceneDrawPlanResult::GenerationMismatch;
   if(!source.hasMaterial || source.material.id!=source.entity.material)
     return IOSGPUSceneDrawPlanResult::MissingMaterial;
   if(source.material.category!=IOSMaterialCategory::Opaque)
     return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
+  if(!source.material.baseColorTexture || !source.hasTexture)
+    return IOSGPUSceneDrawPlanResult::MissingTexture;
+  if(!source.hasNativeTexture || !source.hasSupportedTextureFormat ||
+     !source.hasValidNativeTexture || source.textureWidth==0u ||
+     source.textureHeight==0u || source.textureMipCount==0u)
+    return IOSGPUSceneDrawPlanResult::InvalidTexture;
+
+  uint32_t maximumTextureMipCount = 1u;
+  uint32_t maximumTextureExtent =
+      source.textureWidth>source.textureHeight
+        ? source.textureWidth
+        : source.textureHeight;
+  while(maximumTextureExtent>1u) {
+    maximumTextureExtent /= 2u;
+    ++maximumTextureMipCount;
+    }
+  if(source.textureMipCount>maximumTextureMipCount)
+    return IOSGPUSceneDrawPlanResult::InvalidTexture;
   if(!source.hasMesh)
     return IOSGPUSceneDrawPlanResult::MissingMesh;
 
@@ -103,6 +164,7 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
   out.constants.viewProjection = camera.viewProjection;
   out.constants.model          = source.entity.currentTransform;
   out.constants.baseColor      = source.material.baseColor;
+  out.baseColorTexture         = source.material.baseColorTexture;
   out.indexBufferOffset =
       source.firstIndex*IOSLandscapeIndexStride;
   out.indexCount = source.indexCount;

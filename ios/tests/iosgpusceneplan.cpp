@@ -18,7 +18,15 @@ IOSGPUSceneMeshCandidate validCandidate() {
   source.material.id           = source.entity.material;
   source.material.category     = IOSMaterialCategory::Opaque;
   source.material.baseColor    = {0.25f,0.5f,0.75f,1.f};
+  source.material.baseColorTexture = {source.snapshotGeneration,4};
   source.hasMaterial           = true;
+  source.hasTexture            = true;
+  source.hasNativeTexture      = true;
+  source.hasSupportedTextureFormat = true;
+  source.hasValidNativeTexture = true;
+  source.textureWidth          = 512u;
+  source.textureHeight         = 256u;
+  source.textureMipCount       = 10u;
   source.hasMesh               = true;
   source.hasNativeVertexBuffer = true;
   source.hasNativeIndexBuffer  = true;
@@ -47,6 +55,9 @@ int main() {
     assert(plan.constants.viewProjection.at(1u,2u)==3.f);
     assert(plan.constants.model.at(2u,3u)==4.f);
     assert(plan.constants.baseColor==source.material.baseColor);
+    assert(plan.baseColorTexture==source.material.baseColorTexture);
+    assert(iosGPUSceneFailingHandle(
+               IOSGPUSceneDrawPlanResult::Draw,source)==0u);
   }
 
   {
@@ -87,6 +98,95 @@ int main() {
     IOSGPUSceneDrawPlan plan;
     assert(planIOSGPUSceneDraw(camera,source,plan)==
            IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+  }
+
+  {
+    auto source = validCandidate();
+    source.material.baseColorTexture = {};
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::MissingTexture);
+    assert(iosGPUSceneFailingHandle(
+               IOSGPUSceneDrawPlanResult::MissingTexture,source)==
+           source.entity.material.value);
+  }
+
+  {
+    auto source = validCandidate();
+    source.material.baseColorTexture.generation = IOSWorldGeneration{8};
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::GenerationMismatch);
+    assert(iosGPUSceneFailingHandle(
+               IOSGPUSceneDrawPlanResult::GenerationMismatch,source)==
+           source.material.baseColorTexture.value);
+  }
+
+  {
+    auto source = validCandidate();
+    source.hasTexture = false;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::MissingTexture);
+  }
+
+  {
+    auto source = validCandidate();
+    source.hasNativeTexture = false;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
+    assert(iosGPUSceneFailingHandle(
+               IOSGPUSceneDrawPlanResult::InvalidTexture,source)==
+           source.material.baseColorTexture.value);
+  }
+
+  {
+    auto source = validCandidate();
+    source.hasSupportedTextureFormat = false;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
+  }
+
+  {
+    auto source = validCandidate();
+    source.hasValidNativeTexture = false;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
+  }
+
+  {
+    auto source = validCandidate();
+    source.textureWidth = 0u;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
+  }
+
+  {
+    auto source = validCandidate();
+    source.textureHeight = 0u;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
+  }
+
+  {
+    auto source = validCandidate();
+    source.textureMipCount = 0u;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
+  }
+
+  {
+    auto source = validCandidate();
+    source.textureMipCount = 11u;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidTexture);
   }
 
   {
@@ -190,6 +290,7 @@ int main() {
     assert(plan.indexBufferOffset==0u);
     assert(plan.indexCount==0u);
     assert(plan.constants.baseColor==IOSFloat4{});
+    assert(plan.baseColorTexture==IOSTextureHandle{});
   }
 
   {

@@ -28,6 +28,8 @@ struct IOSSceneExtractionStats final {
   std::size_t planned = 0;
   std::size_t skippedKind = 0;
   std::size_t skippedMaterial = 0;
+  std::size_t skippedTextureAnimation = 0;
+  std::size_t fallbackTexture = 0;
   std::size_t invalidSource = 0;
   };
 

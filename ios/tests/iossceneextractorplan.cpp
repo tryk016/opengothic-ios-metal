@@ -13,6 +13,7 @@ IOSSceneLandscapeCandidate candidate() {
   source.hasStaticMesh  = true;
   source.hasMaterial    = true;
   source.isSolidMaterial = true;
+  source.hasBaseColorTexture = true;
   source.hasLocalBounds = true;
   source.localBounds    = {{-2.f,-3.f,-4.f},{5.f,6.f,7.f}};
   source.indices        = {192,384};
@@ -42,11 +43,13 @@ int main() {
   assert(plan.entityStableKey==41);
   assert(plan.meshStableKey==41);
   assert(plan.materialStableKey==41);
+  assert(plan.textureStableKey==41);
   assert(plan.indices==accepted.indices);
   assert(plan.localBounds==accepted.localBounds);
   assert(plan.transform==accepted.transform);
   assert(plan.materialCategory==IOSMaterialCategory::Opaque);
   assert(plan.visibilityMask==IOSSceneVisibilityMain);
+  assert(!plan.usesFallbackTexture);
 
   auto otherKind = accepted;
   otherKind.isLandscape = false;
@@ -58,6 +61,14 @@ int main() {
   assert(planIOSLandscapeSource(alphaTest,plan)==
          IOSSceneSourcePlanResult::SkippedMaterial);
 
+  auto animatedTexture = accepted;
+  animatedTexture.hasTextureAnimation = true;
+  assert(planIOSLandscapeSource(animatedTexture,plan)==
+         IOSSceneSourcePlanResult::SkippedTextureAnimation);
+  assert(plan.entityStableKey==0u);
+  assert(plan.textureStableKey==0u);
+  assert(plan.indices==IOSIndexRange{});
+
   auto noMaterial = accepted;
   noMaterial.hasMaterial = false;
   assert(planIOSLandscapeSource(noMaterial,plan)==
@@ -67,6 +78,13 @@ int main() {
   noMesh.hasStaticMesh = false;
   assert(planIOSLandscapeSource(noMesh,plan)==
          IOSSceneSourcePlanResult::InvalidSource);
+
+  auto noTexture = accepted;
+  noTexture.hasBaseColorTexture = false;
+  assert(planIOSLandscapeSource(noTexture,plan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(plan.usesFallbackTexture);
+  assert(plan.textureStableKey==noTexture.sourceId);
 
   auto noIdentity = accepted;
   noIdentity.sourceId = 0;

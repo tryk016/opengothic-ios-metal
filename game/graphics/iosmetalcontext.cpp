@@ -274,7 +274,7 @@ struct IOSMetalContext::Impl final {
     resetTargets();
     const auto platform = rendererIOSPlatformInfo();
     try {
-      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape,ui,inventory,save-placeholder build=",
+      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui,inventory,save-placeholder build=",
              OPENGOTHIC_RENDERER_IOS_BUILD_SHA," gpu=",device.properties().name,
              " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data(),
              " faultMode=",fault.name());
@@ -1124,13 +1124,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             iosGPUSceneResultName(report.result)+
             " handle="+std::to_string(report.failingHandle));
           }
+        if(report.drawCount==0u ||
+           report.texturedDrawCount!=report.drawCount) {
+          throw std::runtime_error(
+            std::string(
+              "RendererIOS native Landscape texture coverage failed: draws=")+
+            std::to_string(report.drawCount)+
+            " textured="+std::to_string(report.texturedDrawCount));
+          }
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(input.snapshot->sequence.value==1u ||
            input.snapshot->sequence.value%300u==0u) {
           Log::d("RendererIOS native Landscape: generation=",
                  input.snapshot->generation.value,
                  " sequence=",input.snapshot->sequence.value,
-                 " draws=",uint64_t(report.drawCount));
+                 " draws=",uint64_t(report.drawCount),
+                 " textured=",uint64_t(report.texturedDrawCount));
           }
 #endif
         encoder.setDebugMarker("RendererIOS UI over native Landscape");

@@ -10,6 +10,7 @@ namespace {
 
 constexpr IOSWorldGeneration Generation{7};
 constexpr IOSMeshHandle Mesh{Generation,11};
+constexpr IOSTextureHandle Texture{Generation,12};
 constexpr IOSBounds Bounds{{-1.f,-2.f,-3.f},{1.f,2.f,3.f}};
 
 IOSSceneMeshValidation validate(
@@ -23,6 +24,17 @@ IOSSceneMeshValidation validate(
     IOSWorldGeneration generation = Generation) {
   return IOSSceneAssetRegistry::validateMeshBinding(
     generation,handle,vertexBytes,indexBytes,stride,firstIndex,indexCount,bounds);
+  }
+
+IOSSceneTextureValidation validateTexture(
+    uint32_t width = 512u,
+    uint32_t height = 256u,
+    uint32_t mipCount = 10u,
+    IOSSceneTextureFormat format = IOSSceneTextureFormat::Rgba8Unorm,
+    IOSTextureHandle handle = Texture,
+    IOSWorldGeneration generation = Generation) {
+  return IOSSceneAssetRegistry::validateTextureBinding(
+      generation,handle,width,height,mipCount,format);
   }
 
 void validatePublicContract() {
@@ -120,6 +132,37 @@ void validateBoundsRules() {
          IOSSceneMeshValidation::InvalidBounds);
   }
 
+void validateTextureRules() {
+  assert(validateTexture()==IOSSceneTextureValidation::Valid);
+  assert(validateTexture(1u,1u,1u)==IOSSceneTextureValidation::Valid);
+  assert(validateTexture(512u,256u,10u,IOSSceneTextureFormat::Bc1Rgba)==
+         IOSSceneTextureValidation::Valid);
+  assert(validateTexture(512u,256u,10u,IOSSceneTextureFormat::Bc2Rgba)==
+         IOSSceneTextureValidation::Valid);
+  assert(validateTexture(512u,256u,10u,IOSSceneTextureFormat::Bc3Rgba)==
+         IOSSceneTextureValidation::Valid);
+  assert(validateTexture(512u,256u,10u,
+                         IOSSceneTextureFormat::Rgba8Unorm,Texture,{})==
+         IOSSceneTextureValidation::InvalidRegistryGeneration);
+  assert(validateTexture(512u,256u,10u,
+                         IOSSceneTextureFormat::Rgba8Unorm,{})==
+         IOSSceneTextureValidation::EmptyHandle);
+  assert(validateTexture(512u,256u,10u,
+                         IOSSceneTextureFormat::Rgba8Unorm,{{8},12})==
+         IOSSceneTextureValidation::GenerationMismatch);
+  assert(validateTexture(0u)==IOSSceneTextureValidation::EmptyWidth);
+  assert(validateTexture(512u,0u)==IOSSceneTextureValidation::EmptyHeight);
+  assert(validateTexture(512u,256u,0u)==
+         IOSSceneTextureValidation::EmptyMipCount);
+  assert(validateTexture(512u,256u,11u)==
+         IOSSceneTextureValidation::ExcessiveMipCount);
+  assert(validateTexture(512u,256u,10u,IOSSceneTextureFormat::Invalid)==
+         IOSSceneTextureValidation::UnsupportedFormat);
+  assert(validateTexture(
+             512u,256u,10u,static_cast<IOSSceneTextureFormat>(255u))==
+         IOSSceneTextureValidation::UnsupportedFormat);
+  }
+
 }
 
 int main() {
@@ -130,5 +173,6 @@ int main() {
   validateBufferAndStrideRules();
   validateTriangleAndIndexRangeRules();
   validateBoundsRules();
+  validateTextureRules();
   return 0;
   }

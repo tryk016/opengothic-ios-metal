@@ -10,6 +10,7 @@ enum class IOSSceneSourcePlanResult : uint8_t {
   Planned,
   SkippedKind,
   SkippedMaterial,
+  SkippedTextureAnimation,
   InvalidSource,
   };
 
@@ -19,23 +20,27 @@ struct IOSSceneLandscapeCandidate final {
   bool           hasStaticMesh = false;
   bool           hasMaterial = false;
   bool           isSolidMaterial = false;
+  bool           hasBaseColorTexture = false;
+  bool           hasTextureAnimation = false;
   bool           hasLocalBounds = false;
   IOSMatrix4x4   transform;
   IOSBounds      localBounds;
   IOSIndexRange  indices;
   };
 
-// Pointer-free plan. The three stable keys deliberately share sourceId but are
+// Pointer-free plan. The four stable keys deliberately share sourceId but are
 // resolved in independent IOSRenderWorld registries.
 struct IOSSceneLandscapePlan final {
   uint64_t            entityStableKey = 0;
   uint64_t            meshStableKey = 0;
   uint64_t            materialStableKey = 0;
+  uint64_t            textureStableKey = 0;
   IOSMatrix4x4        transform;
   IOSBounds           localBounds;
   IOSIndexRange       indices;
   IOSMaterialCategory materialCategory = IOSMaterialCategory::Opaque;
   uint64_t            visibilityMask = IOSSceneVisibilityMain;
+  bool                usesFallbackTexture = false;
   };
 
 inline IOSSceneSourcePlanResult planIOSLandscapeSource(
@@ -48,6 +53,8 @@ inline IOSSceneSourcePlanResult planIOSLandscapeSource(
     return IOSSceneSourcePlanResult::InvalidSource;
   if(!source.isSolidMaterial)
     return IOSSceneSourcePlanResult::SkippedMaterial;
+  if(source.hasTextureAnimation)
+    return IOSSceneSourcePlanResult::SkippedTextureAnimation;
   if(source.sourceId==0 || !source.hasStaticMesh || !source.hasLocalBounds ||
      source.indices.count==0 ||
      source.indices.count%uint32_t(3)!=0 ||
@@ -75,10 +82,12 @@ inline IOSSceneSourcePlanResult planIOSLandscapeSource(
   out.entityStableKey   = source.sourceId;
   out.meshStableKey     = source.sourceId;
   out.materialStableKey = source.sourceId;
+  out.textureStableKey  = source.sourceId;
   out.transform         = source.transform;
   out.localBounds       = source.localBounds;
   out.indices           = source.indices;
   out.materialCategory  = IOSMaterialCategory::Opaque;
   out.visibilityMask    = IOSSceneVisibilityMain;
+  out.usesFallbackTexture = !source.hasBaseColorTexture;
   return IOSSceneSourcePlanResult::Planned;
   }

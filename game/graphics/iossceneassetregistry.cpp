@@ -18,6 +18,21 @@ bool sameTexture(Tempest::BorrowedMetalTexture lhs,
   return lhs.get()==rhs.get();
   }
 
+IOSSceneTextureFormat textureFormat(Tempest::TextureFormat format) noexcept {
+  switch(format) {
+    case Tempest::TextureFormat::RGBA8:
+      return IOSSceneTextureFormat::Rgba8Unorm;
+    case Tempest::TextureFormat::DXT1:
+      return IOSSceneTextureFormat::Bc1Rgba;
+    case Tempest::TextureFormat::DXT3:
+      return IOSSceneTextureFormat::Bc2Rgba;
+    case Tempest::TextureFormat::DXT5:
+      return IOSSceneTextureFormat::Bc3Rgba;
+    default:
+      return IOSSceneTextureFormat::Invalid;
+    }
+  }
+
 }
 
 IOSSceneAssetRegistry::IOSSceneAssetRegistry(
@@ -123,10 +138,20 @@ IOSSceneAssetBindResult IOSSceneAssetRegistry::bindTexture(
     return IOSSceneAssetBindResult::InvalidDevice;
   if(registryState!=IOSSceneAssetRegistryState::Active)
     return IOSSceneAssetBindResult::ResetRequired;
-  if(!handle || handle.generation!=worldGeneration)
+
+  const IOSSceneTextureMetadata metadata = {
+    texture.w()>0 ? static_cast<uint32_t>(texture.w()) : 0u,
+    texture.h()>0 ? static_cast<uint32_t>(texture.h()) : 0u,
+    texture.mipCount(),
+    textureFormat(texture.format()),
+    };
+  const auto validation = validateTextureBinding(
+      worldGeneration,handle,metadata.width,metadata.height,
+      metadata.mipCount,metadata.format);
+  if(validation==IOSSceneTextureValidation::EmptyHandle ||
+     validation==IOSSceneTextureValidation::GenerationMismatch)
     return IOSSceneAssetBindResult::InvalidHandle;
-  if(texture.isEmpty() || texture.w()<=0 || texture.h()<=0 ||
-     texture.mipCount()==0)
+  if(validation!=IOSSceneTextureValidation::Valid)
     return IOSSceneAssetBindResult::InvalidMetadata;
 
   Tempest::BorrowedMetalTexture nativeTexture;
@@ -138,11 +163,6 @@ IOSSceneAssetBindResult IOSSceneAssetRegistry::bindTexture(
   return IOSSceneAssetBindResult::NativeHandleUnavailable;
 #endif
 
-  const IOSSceneTextureMetadata metadata = {
-    static_cast<uint32_t>(texture.w()),
-    static_cast<uint32_t>(texture.h()),
-    texture.mipCount(),
-    };
   const IOSSceneTextureAsset asset = {nativeTexture,metadata};
   if(const auto found=textures.find(handle.value); found!=textures.end()) {
     const auto& current = found->second;
