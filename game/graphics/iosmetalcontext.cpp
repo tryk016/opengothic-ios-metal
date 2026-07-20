@@ -26,6 +26,7 @@
 #include <utility>
 
 #include "iosgpuscene.h"
+#include "iosgpubink.h"
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
 #include "resources.h"
@@ -301,6 +302,7 @@ struct IOSMetalContext::Impl final {
         iosGPUSceneDepthFormat(depthFormat),
         1u,
         });
+    gpuBink = std::make_unique<IOSGPUBink>(device);
 
     for(auto& command:commands)
       command = device.commandBuffer();
@@ -890,6 +892,7 @@ struct IOSMetalContext::Impl final {
   TextureFormat                                depthFormat = TextureFormat::Depth16;
   bool                                         depthSupported = false;
   std::unique_ptr<IOSGPUScene>                  gpuScene;
+  std::unique_ptr<IOSGPUBink>                   gpuBink;
 
   Attachment                                   savePreview;
   Pixmap                                       completedPreview;
@@ -1199,8 +1202,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     auto& command = impl->commands[slot];
     {
       auto encoder = command.startEncoding(impl->device);
-      if(impl->videoFrames[slot])
-        VideoWidget::encodePrepared(encoder,slot,impl->videoFrames[slot]);
+      if(impl->videoFrames[slot]) {
+        if(impl->gpuBink==nullptr)
+          throw std::runtime_error(
+              "RendererIOS native Bink pipeline is unavailable");
+        VideoWidget::encodePrepared(
+            encoder,slot,impl->videoFrames[slot],*impl->gpuBink);
+        }
       auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
 
       const bool sceneVisible = !videoActive &&

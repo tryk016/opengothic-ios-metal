@@ -8,7 +8,7 @@
 #include <string_view>
 
 int main(int argc, char** argv) {
-  if(argc!=2 || RendererIOSShader::AbiVersion!=1u)
+  if(argc!=2 || RendererIOSShader::AbiVersion!=2u)
     return 1;
 
   std::ifstream input(argv[1],std::ios::binary);

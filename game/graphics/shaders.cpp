@@ -19,7 +19,7 @@ Shaders::Shaders(CompilationProfile profile)
   instance = this;
   if(profile==CompilationProfile::RendererIOSBridge) {
     compileRendererIOSBridgeShaders();
-    Log::i("RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled");
+    Log::i("RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled");
     return;
     }
 
@@ -60,7 +60,6 @@ void Shaders::compileKeyShaders() {
   }
 
 void Shaders::compileRendererIOSBridgeShaders() {
-  bink = postEffect("bink");
   compileInventoryShader();
   }
 

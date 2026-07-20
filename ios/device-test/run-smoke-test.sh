@@ -345,9 +345,11 @@ rg -F "build=$EXPECTED_SHA" "$WORK/log.txt" >/dev/null ||
   fail "runtime log does not identify exact source SHA $EXPECTED_SHA"
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
-rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=1' \
+rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=2' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
-rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
+rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=2 color=rgba8 sample-count=1 pipeline-created=1' \
+  "$WORK/log.txt" >/dev/null || fail "offline native Bink pipeline marker is missing"
+rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   "$WORK/log.txt" >/dev/null || fail "RendererIOS bridge-only shader policy marker is missing"
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
@@ -385,10 +387,16 @@ if compute_after < compute_before or compute_delta != compute_after-compute_befo
     raise SystemExit("compute-PSO bridge counters are inconsistent")
 if render_after < render_before or render_delta != render_after-render_before:
     raise SystemExit("render-PSO bridge counters are inconsistent")
-if (source_delta, compute_delta, render_delta) != (4, 0, 0):
+if (source_before, source_after, source_delta,
+    compute_before, compute_after, compute_delta,
+    render_before, render_after, render_delta) != (
+        4, 6, 2,
+        0, 0, 0,
+        0, 0, 0,
+    ):
     raise SystemExit(
-        "bridge-only construction must request exactly four source libraries "
-        "and no native PSO"
+        "offline-Bink bridge construction must preserve four Builtin requests, "
+        "request exactly two inventory source libraries and no Tempest native PSO"
     )
 
 frames = [tuple(map(int, match.groups())) for match in frame_re.finditer(log)]
@@ -424,12 +432,10 @@ for present, frame_available, source, compute, render in frames:
 
 last_present, _, last_source, last_compute, last_render = frames[-1]
 first_source, first_compute, first_render = first_frame_totals
-if first_source != source_after or first_compute != compute_after:
+if first_frame_totals != (6, 0, 2):
     raise SystemExit(
-        "runtime shader compilation occurred between bridge construction "
-        "and the first presented frame: "
-        f"bridge={(source_after, compute_after)} "
-        f"first={(first_source, first_compute)}"
+        "the first presented frame must have exact offline-Bink totals "
+        f"(6, 0, 2), found {first_frame_totals}"
     )
 summary.write_text(
     f"runtime_compilation_bridge_source_delta={source_delta}\n"

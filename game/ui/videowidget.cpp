@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 #include "bink/video.h"
-#include "graphics/shaders.h"
+#include "graphics/iosgpubink.h"
 #include "gamemusic.h"
 #include "gothic.h"
 
@@ -188,7 +188,8 @@ struct VideoWidget::Context {
     out.valid    = true;
     }
 
-  void encodePrepared(Tempest::Encoder<Tempest::CommandBuffer>& encoder, uint8_t fId) {
+  void encodePrepared(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+                      uint8_t fId, IOSGPUBink& renderer) {
     if(fId>=Resources::MaxFramesInFlight)
       throw std::out_of_range("VideoWidget frame slot is out of range");
 
@@ -197,19 +198,13 @@ struct VideoWidget::Context {
       return;
 
     encoder.setFramebuffer({{frameImg, Vec4(0), Tempest::Preserve}});
-
-    struct Push { uint32_t strideY; uint32_t strideU; uint32_t strideV; } push = {};
-    push.strideY = in.strideY;
-    push.strideU = in.strideU;
-    push.strideV = in.strideV;
-
-    encoder.setDebugMarker("Bink");
-    encoder.setPushData(push);
-    encoder.setBinding(0, staging[fId], 0);
-    encoder.setBinding(1, staging[fId], in.offsetU);
-    encoder.setBinding(2, staging[fId], in.offsetV);
-    encoder.setPipeline(Shaders::inst().bink);
-    encoder.draw(nullptr, 0, 3);
+    encoder.setDebugMarker("RendererIOS offline Bink");
+    renderer.encode(
+        encoder,staging[fId],
+        IOSGPUBink::PlaneLayout{
+          in.offsetU,in.offsetV,
+          in.strideY,in.strideU,in.strideV,
+        });
     in.valid = false;
     }
 
@@ -444,10 +439,11 @@ VideoWidget::PreparedFrame VideoWidget::prepareFrame(Tempest::Device& device, ui
   }
 
 void VideoWidget::encodePrepared(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
-                                 uint8_t fId, const PreparedFrame& frame) {
+                                 uint8_t fId, const PreparedFrame& frame,
+                                 IOSGPUBink& renderer) {
   if(!frame)
     return;
-  frame.context->encodePrepared(encoder,fId);
+  frame.context->encodePrepared(encoder,fId,renderer);
   }
 
 void VideoWidget::paintEvent(PaintEvent& e) {

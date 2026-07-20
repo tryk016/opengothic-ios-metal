@@ -14,6 +14,7 @@
 #include "resources.h"
 
 class IOSMetalContext;
+class IOSGPUBink;
 
 class VideoWidget : public Tempest::Widget {
   private:
@@ -63,7 +64,8 @@ class VideoWidget : public Tempest::Widget {
 
     PreparedFrame prepareFrame(Tempest::Device& device, uint8_t fId);
     static void encodePrepared(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
-                               uint8_t fId, const PreparedFrame& frame);
+                               uint8_t fId, const PreparedFrame& frame,
+                               IOSGPUBink& renderer);
 
     void  stopVideo();
 
@@ -78,4 +80,3 @@ class VideoWidget : public Tempest::Widget {
 
   friend class IOSMetalContext;
   };
-
