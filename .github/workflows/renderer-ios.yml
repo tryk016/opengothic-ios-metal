@@ -470,16 +470,39 @@ jobs:
           grep -Fq -- '--kill --quiet' ios/device-test/run-smoke-test.sh
           grep -Fq 'original_exit_status=' ios/device-test/run-smoke-test.sh
           grep -Fq 'device_process_stopped=1' ios/device-test/run-smoke-test.sh
+          grep -Fq 'select_device_record()' ios/device-test/run-smoke-test.sh
+          grep -Fq 'attempt=%d result=retry' ios/device-test/run-smoke-test.sh
+          grep -Fq '((attempt < 5)) && sleep 1' ios/device-test/run-smoke-test.sh
+          grep -Fq 'OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'device_selection_attempts=' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'device_selection_method=' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'ditto "$WORK/device-selection.log" "$OUT/device-selection.log"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'd.get("interface") == "usb"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
+            ios/device-test/run-smoke-test.sh
 
           python3 - <<'PY'
           from pathlib import Path
 
           source = Path("ios/device-test/run-smoke-test.sh").read_text()
+          selection = source.index('DEVICE_RECORD="$(select_device_record)"')
+          bundle = source.index('BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"')
+          selection_evidence = source.index(
+              'ditto "$WORK/device-selection.log" "$OUT/device-selection.log"')
           stopped = source.index('stop_running_app 1 || fail "application cleanup failed"')
           result = source.index('echo "result=PASS"')
           passed = source.index('echo "PASS — offline metallib')
+          if not selection < bundle:
+              raise SystemExit("bounded device selection retry runs after app inspection")
           if not stopped < result < passed:
               raise SystemExit("device PASS is emitted before cleanup proof")
+          if not stopped < selection_evidence < result:
+              raise SystemExit("device selection evidence is copied before cleanup proof")
           PY
 
       - name: Configure RendererIOS

@@ -178,30 +178,93 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 REQUESTED_DEVICE="${OPENGOTHIC_IOS_DEVICE:-}"
-xcrun devicectl list devices --json-output "$WORK/devices.json" >/dev/null
-DEVICE_RECORD="$(python3 - "$WORK/devices.json" "$REQUESTED_DEVICE" <<'PY'
+DEVICE_SELECTION_TEST_FAIL_FIRST="${OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST:-0}"
+[[ "$DEVICE_SELECTION_TEST_FAIL_FIRST" =~ ^[01]$ ]] ||
+  fail "OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST must be 0 or 1"
+select_device_record() {
+  local attempt json xcjson record selected_method
+
+  for attempt in 1 2 3 4 5; do
+    json="$WORK/devices-$attempt.json"
+    xcjson="$WORK/xcdevices-$attempt.json"
+    if ((DEVICE_SELECTION_TEST_FAIL_FIRST != 0 && attempt == 1)); then
+      printf 'attempt=1 result=test-injected-enumeration-failure\n' \
+        >>"$WORK/device-selection.log"
+    elif xcrun devicectl list devices --json-output "$json" \
+        >/dev/null 2>>"$WORK/device-selection.log"; then
+      if [[ -n "$REQUESTED_DEVICE" ]]; then
+        printf '[]\n' >"$xcjson"
+      elif ! xcrun xcdevice list >"$xcjson" \
+          2>>"$WORK/device-selection.log"; then
+        printf 'attempt=%d result=xcdevice-enumeration-failure\n' "$attempt" \
+          >>"$WORK/device-selection.log"
+      fi
+      if [[ -s "$xcjson" ]] &&
+          record="$(python3 - "$json" "$REQUESTED_DEVICE" "$xcjson" \
+          2>>"$WORK/device-selection.log" <<'PY'
 import json, sys
 devices = json.load(open(sys.argv[1]))["result"]["devices"]
 requested = sys.argv[2]
+xcdevices = json.load(open(sys.argv[3]))
+usb_udids = {
+    d.get("identifier")
+    for d in xcdevices
+    if not d.get("simulator")
+    and d.get("available")
+    and d.get("interface") == "usb"
+    and d.get("platform") == "com.apple.platform.iphoneos"
+}
 matches = [
     d for d in devices
     if d.get("hardwareProperties", {}).get("platform") == "iOS"
     and d.get("hardwareProperties", {}).get("reality") == "physical"
     # An explicitly selected paired device may establish its CoreDevice/DDI
     # tunnel on the first device command after a transient disconnect. In
-    # auto-selection mode, still require an already connected tunnel.
+    # auto-selection mode, require a connected tunnel or an independent
+    # xcdevice witness that this exact UDID is currently available over USB.
     and (requested or
-         d.get("connectionProperties", {}).get("tunnelState") == "connected")
+         d.get("connectionProperties", {}).get("tunnelState") == "connected"
+         or d.get("hardwareProperties", {}).get("udid") in usb_udids)
     and (not requested or requested in (
         d.get("identifier"), d.get("hardwareProperties", {}).get("udid")))
 ]
 if len(matches) != 1:
     raise SystemExit(f"expected exactly one connected physical iOS device, found {len(matches)}")
 device = matches[0]
-print(device["identifier"] + "\t" + device["hardwareProperties"]["udid"])
+if requested:
+    method = "explicit"
+elif device.get("connectionProperties", {}).get("tunnelState") == "connected":
+    method = "connected"
+else:
+    method = "usb-witness"
+print(device["identifier"] + "\t" + device["hardwareProperties"]["udid"] +
+      "\t" + method)
 PY
-)" || fail "could not select a unique connected physical iOS device"
-IFS=$'\t' read -r DEVICE DEVICE_UDID <<<"$DEVICE_RECORD"
+      )"; then
+        selected_method="${record##*$'\t'}"
+        printf 'attempt=%d result=selected method=%s\n' \
+          "$attempt" "$selected_method" \
+          >>"$WORK/device-selection.log"
+        printf '%s\n' "$record"
+        return 0
+      fi
+    fi
+
+    printf 'attempt=%d result=retry\n' "$attempt" \
+      >>"$WORK/device-selection.log"
+    ((attempt < 5)) && sleep 1
+  done
+  return 1
+}
+
+if ! DEVICE_RECORD="$(select_device_record)"; then
+  tail -20 "$WORK/device-selection.log" >&2 || true
+  fail "could not select a unique connected physical iOS device"
+fi
+DEVICE_SELECTION_ATTEMPTS_USED="$(
+  grep -Ec 'result=(retry|selected)' "$WORK/device-selection.log"
+)"
+IFS=$'\t' read -r DEVICE DEVICE_UDID DEVICE_SELECTION_METHOD <<<"$DEVICE_RECORD"
 
 BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"
 xcrun devicectl device info apps --device "$DEVICE" \
@@ -638,12 +701,16 @@ OUT="$ROOT/build/device-smoke/$EXPECTED_SHA"
 mkdir -p "$OUT"
 ditto "$WORK/log.txt" "$OUT/log.txt"
 [[ ! -f "$WORK/stderr.log" ]] || ditto "$WORK/stderr.log" "$OUT/stderr.log"
+ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
 {
   echo "result=PASS"
   echo "source_sha=$EXPECTED_SHA"
   echo "bundle_id=$BUNDLE_ID"
   echo "save_slot=$SAVE_SLOT"
   echo "duration_seconds=$DURATION"
+  echo "device_selection_attempts=$DEVICE_SELECTION_ATTEMPTS_USED"
+  echo "device_selection_method=$DEVICE_SELECTION_METHOD"
+  echo "device_selection_test_fail_first=$DEVICE_SELECTION_TEST_FAIL_FIRST"
   echo "bink_self_test_required=$REQUIRE_BINK_SELF_TEST"
   echo "bink_self_test_passed=$REQUIRE_BINK_SELF_TEST"
   echo "metallib_sha256=$METALLIB_SHA"
