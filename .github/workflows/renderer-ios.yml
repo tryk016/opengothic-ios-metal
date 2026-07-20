@@ -205,7 +205,7 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'An explicitly selected paired device may establish its CoreDevice/DDI' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'runtime compilation grew after the first presented frame' \
+          grep -Fq 'save runtime totals must remain exact 0/0/2' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'runtime compilation frame markers are not contiguous' \
             ios/device-test/run-smoke-test.sh
@@ -217,6 +217,151 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'builtin_source_role_counts=' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'new_game_builtin_render = (0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0)' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'new-game runtime render transition occurred after present 300' \
+            ios/device-test/run-smoke-test.sh
+
+      - name: Verify RendererIOS pipeline archive policy
+        run: |
+          set -euo pipefail
+
+          test -f game/graphics/iospipelinearchivepolicy.h
+          test -f ios/tests/iospipelinearchivepolicy.cpp
+          test -x ios/device-test/run-pipeline-archive-test.sh
+          test -x ios/device-test/validate-pipeline-archive-log.py
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iospipelinearchivepolicy.cpp \
+            -o "$RUNNER_TEMP/iospipelinearchivepolicy"
+          "$RUNNER_TEMP/iospipelinearchivepolicy"
+          bash -n ios/device-test/run-pipeline-archive-test.sh
+          python3 ios/device-test/validate-pipeline-archive-log.py --self-test
+          ios/device-test/run-pipeline-archive-test.sh --self-test
+
+          grep -Fq 'FirstFlushPresent = 300u' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'LastFlushPresent =' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'successfulPresents<FirstFlushPresent' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'successfulPresents>LastFlushPresent' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq -- '--scenario "$SCENARIO"' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'parser.add_argument("--scenario", choices=("save", "new-game"))' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'NEW_GAME_BUILTIN_RENDER = (0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0)' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'transition_present <= FIRST_FLUSH_PRESENT' \
+            ios/device-test/validate-pipeline-archive-log.py
+          test "$(grep -Fc 'echo "scenario=$SCENARIO"' \
+            ios/device-test/run-pipeline-archive-test.sh)" -eq 5
+          test "$(grep -Fc 'echo "save_slot=$SCENARIO_SAVE_SLOT"' \
+            ios/device-test/run-pipeline-archive-test.sh)" -eq 5
+          grep -Fq 'missing new-game transition self-test passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'post-300 new-game transition self-test passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'wrong new-game role-3 self-test passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'post-plateau growth self-test passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'new-game pipeline archive mode has no confirmed scene world gate' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'new-game pipeline archive mode has no non-empty scene snapshot' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
+            ios/patches/apply-patches.sh
+          grep -Fq 'opengothic-ios-patch-stack-v11' \
+            ios/patches/apply-patches.sh
+
+          grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-4.binaryarchive' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'NSSearchPathForDirectoriesInDomains(' \
+            game/graphics/rendereriosplatform.mm
+          grep -Fq 'NSCachesDirectory,NSUserDomainMask,YES' \
+            game/graphics/rendereriosplatform.mm
+          grep -Fq 'metallib-sha256=' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'NSDataWritingAtomic' \
+            game/graphics/rendereriosplatform.mm
+          grep -Fq 'CorruptArchivePayloadSha256' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'TestModeLogPrefix.data()' game/main.cpp
+          grep -Fq 'O_NOFOLLOW' game/graphics/rendereriosplatform.mm
+          grep -Fq '::mkdirat(' game/graphics/rendereriosplatform.mm
+          grep -Fq '::openat(' game/graphics/rendereriosplatform.mm
+          grep -Fq '::fstatat(' game/graphics/rendereriosplatform.mm
+          grep -Fq '::unlinkat(' game/graphics/rendereriosplatform.mm
+          grep -Fq '::renameat(' game/graphics/rendereriosplatform.mm
+          grep -Fq 'provenanceAfter!=provenanceBefore' \
+            game/graphics/rendereriosplatform.mm
+          grep -Fq 'sha256=' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'pipeline archive provenance-policy:' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'ProvenancePolicyLogPrefix.data()' game/main.cpp
+          ! grep -Fq 'provenance-path=' game/main.cpp
+          grep -Fq 'flushPipelineArchive' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'SnapshotStateLogPrefix.data()' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'SnapshotRenderLogPrefix.data()' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'SnapshotComputeLogPrefix.data()' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'SnapshotFlushLogPrefix.data()' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq '" empty="' game/graphics/iosmetalcontext.cpp
+          grep -Fq '" disabled="' game/graphics/iosmetalcontext.cpp
+          ! grep -Fq '" created-empty="' game/graphics/iosmetalcontext.cpp
+          ! grep -Fq '" disabled-after-error="' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'run-smoke-test.sh' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'run_direct_phase warm' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'run_direct_phase corrupt' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'run_direct_phase recovery-warm' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq -- '--pipeline-archive-test-mode cold' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'run_direct_phase corrupt corrupt' \
+            ios/device-test/run-pipeline-archive-test.sh
+          ! grep -Fq 'device copy to' \
+            ios/device-test/run-pipeline-archive-test.sh
+          ! grep -Fq 'device copy to' \
+            ios/device-test/run-smoke-test.sh
+          ! grep -Fq -- '--remove-existing-content' \
+            ios/device-test/run-pipeline-archive-test.sh
+          ! grep -Fq -- '--remove-existing-content' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'remote_mutating_copy_count=0' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'has missing/invalid directories' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'resources.get("isDirectory") is not True' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'resources.get("isSymbolicLink") is True' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'existing game data preflight failed before install' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'Gothic.dat' ios/device-test/run-smoke-test.sh
+          grep -Fq 'Gothic.ini' ios/device-test/run-smoke-test.sh
+          grep -Fq 'verify_existing_game_data before' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'verify_existing_game_data after' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'record_zero_scan final' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'phase=trap-cleanup game_processes=0' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'install_count=1' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'uninstall_count=0' \
+            ios/device-test/run-pipeline-archive-test.sh
 
       - name: Verify P2.1 native asset registry contract
         run: |
@@ -355,6 +500,14 @@ jobs:
             -Igame \
             -isystem lib/Tempest/Engine/include \
             -fsyntax-only game/graphics/rendereriosplatform.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only game/graphics/rendereriosplatform.mm
 
           xcrun clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
@@ -470,6 +623,10 @@ jobs:
           grep -Fq -- '--kill --quiet' ios/device-test/run-smoke-test.sh
           grep -Fq 'original_exit_status=' ios/device-test/run-smoke-test.sh
           grep -Fq 'device_process_stopped=1' ios/device-test/run-smoke-test.sh
+          test "$(grep -Fc 'echo "scenario=$SCENARIO"' \
+            ios/device-test/run-smoke-test.sh)" -eq 2
+          test "$(grep -Fc 'echo "save_slot=$SCENARIO_SAVE_SLOT"' \
+            ios/device-test/run-smoke-test.sh)" -eq 2
           grep -Fq 'select_device_record()' ios/device-test/run-smoke-test.sh
           grep -Fq 'attempt=%d result=retry' ios/device-test/run-smoke-test.sh
           grep -Fq '((attempt < 5)) && sleep 1' ios/device-test/run-smoke-test.sh
@@ -485,6 +642,14 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'has missing/invalid directories' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'phase=trap-cleanup game_processes=0' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'existing game data preflight failed before install' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'compiled scripts/system preflight failed before install' \
+            ios/device-test/run-smoke-test.sh
 
           python3 - <<'PY'
           from pathlib import Path
@@ -494,11 +659,18 @@ jobs:
           bundle = source.index('BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"')
           selection_evidence = source.index(
               'ditto "$WORK/device-selection.log" "$OUT/device-selection.log"')
+          data_preflight = source.index(
+              'existing game data preflight failed before install')
+          scripts_preflight = source.index(
+              'compiled scripts/system preflight failed before install')
+          install = source.index('echo "== installing $BUNDLE_ID =="')
           stopped = source.index('stop_running_app 1 || fail "application cleanup failed"')
           result = source.index('echo "result=PASS"')
           passed = source.index('echo "PASS — offline metallib')
           if not selection < bundle:
               raise SystemExit("bounded device selection retry runs after app inspection")
+          if not bundle < data_preflight < scripts_preflight < install:
+              raise SystemExit("game-data preflight does not fail before install")
           if not stopped < result < passed:
               raise SystemExit("device PASS is emitted before cleanup proof")
           if not stopped < selection_evidence < result:
@@ -557,12 +729,30 @@ jobs:
             ios/device-test/run-smoke-test.sh
 
       - name: Build iOS Release
+        env:
+          DIAGNOSTICS: ${{ matrix.diagnostics }}
         run: |
+          set -euo pipefail
           cmake --build build-renderer-ios --config Release -- \
             -sdk iphoneos \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
+          APP_BINARY='build-renderer-ios/opengothic/Release/Gothic2Notr.app/Gothic2Notr'
+          APP_STRINGS="$RUNNER_TEMP/Gothic2Notr-$DIAGNOSTICS.strings"
+          test -f "$APP_BINARY"
+          strings "$APP_BINARY" >"$APP_STRINGS"
+          if [ "$DIAGNOSTICS" = ON ]; then
+            grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \
+              "$APP_STRINGS"
+            grep -Fxq 'RendererIOS-D041-invalid-binary-archive-v1' \
+              "$APP_STRINGS"
+          else
+            ! grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \
+              "$APP_STRINGS"
+            ! grep -Fxq 'RendererIOS-D041-invalid-binary-archive-v1' \
+              "$APP_STRINGS"
+          fi
 
       - name: Package unsigned device-test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa

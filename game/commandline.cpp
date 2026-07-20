@@ -158,6 +158,16 @@ CommandLine::CommandLine(int argc, const char** argv) {
       if(i<argc)
         isRtSm = boolArg(argv[i]);
       }
+#if defined(__IOS__)
+    else if(arg.find("-renderer-ios-pipeline-archive-")==0u) {
+#if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      throw std::invalid_argument(
+        "RendererIOS pipeline archive test mode requires diagnostics");
+#endif
+      // Diagnostics validates exact values, duplicates and conflicts only
+      // after Gothic data validation, before Metal/cache construction.
+      }
+#endif
     else {
       Log::i("unreacognized commandline option: \"", arg, "\"");
       }

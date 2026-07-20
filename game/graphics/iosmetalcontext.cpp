@@ -30,6 +30,7 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
+#include "iospipelinearchivepolicy.h"
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
 #include "resources.h"
@@ -41,6 +42,15 @@
 using namespace Tempest;
 
 static_assert(std::is_nothrow_move_assignable_v<CommandBuffer>);
+static_assert(MetalPipelineArchiveSnapshot::AbiVersion==1u);
+static_assert(MetalPipelineArchiveSnapshot::StructSize==120u);
+static_assert(
+  (MetalPipelineArchiveSnapshot::Configured |
+   MetalPipelineArchiveSnapshot::Available |
+   MetalPipelineArchiveSnapshot::LoadedFromDisk |
+   MetalPipelineArchiveSnapshot::CreatedEmpty |
+   MetalPipelineArchiveSnapshot::Dirty |
+   MetalPipelineArchiveSnapshot::DisabledAfterError)==63u);
 
 #if !defined(OPENGOTHIC_RENDERER_IOS_BUILD_SHA)
 #define OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local"
@@ -531,6 +541,98 @@ struct IOSMetalContext::Impl final {
 #else
     (void)presents;
 #endif
+    }
+
+  void logPipelineArchiveSnapshot(
+      const char* point, uint64_t presents,
+      const MetalPipelineArchiveSnapshot& snapshot,
+      bool flushInvoked, bool flushSucceeded) noexcept {
+    namespace Archive = RendererIOSPipelineArchive;
+    const auto hasFlag = [&snapshot](uint32_t flag) noexcept {
+      return (snapshot.flags&flag)!=0u;
+      };
+    try {
+      Log::i(
+        Archive::SnapshotStateLogPrefix.data(),point,
+        " presents=",presents,
+        " abi=",snapshot.abiVersion,
+        " size=",snapshot.structSize,
+        " flags=",snapshot.flags,
+        " schema=",Archive::CacheSchemaVersion,
+        " key=",Archive::PipelineKeyAbiVersion,
+        " metallib=",Archive::MetallibAbiVersion,
+        " cfg=",
+        hasFlag(MetalPipelineArchiveSnapshot::Configured) ? 1 : 0,
+        " available=",
+        hasFlag(MetalPipelineArchiveSnapshot::Available) ? 1 : 0,
+        " loaded=",
+        hasFlag(MetalPipelineArchiveSnapshot::LoadedFromDisk) ? 1 : 0,
+        " empty=",
+        hasFlag(MetalPipelineArchiveSnapshot::CreatedEmpty) ? 1 : 0,
+        " dirty=",
+        hasFlag(MetalPipelineArchiveSnapshot::Dirty) ? 1 : 0,
+        " disabled=",
+        hasFlag(MetalPipelineArchiveSnapshot::DisabledAfterError) ? 1 : 0,
+        " load-fail=",snapshot.loadFailures,
+        " rebuild=",snapshot.rebuilds);
+      Log::i(
+        Archive::SnapshotRenderLogPrefix.data(),point,
+        " presents=",presents,
+        " hit=",snapshot.renderHits,
+        " miss=",snapshot.renderMisses,
+        " add=",snapshot.renderAdds,
+        " fallback=",snapshot.renderFallbacks);
+      Log::i(
+        Archive::SnapshotComputeLogPrefix.data(),point,
+        " presents=",presents,
+        " hit=",snapshot.computeHits,
+        " miss=",snapshot.computeMisses,
+        " add=",snapshot.computeAdds,
+        " fallback=",snapshot.computeFallbacks);
+      Log::i(
+        Archive::SnapshotFlushLogPrefix.data(),point,
+        " presents=",presents,
+        " attempt=",snapshot.flushAttempts,
+        " success=",snapshot.flushSuccesses,
+        " fail=",snapshot.flushFailures,
+        " invoked=",flushInvoked ? 1 : 0,
+        " result=",flushSucceeded ? 1 : 0,
+        " bounded=",uint32_t(pipelineArchiveFlush.attempts),
+        " settled=",pipelineArchiveFlush.settled ? 1 : 0);
+      }
+    catch(...) {
+      }
+    }
+
+  void flushPipelineArchiveAfterPresent(uint64_t presents) noexcept {
+    namespace Archive = RendererIOSPipelineArchive;
+    const auto before =
+      MetalApi::pipelineArchiveSnapshot(device);
+    const bool dirty =
+      (before.flags&MetalPipelineArchiveSnapshot::Dirty)!=0u;
+    const auto decision = Archive::flushDecisionAfterPresent(
+      pipelineArchiveFlush,presents,dirty);
+    if(decision==Archive::FlushDecision::None)
+      return;
+
+    logPipelineArchiveSnapshot(
+      "pre",presents,before,false,false);
+    bool flushInvoked = false;
+    bool flushSucceeded = false;
+    if(decision==Archive::FlushDecision::SettleClean) {
+      Archive::settleCleanArchive(pipelineArchiveFlush);
+      }
+    else {
+      flushInvoked = true;
+      flushSucceeded =
+        MetalApi::flushPipelineArchive(device);
+      Archive::recordFlushResult(
+        pipelineArchiveFlush,flushSucceeded);
+      }
+    const auto after =
+      MetalApi::pipelineArchiveSnapshot(device);
+    logPipelineArchiveSnapshot(
+      "post",presents,after,flushInvoked,flushSucceeded);
     }
 
   ~Impl() noexcept {
@@ -1215,6 +1317,7 @@ struct IOSMetalContext::Impl final {
   uint64_t                                     activeSerial = 0;
   bool                                         frameActive = false;
   LifecycleState                               lifecycleState = LifecycleState::Active;
+  RendererIOSPipelineArchive::FlushState       pipelineArchiveFlush;
   SubmissionCounters                           counters;
   SubmissionCounters                           fatalCounters;
   bool                                         fatalCountersCaptured = false;
@@ -1629,6 +1732,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     ++impl->counters.presentAttempts;
     impl->device.present(impl->swapchain);
     ++impl->counters.presentAccepted;
+    impl->flushPipelineArchiveAfterPresent(
+      impl->counters.presentAccepted);
 
     if(previewAccepted) {
       impl->previewState    = Impl::PreviewState::AwaitingGpu;

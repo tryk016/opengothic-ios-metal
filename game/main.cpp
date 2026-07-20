@@ -19,6 +19,7 @@
 #include "graphics/iosbuiltinshaderabi.h"
 #include "graphics/iosinventoryshaderabi.h"
 #include "graphics/ioslandscapeshaderabi.h"
+#include "graphics/iospipelinearchivepolicy.h"
 #include "graphics/rendereriosplatform.h"
 #include "shader.h"
 #endif
@@ -72,7 +73,12 @@ std::string_view selectDevice(const Tempest::AbstractGraphicsApi& api) {
   return "";
   }
 
-std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
+std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(
+    const CommandLine& g
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    , RendererIOSPipelineArchive::TestMode pipelineArchiveTestMode
+#endif
+    ) {
   Tempest::ApiFlags flg = g.isValidationMode() ? Tempest::ApiFlags::Validation : Tempest::ApiFlags::NoFlags;
   switch(g.graphicsApi()) {
     case CommandLine::DirectX12:
@@ -91,7 +97,31 @@ std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
 
 #if defined(__APPLE__)
 #if defined(__IOS__)
+  static_assert(Tempest::MetalPipelineArchiveConfig::AbiVersion==1u);
+  static_assert(
+    RendererIOSPipelineArchive::MetallibAbiVersion==
+    RendererIOSShader::AbiVersion);
   const std::string metallibPath = rendererIOSMetalLibraryPath();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  if(pipelineArchiveTestMode!=RendererIOSPipelineArchive::TestMode::None) {
+    const RendererIOSPipelineArchiveTestModeResult result =
+      rendererIOSApplyPipelineArchiveTestMode(
+        metallibPath,pipelineArchiveTestMode);
+    Tempest::Log::i(
+      RendererIOSPipelineArchive::TestModeLogPrefix.data(),
+      RendererIOSPipelineArchive::testModeName(
+        pipelineArchiveTestMode).data(),
+      " applied=1 abi=",RendererIOSPipelineArchive::TestModeAbiVersion,
+      " bytes=",result.bytes,
+      " removed-verified=",result.removedVerified ? 1 : 0,
+      " write-verified=",result.writeVerified ? 1 : 0,
+      " sha256=",result.writeVerified
+        ? RendererIOSPipelineArchive::CorruptArchivePayloadSha256.data()
+        : "none");
+    }
+#endif
+  const RendererIOSPipelineArchiveDescriptor pipelineArchive =
+    rendererIOSPipelineArchiveDescriptor(metallibPath);
   Tempest::MetalBuiltinOfflineManifest manifest;
   manifest.metallibPath = metallibPath.c_str();
   manifest.colorVertexFunction =
@@ -114,7 +144,31 @@ std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
   manifest.inventoryFragmentSpirvSize = inventoryFragment.len;
   manifest.inventoryFragmentFunction =
       RendererIOSInventoryShader::FunctionNames[1].data();
-  return std::make_unique<Tempest::MetalApi>(flg,manifest);
+  try {
+    Tempest::Log::i(
+      RendererIOSPipelineArchive::ProvenancePolicyLogPrefix.data(),
+      pipelineArchive.archivePath.empty() ? 0 : 1,
+      " schema=",
+      RendererIOSPipelineArchive::CacheSchemaVersion,
+      " key=",
+      RendererIOSPipelineArchive::PipelineKeyAbiVersion,
+      " metallib=",
+      RendererIOSPipelineArchive::MetallibAbiVersion,
+      " digest=",
+      pipelineArchive.metallibSha256.empty()
+        ? "unavailable"
+        : pipelineArchive.metallibSha256.c_str(),
+      " stale-reset=",
+      pipelineArchive.invalidatedStaleArchive ? 1 : 0);
+    }
+  catch(...) {
+    }
+  if(pipelineArchive.archivePath.empty())
+    return std::make_unique<Tempest::MetalApi>(flg,manifest);
+  Tempest::MetalPipelineArchiveConfig archiveConfig;
+  archiveConfig.archivePath = pipelineArchive.archivePath.c_str();
+  return std::make_unique<Tempest::MetalApi>(
+    flg,manifest,archiveConfig);
 #else
   return std::make_unique<Tempest::MetalApi>(flg);
 #endif
@@ -196,7 +250,25 @@ int main(int argc,const char** argv) {
     AudioSession::activate();   // configure the iOS audio session before any SoundDevice
 
     CommandLine          cmd{argc,argv};
-    auto                 api     = mkApi(cmd);
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    const auto pipelineArchiveTestMode =
+      RendererIOSPipelineArchive::parseTestMode(argc,argv);
+    if(pipelineArchiveTestMode.conflict)
+      throw std::runtime_error(
+        "conflicting RendererIOS pipeline archive test modes");
+    if(pipelineArchiveTestMode.duplicate)
+      throw std::runtime_error(
+        "duplicate RendererIOS pipeline archive test mode");
+    if(pipelineArchiveTestMode.unknown)
+      throw std::runtime_error(
+        "unknown RendererIOS pipeline archive test mode");
+#endif
+    auto                 api     = mkApi(
+      cmd
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      ,pipelineArchiveTestMode.mode
+#endif
+      );
     const auto           gpuName = selectDevice(*api);
     CrashLog::setGpu(gpuName);
 

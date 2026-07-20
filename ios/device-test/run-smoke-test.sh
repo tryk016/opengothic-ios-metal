@@ -7,7 +7,9 @@
 # Usage:
 #   ios/device-test/run-smoke-test.sh path/to/Gothic2Notr.app
 #   OPENGOTHIC_IOS_DEVICE=<CoreDevice UUID> ... --duration 60 --save-slot 20 APP
+#   ... --new-game APP
 #   ... --require-bink-self-test APP
+#   ... --pipeline-archive-test-mode cold APP
 #
 # The phone must be unlocked when the app is launched. No screen interaction is
 # needed: OpenGothic's own -nomenu/-save arguments load the selected save.
@@ -20,7 +22,10 @@ STUB="$ROOT/ios/device-test/provisioning-stub/Probe.xcodeproj"
 BASE_BUNDLE_ID="opengothic.gothic2"
 DURATION=45
 SAVE_SLOT=20
+SAVE_SLOT_EXPLICIT=0
+NEW_GAME=0
 REQUIRE_BINK_SELF_TEST=0
+PIPELINE_ARCHIVE_TEST_MODE=""
 APP_INPUT=""
 
 fail() {
@@ -31,9 +36,18 @@ fail() {
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --duration) DURATION="${2:?missing duration}"; shift 2 ;;
-    --save-slot) SAVE_SLOT="${2:?missing save slot}"; shift 2 ;;
+    --save-slot)
+      SAVE_SLOT="${2:?missing save slot}"
+      SAVE_SLOT_EXPLICIT=1
+      shift 2
+      ;;
+    --new-game) NEW_GAME=1; shift ;;
     --require-bink-self-test) REQUIRE_BINK_SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number] [--require-bink-self-test] path/to/Gothic2Notr.app" ;;
+    --pipeline-archive-test-mode)
+      PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
+      shift 2
+      ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] path/to/Gothic2Notr.app" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -41,8 +55,20 @@ done
 [[ "$DURATION" =~ ^[0-9]+$ ]] && ((DURATION >= 10 && DURATION <= 600)) ||
   fail "duration must be 10..600 seconds"
 [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be a non-negative integer"
+((NEW_GAME == 0 || SAVE_SLOT_EXPLICIT == 0)) ||
+  fail "--new-game and --save-slot are mutually exclusive"
+[[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ||
+   "$PIPELINE_ARCHIVE_TEST_MODE" == cold ||
+   "$PIPELINE_ARCHIVE_TEST_MODE" == corrupt ]] ||
+  fail "pipeline archive test mode must be cold or corrupt"
 [[ -n "$APP_INPUT" && -d "$APP_INPUT" ]] || fail "pass an existing .app directory"
 [[ -f "$APP_INPUT/RendererIOS.metallib" ]] || fail "app has no RendererIOS.metallib"
+SCENARIO=save
+SCENARIO_SAVE_SLOT="$SAVE_SLOT"
+if ((NEW_GAME != 0)); then
+  SCENARIO=new-game
+  SCENARIO_SAVE_SLOT=none
+fi
 
 WORK="$(mktemp -d -t opengothic-device-smoke)"
 DEVICE=""
@@ -52,6 +78,15 @@ EXPECTED_SHA=""
 RUNTIME_ARMED=0
 PRE_CRASH_SHA=""
 POST_CRASH_SHA=""
+APP_EXECUTABLE="$(
+  /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
+    "$APP_INPUT/Info.plist" 2>/dev/null
+)" || fail "app has no CFBundleExecutable"
+[[ -n "$APP_EXECUTABLE" && "$APP_EXECUTABLE" != */* ]] ||
+  fail "invalid CFBundleExecutable"
+strings "$APP_INPUT/$APP_EXECUTABLE" |
+  rg -Fx 'RendererIOS diagnostics: ON frames-in-flight=' >/dev/null ||
+  fail "app is not a diagnostics-enabled RendererIOS build"
 
 stop_running_app() {
   local strict="${1:-0}"
@@ -142,6 +177,8 @@ preserve_failure_evidence() {
   {
     echo "result=FAIL"
     echo "source_sha=$EXPECTED_SHA"
+    echo "scenario=$SCENARIO"
+    echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
     echo "cleanup_status=$cleanup_status"
     echo "pre_crash_sha256=$PRE_CRASH_SHA"
@@ -155,10 +192,18 @@ cleanup() {
   local cleanup_status=0 final_status="$status"
   trap - EXIT INT TERM HUP
   set +e
-  if ((RUNTIME_ARMED != 0)); then
-    pull_runtime_logs before-cleanup
-    stop_running_app 0 || cleanup_status=1
-    pull_runtime_logs after-cleanup
+  if [[ -n "$DEVICE" && -n "$APP_EXECUTABLE" ]]; then
+    if ((RUNTIME_ARMED != 0)); then
+      pull_runtime_logs before-cleanup
+    fi
+    if stop_running_app 0; then
+      echo "phase=trap-cleanup game_processes=0" >>"$WORK/cleanup.log"
+    else
+      cleanup_status=1
+    fi
+    if ((RUNTIME_ARMED != 0)); then
+      pull_runtime_logs after-cleanup
+    fi
   fi
   if ((status != 0 || cleanup_status != 0)); then
     preserve_failure_evidence "$status" "$cleanup_status"
@@ -288,6 +333,81 @@ TEAM_ID="${OPENGOTHIC_IOS_TEAM_ID:-${BUNDLE_ID##*.}}"
   fail "bundle id must preserve the existing team-id suffix"
 [[ "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] || fail "could not derive a valid team id"
 
+echo "== stopping any previous $BUNDLE_ID process before preflight =="
+stop_running_app 1 || fail "preflight application cleanup failed"
+
+xcrun devicectl device info files --device "$DEVICE" \
+  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+  --username mobile --subdirectory Documents --no-recurse \
+  --json-output "$WORK/documents-preflight.json" >/dev/null ||
+  fail "could not inspect the existing OpenGothic Documents container"
+python3 - "$WORK/documents-preflight.json" <<'PY' ||
+import json
+import sys
+
+files = json.load(open(sys.argv[1]))["result"]["files"]
+required = {"Data", "_work", "system"}
+entries = {entry.get("name"): entry for entry in files}
+invalid = []
+for name in sorted(required):
+    entry = entries.get(name)
+    resources = entry.get("resources", {}) if entry else {}
+    if (
+        entry is None
+        or resources.get("isDirectory") is not True
+        or resources.get("isSymbolicLink") is True
+    ):
+        invalid.append(name)
+if invalid:
+    raise SystemExit(
+        "existing OpenGothic Documents container has missing/invalid directories: "
+        + ", ".join(invalid)
+    )
+PY
+  fail "existing game data preflight failed before install"
+xcrun devicectl device info files --device "$DEVICE" \
+  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+  --username mobile \
+  --subdirectory "Documents/_work/Data/Scripts/_compiled" --no-recurse \
+  --json-output "$WORK/scripts-preflight.json" >/dev/null ||
+  fail "could not inspect compiled Gothic scripts before install"
+xcrun devicectl device info files --device "$DEVICE" \
+  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+  --username mobile --subdirectory "Documents/system" --no-recurse \
+  --json-output "$WORK/system-preflight.json" >/dev/null ||
+  fail "could not inspect the existing Gothic system directory"
+python3 - "$WORK/scripts-preflight.json" "$WORK/system-preflight.json" <<'PY' ||
+import json
+import sys
+
+def regular_file(entries, expected):
+    matches = [
+        entry for entry in entries
+        if entry.get("name", "").lower() == expected
+    ]
+    if len(matches) != 1:
+        return False
+    resources = matches[0].get("resources", {})
+    return (
+        resources.get("isDirectory") is False
+        and resources.get("isSymbolicLink") is False
+    )
+
+scripts = json.load(open(sys.argv[1]))["result"]["files"]
+system = json.load(open(sys.argv[2]))["result"]["files"]
+invalid = []
+if not regular_file(scripts, "gothic.dat"):
+    invalid.append("_work/Data/Scripts/_compiled/Gothic.dat")
+if not regular_file(system, "gothic.ini"):
+    invalid.append("system/Gothic.ini")
+if invalid:
+    raise SystemExit(
+        "existing OpenGothic Documents container has missing/invalid files: "
+        + ", ".join(invalid)
+    )
+PY
+  fail "compiled scripts/system preflight failed before install"
+
 IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null |
   awk '/Apple Development/ {print $2}')"
 [[ -n "$IDENTITIES" ]] || fail "no Apple Development identity with a private key"
@@ -371,10 +491,23 @@ stop_running_app 1 || fail "pre-launch application cleanup failed"
 echo "== installing $BUNDLE_ID =="
 xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null
 
-echo "== unattended launch: save slot $SAVE_SLOT, ${DURATION}s =="
+LAUNCH_ARGS=(-nomenu)
+if ((NEW_GAME == 0)); then
+  LAUNCH_ARGS+=(-save "$SAVE_SLOT")
+fi
+if [[ -n "$PIPELINE_ARCHIVE_TEST_MODE" ]]; then
+  LAUNCH_ARGS+=(
+    "-renderer-ios-pipeline-archive-$PIPELINE_ARCHIVE_TEST_MODE"
+  )
+fi
+if ((NEW_GAME != 0)); then
+  echo "== unattended launch: new game, ${DURATION}s =="
+else
+  echo "== unattended launch: save slot $SAVE_SLOT, ${DURATION}s =="
+fi
 RUNTIME_ARMED=1
 if ! xcrun devicectl device process launch --device "$DEVICE" \
-    --terminate-existing -- "$BUNDLE_ID" -nomenu -save "$SAVE_SLOT" \
+    --terminate-existing -- "$BUNDLE_ID" "${LAUNCH_ARGS[@]}" \
     >"$WORK/launch.log" 2>&1; then
   if rg -q 'Locked|could not be unlocked' "$WORK/launch.log"; then
     fail "device is locked; unlock it once and rerun (no in-app interaction is needed)"
@@ -407,7 +540,27 @@ for name in log.txt stderr.log crash.log; do
 done
 
 [[ -s "$WORK/log.txt" ]] || fail "device produced no log.txt"
-rg -F "build=$EXPECTED_SHA" "$WORK/log.txt" >/dev/null ||
+python3 - "$WORK/log.txt" "$EXPECTED_SHA" <<'PY' ||
+import pathlib
+import re
+import sys
+
+log = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+source_sha = sys.argv[2]
+allowed = {source_sha, source_sha + "-local"}
+builds = re.findall(
+    r"^RendererIOS shell: [^\r\n]* build=([^\s]+) gpu=",
+    log,
+    flags=re.MULTILINE,
+)
+if len(builds) != 1 or builds[0] not in allowed:
+    raise SystemExit(
+        "expected exactly one RendererIOS shell build in "
+        + repr(sorted(allowed))
+        + ", found "
+        + repr(builds)
+    )
+PY
   fail "runtime log does not identify exact source SHA $EXPECTED_SHA"
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
@@ -448,13 +601,18 @@ rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipeli
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
 fi
-python3 - "$WORK/log.txt" "$WORK/runtime-compilation-summary.txt" <<'PY' ||
+python3 - "$WORK/log.txt" "$WORK/runtime-compilation-summary.txt" \
+  "$SCENARIO" "$PIPELINE_ARCHIVE_TEST_MODE" <<'PY' ||
 import pathlib
 import re
 import sys
 
 log = pathlib.Path(sys.argv[1]).read_text(errors="replace")
 summary = pathlib.Path(sys.argv[2])
+scenario = sys.argv[3]
+pipeline_archive_test_mode = sys.argv[4]
+if scenario not in ("save", "new-game"):
+    raise SystemExit(f"unknown smoke scenario: {scenario}")
 bridge_re = re.compile(
     r"RendererIOS runtime compilation: point=legacy-bridge available=(\d+) "
     r"source-before=(\d+) source-after=(\d+) source-delta=(\d+) "
@@ -533,6 +691,7 @@ if len(frames) < 2 or frames[0][0] != 1 or frames[-1][0] < 300:
 previous = (0, source_after, compute_after, render_after)
 first_frame_totals = None
 expected_present = 1
+render_transition_present = 0
 for present, frame_available, source, compute, render in frames:
     if frame_available != 1:
         raise SystemExit("Metal runtime compilation counters disappeared during frames")
@@ -549,12 +708,36 @@ for present, frame_available, source, compute, render in frames:
         raise SystemExit("runtime compilation counters are not monotonic")
     if first_frame_totals is None:
         first_frame_totals = (source, compute, render)
-    elif (source, compute, render) != first_frame_totals:
+    if source != 0 or compute != 0:
         raise SystemExit(
-            "runtime compilation grew after the first presented frame: "
-            f"first={first_frame_totals} present={present} "
-            f"current={(source, compute, render)}"
+            f"{scenario} runtime source/compute must remain exact 0/0 at "
+            f"present {present}, found {source}/{compute}"
         )
+    if scenario == "save":
+        if render != 2:
+            raise SystemExit(
+                "save runtime totals must remain exact 0/0/2: "
+                f"present={present} current={(source, compute, render)}"
+            )
+    else:
+        if render not in (2, 3):
+            raise SystemExit(
+                "new-game render total must be exact 2 or 3: "
+                f"present={present} render={render}"
+            )
+        if present == 1 and render != 2:
+            raise SystemExit("new-game first presented frame must have render=2")
+        if present > 1 and render < previous[3]:
+            raise SystemExit(
+                f"new-game render total regressed at present {present}"
+            )
+        if present > 1 and render != previous[3]:
+            if previous[3] != 2 or render != 3 or render_transition_present != 0:
+                raise SystemExit(
+                    "new-game runtime must have exactly one monotonic "
+                    "render 2-to-3 transition"
+                )
+            render_transition_present = present
     previous = (present, source, compute, render)
     expected_present += 1
 
@@ -565,6 +748,16 @@ if first_frame_totals != (0, 0, 2):
         "the first presented frame must have exact offline shader totals "
         f"(0, 0, 2), found {first_frame_totals}"
     )
+if scenario == "new-game":
+    if render_transition_present == 0:
+        raise SystemExit(
+            "new-game runtime never transitioned from render=2 to render=3"
+        )
+    if render_transition_present > 300:
+        raise SystemExit(
+            "new-game runtime render transition occurred after present 300: "
+            f"{render_transition_present}"
+        )
 
 def csv_counts(value):
     return tuple(map(int, value.split(",")))
@@ -621,21 +814,15 @@ if (len(builtin_frames) < 2 or builtin_frames[0][0] != 1 or
         "builtin runtime attribution markers do not cover presents 1 through 300"
     )
 first_builtin_render = builtin_frames[0][3]
-active_builtin_render_roles = tuple(
-    role for role, count in zip(render_roles, first_builtin_render)
-    if count != 0
-)
-expected_builtin_render = (0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0)
+save_builtin_render = (0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0)
+new_game_builtin_render = (0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0)
 if builtin_frames[0][2] != (0, 0, 0, 0):
     raise SystemExit(
         "first frame performed an unexpected Tempest Builtin source request"
     )
-if (sum(first_builtin_render) != first_render or
-        len(active_builtin_render_roles) != 2 or
-        first_builtin_render != expected_builtin_render):
+if first_builtin_render != save_builtin_render:
     raise SystemExit(
         "the first frame must classify the exact two one-shot Builtin PSO "
-        f"requests, roles={active_builtin_render_roles} "
         f"counts={first_builtin_render}"
     )
 previous_builtin_present = 0
@@ -657,14 +844,59 @@ for (present, frame_available, source_counts,
         raise SystemExit(
             f"Tempest Builtin source role counts changed at present {present}"
         )
-    if render_counts != first_builtin_render:
+    expected_builtin_render = save_builtin_render
+    if scenario == "new-game" and present >= 300:
+        expected_builtin_render = new_game_builtin_render
+    if render_counts != expected_builtin_render:
         raise SystemExit(
-            "Tempest Builtin per-role PSO requests grew after the first frame: "
-            f"first={first_builtin_render} present={present} "
+            f"{scenario} Tempest Builtin role vector is wrong: "
+            f"present={present} expected={expected_builtin_render} "
             f"current={render_counts}"
         )
     previous_builtin_present = present
     expected_builtin_present = 300 if present == 1 else present + 300
+
+final_builtin_render = builtin_frames[-1][3]
+active_builtin_render_roles = tuple(
+    role for role, count in zip(render_roles, final_builtin_render)
+    if count != 0
+)
+
+if scenario == "new-game" and render_transition_present > 300:
+    raise SystemExit("new-game Builtin transition was not bounded by present 300")
+
+if scenario == "new-game" and pipeline_archive_test_mode:
+    world_gate_re = re.compile(
+        r"RendererIOS scene world gate: old-generation=(\d+) "
+        r"new-generation=(\d+) retained-after=0 idle-confirmed=1"
+    )
+    snapshot_re = re.compile(
+        r"RendererIOS scene snapshot: generation=(\d+) sequence=(\d+) "
+        r"slot=(\d+) entities=(\d+) lights=(\d+) history-valid=(\d+)"
+    )
+    gates = [
+        (match.start(), int(match.group(1)), int(match.group(2)))
+        for match in world_gate_re.finditer(log)
+    ]
+    snapshots = [
+        (match.start(), int(match.group(1)), int(match.group(4)))
+        for match in snapshot_re.finditer(log)
+    ]
+    if not gates:
+        raise SystemExit(
+            "new-game pipeline archive mode has no confirmed scene world gate"
+        )
+    if not any(
+        snapshot_position > gate_position
+        and snapshot_generation == new_generation
+        and entities > 0
+        for gate_position, _old_generation, new_generation in gates
+        for snapshot_position, snapshot_generation, entities in snapshots
+    ):
+        raise SystemExit(
+            "new-game pipeline archive mode has no non-empty scene snapshot "
+            "after its confirmed world gate"
+        )
 
 summary.write_text(
     f"runtime_compilation_bridge_source_delta={source_delta}\n"
@@ -677,15 +909,20 @@ summary.write_text(
     f"runtime_compilation_frame_source_growth={last_source-first_source}\n"
     f"runtime_compilation_frame_compute_growth={last_compute-first_compute}\n"
     f"runtime_compilation_frame_render_growth={last_render-first_render}\n"
+    f"runtime_compilation_render_transition_present={render_transition_present}\n"
     f"builtin_source_roles={','.join(source_roles)}\n"
     f"builtin_source_role_counts={','.join(map(str, builtin_frames[0][2]))}\n"
     f"builtin_render_active_roles={','.join(active_builtin_render_roles)}\n"
-    f"builtin_render_role_counts={','.join(map(str, first_builtin_render))}\n"
+    f"builtin_render_initial_role_counts={','.join(map(str, first_builtin_render))}\n"
+    f"builtin_render_role_counts={','.join(map(str, final_builtin_render))}\n"
 )
 PY
   fail "runtime compilation counter evidence is incomplete or inconsistent"
-rg 'RendererIOS native Landscape: .*draws=[1-9][0-9]* textured=[1-9][0-9]*' \
-  "$WORK/log.txt" >/dev/null || fail "no native textured Landscape frame was proven"
+if [[ "$SCENARIO" != new-game || -z "$PIPELINE_ARCHIVE_TEST_MODE" ]]; then
+  rg 'RendererIOS native Landscape: .*draws=[1-9][0-9]* textured=[1-9][0-9]*' \
+    "$WORK/log.txt" >/dev/null ||
+    fail "no native textured Landscape frame was proven"
+fi
 if rg -i 'RendererIOS (fatal|GPU shutdown failed|native Landscape encode failed|IOSGPUScene metallib loading failed)|libc\\+\\+abi: terminating|SIGABRT' \
     "$WORK/log.txt" "$WORK/stderr.log" >/dev/null 2>&1; then
   fail "fatal RendererIOS/runtime signature found in device logs"
@@ -706,7 +943,8 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
   echo "result=PASS"
   echo "source_sha=$EXPECTED_SHA"
   echo "bundle_id=$BUNDLE_ID"
-  echo "save_slot=$SAVE_SLOT"
+  echo "scenario=$SCENARIO"
+  echo "save_slot=$SCENARIO_SAVE_SLOT"
   echo "duration_seconds=$DURATION"
   echo "device_selection_attempts=$DEVICE_SELECTION_ATTEMPTS_USED"
   echo "device_selection_method=$DEVICE_SELECTION_METHOD"
@@ -719,5 +957,5 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
   cat "$WORK/runtime-compilation-summary.txt"
 } >"$OUT/result.txt"
 
-echo "PASS — offline metallib + counters + native Landscape/Bink gates proven; app stopped"
+echo "PASS — offline metallib + scenario counters + scene/Bink gates proven; app stopped"
 echo "evidence: $OUT"

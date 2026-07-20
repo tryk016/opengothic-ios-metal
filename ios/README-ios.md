@@ -122,11 +122,19 @@ Xcode target obtains a profile for the existing App ID, and signing uses the
 entitlements decoded from that profile. The suffixed identifier is preserved,
 so the existing Documents container, game data and saves remain attached.
 
-After installation it launches `-nomenu -save 20`, waits 45 seconds and pulls
-`log.txt`, `stderr.log` and `crash.log`. PASS requires the exact source SHA,
-RendererIOS diagnostics, the offline-metallib ABI marker and at least one
-textured native Landscape frame, with no new crash log or fatal RendererIOS
-signature. Evidence is written under `build/device-smoke/<source-sha>/`.
+After installation it launches `-nomenu -save 20` by default, or a fresh
+default world with `--new-game`, waits 45 seconds and pulls `log.txt`,
+`stderr.log` and `crash.log`. PASS requires the exact source SHA,
+RendererIOS diagnostics and the offline-metallib ABI marker, with no new crash
+log or fatal RendererIOS signature. Save keeps the exact `0/0/2` runtime
+source/compute/render plateau and Builtin roles 7/9. New game starts at the
+same values, must make exactly one render transition to `0/0/3` no later than
+present 300, and then remain on the Builtin role 3/7/9 plateau. These are
+present-count gates, not elapsed-time gates. A normal smoke also requires a
+textured native Landscape frame. The specialized new-game pipeline-archive
+mode instead requires a confirmed world gate followed by a non-empty scene
+snapshot; intro video can delay Landscape, and Bink/direct PSOs remain outside
+D-041. Evidence is written under `build/device-smoke/<source-sha>/`.
 
 The only unavoidable manual precondition is that iOS must already trust the
 Mac/development identity and the device must be unlocked at launch time.
@@ -136,7 +144,51 @@ Every override is still checked against the connected device and its existing
 installed app; it cannot select a new App ID or container.
 `OPENGOTHIC_IOS_EXPECTED_SHA` accepts only an exact 40-character commit SHA and
 defaults to `HEAD`.
-`--save-slot` and `--duration` select the unattended scenario.
+`--save-slot` and `--new-game` are mutually exclusive; together with
+`--duration` they select the unattended scenario.
+
+### Maintainer pipeline-archive test
+
+`ios/device-test/run-pipeline-archive-test.sh` validates the persistent
+RendererIOS Metal pipeline archive without using elapsed time as a PASS
+criterion:
+
+```sh
+ios/device-test/run-pipeline-archive-test.sh \
+  --new-game --duration 45 \
+  build/archive-device-on/opengothic/Release/Gothic2Notr.app
+```
+
+The diagnostics-enabled app uses one device-wide `MTLBinaryArchive` for the
+scenario's Tempest Builtin render pipelines: two for save and three for new
+game. The archive is stored below
+`Library/Caches/RendererIOS/PipelineArchives/schema-1/`; a canonical provenance
+sidecar binds it to the RendererIOS metallib ABI and SHA-256 digest. Archive
+load, serialization or I/O failures are non-fatal and rebuild from the same
+offline named functions; they never enable runtime shader-source compilation.
+
+The harness signs and installs once, then runs four fresh processes: cold,
+warm strict-hit, deliberately corrupt and recovery-warm. It verifies exact
+archive counters and the existing zero-source-compilation plateau, stops the
+game before every cache read or test-mode launch, and requires a final
+zero-process scan on both PASS and failure. Before installation it fail-closes
+unless the existing container still contains `Data`, `_work` and `system`.
+Cold reset and corrupt injection are diagnostics-only, app-owned operations on
+the exact archive/provenance files. Their exact mode, byte count, deterministic
+payload SHA-256 and removal/write verification are required in the device log;
+warm phases must contain no test-mode marker. The harness performs no mutating
+remote container copy. Evidence is written below
+`build/device-pipeline-archive/<source-sha>/`. The same device, bundle,
+provisioning and exact-source safeguards as the smoke test apply.
+
+Archive snapshots occur at present 300, after the new-game role-3 warmup has
+completed; cold/corrupt perform their first serialization there.
+Serialization failure retries are
+bounded to presents 301 and 302; no flush is attempted before 300 or after
+302. Cold/corrupt require exact miss/add counts of 2 for save or 3 for new
+game, while warm/recovery require the matching exact hit count and every phase
+requires zero archive fallback. Scenario and save-slot selection are preserved
+in PASS and failure evidence.
 
 ---
 
