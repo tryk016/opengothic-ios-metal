@@ -209,7 +209,7 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'runtime compilation frame markers are not contiguous' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'the first presented frame must have exact offline-Builtin totals' \
+          grep -Fq 'the first presented frame must have exact offline shader totals' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'builtin runtime attribution markers do not cover presents 1 through 300' \
             ios/device-test/run-smoke-test.sh
