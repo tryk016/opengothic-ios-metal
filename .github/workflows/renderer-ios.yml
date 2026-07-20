@@ -204,7 +204,7 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'runtime compilation frame markers are not contiguous' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'runtime shader compilation occurred between bridge construction' \
+          grep -Fq 'the first presented frame must have exact offline-Bink totals' \
             ios/device-test/run-smoke-test.sh
 
       - name: Verify P2.1 native asset registry contract
