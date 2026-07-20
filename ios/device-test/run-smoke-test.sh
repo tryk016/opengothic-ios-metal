@@ -348,9 +348,11 @@ rg -F "build=$EXPECTED_SHA" "$WORK/log.txt" >/dev/null ||
   fail "runtime log does not identify exact source SHA $EXPECTED_SHA"
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
-rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=2' \
+rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=3' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
-rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=2 color=rgba8 sample-count=1 pipeline-created=1' \
+rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=3 manifest=1 fail-closed=1' \
+  "$WORK/log.txt" >/dev/null || fail "offline Builtin manifest marker is missing"
+rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=3 color=rgba8 sample-count=1 pipeline-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline native Bink pipeline marker is missing"
 if ((REQUIRE_BINK_SELF_TEST != 0)); then
   BINK_ARMED_COUNT="$(grep -Fc \
@@ -374,7 +376,7 @@ if ((REQUIRE_BINK_SELF_TEST != 0)); then
   rg -F 'encoded-frames-delta=1' "$WORK/log.txt" >/dev/null ||
     fail "Bink self-test did not encode exactly one frame"
 fi
-rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
+rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=builtin,bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   "$WORK/log.txt" >/dev/null || fail "RendererIOS bridge-only shader policy marker is missing"
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
@@ -449,12 +451,12 @@ if render_after < render_before or render_delta != render_after-render_before:
 if (source_before, source_after, source_delta,
     compute_before, compute_after, compute_delta,
     render_before, render_after, render_delta) != (
-        4, 6, 2,
+        0, 2, 2,
         0, 0, 0,
         0, 0, 0,
     ):
     raise SystemExit(
-        "offline-Bink bridge construction must preserve four Builtin requests, "
+        "offline Builtin construction must start at zero source requests, "
         "request exactly two inventory source libraries and no Tempest native PSO"
     )
 
@@ -491,10 +493,10 @@ for present, frame_available, source, compute, render in frames:
 
 last_present, _, last_source, last_compute, last_render = frames[-1]
 first_source, first_compute, first_render = first_frame_totals
-if first_frame_totals != (6, 0, 2):
+if first_frame_totals != (2, 0, 2):
     raise SystemExit(
-        "the first presented frame must have exact offline-Bink totals "
-        f"(6, 0, 2), found {first_frame_totals}"
+        "the first presented frame must have exact offline-Builtin totals "
+        f"(2, 0, 2), found {first_frame_totals}"
     )
 
 def csv_counts(value):
@@ -519,10 +521,10 @@ if len(builtin_bridges) != 1:
  builtin_render_before, builtin_render_after) = builtin_bridges[0]
 if builtin_available != 1:
     raise SystemExit("Metal Builtin runtime attribution is unavailable")
-if builtin_source_before != (1, 1, 1, 1):
+if builtin_source_before != (0, 0, 0, 0):
     raise SystemExit(
-        "Tempest Builtin construction must classify exactly one request for "
-        f"each source role, found {builtin_source_before}"
+        "offline Tempest Builtin construction must not request source libraries, "
+        f"found {builtin_source_before}"
     )
 if builtin_source_after != builtin_source_before:
     raise SystemExit(
@@ -556,13 +558,14 @@ active_builtin_render_roles = tuple(
     role for role, count in zip(render_roles, first_builtin_render)
     if count != 0
 )
-if builtin_frames[0][2] != (1, 1, 1, 1):
+expected_builtin_render = (0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0)
+if builtin_frames[0][2] != (0, 0, 0, 0):
     raise SystemExit(
-        "first frame lost one or more exact Tempest Builtin source roles"
+        "first frame performed an unexpected Tempest Builtin source request"
     )
 if (sum(first_builtin_render) != first_render or
         len(active_builtin_render_roles) != 2 or
-        any(count not in (0, 1) for count in first_builtin_render)):
+        first_builtin_render != expected_builtin_render):
     raise SystemExit(
         "the first frame must classify the exact two one-shot Builtin PSO "
         f"requests, roles={active_builtin_render_roles} "
@@ -583,7 +586,7 @@ for (present, frame_available, source_counts,
             "builtin runtime attribution markers are not contiguous: "
             f"expected {expected_builtin_present}, found {present}"
         )
-    if source_counts != (1, 1, 1, 1):
+    if source_counts != (0, 0, 0, 0):
         raise SystemExit(
             f"Tempest Builtin source role counts changed at present {present}"
         )
@@ -608,6 +611,7 @@ summary.write_text(
     f"runtime_compilation_frame_compute_growth={last_compute-first_compute}\n"
     f"runtime_compilation_frame_render_growth={last_render-first_render}\n"
     f"builtin_source_roles={','.join(source_roles)}\n"
+    f"builtin_source_role_counts={','.join(map(str, builtin_frames[0][2]))}\n"
     f"builtin_render_active_roles={','.join(active_builtin_render_roles)}\n"
     f"builtin_render_role_counts={','.join(map(str, first_builtin_render))}\n"
 )

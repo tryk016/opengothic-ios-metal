@@ -242,16 +242,21 @@ elseif(IOS)
       "${CMAKE_SOURCE_DIR}/shader/ios-metal/landscape.metal")
   set(OPENGOTHIC_RENDERER_IOS_BINK_METAL_SOURCE
       "${CMAKE_SOURCE_DIR}/shader/ios-metal/bink.metal")
+  set(OPENGOTHIC_RENDERER_IOS_UI_METAL_SOURCE
+      "${CMAKE_SOURCE_DIR}/shader/ios-metal/ui.metal")
   set(OPENGOTHIC_RENDERER_IOS_LANDSCAPE_AIR
       "${CMAKE_CURRENT_BINARY_DIR}/RendererIOS-Landscape.air")
   set(OPENGOTHIC_RENDERER_IOS_BINK_AIR
       "${CMAKE_CURRENT_BINARY_DIR}/RendererIOS-Bink.air")
+  set(OPENGOTHIC_RENDERER_IOS_UI_AIR
+      "${CMAKE_CURRENT_BINARY_DIR}/RendererIOS-UI.air")
   set(OPENGOTHIC_RENDERER_IOS_METALLIB
       "${CMAKE_CURRENT_BINARY_DIR}/RendererIOS.metallib")
   add_custom_command(
     OUTPUT
       "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_AIR}"
       "${OPENGOTHIC_RENDERER_IOS_BINK_AIR}"
+      "${OPENGOTHIC_RENDERER_IOS_UI_AIR}"
       "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
     COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
             -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
@@ -261,13 +266,19 @@ elseif(IOS)
             -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
             -c "${OPENGOTHIC_RENDERER_IOS_BINK_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_BINK_AIR}"
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
+            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+            -c "${OPENGOTHIC_RENDERER_IOS_UI_METAL_SOURCE}"
+            -o "${OPENGOTHIC_RENDERER_IOS_UI_AIR}"
     COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metallib
             "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_AIR}"
             "${OPENGOTHIC_RENDERER_IOS_BINK_AIR}"
+            "${OPENGOTHIC_RENDERER_IOS_UI_AIR}"
             -o "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
     DEPENDS
       "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_METAL_SOURCE}"
       "${OPENGOTHIC_RENDERER_IOS_BINK_METAL_SOURCE}"
+      "${OPENGOTHIC_RENDERER_IOS_UI_METAL_SOURCE}"
     COMMENT "Compiling RendererIOS offline Metal library"
     VERBATIM)
   add_custom_target(RendererIOSMetallib

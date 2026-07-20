@@ -16,6 +16,9 @@
 
 #if defined(__IOS__)
 #include "utils/installdetect.h"
+#include "graphics/iosbuiltinshaderabi.h"
+#include "graphics/ioslandscapeshaderabi.h"
+#include "graphics/rendereriosplatform.h"
 #endif
 
 #include <cstdio>
@@ -85,7 +88,22 @@ std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
     }
 
 #if defined(__APPLE__)
+#if defined(__IOS__)
+  const std::string metallibPath = rendererIOSMetalLibraryPath();
+  Tempest::MetalBuiltinOfflineManifest manifest;
+  manifest.metallibPath = metallibPath.c_str();
+  manifest.colorVertexFunction =
+      RendererIOSBuiltinShader::FunctionNames[0].data();
+  manifest.colorFragmentFunction =
+      RendererIOSBuiltinShader::FunctionNames[1].data();
+  manifest.textureVertexFunction =
+      RendererIOSBuiltinShader::FunctionNames[2].data();
+  manifest.textureFragmentFunction =
+      RendererIOSBuiltinShader::FunctionNames[3].data();
+  return std::make_unique<Tempest::MetalApi>(flg,manifest);
+#else
   return std::make_unique<Tempest::MetalApi>(flg);
+#endif
 #else
   return std::make_unique<Tempest::VulkanApi>(flg);
 #endif
@@ -170,6 +188,14 @@ int main(int argc,const char** argv) {
 
     Tempest::Device      device{*api,gpuName};
     CrashLog::setGpu(device.properties().name);
+#if defined(__IOS__)
+    Tempest::Log::i(
+        "RendererIOS builtin shader library: source=offline-metallib resource=",
+        RendererIOSShader::LibraryName,".metallib abi=",
+        RendererIOSShader::AbiVersion,
+        " manifest=",RendererIOSBuiltinShader::ManifestVersion,
+        " fail-closed=1");
+#endif
 
     Resources            resources{device};
     Gothic               gothic;

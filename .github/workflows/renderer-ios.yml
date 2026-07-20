@@ -215,6 +215,8 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'builtin_render_active_roles=' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'builtin_source_role_counts=' \
+            ios/device-test/run-smoke-test.sh
 
       - name: Verify P2.1 native asset registry contract
         run: |
@@ -297,14 +299,17 @@ jobs:
           test -f game/graphics/iosgpuscene.h
           test -f game/graphics/iosgpuscene.mm
           test -f game/graphics/ioslandscapeshaderabi.h
+          test -f game/graphics/iosbuiltinshaderabi.h
           test -f game/graphics/iosbinkshaderabi.h
           test -f game/graphics/iosbinkselftest.h
           test -f game/graphics/iosgpubink.h
           test -f game/graphics/iosgpubink.mm
           test -f shader/ios-metal/landscape.metal
           test -f shader/ios-metal/bink.metal
+          test -f shader/ios-metal/ui.metal
           test -f ios/tests/iosgpusceneplan.cpp
           test -f ios/tests/ioslandscapeshader.cpp
+          test -f ios/tests/iosbuiltinshader.cpp
           test -f ios/tests/iosbinkshader.cpp
           test -f ios/tests/iosbinkselftest.cpp
 
@@ -340,6 +345,13 @@ jobs:
             -isystem lib/Tempest/Engine/include \
             -isystem lib/ZenKit/include \
             -fsyntax-only game/graphics/iosgpubink.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only game/graphics/rendereriosplatform.mm
 
           xcrun clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
@@ -358,6 +370,13 @@ jobs:
           xcrun clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame \
+            ios/tests/iosbuiltinshader.cpp \
+            -o "$RUNNER_TEMP/iosbuiltinshader"
+          "$RUNNER_TEMP/iosbuiltinshader" \
+            shader/ios-metal/ui.metal
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
             ios/tests/iosbinkselftest.cpp \
             -o "$RUNNER_TEMP/iosbinkselftest"
           "$RUNNER_TEMP/iosbinkselftest"
@@ -369,16 +388,32 @@ jobs:
             -target air64-apple-ios16.4 \
             -c shader/ios-metal/bink.metal \
             -o "$RUNNER_TEMP/ios-bink.air"
+          xcrun --sdk iphoneos metal \
+            -target air64-apple-ios16.4 \
+            -c shader/ios-metal/ui.metal \
+            -o "$RUNNER_TEMP/ios-ui.air"
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-landscape.air"
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-bink.air"
+          LC_ALL=C grep -aFq \
+            'apple-ios16.4.0' \
+            "$RUNNER_TEMP/ios-ui.air"
           xcrun --sdk iphoneos metallib \
             "$RUNNER_TEMP/ios-landscape.air" \
             "$RUNNER_TEMP/ios-bink.air" \
+            "$RUNNER_TEMP/ios-ui.air" \
             -o "$RUNNER_TEMP/ios-landscape.metallib"
+          for function in \
+              riosLandscapeVertex riosLandscapeFragment \
+              riosBinkVertex riosBinkFragment \
+              riosUiColorVertex riosUiColorFragment \
+              riosUiTextureVertex riosUiTextureFragment; do
+            LC_ALL=C grep -aFq "$function" \
+              "$RUNNER_TEMP/ios-landscape.metallib"
+          done
 
           if grep -Eq \
               'newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|MTLCommandBuffer|gapi/metal/mt' \
@@ -459,12 +494,16 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iossceneextractor\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosgpuscene\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosgpubink\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])rendereriosplatform\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Fq 'legacyShaders(Shaders::CompilationProfile::RendererIOSBridge)' game/graphics/iosmetalcontext.cpp
-          grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' game/graphics/shaders.cpp
+          grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=builtin,bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' game/graphics/shaders.cpp
           ! grep -Fq 'Shaders::inst().bink' game/ui/videowidget.cpp
           grep -Fq 'runtimeCompilationSnapshot(device)' game/graphics/iosmetalcontext.cpp
           grep -Fq 'builtinRuntimeSnapshot(device)' game/graphics/iosmetalcontext.cpp
           grep -Fq 'point=legacy-bridge role-abi=1 available=' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'MetalBuiltinOfflineManifest manifest;' game/main.cpp
+          grep -Fq 'MetalApi>(flg,manifest)' game/main.cpp
+          grep -Fq 'RendererIOS builtin shader library: source=offline-metallib' game/main.cpp
           grep -Fq 'runtime_compilation_bridge_source_delta=' ios/device-test/run-smoke-test.sh
           grep -Fq 'builtin_render_active_roles=' ios/device-test/run-smoke-test.sh
           grep -Fq 'impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);' \

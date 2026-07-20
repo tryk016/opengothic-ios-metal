@@ -1,4 +1,5 @@
 #include "rendereriosplatform.h"
+#include "ioslandscapeshaderabi.h"
 
 #include <Tempest/Platform>
 
@@ -32,6 +33,25 @@ RendererIOSPlatformInfo rendererIOSPlatformInfo() noexcept {
   else
     info.deviceFamily.back() = '\0';
   return info;
+  }
+
+std::string rendererIOSMetalLibraryPath() {
+  // This runs on Tempest's game fiber. UIKit's run-loop pool owns these short
+  // autoreleased Foundation values; do not create a nested autorelease pool.
+  NSString* libraryName =
+      [NSString stringWithUTF8String:RendererIOSShader::LibraryName.data()];
+  if(libraryName==nil)
+    return {};
+  NSURL* libraryUrl =
+      [[NSBundle mainBundle] URLForResource:libraryName
+                             withExtension:@"metallib"];
+  if(libraryUrl==nil)
+    return {};
+  NSString* libraryPath = [libraryUrl path];
+  if(libraryPath==nil)
+    return {};
+  const char* path = [libraryPath fileSystemRepresentation];
+  return path==nullptr ? std::string{} : std::string{path};
   }
 
 #endif

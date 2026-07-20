@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <string>
 
 struct RendererIOSPlatformInfo final {
   std::array<char,64> osVersion    = {};
@@ -8,3 +9,7 @@ struct RendererIOSPlatformInfo final {
   };
 
 RendererIOSPlatformInfo rendererIOSPlatformInfo() noexcept;
+
+#if defined(__IOS__)
+std::string rendererIOSMetalLibraryPath();
+#endif
