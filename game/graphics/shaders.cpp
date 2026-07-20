@@ -10,7 +10,23 @@
 #include "shader.h"
 #include "utils/string_frm.h"
 
+#if defined(__IOS__)
+#include "iosinventoryshaderabi.h"
+#include "ioslandscapeshaderabi.h"
+#endif
+
+#include <cstddef>
+
 using namespace Tempest;
+
+#if defined(__IOS__)
+static_assert(sizeof(Resources::Vertex)==
+              RendererIOSInventoryShader::VertexStride);
+static_assert(offsetof(Resources::Vertex,pos)==0u);
+static_assert(offsetof(Resources::Vertex,norm)==12u);
+static_assert(offsetof(Resources::Vertex,uv)==24u);
+static_assert(offsetof(Resources::Vertex,color)==32u);
+#endif
 
 Shaders* Shaders::instance = nullptr;
 
@@ -75,6 +91,14 @@ void Shaders::compileInventoryShader() {
   sh = GothicShader::get("item.frag.sprv");
   auto fs = device.shader(sh.data,sh.len);
   inventory = device.pipeline(Triangles,state,vs,fs);
+#if defined(__IOS__)
+  Log::i(
+      "RendererIOS inventory shader pipeline: source=offline-metallib resource=",
+      RendererIOSShader::LibraryName,".metallib abi=",
+      RendererIOSShader::AbiVersion,
+      " manifest=",RendererIOSInventoryShader::ManifestVersion,
+      " exact-spirv=1 functions-resolved=2 pipeline-wrapper-created=1");
+#endif
   }
 
 void Shaders::compileShaders() {

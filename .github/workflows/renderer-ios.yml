@@ -291,7 +291,7 @@ jobs:
             exit 1
           fi
 
-      - name: Verify P2.1 native Landscape GPU contract
+      - name: Verify RendererIOS native GPU and offline Metal contracts
         run: |
           set -euo pipefail
 
@@ -300,6 +300,7 @@ jobs:
           test -f game/graphics/iosgpuscene.mm
           test -f game/graphics/ioslandscapeshaderabi.h
           test -f game/graphics/iosbuiltinshaderabi.h
+          test -f game/graphics/iosinventoryshaderabi.h
           test -f game/graphics/iosbinkshaderabi.h
           test -f game/graphics/iosbinkselftest.h
           test -f game/graphics/iosgpubink.h
@@ -307,9 +308,11 @@ jobs:
           test -f shader/ios-metal/landscape.metal
           test -f shader/ios-metal/bink.metal
           test -f shader/ios-metal/ui.metal
+          test -f shader/ios-metal/inventory.metal
           test -f ios/tests/iosgpusceneplan.cpp
           test -f ios/tests/ioslandscapeshader.cpp
           test -f ios/tests/iosbuiltinshader.cpp
+          test -f ios/tests/iosinventoryshader.cpp
           test -f ios/tests/iosbinkshader.cpp
           test -f ios/tests/iosbinkselftest.cpp
 
@@ -377,6 +380,13 @@ jobs:
           xcrun clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame \
+            ios/tests/iosinventoryshader.cpp \
+            -o "$RUNNER_TEMP/iosinventoryshader"
+          "$RUNNER_TEMP/iosinventoryshader" \
+            shader/ios-metal/inventory.metal
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
             ios/tests/iosbinkselftest.cpp \
             -o "$RUNNER_TEMP/iosbinkselftest"
           "$RUNNER_TEMP/iosbinkselftest"
@@ -392,6 +402,10 @@ jobs:
             -target air64-apple-ios16.4 \
             -c shader/ios-metal/ui.metal \
             -o "$RUNNER_TEMP/ios-ui.air"
+          xcrun --sdk iphoneos metal \
+            -target air64-apple-ios16.4 \
+            -c shader/ios-metal/inventory.metal \
+            -o "$RUNNER_TEMP/ios-inventory.air"
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-landscape.air"
@@ -401,18 +415,23 @@ jobs:
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-ui.air"
+          LC_ALL=C grep -aFq \
+            'apple-ios16.4.0' \
+            "$RUNNER_TEMP/ios-inventory.air"
           xcrun --sdk iphoneos metallib \
             "$RUNNER_TEMP/ios-landscape.air" \
             "$RUNNER_TEMP/ios-bink.air" \
             "$RUNNER_TEMP/ios-ui.air" \
-            -o "$RUNNER_TEMP/ios-landscape.metallib"
+            "$RUNNER_TEMP/ios-inventory.air" \
+            -o "$RUNNER_TEMP/RendererIOS.metallib"
           for function in \
               riosLandscapeVertex riosLandscapeFragment \
               riosBinkVertex riosBinkFragment \
               riosUiColorVertex riosUiColorFragment \
-              riosUiTextureVertex riosUiTextureFragment; do
+              riosUiTextureVertex riosUiTextureFragment \
+              riosInventoryVertex riosInventoryFragment; do
             LC_ALL=C grep -aFq "$function" \
-              "$RUNNER_TEMP/ios-landscape.metallib"
+              "$RUNNER_TEMP/RendererIOS.metallib"
           done
 
           if grep -Eq \

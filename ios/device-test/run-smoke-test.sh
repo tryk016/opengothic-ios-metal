@@ -348,11 +348,15 @@ rg -F "build=$EXPECTED_SHA" "$WORK/log.txt" >/dev/null ||
   fail "runtime log does not identify exact source SHA $EXPECTED_SHA"
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
-rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=3' \
+rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=4' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
-rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=3 manifest=1 fail-closed=1' \
+rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=4 manifest=1 fail-closed=1' \
   "$WORK/log.txt" >/dev/null || fail "offline Builtin manifest marker is missing"
-rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=3 color=rgba8 sample-count=1 pipeline-created=1' \
+rg -F 'RendererIOS inventory shader manifest: resource=RendererIOS.metallib abi=4 manifest=1 exact-spirv=1 configured=1 fail-closed=1' \
+  "$WORK/log.txt" >/dev/null || fail "offline inventory manifest marker is missing"
+rg -F 'RendererIOS inventory shader pipeline: source=offline-metallib resource=RendererIOS.metallib abi=4 manifest=1 exact-spirv=1 functions-resolved=2 pipeline-wrapper-created=1' \
+  "$WORK/log.txt" >/dev/null || fail "offline inventory pipeline marker is missing"
+rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=4 color=rgba8 sample-count=1 pipeline-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline native Bink pipeline marker is missing"
 if ((REQUIRE_BINK_SELF_TEST != 0)); then
   BINK_ARMED_COUNT="$(grep -Fc \
@@ -451,13 +455,13 @@ if render_after < render_before or render_delta != render_after-render_before:
 if (source_before, source_after, source_delta,
     compute_before, compute_after, compute_delta,
     render_before, render_after, render_delta) != (
-        0, 2, 2,
+        0, 0, 0,
         0, 0, 0,
         0, 0, 0,
     ):
     raise SystemExit(
-        "offline Builtin construction must start at zero source requests, "
-        "request exactly two inventory source libraries and no Tempest native PSO"
+        "offline Builtin and inventory construction must not request source "
+        "libraries or Tempest native PSOs"
     )
 
 frames = [tuple(map(int, match.groups())) for match in frame_re.finditer(log)]
@@ -493,10 +497,10 @@ for present, frame_available, source, compute, render in frames:
 
 last_present, _, last_source, last_compute, last_render = frames[-1]
 first_source, first_compute, first_render = first_frame_totals
-if first_frame_totals != (2, 0, 2):
+if first_frame_totals != (0, 0, 2):
     raise SystemExit(
-        "the first presented frame must have exact offline-Builtin totals "
-        f"(2, 0, 2), found {first_frame_totals}"
+        "the first presented frame must have exact offline shader totals "
+        f"(0, 0, 2), found {first_frame_totals}"
     )
 
 def csv_counts(value):

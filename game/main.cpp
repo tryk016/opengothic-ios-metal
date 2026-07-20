@@ -17,8 +17,10 @@
 #if defined(__IOS__)
 #include "utils/installdetect.h"
 #include "graphics/iosbuiltinshaderabi.h"
+#include "graphics/iosinventoryshaderabi.h"
 #include "graphics/ioslandscapeshaderabi.h"
 #include "graphics/rendereriosplatform.h"
+#include "shader.h"
 #endif
 
 #include <cstdio>
@@ -100,6 +102,18 @@ std::unique_ptr<Tempest::AbstractGraphicsApi> mkApi(const CommandLine& g) {
       RendererIOSBuiltinShader::FunctionNames[2].data();
   manifest.textureFragmentFunction =
       RendererIOSBuiltinShader::FunctionNames[3].data();
+  const auto inventoryVertex =
+      GothicShader::get("item.vert.sprv");
+  const auto inventoryFragment =
+      GothicShader::get("item.frag.sprv");
+  manifest.inventoryVertexSpirv = inventoryVertex.data;
+  manifest.inventoryVertexSpirvSize = inventoryVertex.len;
+  manifest.inventoryVertexFunction =
+      RendererIOSInventoryShader::FunctionNames[0].data();
+  manifest.inventoryFragmentSpirv = inventoryFragment.data;
+  manifest.inventoryFragmentSpirvSize = inventoryFragment.len;
+  manifest.inventoryFragmentFunction =
+      RendererIOSInventoryShader::FunctionNames[1].data();
   return std::make_unique<Tempest::MetalApi>(flg,manifest);
 #else
   return std::make_unique<Tempest::MetalApi>(flg);
@@ -195,6 +209,12 @@ int main(int argc,const char** argv) {
         RendererIOSShader::AbiVersion,
         " manifest=",RendererIOSBuiltinShader::ManifestVersion,
         " fail-closed=1");
+    Tempest::Log::i(
+        "RendererIOS inventory shader manifest: resource=",
+        RendererIOSShader::LibraryName,".metallib abi=",
+        RendererIOSShader::AbiVersion,
+        " manifest=",RendererIOSInventoryShader::ManifestVersion,
+        " exact-spirv=1 configured=1 fail-closed=1");
 #endif
 
     Resources            resources{device};
