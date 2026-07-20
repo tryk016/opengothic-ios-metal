@@ -6,6 +6,7 @@
 #include "graphics/mesh/submesh/staticmesh.h"
 #include "graphics/mesh/submesh/packedmesh.h"
 #include "graphics/visualobjects.h"
+#include "shadercompilationpolicy.h"
 #include "shaders.h"
 
 #include "gothic.h"
@@ -144,19 +145,41 @@ void DrawCommands::setBindings(Tempest::Encoder<CommandBuffer>& cmd, const DrawC
 uint16_t DrawCommands::commandId(const Material& m, Type type, uint32_t bucketId) {
   const bool bindlessSys = Gothic::inst().options().doBindless;
   const bool bindless    = bindlessSys && !m.hasFrameAnimation();
+  auto& shaders = Shaders::inst();
+  const bool materialPipelines = shaders.allowsMaterialPipelines();
+  const auto sourceOnlyKey = sourceOnlyDrawCommandKey(
+    uint8_t(type),uint8_t(m.alpha),bindless,bucketId);
 
-  auto pMain    = Shaders::inst().materialPipeline(m, type, Shaders::T_Main,   bindless);
-  auto pShadow  = Shaders::inst().materialPipeline(m, type, Shaders::T_Shadow, bindless);
-  auto pVsm     = Shaders::inst().materialPipeline(m, type, Shaders::T_Vsm,    bindless);
-  auto pHiZ     = Shaders::inst().materialPipeline(m, type, Shaders::T_Depth,  bindless);
-  if(pMain==nullptr && pShadow==nullptr && pHiZ==nullptr)
-    return uint16_t(-1);
+  const RenderPipeline* pMain   = nullptr;
+  const RenderPipeline* pShadow = nullptr;
+  const RenderPipeline* pVsm    = nullptr;
+  const RenderPipeline* pHiZ    = nullptr;
+  if(materialPipelines) {
+    pMain   = shaders.materialPipeline(m, type, Shaders::T_Main,   bindless);
+    pShadow = shaders.materialPipeline(m, type, Shaders::T_Shadow, bindless);
+    pVsm    = shaders.materialPipeline(m, type, Shaders::T_Vsm,    bindless);
+    pHiZ    = shaders.materialPipeline(m, type, Shaders::T_Depth,  bindless);
+    if(pMain==nullptr && pShadow==nullptr && pHiZ==nullptr)
+      return uint16_t(-1);
+    }
 
   for(size_t i=0; i<cmd.size(); ++i) {
-    if(cmd[i].pMain!=pMain || cmd[i].pShadow!=pShadow || cmd[i].pHiZ!=pHiZ)
-      continue;
-    if(!bindless && cmd[i].bucketId!=bucketId)
-      continue;
+    if(materialPipelines) {
+      if(cmd[i].pMain!=pMain || cmd[i].pShadow!=pShadow ||
+         cmd[i].pHiZ!=pHiZ)
+        continue;
+      if(!bindless && cmd[i].bucketId!=bucketId)
+        continue;
+      }
+    else {
+      const SourceOnlyDrawCommandKey candidate = {
+        uint8_t(cmd[i].type),
+        uint8_t(cmd[i].alpha),
+        cmd[i].bucketId,
+        };
+      if(candidate!=sourceOnlyKey)
+        continue;
+      }
     return uint16_t(i);
     }
 
@@ -167,7 +190,7 @@ uint16_t DrawCommands::commandId(const Material& m, Type type, uint32_t bucketId
   cx.pShadow     = pShadow;
   cx.pVsm        = pVsm;
   cx.pHiZ        = pHiZ;
-  cx.bucketId    = bindless ? 0xFFFFFFFF : bucketId;
+  cx.bucketId    = sourceOnlyKey.bucketId;
   cx.type        = type;
   cx.alpha       = m.alpha;
   cmd.push_back(std::move(cx));

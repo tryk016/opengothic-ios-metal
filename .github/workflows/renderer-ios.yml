@@ -177,6 +177,36 @@ jobs:
           test "$(grep -Fc 'device.readPixels(savePreview)' game/graphics/iosmetalcontext.cpp)" -eq 1
           grep -Fq 'previewFenceErrorAfterTerminal()' game/graphics/iosmetalcontext.cpp
 
+      - name: Verify RendererIOS legacy shader compilation policy
+        run: |
+          set -euo pipefail
+
+          test -f game/graphics/shadercompilationpolicy.h
+          test -f ios/tests/iosshadercompilationpolicy.cpp
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosshadercompilationpolicy.cpp \
+            -o "$RUNNER_TEMP/iosshadercompilationpolicy"
+          "$RUNNER_TEMP/iosshadercompilationpolicy"
+
+          grep -Fq 'if(!allowsMaterialPipelines())' \
+            game/graphics/shaders.cpp
+          grep -Fq 'sourceOnlyDrawCommandKey(' \
+            game/graphics/drawcommands.cpp
+          grep -Fq 'material-pipelines=source-metadata-only pfx-pipelines=disabled' \
+            game/graphics/shaders.cpp
+          grep -Fq 'runtime_compilation_frame_source_growth=' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'An explicitly selected paired device may establish its CoreDevice/DDI' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'runtime compilation grew after the first presented frame' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'runtime compilation frame markers are not contiguous' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'runtime shader compilation occurred between bridge construction' \
+            ios/device-test/run-smoke-test.sh
+
       - name: Verify P2.1 native asset registry contract
         run: |
           set -euo pipefail
@@ -381,10 +411,12 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iossceneextractor\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosgpuscene\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Fq 'legacyShaders(Shaders::CompilationProfile::RendererIOSBridge)' game/graphics/iosmetalcontext.cpp
-          grep -Fq 'profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled' game/graphics/shaders.cpp
+          grep -Fq 'profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' game/graphics/shaders.cpp
           grep -Fq 'runtimeCompilationSnapshot(device)' game/graphics/iosmetalcontext.cpp
           grep -Fq 'point=legacy-bridge available=' game/graphics/iosmetalcontext.cpp
           grep -Fq 'runtime_compilation_bridge_source_delta=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);' \
+            game/graphics/iosmetalcontext.cpp
 
       - name: Build iOS Release
         run: |

@@ -7,20 +7,19 @@
 #include <list>
 
 #include "graphics/drawcommands.h"
+#include "graphics/shadercompilationpolicy.h"
 #include "material.h"
 #include "game/constants.h"
 
 class Shaders {
   public:
-    enum class CompilationProfile : uint8_t {
-      LegacyRenderer,
-      RendererIOSBridge,
-      };
+    using CompilationProfile = ShaderCompilationProfile;
 
     explicit Shaders(CompilationProfile profile = CompilationProfile::LegacyRenderer);
     ~Shaders();
 
     void waitCompiler();
+    bool allowsMaterialPipelines() const noexcept;
 
     enum PipelineType: uint8_t {
       T_Depth,
@@ -175,6 +174,7 @@ class Shaders {
 
     static Shaders* instance;
 
+    const CompilationProfile compilationProfile;
     std::future<void>        deferredCompilation;
     mutable std::list<Entry> materials;
   };

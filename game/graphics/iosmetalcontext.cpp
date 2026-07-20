@@ -1322,8 +1322,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         }
       catch(...) {
         }
-      impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);
       }
+    impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);
 #endif
 
     (void)impl->pollPresentFailure(

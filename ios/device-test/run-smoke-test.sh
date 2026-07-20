@@ -184,7 +184,11 @@ matches = [
     d for d in devices
     if d.get("hardwareProperties", {}).get("platform") == "iOS"
     and d.get("hardwareProperties", {}).get("reality") == "physical"
-    and d.get("connectionProperties", {}).get("tunnelState") == "connected"
+    # An explicitly selected paired device may establish its CoreDevice/DDI
+    # tunnel on the first device command after a transient disconnect. In
+    # auto-selection mode, still require an already connected tunnel.
+    and (requested or
+         d.get("connectionProperties", {}).get("tunnelState") == "connected")
     and (not requested or requested in (
         d.get("identifier"), d.get("hardwareProperties", {}).get("udid")))
 ]
@@ -326,6 +330,10 @@ if not any(pathlib.PurePosixPath(p.get("executable", "")).name == expected
 PY
   fail "application process did not survive the smoke window"
 
+echo "== stopping $BUNDLE_ID after smoke window =="
+stop_running_app 1 || fail "application cleanup failed"
+RUNTIME_ARMED=0
+
 for name in log.txt stderr.log crash.log; do
   xcrun devicectl device copy from --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
@@ -339,7 +347,7 @@ rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
 rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=1' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
-rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled' \
+rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   "$WORK/log.txt" >/dev/null || fail "RendererIOS bridge-only shader policy marker is missing"
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
@@ -387,18 +395,42 @@ frames = [tuple(map(int, match.groups())) for match in frame_re.finditer(log)]
 if len(frames) < 2 or frames[0][0] != 1 or frames[-1][0] < 300:
     raise SystemExit("runtime compilation frame markers do not cover presents 1 through 300")
 previous = (0, source_after, compute_after, render_after)
+first_frame_totals = None
+expected_present = 1
 for present, frame_available, source, compute, render in frames:
     if frame_available != 1:
         raise SystemExit("Metal runtime compilation counters disappeared during frames")
     if present <= previous[0]:
         raise SystemExit("runtime compilation frame markers are not strictly ordered")
+    if present != expected_present:
+        raise SystemExit(
+            "runtime compilation frame markers are not contiguous: "
+            f"expected {expected_present}, found {present}"
+        )
     if (source < previous[1] or
         compute < previous[2] or
         render < previous[3]):
         raise SystemExit("runtime compilation counters are not monotonic")
+    if first_frame_totals is None:
+        first_frame_totals = (source, compute, render)
+    elif (source, compute, render) != first_frame_totals:
+        raise SystemExit(
+            "runtime compilation grew after the first presented frame: "
+            f"first={first_frame_totals} present={present} "
+            f"current={(source, compute, render)}"
+        )
     previous = (present, source, compute, render)
+    expected_present += 1
 
 last_present, _, last_source, last_compute, last_render = frames[-1]
+first_source, first_compute, first_render = first_frame_totals
+if first_source != source_after or first_compute != compute_after:
+    raise SystemExit(
+        "runtime shader compilation occurred between bridge construction "
+        "and the first presented frame: "
+        f"bridge={(source_after, compute_after)} "
+        f"first={(first_source, first_compute)}"
+    )
 summary.write_text(
     f"runtime_compilation_bridge_source_delta={source_delta}\n"
     f"runtime_compilation_bridge_compute_delta={compute_delta}\n"
@@ -407,6 +439,9 @@ summary.write_text(
     f"runtime_compilation_last_source={last_source}\n"
     f"runtime_compilation_last_compute={last_compute}\n"
     f"runtime_compilation_last_render={last_render}\n"
+    f"runtime_compilation_frame_source_growth={last_source-first_source}\n"
+    f"runtime_compilation_frame_compute_growth={last_compute-first_compute}\n"
+    f"runtime_compilation_frame_render_growth={last_render-first_render}\n"
 )
 PY
   fail "runtime compilation counter evidence is incomplete or inconsistent"
@@ -422,10 +457,6 @@ fi
 if [[ -n "$POST_CRASH_SHA" && "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
   fail "crash.log changed during the smoke run"
 fi
-
-echo "== stopping $BUNDLE_ID after evidence collection =="
-stop_running_app 1 || fail "application cleanup failed"
-RUNTIME_ARMED=0
 
 OUT="$ROOT/build/device-smoke/$EXPECTED_SHA"
 mkdir -p "$OUT"

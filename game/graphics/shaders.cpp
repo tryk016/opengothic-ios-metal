@@ -14,11 +14,12 @@ using namespace Tempest;
 
 Shaders* Shaders::instance = nullptr;
 
-Shaders::Shaders(CompilationProfile profile) {
+Shaders::Shaders(CompilationProfile profile)
+  : compilationProfile(profile) {
   instance = this;
   if(profile==CompilationProfile::RendererIOSBridge) {
     compileRendererIOSBridgeShaders();
-    Log::i("RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled");
+    Log::i("RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=bink,inventory legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled");
     return;
     }
 
@@ -42,6 +43,10 @@ Shaders::~Shaders() {
 void Shaders::waitCompiler() {
   if(deferredCompilation.valid())
     deferredCompilation.wait();
+  }
+
+bool Shaders::allowsMaterialPipelines() const noexcept {
+  return shaderProfileAllowsMaterialPipelines(compilationProfile);
   }
 
 Shaders& Shaders::inst() {
@@ -428,6 +433,9 @@ bool Shaders::isGi2Supported() {
   }
 
 const RenderPipeline* Shaders::materialPipeline(const Material& mat, DrawCommands::Type t, PipelineType pt, bool bl) const {
+  if(!allowsMaterialPipelines())
+    return nullptr;
+
   if(t==DrawCommands::Static) {
     // same shader
     t = DrawCommands::Movable;
