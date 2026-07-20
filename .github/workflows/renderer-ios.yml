@@ -151,6 +151,69 @@ jobs:
             -Ilib/Tempest/Engine/include -fsyntax-only \
             lib/Tempest/Tests/tests/metalapi_borrowed_handle_compile_test.cpp
 
+      - name: Verify neutral P2.2a frame plan
+        run: |
+          set -euo pipefail
+
+          test -f game/graphics/iosframeplan.h
+          test -f game/graphics/iosframeplan.cpp
+          test -f ios/tests/iosframeplan.cpp
+
+          if grep -nF '\' \
+              game/graphics/iosframeplan.h \
+              game/graphics/iosframeplan.cpp; then
+            echo 'neutral P2.2a frame-plan contract uses forbidden line continuation'
+            exit 1
+          fi
+          if grep -nE '/\*|\*/' \
+              game/graphics/iosframeplan.h \
+              game/graphics/iosframeplan.cpp; then
+            echo 'neutral P2.2a frame-plan contract uses forbidden block comment'
+            exit 1
+          fi
+          if LC_ALL=C grep -nE '[^[:blank:][:graph:]]' \
+              game/graphics/iosframeplan.h \
+              game/graphics/iosframeplan.cpp; then
+            echo 'neutral P2.2a frame-plan contract is not printable ASCII'
+            exit 1
+          fi
+
+          header_directives="$(
+            grep -E '^[[:space:]]*(#|%:)' \
+              game/graphics/iosframeplan.h || true
+          )"
+          source_directives="$(
+            grep -E '^[[:space:]]*(#|%:)' \
+              game/graphics/iosframeplan.cpp || true
+          )"
+          test "$header_directives" = \
+            $'#pragma once\n#include <cstdint>\n#include <vector>'
+          test "$source_directives" = \
+            $'#include "iosframeplan.h"\n#include <cstddef>'
+
+          if grep -nE \
+              'Tempest|Objective-C|MTL|Metal|CAMetalLayer|IOSMetalContext|IOSFrameGraph|allocator|Drawable|Swapchain|CommandBuffer|Encoder|Fence|WorldView|DrawCommands|Shaders|InventoryMenu|VideoWidget|QuartzCore|Foundation|UIKit|CoreFoundation|void[[:space:]]*\*|NativeHandle' \
+              game/graphics/iosframeplan.h \
+              game/graphics/iosframeplan.cpp; then
+            echo 'neutral P2.2a frame-plan contract leaks runtime or transport types'
+            exit 1
+          fi
+
+          printf '#include "graphics/iosframeplan.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun clang++ -x c++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -fsyntax-only game/graphics/iosframeplan.cpp
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosframeplan.cpp \
+            game/graphics/iosframeplan.cpp \
+            -o "$RUNNER_TEMP/iosframeplan"
+          "$RUNNER_TEMP/iosframeplan"
+
       - name: Verify RendererIOS save-preview routing policy
         run: |
           set -euo pipefail
@@ -701,6 +764,13 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])rendererios\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalcontext\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosframeinput\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq 'game/graphics/iosframeplan\.cpp \*/ = \{isa = PBXBuildFile; fileRef =' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          awk '
+            /Begin PBXSourcesBuildPhase section/ { in_sources=1 }
+            /End PBXSourcesBuildPhase section/ { in_sources=0 }
+            in_sources && /game\/graphics\/iosframeplan\.cpp \*\// { found=1 }
+            END { exit found ? 0 : 1 }
+          ' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosrenderworld\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosscenesnapshot\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iossceneconversion\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
