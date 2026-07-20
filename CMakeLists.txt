@@ -70,6 +70,8 @@ elseif(IOS)
          "Enable low-frequency performance and memory telemetry" OFF)
   option(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS
          "Enable RendererIOS lifecycle markers and validation diagnostics" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST
+         "Encode and read back one deterministic RendererIOS Bink frame" OFF)
   set(_renderer_ios_fault_modes
       none
       preview-attachment-missing
@@ -140,6 +142,20 @@ elseif(IOS)
      NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     message(FATAL_ERROR
       "RendererIOS fault injection requires OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST AND
+     NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    message(FATAL_ERROR
+      "RendererIOS Bink self-test requires OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST AND
+     NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
+    message(FATAL_ERROR
+      "RendererIOS Bink self-test requires OPENGOTHIC_RENDERER_IOS_FAULT_MODE=none")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=1)
   endif()
 
   if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")

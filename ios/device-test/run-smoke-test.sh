@@ -7,6 +7,7 @@
 # Usage:
 #   ios/device-test/run-smoke-test.sh path/to/Gothic2Notr.app
 #   OPENGOTHIC_IOS_DEVICE=<CoreDevice UUID> ... --duration 60 --save-slot 20 APP
+#   ... --require-bink-self-test APP
 #
 # The phone must be unlocked when the app is launched. No screen interaction is
 # needed: OpenGothic's own -nomenu/-save arguments load the selected save.
@@ -19,6 +20,7 @@ STUB="$ROOT/ios/device-test/provisioning-stub/Probe.xcodeproj"
 BASE_BUNDLE_ID="opengothic.gothic2"
 DURATION=45
 SAVE_SLOT=20
+REQUIRE_BINK_SELF_TEST=0
 APP_INPUT=""
 
 fail() {
@@ -30,7 +32,8 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --duration) DURATION="${2:?missing duration}"; shift 2 ;;
     --save-slot) SAVE_SLOT="${2:?missing save slot}"; shift 2 ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number] path/to/Gothic2Notr.app" ;;
+    --require-bink-self-test) REQUIRE_BINK_SELF_TEST=1; shift ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number] [--require-bink-self-test] path/to/Gothic2Notr.app" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -349,6 +352,28 @@ rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
 rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=2 color=rgba8 sample-count=1 pipeline-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline native Bink pipeline marker is missing"
+if ((REQUIRE_BINK_SELF_TEST != 0)); then
+  BINK_ARMED_COUNT="$(grep -Fc \
+    'RendererIOS Bink self-test: ARMED case=yuv420p-4x4-padded-v1' \
+    "$WORK/log.txt" || true)"
+  BINK_PASS_COUNT="$(grep -Fc \
+    'RendererIOS Bink self-test: PASS case=yuv420p-4x4-padded-v1' \
+    "$WORK/log.txt" || true)"
+  BINK_FAIL_COUNT="$(grep -Fc \
+    'RendererIOS Bink self-test: FAIL case=yuv420p-4x4-padded-v1' \
+    "$WORK/log.txt" || true)"
+  [[ "$BINK_ARMED_COUNT" -eq 1 ]] ||
+    fail "expected exactly one Bink self-test ARMED marker"
+  [[ "$BINK_PASS_COUNT" -eq 1 ]] ||
+    fail "expected exactly one Bink self-test PASS marker"
+  [[ "$BINK_FAIL_COUNT" -eq 0 ]] ||
+    fail "Bink self-test reported FAIL"
+  rg -F 'fence-terminal=1 bytes=64 rgba-fnv1a64=eb48c2c0c3cea445' \
+    "$WORK/log.txt" >/dev/null ||
+    fail "Bink self-test readback evidence is incomplete"
+  rg -F 'encoded-frames-delta=1' "$WORK/log.txt" >/dev/null ||
+    fail "Bink self-test did not encode exactly one frame"
+fi
 rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   "$WORK/log.txt" >/dev/null || fail "RendererIOS bridge-only shader policy marker is missing"
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
@@ -474,11 +499,13 @@ ditto "$WORK/log.txt" "$OUT/log.txt"
   echo "bundle_id=$BUNDLE_ID"
   echo "save_slot=$SAVE_SLOT"
   echo "duration_seconds=$DURATION"
+  echo "bink_self_test_required=$REQUIRE_BINK_SELF_TEST"
+  echo "bink_self_test_passed=$REQUIRE_BINK_SELF_TEST"
   echo "metallib_sha256=$METALLIB_SHA"
   echo "log_sha256=$(shasum -a 256 "$WORK/log.txt" | awk '{print $1}')"
   echo "device_process_stopped=1"
   cat "$WORK/runtime-compilation-summary.txt"
 } >"$OUT/result.txt"
 
-echo "PASS — offline metallib + runtime compilation counters + native textured Landscape proven; app stopped"
+echo "PASS — offline metallib + counters + native Landscape/Bink gates proven; app stopped"
 echo "evidence: $OUT"

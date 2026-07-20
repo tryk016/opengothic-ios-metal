@@ -35,17 +35,22 @@ on:
         required: true
         default: false
         type: boolean
+      bink_self_test:
+        description: 'Build the diagnostics-ON artifact with the synthetic Bink encode/readback gate (fault none only)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
+    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }}
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -289,6 +294,7 @@ jobs:
           test -f game/graphics/iosgpuscene.mm
           test -f game/graphics/ioslandscapeshaderabi.h
           test -f game/graphics/iosbinkshaderabi.h
+          test -f game/graphics/iosbinkselftest.h
           test -f game/graphics/iosgpubink.h
           test -f game/graphics/iosgpubink.mm
           test -f shader/ios-metal/landscape.metal
@@ -296,6 +302,7 @@ jobs:
           test -f ios/tests/iosgpusceneplan.cpp
           test -f ios/tests/ioslandscapeshader.cpp
           test -f ios/tests/iosbinkshader.cpp
+          test -f ios/tests/iosbinkselftest.cpp
 
           printf '#include "graphics/iosgpusceneplan.h"\nint main() { return 0; }\n' |
             xcrun clang++ -x c++ -std=c++20 \
@@ -344,6 +351,12 @@ jobs:
             -o "$RUNNER_TEMP/iosbinkshader"
           "$RUNNER_TEMP/iosbinkshader" \
             shader/ios-metal/bink.metal
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosbinkselftest.cpp \
+            -o "$RUNNER_TEMP/iosbinkselftest"
+          "$RUNNER_TEMP/iosbinkselftest"
           xcrun --sdk iphoneos metal \
             -target air64-apple-ios16.4 \
             -c shader/ios-metal/landscape.metal \
@@ -423,6 +436,7 @@ jobs:
             -DOPENGOTHIC_METALFX_TEMPORAL="${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile == 'metalfx-temporal' && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="${{ matrix.diagnostics }}" \
             -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}" \
+            -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="${GITHUB_SHA}"
 
       - name: Assert legacy renderer is not in the target
@@ -449,6 +463,11 @@ jobs:
           grep -Fq 'runtime_compilation_bridge_source_delta=' ios/device-test/run-smoke-test.sh
           grep -Fq 'impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);' \
             game/graphics/iosmetalcontext.cpp
+          grep -Fq 'OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST' CMakeLists.txt
+          grep -Fq 'materializeBinkSelfTestAfterTerminal(' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq -- '--require-bink-self-test' \
+            ios/device-test/run-smoke-test.sh
 
       - name: Build iOS Release
         run: |
@@ -462,6 +481,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         env:
           ACTIVE_FAULT_MODE: ${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}
+          BINK_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.bink_self_test && 'ON' || 'OFF' }}
           DIAGNOSTICS: ${{ matrix.diagnostics }}
           IOS_VERSION: 1.0.${{ github.run_number }}
           TEMPEST_PROFILE: ${{ inputs.tempest_profile }}
@@ -530,7 +550,7 @@ jobs:
           fi
 
           SHORT_SHA="${GITHUB_SHA:0:12}"
-          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}"
+          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}"
           ARTIFACT_DIR="$GITHUB_WORKSPACE/device-artifact"
           PACKAGE_ROOT="$RUNNER_TEMP/renderer-ios-device-package"
           rm -rf "$ARTIFACT_DIR" "$PACKAGE_ROOT"
@@ -557,6 +577,7 @@ jobs:
           tempest_profile=$TEMPEST_PROFILE
           diagnostics=$DIAGNOSTICS
           fault_mode=$ACTIVE_FAULT_MODE
+          bink_self_test=$BINK_SELF_TEST
           save_preview_route=$SAVE_PREVIEW_ROUTE
           bundle_id=$BUNDLE_ID
           bundle_version=$BUNDLE_VERSION
@@ -570,7 +591,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         uses: actions/upload-artifact@v4
         with:
-          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}
           path: device-artifact/
           if-no-files-found: error
           retention-days: 14

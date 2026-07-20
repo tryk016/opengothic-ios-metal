@@ -27,6 +27,9 @@
 
 #include "iosgpuscene.h"
 #include "iosgpubink.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+#include "iosbinkselftest.h"
+#endif
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
 #include "resources.h"
@@ -57,6 +60,14 @@ static_assert(std::is_nothrow_move_assignable_v<CommandBuffer>);
 
 #if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0 && !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #error "RendererIOS fault injection requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST) && !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS Bink self-test requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST) && OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
+#error "RendererIOS Bink self-test requires fault mode none"
 #endif
 
 namespace {
@@ -255,6 +266,17 @@ struct IOSMetalContext::Impl final {
     ReadyPlaceholder,
     };
 
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+  enum class BinkSelfTestState : uint8_t {
+    Armed,
+    Ready,
+    EncodedPendingSubmit,
+    AwaitingGpu,
+    Passed,
+    Failed,
+    };
+#endif
+
   enum class LifecycleState : uint8_t {
     Active,
     Suspended,
@@ -303,6 +325,9 @@ struct IOSMetalContext::Impl final {
         1u,
         });
     gpuBink = std::make_unique<IOSGPUBink>(device);
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+    armBinkSelfTest();
+#endif
 
     for(auto& command:commands)
       command = device.commandBuffer();
@@ -321,6 +346,9 @@ struct IOSMetalContext::Impl final {
       Log::i("RendererIOS diagnostics: ON frames-in-flight=",Resources::MaxFramesInFlight,
              " context=IOSMetalContext transport=Tempest");
       logRuntimeCompilationBridge();
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+      Log::i("RendererIOS Bink self-test: ARMED case=yuv420p-4x4-padded-v1");
+#endif
       if(ConfiguredFaultMode!=RendererIOSFaultMode::None)
         Log::i("RendererIOS fault injection armed: mode=",fault.name(),
                " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
@@ -414,6 +442,130 @@ struct IOSMetalContext::Impl final {
     if(depthSupported && w>0u && h>0u)
       overlayDepth = device.zbuffer(depthFormat,w,h);
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+  void armBinkSelfTest() noexcept {
+    binkSelfTestState = BinkSelfTestState::Armed;
+    }
+
+  void prepareBinkSelfTest() {
+    if(binkSelfTestState!=BinkSelfTestState::Armed)
+      return;
+    const size_t alignment =
+      std::max<size_t>(device.properties().ssbo.offsetAlign,4u);
+    const auto testCase = makeIOSBinkSelfTestCase(alignment);
+    binkSelfTestTarget =
+      device.attachment(TextureFormat::RGBA8,
+                        static_cast<uint32_t>(IOSBinkSelfTestWidth),
+                        static_cast<uint32_t>(IOSBinkSelfTestHeight));
+    binkSelfTestPlanes =
+      device.ssbo(BufferHeap::Upload,
+                  testCase.planes.data(),testCase.planes.size());
+    if(binkSelfTestTarget.isEmpty() || binkSelfTestPlanes.isEmpty())
+      throw std::runtime_error(
+        "RendererIOS Bink self-test could not allocate its resources");
+
+    binkSelfTestLayout.offsetU = testCase.offsetU;
+    binkSelfTestLayout.offsetV = testCase.offsetV;
+    binkSelfTestLayout.strideY = testCase.strideY;
+    binkSelfTestLayout.strideU = testCase.strideU;
+    binkSelfTestLayout.strideV = testCase.strideV;
+    binkSelfTestEncodedFramesBefore = gpuBink->encodedFrames();
+    binkSelfTestState = BinkSelfTestState::Ready;
+    }
+
+  bool encodeBinkSelfTest(
+      Encoder<CommandBuffer>& encoder, uint8_t slot, uint64_t serial) {
+    if(binkSelfTestState!=BinkSelfTestState::Ready)
+      return false;
+    encoder.setDebugMarker("RendererIOS Bink synthetic YUV self-test");
+    encoder.setFramebuffer(
+      {{binkSelfTestTarget,OpaqueBlack,Tempest::Preserve}});
+    gpuBink->encode(encoder,binkSelfTestPlanes,binkSelfTestLayout);
+    if(gpuBink->encodedFrames()!=binkSelfTestEncodedFramesBefore+1u)
+      throw std::runtime_error(
+        "RendererIOS Bink self-test encode counter did not advance once");
+    binkSelfTestSlot = slot;
+    binkSelfTestSerial = serial;
+    binkSelfTestState = BinkSelfTestState::EncodedPendingSubmit;
+    return true;
+    }
+
+  void acceptBinkSelfTestSubmit(uint8_t slot) noexcept {
+    if(binkSelfTestState!=BinkSelfTestState::EncodedPendingSubmit ||
+       binkSelfTestSlot!=slot)
+      return;
+    binkSelfTestState = BinkSelfTestState::AwaitingGpu;
+    }
+
+  void releaseBinkSelfTestResources() noexcept {
+    binkSelfTestTarget = Attachment();
+    binkSelfTestPlanes = StorageBuffer();
+    }
+
+  void materializeBinkSelfTestAfterTerminal(
+      uint8_t terminalSlot, const char* operation) noexcept {
+    if(binkSelfTestState!=BinkSelfTestState::AwaitingGpu ||
+       binkSelfTestSlot!=terminalSlot ||
+       !slotSubmitted[terminalSlot])
+      return;
+    if(failed) {
+      binkSelfTestState = BinkSelfTestState::Failed;
+      return;
+      }
+
+    try {
+      Pixmap rgba = device.readPixels(binkSelfTestTarget);
+      if(rgba.format()!=TextureFormat::RGBA8 ||
+         rgba.w()!=static_cast<uint32_t>(IOSBinkSelfTestWidth) ||
+         rgba.h()!=static_cast<uint32_t>(IOSBinkSelfTestHeight) ||
+         rgba.dataSize()!=IOSBinkSelfTestExpectedBytes) {
+        std::array<char,192> detail = {};
+        std::snprintf(
+          detail.data(),detail.size(),
+          "unexpected readback format=%u width=%u height=%u bytes=%zu",
+          unsigned(rgba.format()),unsigned(rgba.w()),unsigned(rgba.h()),
+          rgba.dataSize());
+        fail(operation,detail.data());
+        return;
+        }
+
+      const auto validation =
+        validateIOSBinkSelfTestRgba(rgba.data(),rgba.dataSize());
+      if(!validation.passed) {
+        std::array<char,192> detail = {};
+        std::snprintf(
+          detail.data(),detail.size(),
+          "RGBA mismatch offset=%zu expected=%u actual=%u",
+          validation.firstMismatch,
+          unsigned(validation.expected),unsigned(validation.actual));
+        fail(operation,detail.data());
+        return;
+        }
+
+      std::array<char,17> hash = {};
+      std::snprintf(
+        hash.data(),hash.size(),"%016llx",
+        static_cast<unsigned long long>(validation.fnv1a64));
+      Log::i(
+        "RendererIOS Bink self-test: PASS case=yuv420p-4x4-padded-v1",
+        " fence-terminal=1 bytes=",rgba.dataSize(),
+        " rgba-fnv1a64=",hash.data(),
+        " slot=",uint32_t(binkSelfTestSlot),
+        " serial=",binkSelfTestSerial,
+        " encoded-frames-delta=",
+        gpuBink->encodedFrames()-binkSelfTestEncodedFramesBefore);
+      binkSelfTestState = BinkSelfTestState::Passed;
+      releaseBinkSelfTestResources();
+      }
+    catch(const std::exception& e) {
+      fail(operation,e.what());
+      }
+    catch(...) {
+      fail(operation);
+      }
+    }
+#endif
 
   void clearPreview() {
     if(!previewAttachmentRetained) {
@@ -582,6 +734,20 @@ struct IOSMetalContext::Impl final {
     forcePreviewPlaceholder();
     cancelActiveFrame();
     lifecycleState = LifecycleState::Fatal;
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+    if(binkSelfTestState!=BinkSelfTestState::Passed &&
+       binkSelfTestState!=BinkSelfTestState::Failed) {
+      try {
+        Log::e("RendererIOS Bink self-test: FAIL case=yuv420p-4x4-padded-v1",
+               " operation=",operation,
+               detail!=nullptr ? " detail=" : "",
+               detail!=nullptr ? detail : "");
+        }
+      catch(...) {
+        }
+      binkSelfTestState = BinkSelfTestState::Failed;
+      }
+#endif
     if(failed)
       return;
 
@@ -836,12 +1002,16 @@ struct IOSMetalContext::Impl final {
         }
       }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+    materializeBinkSelfTestAfterTerminal(
+      binkSelfTestSlot,"RendererIOS Bink self-test readback failed");
+#endif
     neutralizeFences();
     releaseVideoFrames();
     releaseSceneFrames();
     logSceneLifetime(reason);
     logFatalSettledOnce();
-    return presentHealthy;
+    return presentHealthy && !failed;
     }
 
   bool confirmGpuIdle(SettleReason reason, const char* operation,
@@ -893,6 +1063,16 @@ struct IOSMetalContext::Impl final {
   bool                                         depthSupported = false;
   std::unique_ptr<IOSGPUScene>                  gpuScene;
   std::unique_ptr<IOSGPUBink>                   gpuBink;
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+  Attachment                                   binkSelfTestTarget;
+  StorageBuffer                                binkSelfTestPlanes;
+  IOSGPUBink::PlaneLayout                      binkSelfTestLayout;
+  BinkSelfTestState                            binkSelfTestState =
+                                                  BinkSelfTestState::Armed;
+  uint64_t                                     binkSelfTestSerial = 0;
+  uint64_t                                     binkSelfTestEncodedFramesBefore = 0;
+  uint8_t                                      binkSelfTestSlot = 0;
+#endif
 
   Attachment                                   savePreview;
   Pixmap                                       completedPreview;
@@ -974,8 +1154,14 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
                                 : "RendererIOS Metal frame fence failed");
     return std::nullopt;
     }
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+  impl->materializeBinkSelfTestAfterTerminal(
+    slot,"RendererIOS Bink self-test readback failed");
+#endif
   impl->fences[slot] = Fence();
   impl->retireSlotAfterTerminal(slot);
+  if(impl->failed)
+    return std::nullopt;
   if(impl->previewState==Impl::PreviewState::AwaitingGpu && impl->previewSlot==slot)
     impl->materializePreviewSafely("RendererIOS save-preview materialization failed");
   if(impl->failed)
@@ -1199,6 +1385,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         }
       }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+    impl->prepareBinkSelfTest();
+#endif
     auto& command = impl->commands[slot];
     {
       auto encoder = command.startEncoding(impl->device);
@@ -1282,6 +1471,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setDebugMarker("RendererIOS save preview diagnostic capture");
         encoder.setFramebuffer({{impl->savePreview,OpaqueBlack,Tempest::Preserve}});
         }
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+      (void)impl->encodeBinkSelfTest(encoder,slot,frame.serial);
+#endif
       }
 
     ++impl->counters.submitAttempts;
@@ -1290,6 +1482,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     impl->fences[slot] = std::move(submittedFence);
     impl->slotSubmitted[slot] = true;
     ++impl->counters.submitAccepted;
+#if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+    impl->acceptBinkSelfTestSubmit(slot);
+#endif
 
     // Submission consumes the ticket and commits temporal history even if
     // drawable presentation subsequently reports SwapchainSuboptimal. Every
