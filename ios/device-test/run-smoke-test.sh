@@ -396,6 +396,40 @@ frame_re = re.compile(
     r"RendererIOS runtime compilation: point=frame presents=(\d+) available=(\d+) "
     r"source=(\d+) compute=(\d+) render=(\d+)"
 )
+source_roles = (
+    "color-vertex",
+    "color-fragment",
+    "texture-vertex",
+    "texture-fragment",
+)
+render_roles = (
+    "color-lines-opaque",
+    "color-triangles-opaque",
+    "color-lines-alpha",
+    "color-triangles-alpha",
+    "color-lines-additive",
+    "color-triangles-additive",
+    "texture-lines-opaque",
+    "texture-triangles-opaque",
+    "texture-lines-alpha",
+    "texture-triangles-alpha",
+    "texture-lines-additive",
+    "texture-triangles-additive",
+)
+builtin_bridge_re = re.compile(
+    r"RendererIOS builtin runtime attribution: point=legacy-bridge role-abi=1 "
+    + r"available=(\d+) "
+    + r"source-before=([0-9]+(?:,[0-9]+){3}) "
+    + r"source-after=([0-9]+(?:,[0-9]+){3}) "
+    + r"render-before=([0-9]+(?:,[0-9]+){11}) "
+    + r"render-after=([0-9]+(?:,[0-9]+){11})"
+)
+builtin_frame_re = re.compile(
+    r"RendererIOS builtin runtime attribution: point=frame presents=(\d+) "
+    + r"role-abi=1 available=(\d+) "
+    + r"source=([0-9]+(?:,[0-9]+){3}) "
+    + r"render=([0-9]+(?:,[0-9]+){11})"
+)
 
 bridges = [tuple(map(int, match.groups())) for match in bridge_re.finditer(log)]
 if len(bridges) != 1:
@@ -462,6 +496,106 @@ if first_frame_totals != (6, 0, 2):
         "the first presented frame must have exact offline-Bink totals "
         f"(6, 0, 2), found {first_frame_totals}"
     )
+
+def csv_counts(value):
+    return tuple(map(int, value.split(",")))
+
+builtin_bridges = [
+    (
+        int(match.group(1)),
+        csv_counts(match.group(2)),
+        csv_counts(match.group(3)),
+        csv_counts(match.group(4)),
+        csv_counts(match.group(5)),
+    )
+    for match in builtin_bridge_re.finditer(log)
+]
+if len(builtin_bridges) != 1:
+    raise SystemExit(
+        "expected one builtin runtime attribution bridge marker, "
+        f"found {len(builtin_bridges)}"
+    )
+(builtin_available, builtin_source_before, builtin_source_after,
+ builtin_render_before, builtin_render_after) = builtin_bridges[0]
+if builtin_available != 1:
+    raise SystemExit("Metal Builtin runtime attribution is unavailable")
+if builtin_source_before != (1, 1, 1, 1):
+    raise SystemExit(
+        "Tempest Builtin construction must classify exactly one request for "
+        f"each source role, found {builtin_source_before}"
+    )
+if builtin_source_after != builtin_source_before:
+    raise SystemExit(
+        "parent inventory source requests must not be classified as Tempest Builtin"
+    )
+if builtin_render_before != (0,) * len(render_roles):
+    raise SystemExit(
+        "Tempest Builtin native PSO was created before legacy bridge construction"
+    )
+if builtin_render_after != builtin_render_before:
+    raise SystemExit(
+        "legacy bridge construction must not create a Tempest Builtin native PSO"
+    )
+
+builtin_frames = [
+    (
+        int(match.group(1)),
+        int(match.group(2)),
+        csv_counts(match.group(3)),
+        csv_counts(match.group(4)),
+    )
+    for match in builtin_frame_re.finditer(log)
+]
+if (len(builtin_frames) < 2 or builtin_frames[0][0] != 1 or
+        builtin_frames[-1][0] < 300):
+    raise SystemExit(
+        "builtin runtime attribution markers do not cover presents 1 through 300"
+    )
+first_builtin_render = builtin_frames[0][3]
+active_builtin_render_roles = tuple(
+    role for role, count in zip(render_roles, first_builtin_render)
+    if count != 0
+)
+if builtin_frames[0][2] != (1, 1, 1, 1):
+    raise SystemExit(
+        "first frame lost one or more exact Tempest Builtin source roles"
+    )
+if (sum(first_builtin_render) != first_render or
+        len(active_builtin_render_roles) != 2 or
+        any(count not in (0, 1) for count in first_builtin_render)):
+    raise SystemExit(
+        "the first frame must classify the exact two one-shot Builtin PSO "
+        f"requests, roles={active_builtin_render_roles} "
+        f"counts={first_builtin_render}"
+    )
+previous_builtin_present = 0
+expected_builtin_present = 1
+for (present, frame_available, source_counts,
+     render_counts) in builtin_frames:
+    if frame_available != 1:
+        raise SystemExit("Metal Builtin runtime attribution disappeared")
+    if present <= previous_builtin_present:
+        raise SystemExit(
+            "builtin runtime attribution markers are not strictly ordered"
+        )
+    if present != expected_builtin_present:
+        raise SystemExit(
+            "builtin runtime attribution markers are not contiguous: "
+            f"expected {expected_builtin_present}, found {present}"
+        )
+    if source_counts != (1, 1, 1, 1):
+        raise SystemExit(
+            f"Tempest Builtin source role counts changed at present {present}"
+        )
+    if render_counts != first_builtin_render:
+        raise SystemExit(
+            "Tempest Builtin per-role PSO requests grew after the first frame: "
+            f"first={first_builtin_render} present={present} "
+            f"current={render_counts}"
+        )
+    previous_builtin_present = present
+    expected_builtin_present = 300 if present == 1 else present + 300
+
 summary.write_text(
     f"runtime_compilation_bridge_source_delta={source_delta}\n"
     f"runtime_compilation_bridge_compute_delta={compute_delta}\n"
@@ -473,6 +607,9 @@ summary.write_text(
     f"runtime_compilation_frame_source_growth={last_source-first_source}\n"
     f"runtime_compilation_frame_compute_growth={last_compute-first_compute}\n"
     f"runtime_compilation_frame_render_growth={last_render-first_render}\n"
+    f"builtin_source_roles={','.join(source_roles)}\n"
+    f"builtin_render_active_roles={','.join(active_builtin_render_roles)}\n"
+    f"builtin_render_role_counts={','.join(map(str, first_builtin_render))}\n"
 )
 PY
   fail "runtime compilation counter evidence is incomplete or inconsistent"

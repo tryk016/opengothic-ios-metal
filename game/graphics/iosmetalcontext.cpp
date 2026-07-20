@@ -300,8 +300,12 @@ struct IOSMetalContext::Impl final {
   Impl(Device& device, SystemApi::Window* window)
     : device(device), swapchain(device,window),
       runtimeBeforeLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
+      builtinRuntimeBeforeLegacyShaders(
+        MetalApi::builtinRuntimeSnapshot(device)),
       legacyShaders(Shaders::CompilationProfile::RendererIOSBridge),
-      runtimeAfterLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)) {
+      runtimeAfterLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
+      builtinRuntimeAfterLegacyShaders(
+        MetalApi::builtinRuntimeSnapshot(device)) {
     static constexpr TextureFormat depthCandidates[] = {
       TextureFormat::Depth16,
       TextureFormat::Depth32F,
@@ -384,6 +388,86 @@ struct IOSMetalContext::Impl final {
         " render-delta=",
         counterDelta(runtimeAfterLegacyShaders.renderPsoRequests,
                      runtimeBeforeLegacyShaders.renderPsoRequests));
+      const auto& sourceBefore =
+        builtinRuntimeBeforeLegacyShaders.sourceLibraryRequests;
+      const auto& sourceAfter =
+        builtinRuntimeAfterLegacyShaders.sourceLibraryRequests;
+      const auto& renderBefore =
+        builtinRuntimeBeforeLegacyShaders.renderPsoRequests;
+      const auto& renderAfter =
+        builtinRuntimeAfterLegacyShaders.renderPsoRequests;
+      Log::i(
+        "RendererIOS builtin runtime attribution: point=legacy-bridge role-abi=1 available=",
+        builtinRuntimeBeforeLegacyShaders.available &&
+        builtinRuntimeAfterLegacyShaders.available ? 1 : 0,
+        " source-before=",
+        sourceBefore[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::ColorVertex)],",",
+        sourceBefore[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::ColorFragment)],",",
+        sourceBefore[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::TextureVertex)],",",
+        sourceBefore[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::TextureFragment)],
+        " source-after=",
+        sourceAfter[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::ColorVertex)],",",
+        sourceAfter[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::ColorFragment)],",",
+        sourceAfter[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::TextureVertex)],",",
+        sourceAfter[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::TextureFragment)],
+        " render-before=",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesOpaque)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesOpaque)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesAlpha)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesAlpha)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesAdditive)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesAdditive)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesOpaque)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesOpaque)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesAlpha)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesAlpha)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesAdditive)],",",
+        renderBefore[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesAdditive)],
+        " render-after=",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesOpaque)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesOpaque)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesAlpha)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesAlpha)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesAdditive)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesAdditive)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesOpaque)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesOpaque)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesAlpha)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesAlpha)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesAdditive)],",",
+        renderAfter[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesAdditive)]);
       }
     catch(...) {
       }
@@ -399,6 +483,48 @@ struct IOSMetalContext::Impl final {
              " source=",snapshot.sourceLibraryRequests,
              " compute=",snapshot.computePsoRequests,
              " render=",snapshot.renderPsoRequests);
+      if(presents!=1u && presents%300u!=0u)
+        return;
+      const auto builtin = MetalApi::builtinRuntimeSnapshot(device);
+      const auto& source = builtin.sourceLibraryRequests;
+      const auto& render = builtin.renderPsoRequests;
+      Log::d(
+        "RendererIOS builtin runtime attribution: point=frame presents=",presents,
+        " role-abi=1 available=",builtin.available ? 1 : 0,
+        " source=",
+        source[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::ColorVertex)],",",
+        source[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::ColorFragment)],",",
+        source[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::TextureVertex)],",",
+        source[metalBuiltinSourceRoleIndex(
+          MetalBuiltinSourceRole::TextureFragment)],
+        " render=",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesOpaque)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesOpaque)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesAlpha)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesAlpha)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorLinesAdditive)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::ColorTrianglesAdditive)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesOpaque)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesOpaque)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesAlpha)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesAlpha)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureLinesAdditive)],",",
+        render[metalBuiltinRenderRoleIndex(
+          MetalBuiltinRenderRole::TextureTrianglesAdditive)]);
       }
     catch(...) {
       }
@@ -1040,8 +1166,10 @@ struct IOSMetalContext::Impl final {
   // the bridge-only shader profile so this ownership does not start the
   // legacy renderer's eager shader compilation job.
   MetalRuntimeCompilationSnapshot              runtimeBeforeLegacyShaders;
+  MetalBuiltinRuntimeSnapshot                  builtinRuntimeBeforeLegacyShaders;
   Shaders                                      legacyShaders;
   MetalRuntimeCompilationSnapshot              runtimeAfterLegacyShaders;
+  MetalBuiltinRuntimeSnapshot                  builtinRuntimeAfterLegacyShaders;
 
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> uiMeshes;
   std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> numberMeshes;

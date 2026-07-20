@@ -211,6 +211,10 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'the first presented frame must have exact offline-Bink totals' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'builtin runtime attribution markers do not cover presents 1 through 300' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'builtin_render_active_roles=' \
+            ios/device-test/run-smoke-test.sh
 
       - name: Verify P2.1 native asset registry contract
         run: |
@@ -459,8 +463,10 @@ jobs:
           grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' game/graphics/shaders.cpp
           ! grep -Fq 'Shaders::inst().bink' game/ui/videowidget.cpp
           grep -Fq 'runtimeCompilationSnapshot(device)' game/graphics/iosmetalcontext.cpp
-          grep -Fq 'point=legacy-bridge available=' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'builtinRuntimeSnapshot(device)' game/graphics/iosmetalcontext.cpp
+          grep -Fq 'point=legacy-bridge role-abi=1 available=' game/graphics/iosmetalcontext.cpp
           grep -Fq 'runtime_compilation_bridge_source_delta=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'builtin_render_active_roles=' ios/device-test/run-smoke-test.sh
           grep -Fq 'impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);' \
             game/graphics/iosmetalcontext.cpp
           grep -Fq 'OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST' CMakeLists.txt
