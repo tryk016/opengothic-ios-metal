@@ -2232,12 +2232,18 @@ void MainWindow::render(){
     const bool videoActive = video.isActive();
     IOSVideoPacket videoPacket;
     if(videoActive) {
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      inventory.itemRenderer().clearRendererIOSUISurfaceEvidence();
+#endif
       videoPacket = renderer.prepareVideo(*frame,video);
       uiLayer.clear();
       PaintEvent p(uiLayer,atlas,this->w(),this->h());
       video.paintEvent(p);
       }
     else if(needToUpdate() || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle) {
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      inventory.itemRenderer().clearRendererIOSUISurfaceEvidence();
+#endif
       dispatchPaintEvent(uiLayer,atlas);
 
       numOverlay.clear();

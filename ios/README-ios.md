@@ -181,6 +181,39 @@ remote container copy. Evidence is written below
 `build/device-pipeline-archive/<source-sha>/`. The same device, bundle,
 provisioning and exact-source safeguards as the smoke test apply.
 
+### Maintainer UI automation test
+
+`ios/device-test/run-ui-automation-test.sh` drives the already installed
+diagnostics build through XCTest/XCUIAutomation without requiring an
+accessibility tree. Run the normal 120-second new-game smoke first so the exact
+app has been signed, installed and independently checked:
+
+```sh
+ios/device-test/run-smoke-test.sh \
+  --new-game --duration 120 --require-bink-self-test \
+  build/local-renderer-ios-on/opengothic/Release/Gothic2Notr.app
+ios/device-test/run-ui-automation-test.sh --new-game
+```
+
+The standalone UI test computes canvas coordinates from the current landscape
+frame. It lets real intro Bink frames encode before bounded skip taps, opens and
+closes Inventory, exercises the Items and Weapons QuickRings separately, then
+uses Home followed by `activate()` for a true background/resume cycle. PASS is
+not based on taps or screenshots: diagnostics carry per-frame POD evidence and
+emit a marker only after accepted submit/present and a clean terminal fence.
+The validator requires terminal Inventory, both QuickRing panels, real Bink
+ordinals 1 and 30, ordered app-state transitions and the first terminal present
+after resume. The harness also rejects skipped tests through the xcresult
+summary, scans both app logs for fatal signatures and requires `crash.log` to
+remain byte-identical across the run. A save-slot run omits only the real-Bink
+requirement because loading directly into a save need not play an intro clip.
+
+The device must be attached over USB, unlocked and have Developer Mode and
+Enable UI Automation active. The harness targets only the existing
+team-suffixed OpenGothic bundle, never uninstalls it, and uses bounded
+terminate-to-kill cleanup plus a final zero-process scan on success and failure.
+Evidence is stored below `build/device-ui-automation/<source-sha>/`.
+
 Archive snapshots occur at present 300, after the new-game role-3 warmup has
 completed; cold/corrupt perform their first serialization there.
 Serialization failure retries are

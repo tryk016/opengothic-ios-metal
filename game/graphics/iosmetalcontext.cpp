@@ -94,6 +94,19 @@ IOSGPUScene::DepthFormat iosGPUSceneDepthFormat(TextureFormat format) {
     }
   }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+const char* rendererIOSUISurfaceEvidenceName(
+    RendererIOSUISurfaceEvidence value) noexcept {
+  switch(value) {
+    case RendererIOSUISurfaceEvidence::None:             return "none";
+    case RendererIOSUISurfaceEvidence::Inventory:        return "inventory";
+    case RendererIOSUISurfaceEvidence::QuickRingItems:   return "quickring-items";
+    case RendererIOSUISurfaceEvidence::QuickRingWeapons: return "quickring-weapons";
+    }
+  return "unknown";
+  }
+#endif
+
 enum class SettleReason : uint8_t {
   Resize,
   Suspend,
@@ -307,6 +320,17 @@ struct IOSMetalContext::Impl final {
     bool           videoActive = false;
     };
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  struct FunctionalEvidence final {
+    RendererIOSUISurfaceEvidence uiSurface =
+      RendererIOSUISurfaceEvidence::None;
+    uint64_t serial          = 0;
+    uint64_t realBinkOrdinal = 0;
+    uint64_t resumeCycle     = 0;
+    bool     presentAccepted = false;
+    };
+#endif
+
   struct FrameContext final {
     VectorImage::Mesh          uiMesh;
     VectorImage::Mesh          numberMesh;
@@ -314,6 +338,9 @@ struct IOSMetalContext::Impl final {
     IOSSceneSnapshotPtr        sceneFrame;
     PreparedUi                 uiPayload;
     uint64_t                   videoSerial = 0;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    FunctionalEvidence         functionalEvidence;
+#endif
     bool                       submitted = false;
     bool                       discardCommandAfterIdle = false;
     bool                       rebuildCommand = false;
@@ -1018,6 +1045,9 @@ struct IOSMetalContext::Impl final {
     for(auto& frame:frames) {
       frame.fence     = Fence();
       frame.submitted = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      frame.functionalEvidence = {};
+#endif
       }
     }
 
@@ -1112,6 +1142,9 @@ struct IOSMetalContext::Impl final {
       auto& frame = frames[nextSlot];
       clearPreparedUi(frame);
       releaseVideoFrame(frame);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      frame.functionalEvidence = {};
+#endif
       }
     frameActive  = false;
     activeSerial = 0;
@@ -1122,7 +1155,82 @@ struct IOSMetalContext::Impl final {
     clearPreparedUi(frame);
     releaseVideoFrame(frame);
     releaseSceneFrame(frame);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    frame.functionalEvidence = {};
+#endif
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  bool uiSurfaceAlreadyProven(RendererIOSUISurfaceEvidence value) const noexcept {
+    switch(value) {
+      case RendererIOSUISurfaceEvidence::None:             return true;
+      case RendererIOSUISurfaceEvidence::Inventory:        return inventoryEvidenceProven;
+      case RendererIOSUISurfaceEvidence::QuickRingItems:   return quickRingItemsEvidenceProven;
+      case RendererIOSUISurfaceEvidence::QuickRingWeapons: return quickRingWeaponsEvidenceProven;
+      }
+    return true;
+    }
+
+  void markUiSurfaceProven(RendererIOSUISurfaceEvidence value) noexcept {
+    switch(value) {
+      case RendererIOSUISurfaceEvidence::None:             return;
+      case RendererIOSUISurfaceEvidence::Inventory:
+        inventoryEvidenceProven = true;
+        return;
+      case RendererIOSUISurfaceEvidence::QuickRingItems:
+        quickRingItemsEvidenceProven = true;
+        return;
+      case RendererIOSUISurfaceEvidence::QuickRingWeapons:
+        quickRingWeaponsEvidenceProven = true;
+        return;
+      }
+    }
+
+  void emitFunctionalEvidenceAfterTerminal(FrameContext& frame,
+                                           uint8_t slot) noexcept {
+    auto& evidence = frame.functionalEvidence;
+    if(!frame.submitted || !evidence.presentAccepted) {
+      evidence = {};
+      return;
+      }
+
+    const bool proveUi = !uiSurfaceAlreadyProven(evidence.uiSurface);
+    const bool proveBink =
+      (evidence.realBinkOrdinal==1u && !realBinkFirstEvidenceProven) ||
+      (evidence.realBinkOrdinal==30u && !realBinkThirtyEvidenceProven);
+    const bool proveResume =
+      evidence.resumeCycle!=0u &&
+      evidence.resumeCycle>resumeEvidenceCycleProven;
+    if(!proveUi && !proveBink && !proveResume) {
+      evidence = {};
+      return;
+      }
+
+    try {
+      Log::i("RendererIOS functional evidence: fence-terminal=1",
+             " submitted=1 presented=1 slot=",uint32_t(slot),
+             " serial=",evidence.serial,
+             " ui=",proveUi
+               ? rendererIOSUISurfaceEvidenceName(evidence.uiSurface)
+               : "none",
+             " real-bink-ordinal=",proveBink ? evidence.realBinkOrdinal : 0u,
+             " resume-cycle=",proveResume ? evidence.resumeCycle : 0u);
+      if(proveUi)
+        markUiSurfaceProven(evidence.uiSurface);
+      if(proveBink) {
+        if(evidence.realBinkOrdinal==1u)
+          realBinkFirstEvidenceProven = true;
+        if(evidence.realBinkOrdinal==30u)
+          realBinkThirtyEvidenceProven = true;
+        }
+      if(proveResume)
+        resumeEvidenceCycleProven = evidence.resumeCycle;
+      }
+    catch(...) {
+      }
+    evidence = {};
+    }
+#endif
 
   void stopFrameAdmission(LifecycleState state) noexcept {
     lifecycleState = state;
@@ -1253,6 +1361,13 @@ struct IOSMetalContext::Impl final {
       frames[binkSelfTestSlot],binkSelfTestSlot,
       "RendererIOS Bink self-test readback failed");
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    if(presentHealthy && !failed) {
+      for(uint32_t slot=0; slot<uint32_t(frames.size()); ++slot)
+        emitFunctionalEvidenceAfterTerminal(
+          frames[slot],static_cast<uint8_t>(slot));
+      }
+#endif
     neutralizeFences();
     releaseVideoFrames();
     releaseSceneFrames();
@@ -1302,6 +1417,16 @@ struct IOSMetalContext::Impl final {
   bool                                         depthSupported = false;
   std::unique_ptr<IOSGPUScene>                  gpuScene;
   std::unique_ptr<IOSGPUBink>                   gpuBink;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  uint64_t                                     realBinkEncodeCount = 0;
+  uint64_t                                     activeResumeCycle = 0;
+  uint64_t                                     resumeEvidenceCycleProven = 0;
+  bool                                         realBinkFirstEvidenceProven = false;
+  bool                                         realBinkThirtyEvidenceProven = false;
+  bool                                         inventoryEvidenceProven = false;
+  bool                                         quickRingItemsEvidenceProven = false;
+  bool                                         quickRingWeaponsEvidenceProven = false;
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   Attachment                                   binkSelfTestTarget;
   StorageBuffer                                binkSelfTestPlanes;
@@ -1398,6 +1523,10 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   impl->materializeBinkSelfTestAfterTerminal(
     frameContext,slot,"RendererIOS Bink self-test readback failed");
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  if(!impl->failed)
+    impl->emitFunctionalEvidenceAfterTerminal(frameContext,slot);
 #endif
   frameContext.fence = Fence();
   impl->retireSlotAfterTerminal(frameContext);
@@ -1639,8 +1768,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         if(impl->gpuBink==nullptr)
           throw std::runtime_error(
               "RendererIOS native Bink pipeline is unavailable");
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        const uint64_t encodedFramesBefore = impl->gpuBink->encodedFrames();
+#endif
         VideoWidget::encodePrepared(
             encoder,slot,frameContext.videoFrame,*impl->gpuBink);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        const uint64_t encodedFramesAfter = impl->gpuBink->encodedFrames();
+        if(encodedFramesAfter==encodedFramesBefore+1u) {
+          ++impl->realBinkEncodeCount;
+          if(impl->realBinkEncodeCount==1u ||
+             impl->realBinkEncodeCount==30u) {
+            frameContext.functionalEvidence.realBinkOrdinal =
+              impl->realBinkEncodeCount;
+            }
+          }
+#endif
         }
       auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
 
@@ -1693,11 +1836,24 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setDebugMarker("RendererIOS shell clear/UI");
         encoder.setFramebuffer(
           {{drawable,OpaqueBlack,Tempest::Preserve}});
-        }
+      }
       frameContext.uiMesh.draw(encoder);
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      const RendererIOSUISurfaceEvidence uiSurface =
+        videoActive ? RendererIOSUISurfaceEvidence::None
+                    : inventory.itemRenderer().rendererIOSUISurface();
+      if((uiSurface==RendererIOSUISurfaceEvidence::QuickRingItems ||
+          uiSurface==RendererIOSUISurfaceEvidence::QuickRingWeapons) &&
+         !impl->uiSurfaceAlreadyProven(uiSurface)) {
+        frameContext.functionalEvidence.uiSurface = uiSurface;
+        }
+#endif
+
+      const bool inventoryMenuVisible =
+        inventory.isOpen()!=InventoryMenu::State::Closed;
       const bool ringIcons = !videoActive && inventory.itemRenderer().hasItems();
-      const bool inventoryVisible = inventory.isOpen()!=InventoryMenu::State::Closed || ringIcons;
+      const bool inventoryVisible = inventoryMenuVisible || ringIcons;
       if(inventoryVisible) {
         if(!impl->overlayDepth.isEmpty()) {
           encoder.setDebugMarker("RendererIOS bootstrap inventory");
@@ -1709,6 +1865,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setDebugMarker("RendererIOS bootstrap inventory counters");
         encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}});
         frameContext.numberMesh.draw(encoder);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        if(inventoryMenuVisible &&
+           uiSurface==RendererIOSUISurfaceEvidence::Inventory &&
+           !impl->uiSurfaceAlreadyProven(uiSurface)) {
+          frameContext.functionalEvidence.uiSurface = uiSurface;
+          }
+#endif
         }
 
       if(previewAccepted && !previewFallback) {
@@ -1745,6 +1908,12 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     ++impl->counters.presentAttempts;
     impl->device.present(impl->swapchain);
     ++impl->counters.presentAccepted;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    frameContext.functionalEvidence.serial = frame.serial;
+    frameContext.functionalEvidence.presentAccepted = true;
+    if(impl->activeResumeCycle>impl->resumeEvidenceCycleProven)
+      frameContext.functionalEvidence.resumeCycle = impl->activeResumeCycle;
+#endif
     impl->flushPipelineArchiveAfterPresent(
       impl->counters.presentAccepted);
 
@@ -1932,6 +2101,9 @@ bool IOSMetalContext::resume() noexcept {
   try {
     impl->swapchain.reset();
     impl->resetTargets();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    ++impl->activeResumeCycle;
+#endif
     impl->lifecycleState = Impl::LifecycleState::Active;
     return true;
     }

@@ -798,6 +798,37 @@ jobs:
           grep -Fq -- '--require-bink-self-test' \
             ios/device-test/run-smoke-test.sh
 
+      - name: Verify RendererIOS UI automation contract
+        run: |
+          set -euo pipefail
+
+          test -x ios/device-test/run-ui-automation-test.sh
+          test -x ios/device-test/validate-ui-automation-log.py
+          bash -n ios/device-test/run-ui-automation-test.sh
+          python3 ios/device-test/validate-ui-automation-log.py --self-test
+          grep -Fq 'trap cleanup EXIT' \
+            ios/device-test/run-ui-automation-test.sh
+          grep -Fq -- '--kill --quiet' \
+            ios/device-test/run-ui-automation-test.sh
+          grep -Fq 'stop_running_app 1 || fail "post-test application cleanup failed"' \
+            ios/device-test/run-ui-automation-test.sh
+          grep -Fq '"skippedTests": 0' \
+            ios/device-test/run-ui-automation-test.sh
+          grep -Fq 'crash.log changed during the UI automation run' \
+            ios/device-test/run-ui-automation-test.sh
+          ! grep -Fq 'XCTSkip' \
+            ios/device-test/ui-automation/RendererIOSUITests/RendererIOSUITests.swift
+          grep -Fq 'fence-terminal=1 submitted=1 presented=1' \
+            ios/device-test/validate-ui-automation-log.py
+          xcodebuild \
+            -project ios/device-test/ui-automation/RendererIOSUITests.xcodeproj \
+            -scheme RendererIOSUITests \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/renderer-ios-ui-tests" \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+
       - name: Build iOS Release
         env:
           DIAGNOSTICS: ${{ matrix.diagnostics }}
@@ -817,11 +848,19 @@ jobs:
               "$APP_STRINGS"
             grep -Fxq 'RendererIOS-D041-invalid-binary-archive-v1' \
               "$APP_STRINGS"
+            grep -Fxq 'RendererIOS functional evidence: fence-terminal=1' \
+              "$APP_STRINGS"
+            grep -Fxq 'quickring-items' "$APP_STRINGS"
+            grep -Fxq 'quickring-weapons' "$APP_STRINGS"
           else
             ! grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \
               "$APP_STRINGS"
             ! grep -Fxq 'RendererIOS-D041-invalid-binary-archive-v1' \
               "$APP_STRINGS"
+            ! grep -Fxq 'RendererIOS functional evidence: fence-terminal=1' \
+              "$APP_STRINGS"
+            ! grep -Fxq 'quickring-items' "$APP_STRINGS"
+            ! grep -Fxq 'quickring-weapons' "$APP_STRINGS"
           fi
 
       - name: Package unsigned device-test IPA

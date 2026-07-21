@@ -3,11 +3,24 @@
 #include <Tempest/Device>
 #include <Tempest/Matrix4x4>
 
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#include <cstdint>
+#endif
+
 #include "meshobjects.h"
 #include "sceneglobals.h"
 #include "visualobjects.h"
 
 class Item;
+
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+enum class RendererIOSUISurfaceEvidence : uint8_t {
+  None,
+  Inventory,
+  QuickRingItems,
+  QuickRingWeapons,
+  };
+#endif
 
 class InventoryRenderer {
   public:
@@ -18,6 +31,18 @@ class InventoryRenderer {
     void reset(bool full=false);
     void drawItem(int x, int y, int w, int h, const Item &item);
     bool hasItems() const { return !items.empty(); }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    void setRendererIOSUISurfaceEvidence(
+      RendererIOSUISurfaceEvidence value) noexcept {
+      rendererIOSUISurfaceEvidence = value;
+      }
+    void clearRendererIOSUISurfaceEvidence() noexcept {
+      rendererIOSUISurfaceEvidence = RendererIOSUISurfaceEvidence::None;
+      }
+    RendererIOSUISurfaceEvidence rendererIOSUISurface() const noexcept {
+      return rendererIOSUISurfaceEvidence;
+      }
+#endif
 
   private:
     struct PerFrame {
@@ -34,5 +59,8 @@ class InventoryRenderer {
     VisualObjects    visual;
     MeshObjects      itmGroup;
     std::vector<Itm> items;
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    RendererIOSUISurfaceEvidence rendererIOSUISurfaceEvidence =
+      RendererIOSUISurfaceEvidence::None;
+#endif
   };
-

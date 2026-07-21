@@ -386,6 +386,11 @@ void QuickRing::paint(Painter& p, InventoryRenderer& ir, const Npc* pl,
 
   // Rebuild this frame's mesh icon set, like InventoryMenu does.
   ir.reset();
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  ir.setRendererIOSUISurfaceEvidence(
+    kind==Items ? RendererIOSUISurfaceEvidence::QuickRingItems
+                : RendererIOSUISurfaceEvidence::QuickRingWeapons);
+#endif
 
   p.setBrush(Color(0.f,0.f,0.f,0.48f));
   p.drawRect(0,0,screenW,screenH);

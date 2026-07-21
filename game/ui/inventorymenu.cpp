@@ -412,6 +412,10 @@ void InventoryMenu::paintEvent(PaintEvent &e) {
   if(player==nullptr || state==State::Closed)
     return;
   renderer.reset();
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  renderer.setRendererIOSUISurfaceEvidence(
+    RendererIOSUISurfaceEvidence::Inventory);
+#endif
 
   Painter p(e);
   drawAll(p,*player,DrawPass::Back);
