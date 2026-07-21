@@ -307,6 +307,22 @@ struct IOSMetalContext::Impl final {
     bool           videoActive = false;
     };
 
+  struct FrameContext final {
+    VectorImage::Mesh          uiMesh;
+    VectorImage::Mesh          numberMesh;
+    VideoWidget::PreparedFrame videoFrame;
+    IOSSceneSnapshotPtr        sceneFrame;
+    PreparedUi                 uiPayload;
+    uint64_t                   videoSerial = 0;
+    bool                       submitted = false;
+    bool                       discardCommandAfterIdle = false;
+    bool                       rebuildCommand = false;
+    // Impl teardown settles explicitly. Reverse member destruction still
+    // drops the fence and command before the scene/video keep-alives.
+    CommandBuffer              command;
+    Fence                      fence;
+    };
+
   Impl(Device& device, SystemApi::Window* window)
     : device(device), swapchain(device,window),
       runtimeBeforeLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
@@ -343,8 +359,8 @@ struct IOSMetalContext::Impl final {
     armBinkSelfTest();
 #endif
 
-    for(auto& command:commands)
-      command = device.commandBuffer();
+    for(auto& frame:frames)
+      frame.command = device.commandBuffer();
     resetTargets();
     const auto platform = rendererIOSPlatformInfo();
     try {
@@ -732,10 +748,11 @@ struct IOSMetalContext::Impl final {
     }
 
   void materializeBinkSelfTestAfterTerminal(
-      uint8_t terminalSlot, const char* operation) noexcept {
+      FrameContext& terminalFrame, uint8_t terminalSlot,
+      const char* operation) noexcept {
     if(binkSelfTestState!=BinkSelfTestState::AwaitingGpu ||
        binkSelfTestSlot!=terminalSlot ||
-       !slotSubmitted[terminalSlot])
+       !terminalFrame.submitted)
       return;
     if(failed) {
       binkSelfTestState = BinkSelfTestState::Failed;
@@ -998,36 +1015,36 @@ struct IOSMetalContext::Impl final {
   void neutralizeFences() noexcept {
     // Tempest::Fence::~Fence() waits and can throw for a completed Metal error.
     // Move-assigning an empty wrapper releases it without invoking that wait.
-    for(size_t i=0; i<fences.size(); ++i) {
-      fences[i]        = Fence();
-      slotSubmitted[i] = false;
+    for(auto& frame:frames) {
+      frame.fence     = Fence();
+      frame.submitted = false;
       }
     }
 
-  void releaseVideoFrame(uint8_t slot) noexcept {
-    videoFrames[slot] = VideoWidget::PreparedFrame();
-    videoSerials[slot] = 0;
+  void releaseVideoFrame(FrameContext& frame) noexcept {
+    frame.videoFrame  = VideoWidget::PreparedFrame();
+    frame.videoSerial = 0;
     }
 
   void releaseVideoFrames() noexcept {
-    for(uint8_t slot=0; slot<uint8_t(videoFrames.size()); ++slot)
-      releaseVideoFrame(slot);
+    for(auto& frame:frames)
+      releaseVideoFrame(frame);
     }
 
-  void releaseSceneFrame(uint8_t slot) noexcept {
-    if(sceneFrames[slot]!=nullptr)
+  void releaseSceneFrame(FrameContext& frame) noexcept {
+    if(frame.sceneFrame!=nullptr)
       ++sceneReleaseCount;
-    sceneFrames[slot].reset();
+    frame.sceneFrame.reset();
     }
 
   void releaseSceneFrames() noexcept {
-    for(uint8_t slot=0; slot<uint8_t(sceneFrames.size()); ++slot)
-      releaseSceneFrame(slot);
+    for(auto& frame:frames)
+      releaseSceneFrame(frame);
     }
 
-  void retainSceneFrame(uint8_t slot,
+  void retainSceneFrame(FrameContext& frame,
                         const IOSSceneSnapshotPtr& scene) noexcept {
-    sceneFrames[slot] = scene;
+    frame.sceneFrame = scene;
     ++sceneRetainCount;
     }
 
@@ -1035,9 +1052,9 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     try {
       const uint64_t live = uint64_t(std::count_if(
-        sceneFrames.begin(),sceneFrames.end(),
-        [](const IOSSceneSnapshotPtr& scene) {
-          return scene!=nullptr;
+        frames.begin(),frames.end(),
+        [](const FrameContext& frame) {
+          return frame.sceneFrame!=nullptr;
           }));
       Log::i("RendererIOS scene lifetime: reason=",settleReasonName(reason),
              " retained=",sceneRetainCount,
@@ -1051,59 +1068,60 @@ struct IOSMetalContext::Impl final {
 #endif
     }
 
-  void clearPreparedUi(uint8_t slot) noexcept {
-    preparedUi[slot] = {};
+  void clearPreparedUi(FrameContext& frame) noexcept {
+    frame.uiPayload = {};
     }
 
-  void discardUnsubmittedCommand(uint8_t slot) noexcept {
+  void discardUnsubmittedCommand(FrameContext& frame) noexcept {
     // Metal command buffers use retainedReferences=false. Once native borrowed
     // VBO/IBO handles have been encoded, an unsubmitted command must not
     // survive the scene owners that back those handles. Moving an empty wrapper
     // here synchronously destroys the native command without allocating.
-    commands[slot] = CommandBuffer();
-    commandDiscardAfterIdle[slot] = false;
-    commandNeedsRebuild[slot] = true;
+    frame.command = CommandBuffer();
+    frame.discardCommandAfterIdle = false;
+    frame.rebuildCommand = true;
     }
 
   void discardAmbiguousCommandsAfterConfirmedIdle() noexcept {
-    for(uint8_t slot=0; slot<uint8_t(commandDiscardAfterIdle.size()); ++slot) {
-      if(commandDiscardAfterIdle[slot])
-        discardUnsubmittedCommand(slot);
+    for(auto& frame:frames) {
+      if(frame.discardCommandAfterIdle)
+        discardUnsubmittedCommand(frame);
       }
     }
 
-  void rebuildCommandIfDiscarded(uint8_t slot) {
-    if(!commandNeedsRebuild[slot])
+  void rebuildCommandIfDiscarded(FrameContext& frame) {
+    if(!frame.rebuildCommand)
       return;
-    commands[slot] = device.commandBuffer();
-    commandNeedsRebuild[slot] = false;
+    frame.command = device.commandBuffer();
+    frame.rebuildCommand = false;
     }
 
-  void cancelActiveFrameKeepingSlotResources(uint8_t slot) noexcept {
+  void cancelActiveFrameKeepingSlotResources(FrameContext& frame) noexcept {
     // A throwing Metal commit has an ambiguous disposition: it may already be
     // enqueued even though no Fence wrapper was returned. Keep video/scene
     // resources alive until device.waitIdle() establishes the terminal point.
-    if(frameActive && nextSlot==slot)
-      clearPreparedUi(slot);
-    commandDiscardAfterIdle[slot] = true;
+    if(frameActive && &frames[nextSlot]==&frame)
+      clearPreparedUi(frame);
+    frame.discardCommandAfterIdle = true;
     frameActive  = false;
     activeSerial = 0;
     }
 
   void cancelActiveFrame() noexcept {
     if(frameActive) {
-      clearPreparedUi(nextSlot);
-      releaseVideoFrame(nextSlot);
+      auto& frame = frames[nextSlot];
+      clearPreparedUi(frame);
+      releaseVideoFrame(frame);
       }
     frameActive  = false;
     activeSerial = 0;
     }
 
-  void retireSlotAfterTerminal(uint8_t slot) noexcept {
-    slotSubmitted[slot] = false;
-    clearPreparedUi(slot);
-    releaseVideoFrame(slot);
-    releaseSceneFrame(slot);
+  void retireSlotAfterTerminal(FrameContext& frame) noexcept {
+    frame.submitted = false;
+    clearPreparedUi(frame);
+    releaseVideoFrame(frame);
+    releaseSceneFrame(frame);
     }
 
   void stopFrameAdmission(LifecycleState state) noexcept {
@@ -1192,9 +1210,9 @@ struct IOSMetalContext::Impl final {
     // Metal Device::waitIdle() only waits for completion. Error propagation is
     // owned by Fence::wait(), so inspect every terminal fence before releasing
     // the wrappers or claiming a clean lifecycle transition.
-    for(auto& fence:fences) {
+    for(auto& frame:frames) {
       try {
-        if(!fence.wait(0)) {
+        if(!frame.fence.wait(0)) {
           neutralizeFences();
           releaseVideoFrames();
           releaseSceneFrames();
@@ -1232,7 +1250,8 @@ struct IOSMetalContext::Impl final {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     materializeBinkSelfTestAfterTerminal(
-      binkSelfTestSlot,"RendererIOS Bink self-test readback failed");
+      frames[binkSelfTestSlot],binkSelfTestSlot,
+      "RendererIOS Bink self-test readback failed");
 #endif
     neutralizeFences();
     releaseVideoFrames();
@@ -1273,17 +1292,7 @@ struct IOSMetalContext::Impl final {
   MetalRuntimeCompilationSnapshot              runtimeAfterLegacyShaders;
   MetalBuiltinRuntimeSnapshot                  builtinRuntimeAfterLegacyShaders;
 
-  std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> uiMeshes;
-  std::array<VectorImage::Mesh,Resources::MaxFramesInFlight> numberMeshes;
-  std::array<Fence,Resources::MaxFramesInFlight>              fences;
-  std::array<bool,Resources::MaxFramesInFlight>               slotSubmitted = {};
-  std::array<bool,Resources::MaxFramesInFlight>               commandDiscardAfterIdle = {};
-  std::array<bool,Resources::MaxFramesInFlight>               commandNeedsRebuild = {};
-  std::array<CommandBuffer,Resources::MaxFramesInFlight>      commands;
-  std::array<VideoWidget::PreparedFrame,Resources::MaxFramesInFlight> videoFrames;
-  std::array<uint64_t,Resources::MaxFramesInFlight>           videoSerials = {};
-  std::array<PreparedUi,Resources::MaxFramesInFlight>         preparedUi;
-  std::array<IOSSceneSnapshotPtr,Resources::MaxFramesInFlight> sceneFrames;
+  std::array<FrameContext,Resources::MaxFramesInFlight> frames;
   uint64_t                                      sceneRetainCount  = 0;
   uint64_t                                      sceneReleaseCount = 0;
   FaultInjection                               fault;
@@ -1342,7 +1351,8 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     throw std::logic_error("RendererIOS frame ticket is already active");
 
   const uint8_t slot = impl->nextSlot;
-  if(impl->commandDiscardAfterIdle[slot]) {
+  auto& frameContext = impl->frames[slot];
+  if(frameContext.discardCommandAfterIdle) {
     // An ambiguous Metal commit may still own this slot's unretained native
     // resources. Admission is forbidden until a lifecycle settle confirms
     // device idle and discards that command.
@@ -1353,9 +1363,9 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     }
   bool previewFenceFault = false;
   try {
-    if(!impl->fences[slot].wait(0))
+    if(!frameContext.fence.wait(0))
       return std::nullopt;
-    if(impl->slotSubmitted[slot] &&
+    if(frameContext.submitted &&
        impl->previewState==Impl::PreviewState::AwaitingGpu &&
        impl->previewSlot==slot &&
        impl->fault.previewFenceErrorAfterTerminal()) {
@@ -1363,14 +1373,14 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
       throw DeviceLostException(
         "RendererIOS diagnostics injected a terminal save-preview fence error");
       }
-    if(impl->slotSubmitted[slot] && impl->fault.frameFenceErrorAfterTerminal())
+    if(frameContext.submitted && impl->fault.frameFenceErrorAfterTerminal())
       throw DeviceLostException("RendererIOS diagnostics injected a terminal frame-fence error");
     }
   catch(const std::exception& e) {
     // Do not retry a Metal error command buffer: Tempest maps it to device
     // lost/hang. Dropping the fence also prevents its throwing destructor.
-    impl->fences[slot] = Fence();
-    impl->retireSlotAfterTerminal(slot);
+    frameContext.fence = Fence();
+    impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
     impl->fail(previewFenceFault ? "RendererIOS Metal save-preview fence failed"
                                 : "RendererIOS Metal frame fence failed",
@@ -1378,8 +1388,8 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     return std::nullopt;
     }
   catch(...) {
-    impl->fences[slot] = Fence();
-    impl->retireSlotAfterTerminal(slot);
+    frameContext.fence = Fence();
+    impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
     impl->fail(previewFenceFault ? "RendererIOS Metal save-preview fence failed"
                                 : "RendererIOS Metal frame fence failed");
@@ -1387,10 +1397,10 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     }
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   impl->materializeBinkSelfTestAfterTerminal(
-    slot,"RendererIOS Bink self-test readback failed");
+    frameContext,slot,"RendererIOS Bink self-test readback failed");
 #endif
-  impl->fences[slot] = Fence();
-  impl->retireSlotAfterTerminal(slot);
+  frameContext.fence = Fence();
+  impl->retireSlotAfterTerminal(frameContext);
   if(impl->failed)
     return std::nullopt;
   if(impl->previewState==Impl::PreviewState::AwaitingGpu && impl->previewSlot==slot)
@@ -1399,7 +1409,7 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     return std::nullopt;
 
   try {
-    impl->rebuildCommandIfDiscarded(slot);
+    impl->rebuildCommandIfDiscarded(frameContext);
     }
   catch(const std::exception& e) {
     impl->forcePreviewPlaceholder();
@@ -1442,21 +1452,22 @@ IOSUIPacket IOSMetalContext::prepareUi(const FrameLease& frame,
     throw std::logic_error("RendererIOS received an invalid frame ticket for UI preparation");
 
   const uint8_t slot = frame.slot;
-  if(impl->preparedUi[slot].serial!=0)
+  auto& frameContext = impl->frames[slot];
+  if(frameContext.uiPayload.serial!=0)
     throw std::logic_error("RendererIOS UI payload was already prepared for this frame");
   try {
-    impl->uiMeshes[slot].update(impl->device,uiLayer);
-    impl->numberMeshes[slot].update(impl->device,numberOverlay);
-    impl->preparedUi[slot] = {frame.serial,&inventory,videoActive};
+    frameContext.uiMesh.update(impl->device,uiLayer);
+    frameContext.numberMesh.update(impl->device,numberOverlay);
+    frameContext.uiPayload = {frame.serial,&inventory,videoActive};
     return IOSUIPacket(frame.serial);
     }
   catch(const std::exception& e) {
-    impl->clearPreparedUi(slot);
+    impl->clearPreparedUi(frameContext);
     impl->fail("RendererIOS UI frame preparation failed",e.what());
     throw;
     }
   catch(...) {
-    impl->clearPreparedUi(slot);
+    impl->clearPreparedUi(frameContext);
     impl->fail("RendererIOS UI frame preparation failed");
     throw;
     }
@@ -1471,20 +1482,21 @@ IOSVideoPacket IOSMetalContext::prepareVideo(const FrameLease& frame,
     throw std::logic_error("RendererIOS received an invalid frame ticket for video preparation");
 
   const uint8_t slot = frame.slot;
-  if(impl->videoSerials[slot]!=0)
+  auto& frameContext = impl->frames[slot];
+  if(frameContext.videoSerial!=0)
     throw std::logic_error("RendererIOS video payload was already prepared for this frame");
   try {
-    impl->videoFrames[slot] = video.prepareFrame(impl->device,slot);
-    impl->videoSerials[slot] = frame.serial;
+    frameContext.videoFrame = video.prepareFrame(impl->device,slot);
+    frameContext.videoSerial = frame.serial;
     return IOSVideoPacket(frame.serial);
     }
   catch(const std::exception& e) {
-    impl->releaseVideoFrame(slot);
+    impl->releaseVideoFrame(frameContext);
     impl->fail("RendererIOS video frame preparation failed",e.what());
     throw;
     }
   catch(...) {
-    impl->releaseVideoFrame(slot);
+    impl->releaseVideoFrame(frameContext);
     impl->fail("RendererIOS video frame preparation failed");
     throw;
     }
@@ -1506,6 +1518,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     throw std::logic_error("RendererIOS received an invalid frame ticket");
 
   const uint8_t slot = frame.slot;
+  auto& frameContext = impl->frames[slot];
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")) {
     cancelFrame(frame.serial);
     (void)completeFrame(completion,false);
@@ -1517,7 +1530,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     (void)completeFrame(completion,false);
     };
   const auto abandonFrameKeepingSlotResources = [&]() noexcept {
-    impl->cancelActiveFrameKeepingSlotResources(slot);
+    impl->cancelActiveFrameKeepingSlotResources(frameContext);
     (void)completeFrame(completion,false);
     };
 
@@ -1528,28 +1541,28 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
        input.snapshot==nullptr ||
        !input.snapshot->readyForSubmit())
       throw std::logic_error("RendererIOS received an invalid scene snapshot");
-    if(impl->sceneFrames[slot]!=nullptr)
+    if(frameContext.sceneFrame!=nullptr)
       throw std::logic_error("RendererIOS scene slot was not retired before reuse");
     if(input.ui.transportSerial!=frame.serial)
       throw std::logic_error("RendererIOS received an invalid UI packet");
 
-    const auto preparedUi = impl->preparedUi[slot];
-    if(preparedUi.serial!=frame.serial || preparedUi.inventory==nullptr)
+    const auto uiPayload = frameContext.uiPayload;
+    if(uiPayload.serial!=frame.serial || uiPayload.inventory==nullptr)
       throw std::logic_error("RendererIOS UI packet has no matching prepared payload");
-    if(preparedUi.videoActive) {
+    if(uiPayload.videoActive) {
       if(input.video.transportSerial!=frame.serial ||
-         impl->videoSerials[slot]!=frame.serial)
+         frameContext.videoSerial!=frame.serial)
         throw std::logic_error("RendererIOS video packet has no matching prepared payload");
       }
-    else if(input.video.transportSerial!=0 || impl->videoSerials[slot]!=0) {
+    else if(input.video.transportSerial!=0 || frameContext.videoSerial!=0) {
       throw std::logic_error("RendererIOS received video payload for a non-video frame");
       }
 
     // The only borrowed UI owner is copied to this synchronous scope and
     // removed from context state before encoding. It cannot cross submit.
-    inventoryOwner = preparedUi.inventory;
-    videoActive    = preparedUi.videoActive;
-    impl->clearPreparedUi(slot);
+    inventoryOwner = uiPayload.inventory;
+    videoActive    = uiPayload.videoActive;
+    impl->clearPreparedUi(frameContext);
     }
   catch(...) {
     abandonFrame();
@@ -1559,7 +1572,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 
   // Retain before encoding so the post-submit commit contains no allocation.
   // Pre-submit failures release this slot in the catch paths below.
-  impl->retainSceneFrame(slot,input.snapshot);
+  impl->retainSceneFrame(frameContext,input.snapshot);
 
   bool previewAccepted = false;
   bool previewFallback = false;
@@ -1619,15 +1632,15 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     impl->prepareBinkSelfTest();
 #endif
-    auto& command = impl->commands[slot];
+    auto& command = frameContext.command;
     {
       auto encoder = command.startEncoding(impl->device);
-      if(impl->videoFrames[slot]) {
+      if(frameContext.videoFrame) {
         if(impl->gpuBink==nullptr)
           throw std::runtime_error(
               "RendererIOS native Bink pipeline is unavailable");
         VideoWidget::encodePrepared(
-            encoder,slot,impl->videoFrames[slot],*impl->gpuBink);
+            encoder,slot,frameContext.videoFrame,*impl->gpuBink);
         }
       auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
 
@@ -1681,7 +1694,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setFramebuffer(
           {{drawable,OpaqueBlack,Tempest::Preserve}});
         }
-      impl->uiMeshes[slot].draw(encoder);
+      frameContext.uiMesh.draw(encoder);
 
       const bool ringIcons = !videoActive && inventory.itemRenderer().hasItems();
       const bool inventoryVisible = inventory.isOpen()!=InventoryMenu::State::Closed || ringIcons;
@@ -1695,7 +1708,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 
         encoder.setDebugMarker("RendererIOS bootstrap inventory counters");
         encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}});
-        impl->numberMeshes[slot].draw(encoder);
+        frameContext.numberMesh.draw(encoder);
         }
 
       if(previewAccepted && !previewFallback) {
@@ -1710,8 +1723,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     ++impl->counters.submitAttempts;
     submissionAttempted = true;
     Fence submittedFence = impl->device.submit(command);
-    impl->fences[slot] = std::move(submittedFence);
-    impl->slotSubmitted[slot] = true;
+    frameContext.fence = std::move(submittedFence);
+    frameContext.submitted = true;
     ++impl->counters.submitAccepted;
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     impl->acceptBinkSelfTestSubmit(slot);
@@ -1770,26 +1783,26 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   catch(const SwapchainSuboptimal&) {
     // Drawable replacement is a recoverable surface lifecycle event. The
     // submitted frame, if any, is settled by resize() before targets are reused.
-    if(!impl->slotSubmitted[slot]) {
+    if(!frameContext.submitted) {
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
       else {
-        impl->discardUnsubmittedCommand(slot);
-        impl->releaseSceneFrame(slot);
+        impl->discardUnsubmittedCommand(frameContext);
+        impl->releaseSceneFrame(frameContext);
         abandonFrame();
         }
       }
     throw;
     }
   catch(const std::exception& e) {
-    if(!impl->slotSubmitted[slot]) {
+    if(!frameContext.submitted) {
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
       else {
-        impl->discardUnsubmittedCommand(slot);
-        impl->releaseSceneFrame(slot);
+        impl->discardUnsubmittedCommand(frameContext);
+        impl->releaseSceneFrame(frameContext);
         abandonFrame();
         }
       }
@@ -1799,13 +1812,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     throw;
     }
   catch(...) {
-    if(!impl->slotSubmitted[slot]) {
+    if(!frameContext.submitted) {
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
       else {
-        impl->discardUnsubmittedCommand(slot);
-        impl->releaseSceneFrame(slot);
+        impl->discardUnsubmittedCommand(frameContext);
+        impl->releaseSceneFrame(frameContext);
         abandonFrame();
         }
       }
@@ -1979,10 +1992,11 @@ void IOSMetalContext::onWorldChanged() {
   impl->activeSerial = 0;
   impl->nextSlot     = 0;
   try {
-    for(auto& command:impl->commands)
-      command = impl->device.commandBuffer();
-    impl->commandDiscardAfterIdle.fill(false);
-    impl->commandNeedsRebuild.fill(false);
+    for(auto& frame:impl->frames) {
+      frame.command = impl->device.commandBuffer();
+      frame.discardCommandAfterIdle = false;
+      frame.rebuildCommand = false;
+      }
     }
   catch(const std::exception& e) {
     impl->forcePreviewPlaceholder();
@@ -2006,10 +2020,11 @@ bool IOSMetalContext::savePreviewReady() {
     impl->forcePreviewPlaceholder();
     return true;
     }
+  auto& frameContext = impl->frames[impl->previewSlot];
   try {
-    if(!impl->fences[impl->previewSlot].wait(0))
+    if(!frameContext.fence.wait(0))
       return false;
-    if(impl->slotSubmitted[impl->previewSlot] &&
+    if(frameContext.submitted &&
        impl->fault.previewFenceErrorAfterTerminal())
       throw DeviceLostException(
         "RendererIOS diagnostics injected a terminal save-preview fence error");
@@ -2018,15 +2033,15 @@ bool IOSMetalContext::savePreviewReady() {
            impl->previewState==Impl::PreviewState::ReadyPlaceholder;
     }
   catch(const std::exception& e) {
-    impl->fences[impl->previewSlot] = Fence();
-    impl->retireSlotAfterTerminal(impl->previewSlot);
+    frameContext.fence = Fence();
+    impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
     impl->fail("RendererIOS Metal save-preview fence failed",e.what());
     return true;
     }
   catch(...) {
-    impl->fences[impl->previewSlot] = Fence();
-    impl->retireSlotAfterTerminal(impl->previewSlot);
+    frameContext.fence = Fence();
+    impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
     impl->fail("RendererIOS Metal save-preview fence failed");
     return true;
@@ -2076,8 +2091,8 @@ void IOSMetalContext::cancelFrame(uint64_t serial) noexcept {
   }
 
 std::size_t IOSMetalContext::retainedSceneCount() const noexcept {
-  return std::size_t(std::count_if(impl->sceneFrames.begin(),impl->sceneFrames.end(),
-    [](const IOSSceneSnapshotPtr& scene) {
-      return scene!=nullptr;
+  return std::size_t(std::count_if(impl->frames.begin(),impl->frames.end(),
+    [](const Impl::FrameContext& frame) {
+      return frame.sceneFrame!=nullptr;
       }));
   }
