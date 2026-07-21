@@ -16,7 +16,10 @@ InventoryRenderer::InventoryRenderer()
   scene.setViewProject(mv,p,0,1,shMv);
   }
 
-void InventoryRenderer::draw(Tempest::Encoder<CommandBuffer>& cmd) {
+uint64_t InventoryRenderer::draw(Tempest::Encoder<CommandBuffer>& cmd) {
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  uint64_t drawCalls = 0;
+#endif
   Tempest::Matrix4x4 mv = Tempest::Matrix4x4::mkIdentity();
   mv.translate(0, 0, 0.5f);
   mv.scale(0.8f,1.f,1.f);
@@ -40,9 +43,17 @@ void InventoryRenderer::draw(Tempest::Encoder<CommandBuffer>& cmd) {
         cmd.setPushData(p);
         cmd.setPipeline(pso);
         cmd.draw(s->vbo, s->ibo, sl.first, sl.second);
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        ++drawCalls;
+#endif
         }
       }
     }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  return drawCalls;
+#else
+  return 0u;
+#endif
   }
 
 void InventoryRenderer::reset(bool full) {

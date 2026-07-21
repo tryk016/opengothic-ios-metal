@@ -51,7 +51,7 @@ class InventoryMenu : public Tempest::Widget {
     void  onWorldChanged();
 
     void  tick(uint64_t dt);
-    void  draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);
+    uint64_t draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);
     void  paintNumOverlay(Tempest::PaintEvent& e);
 
     // the QuickRing borrows this renderer to draw live 3D item icons; the

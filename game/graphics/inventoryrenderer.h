@@ -3,9 +3,7 @@
 #include <Tempest/Device>
 #include <Tempest/Matrix4x4>
 
-#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #include <cstdint>
-#endif
 
 #include "meshobjects.h"
 #include "sceneglobals.h"
@@ -26,7 +24,7 @@ class InventoryRenderer {
   public:
     InventoryRenderer();
 
-    void draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);
+    uint64_t draw(Tempest::Encoder<Tempest::CommandBuffer>& cmd);
 
     void reset(bool full=false);
     void drawItem(int x, int y, int w, int h, const Item &item);

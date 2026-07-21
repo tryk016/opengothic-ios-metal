@@ -820,6 +820,17 @@ jobs:
             ios/device-test/ui-automation/RendererIOSUITests/RendererIOSUITests.swift
           grep -Fq 'fence-terminal=1 submitted=1 presented=1' \
             ios/device-test/validate-ui-automation-log.py
+          grep -Fxq '[[ "$SCENARIO" != save ]] || VALIDATOR_ARGS+=(--require-ui-items)' \
+            ios/device-test/run-ui-automation-test.sh
+          grep -Fxq '    parser.add_argument("--require-ui-items", action="store_true")' \
+            ios/device-test/validate-ui-automation-log.py
+          grep -Fxq '        require_ui_items=args.require_ui_items,' \
+            ios/device-test/validate-ui-automation-log.py
+          grep -Fxq '    r"ui-item-draw-count=(\d+) "' \
+            ios/device-test/validate-ui-automation-log.py
+          grep -Fq '++drawCalls;' game/graphics/inventoryrenderer.cpp
+          grep -Fq 'uiItemDrawCount = inventory.draw(encoder);' \
+            game/graphics/iosmetalcontext.cpp
           xcodebuild \
             -project ios/device-test/ui-automation/RendererIOSUITests.xcodeproj \
             -scheme RendererIOSUITests \
@@ -850,6 +861,7 @@ jobs:
               "$APP_STRINGS"
             grep -Fxq 'RendererIOS functional evidence: fence-terminal=1' \
               "$APP_STRINGS"
+            grep -Fxq ' ui-item-draw-count=' "$APP_STRINGS"
             grep -Fxq 'quickring-items' "$APP_STRINGS"
             grep -Fxq 'quickring-weapons' "$APP_STRINGS"
           else
@@ -859,6 +871,7 @@ jobs:
               "$APP_STRINGS"
             ! grep -Fxq 'RendererIOS functional evidence: fence-terminal=1' \
               "$APP_STRINGS"
+            ! grep -Fxq ' ui-item-draw-count=' "$APP_STRINGS"
             ! grep -Fxq 'quickring-items' "$APP_STRINGS"
             ! grep -Fxq 'quickring-weapons' "$APP_STRINGS"
           fi

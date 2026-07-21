@@ -324,10 +324,11 @@ struct IOSMetalContext::Impl final {
   struct FunctionalEvidence final {
     RendererIOSUISurfaceEvidence uiSurface =
       RendererIOSUISurfaceEvidence::None;
-    uint64_t serial          = 0;
-    uint64_t realBinkOrdinal = 0;
-    uint64_t resumeCycle     = 0;
-    bool     presentAccepted = false;
+    uint64_t serial           = 0;
+    uint64_t uiItemDrawCount  = 0;
+    uint64_t realBinkOrdinal  = 0;
+    uint64_t resumeCycle      = 0;
+    bool     presentAccepted  = false;
     };
 #endif
 
@@ -1213,6 +1214,7 @@ struct IOSMetalContext::Impl final {
              " ui=",proveUi
                ? rendererIOSUISurfaceEvidenceName(evidence.uiSurface)
                : "none",
+             " ui-item-draw-count=",proveUi ? evidence.uiItemDrawCount : 0u,
              " real-bink-ordinal=",proveBink ? evidence.realBinkOrdinal : 0u,
              " resume-cycle=",proveResume ? evidence.resumeCycle : 0u);
       if(proveUi)
@@ -1843,11 +1845,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       const RendererIOSUISurfaceEvidence uiSurface =
         videoActive ? RendererIOSUISurfaceEvidence::None
                     : inventory.itemRenderer().rendererIOSUISurface();
-      if((uiSurface==RendererIOSUISurfaceEvidence::QuickRingItems ||
-          uiSurface==RendererIOSUISurfaceEvidence::QuickRingWeapons) &&
-         !impl->uiSurfaceAlreadyProven(uiSurface)) {
-        frameContext.functionalEvidence.uiSurface = uiSurface;
-        }
+      uint64_t uiItemDrawCount = 0;
 #endif
 
       const bool inventoryMenuVisible =
@@ -1859,20 +1857,25 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           encoder.setDebugMarker("RendererIOS bootstrap inventory");
           encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}},
                                  {impl->overlayDepth,1.f,Tempest::Preserve});
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+          uiItemDrawCount = inventory.draw(encoder);
+#else
           inventory.draw(encoder);
+#endif
           }
 
         encoder.setDebugMarker("RendererIOS bootstrap inventory counters");
         encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}});
         frameContext.numberMesh.draw(encoder);
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-        if(inventoryMenuVisible &&
-           uiSurface==RendererIOSUISurfaceEvidence::Inventory &&
-           !impl->uiSurfaceAlreadyProven(uiSurface)) {
-          frameContext.functionalEvidence.uiSurface = uiSurface;
-          }
-#endif
         }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(uiSurface!=RendererIOSUISurfaceEvidence::None &&
+         !impl->uiSurfaceAlreadyProven(uiSurface)) {
+        frameContext.functionalEvidence.uiSurface = uiSurface;
+        frameContext.functionalEvidence.uiItemDrawCount = uiItemDrawCount;
+        }
+#endif
 
       if(previewAccepted && !previewFallback) {
         encoder.setDebugMarker("RendererIOS save preview diagnostic capture");

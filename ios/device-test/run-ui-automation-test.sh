@@ -253,6 +253,7 @@ VALIDATOR_ARGS=("$WORK/log-final.txt")
 [[ ! -f "$WORK/stderr-final.log" ]] ||
   VALIDATOR_ARGS+=(--stderr "$WORK/stderr-final.log")
 [[ "$SCENARIO" != new-game ]] || VALIDATOR_ARGS+=(--require-bink)
+[[ "$SCENARIO" != save ]] || VALIDATOR_ARGS+=(--require-ui-items)
 "$VALIDATOR" "${VALIDATOR_ARGS[@]}" ||
   fail "terminal functional evidence is incomplete"
 
