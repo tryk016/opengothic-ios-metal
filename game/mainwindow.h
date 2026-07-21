@@ -125,6 +125,32 @@ class MainWindow : public Tempest::Window {
     bool rendererOperational();
     void pumpLoadingAfterRendererFailure();
 
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    enum class IOSSemanticScriptState : uint8_t {
+      Disabled,
+      WaitWorld,
+      WaitInventoryEvidence,
+      WaitItemsEvidence,
+      WaitWeaponsEvidence,
+      ReadyForLifecycle,
+      WaitDidEnterBackground,
+      WaitWillEnterForeground,
+      WaitDidBecomeActive,
+      WaitResumeEvidence,
+      Passed,
+      Failed,
+      };
+
+    static const char* iosSemanticScriptStateName(
+      IOSSemanticScriptState state) noexcept;
+    void armIOSSemanticScript();
+    void processIOSSemanticScript();
+    void transitionIOSSemanticScript(IOSSemanticScriptState state,
+                                     uint64_t timeoutMs) noexcept;
+    void failIOSSemanticScript(const char* reason) noexcept;
+    bool iosSemanticScriptRunning() const noexcept;
+#endif
+
     void processMouse(Tempest::MouseEvent& event, bool enable);
     void tickMouse(uint64_t dt);
     void onSettings();
@@ -231,6 +257,11 @@ class MainWindow : public Tempest::Window {
     bool                      rendererFailureReported = false;
     bool                      rendererFailureSettled  = false;
     SafeArea::Insets          safeArea;           // display cutouts, px; zero off-iOS
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    IOSSemanticScriptState       iosSemanticState = IOSSemanticScriptState::Disabled;
+    IOSFunctionalEvidenceSnapshot iosSemanticBaseline;
+    uint64_t                     iosSemanticDeadlineMs = 0;
+#endif
 
     Tempest::Widget*          uiKeyUp=nullptr;
     Tempest::Point            dMouse;

@@ -415,6 +415,13 @@ bool RendererIOS::ssaoBuffersAllocated() const noexcept {
   return impl->context.ssaoBuffersAllocated();
   }
 
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+IOSFunctionalEvidenceSnapshot
+RendererIOS::functionalEvidenceSnapshot() const noexcept {
+  return impl->context.functionalEvidenceSnapshot();
+  }
+#endif
+
 void RendererIOS::cancelFrame(uint64_t serial) noexcept {
   if(impl) {
     impl->context.cancelFrame(serial);

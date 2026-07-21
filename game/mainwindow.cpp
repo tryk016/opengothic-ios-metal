@@ -147,6 +147,183 @@ double memoryMiB(uint64_t bytes, bool valid) {
 }
 #endif
 
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+const char* MainWindow::iosSemanticScriptStateName(
+    IOSSemanticScriptState state) noexcept {
+  switch(state) {
+    case IOSSemanticScriptState::Disabled:               return "DISABLED";
+    case IOSSemanticScriptState::WaitWorld:              return "WAIT_WORLD";
+    case IOSSemanticScriptState::WaitInventoryEvidence:  return "WAIT_INVENTORY_EVIDENCE";
+    case IOSSemanticScriptState::WaitItemsEvidence:      return "WAIT_ITEMS_EVIDENCE";
+    case IOSSemanticScriptState::WaitWeaponsEvidence:    return "WAIT_WEAPONS_EVIDENCE";
+    case IOSSemanticScriptState::ReadyForLifecycle:      return "READY_FOR_LIFECYCLE";
+    case IOSSemanticScriptState::WaitDidEnterBackground: return "WAIT_DID_ENTER_BACKGROUND";
+    case IOSSemanticScriptState::WaitWillEnterForeground:return "WAIT_WILL_ENTER_FOREGROUND";
+    case IOSSemanticScriptState::WaitDidBecomeActive:    return "WAIT_DID_BECOME_ACTIVE";
+    case IOSSemanticScriptState::WaitResumeEvidence:     return "WAIT_RESUME_EVIDENCE";
+    case IOSSemanticScriptState::Passed:                 return "PASSED";
+    case IOSSemanticScriptState::Failed:                 return "FAILED";
+    }
+  return "UNKNOWN";
+  }
+
+bool MainWindow::iosSemanticScriptRunning() const noexcept {
+  return iosSemanticState!=IOSSemanticScriptState::Disabled &&
+         iosSemanticState!=IOSSemanticScriptState::Passed &&
+         iosSemanticState!=IOSSemanticScriptState::Failed;
+  }
+
+void MainWindow::transitionIOSSemanticScript(
+    IOSSemanticScriptState state, uint64_t timeoutMs) noexcept {
+  iosSemanticState      = state;
+  iosSemanticDeadlineMs = Application::tickCount()+timeoutMs;
+  try {
+    Log::i("RendererIOS semantic script: state=",
+           iosSemanticScriptStateName(state),
+           " nonce=",CommandLine::inst().rendererIOSSemanticNonce());
+    }
+  catch(...) {
+    }
+  }
+
+void MainWindow::failIOSSemanticScript(const char* reason) noexcept {
+  if(!iosSemanticScriptRunning())
+    return;
+  const char* state = iosSemanticScriptStateName(iosSemanticState);
+  iosSemanticState = IOSSemanticScriptState::Failed;
+  iosSemanticDeadlineMs = 0;
+  try {
+    Log::e("RendererIOS semantic script: SCRIPT FAIL",
+           " mode=save-ui-lifecycle-v1",
+           " nonce=",CommandLine::inst().rendererIOSSemanticNonce(),
+           " state=",state,
+           " reason=",reason);
+    }
+  catch(...) {
+    }
+  }
+
+void MainWindow::armIOSSemanticScript() {
+  if(!CommandLine::inst().rendererIOSSemanticScript())
+    return;
+  iosSemanticBaseline = renderer.functionalEvidenceSnapshot();
+  Log::i("RendererIOS semantic script: ARMED mode=save-ui-lifecycle-v1",
+         " nonce=",CommandLine::inst().rendererIOSSemanticNonce());
+  transitionIOSSemanticScript(IOSSemanticScriptState::WaitWorld,180000u);
+  }
+
+void MainWindow::processIOSSemanticScript() {
+  if(!iosSemanticScriptRunning())
+    return;
+  if(Application::tickCount()>iosSemanticDeadlineMs) {
+    failIOSSemanticScript("watchdog-timeout");
+    return;
+    }
+
+  const auto evidence = renderer.functionalEvidenceSnapshot();
+  switch(iosSemanticState) {
+    case IOSSemanticScriptState::WaitWorld: {
+      auto& gothic = Gothic::inst();
+      auto* world = gothic.world();
+      if(gothic.checkLoading()!=Gothic::LoadState::Idle ||
+         !gothic.isInGameAndAlive() || world==nullptr ||
+         world->player()==nullptr || world->isCutsceneLock() ||
+         gothic.isPause() || padContext()!=PadCtx::World)
+        return;
+      iosSemanticBaseline = evidence;
+      uiAction(KeyCodec::Inventory);
+      if(!inventory.isActive()) {
+        failIOSSemanticScript("inventory-open-rejected");
+        return;
+        }
+      transitionIOSSemanticScript(
+        IOSSemanticScriptState::WaitInventoryEvidence,30000u);
+      return;
+      }
+    case IOSSemanticScriptState::WaitInventoryEvidence:
+      if(evidence.inventorySerial<=iosSemanticBaseline.inventorySerial)
+        return;
+      if(evidence.inventoryItemDrawCount==0u) {
+        failIOSSemanticScript("inventory-draw-empty");
+        return;
+        }
+      iosSemanticBaseline = evidence;
+      uiAction(KeyCodec::Inventory);
+      if(inventory.isActive()) {
+        failIOSSemanticScript("inventory-close-rejected");
+        return;
+        }
+      padOpenItemRing();
+      if(!padRingOpen()) {
+        failIOSSemanticScript("item-ring-open-rejected");
+        return;
+        }
+      transitionIOSSemanticScript(
+        IOSSemanticScriptState::WaitItemsEvidence,30000u);
+      return;
+    case IOSSemanticScriptState::WaitItemsEvidence:
+      if(evidence.itemRingSerial<=iosSemanticBaseline.itemRingSerial)
+        return;
+      if(evidence.itemRingItemDrawCount==0u) {
+        failIOSSemanticScript("item-ring-draw-empty");
+        return;
+        }
+      iosSemanticBaseline = evidence;
+      padRingCancel();
+      if(padRingOpen()) {
+        failIOSSemanticScript("item-ring-cancel-rejected");
+        return;
+        }
+      padOpenWeaponsRing();
+      if(!padRingOpen()) {
+        failIOSSemanticScript("weapon-ring-open-rejected");
+        return;
+        }
+      transitionIOSSemanticScript(
+        IOSSemanticScriptState::WaitWeaponsEvidence,30000u);
+      return;
+    case IOSSemanticScriptState::WaitWeaponsEvidence:
+      if(evidence.weaponRingSerial<=iosSemanticBaseline.weaponRingSerial)
+        return;
+      if(evidence.weaponRingItemDrawCount==0u) {
+        failIOSSemanticScript("weapon-ring-draw-empty");
+        return;
+        }
+      iosSemanticBaseline = evidence;
+      padRingCancel();
+      if(padRingOpen()) {
+        failIOSSemanticScript("weapon-ring-cancel-rejected");
+        return;
+        }
+      transitionIOSSemanticScript(
+        IOSSemanticScriptState::ReadyForLifecycle,60000u);
+      return;
+    case IOSSemanticScriptState::WaitResumeEvidence:
+      if(evidence.resumeSerial<=iosSemanticBaseline.resumeSerial ||
+         evidence.resumeCycle<=iosSemanticBaseline.resumeCycle)
+        return;
+      iosSemanticState = IOSSemanticScriptState::Passed;
+      iosSemanticDeadlineMs = 0;
+      try {
+        Log::i("RendererIOS semantic script: SCRIPT PASS",
+               " mode=save-ui-lifecycle-v1",
+               " nonce=",CommandLine::inst().rendererIOSSemanticNonce());
+        }
+      catch(...) {
+        }
+      return;
+    case IOSSemanticScriptState::ReadyForLifecycle:
+    case IOSSemanticScriptState::WaitDidEnterBackground:
+    case IOSSemanticScriptState::WaitWillEnterForeground:
+    case IOSSemanticScriptState::WaitDidBecomeActive:
+    case IOSSemanticScriptState::Disabled:
+    case IOSSemanticScriptState::Passed:
+    case IOSSemanticScriptState::Failed:
+      return;
+    }
+  }
+#endif
+
 MainWindow::MainWindow(Device& device)
   : Window(Maximized),atlas(device),renderer(device,hwnd()),
     rootMenu(keycodec),inventory(keycodec),
@@ -165,6 +342,9 @@ MainWindow::MainWindow(Device& device)
   Gothic::inst().onSettingsChanged.bind(this,&MainWindow::onSettings);
   onSettings();
   safeArea = SafeArea::insets();
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  armIOSSemanticScript();
+#endif
 
   if(Gothic::inst().version().game==2)
     setWindowTitle("Gothic II"); else
@@ -494,6 +674,17 @@ void MainWindow::appStateEvent(AppStateEvent& event) {
         }
       catch(...) {
         }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(iosSemanticScriptRunning()) {
+        if(iosSemanticState!=IOSSemanticScriptState::ReadyForLifecycle)
+          failIOSSemanticScript("unexpected-will-resign-active");
+        else if(!idleConfirmed)
+          failIOSSemanticScript("will-resign-idle-unconfirmed");
+        else
+          transitionIOSSemanticScript(
+            IOSSemanticScriptState::WaitDidEnterBackground,30000u);
+        }
+#endif
       return;
       }
     case AppStateEvent::State::DidEnterBackground: {
@@ -507,6 +698,17 @@ void MainWindow::appStateEvent(AppStateEvent& event) {
         }
       catch(...) {
         }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(iosSemanticScriptRunning()) {
+        if(iosSemanticState!=IOSSemanticScriptState::WaitDidEnterBackground)
+          failIOSSemanticScript("unexpected-did-enter-background");
+        else if(!idleConfirmed)
+          failIOSSemanticScript("did-enter-idle-unconfirmed");
+        else
+          transitionIOSSemanticScript(
+            IOSSemanticScriptState::WaitWillEnterForeground,30000u);
+        }
+#endif
       return;
       }
     case AppStateEvent::State::WillEnterForeground:
@@ -518,6 +720,15 @@ void MainWindow::appStateEvent(AppStateEvent& event) {
         }
       catch(...) {
         }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(iosSemanticScriptRunning()) {
+        if(iosSemanticState!=IOSSemanticScriptState::WaitWillEnterForeground)
+          failIOSSemanticScript("unexpected-will-enter-foreground");
+        else
+          transitionIOSSemanticScript(
+            IOSSemanticScriptState::WaitDidBecomeActive,30000u);
+        }
+#endif
       return;
     case AppStateEvent::State::DidBecomeActive: {
       if(appLifecycleState==AppLifecycleState::Active)
@@ -550,6 +761,19 @@ void MainWindow::appStateEvent(AppStateEvent& event) {
         }
       catch(...) {
         }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(iosSemanticScriptRunning()) {
+        if(iosSemanticState!=IOSSemanticScriptState::WaitDidBecomeActive)
+          failIOSSemanticScript("unexpected-did-become-active");
+        else if(!resumed)
+          failIOSSemanticScript("resume-rejected");
+        else {
+          iosSemanticBaseline = renderer.functionalEvidenceSnapshot();
+          transitionIOSSemanticScript(
+            IOSSemanticScriptState::WaitResumeEvidence,30000u);
+          }
+        }
+#endif
       update();
       return;
       }
@@ -2163,6 +2387,10 @@ void MainWindow::render(){
 #endif
     if(!rendererOperational())
       return;
+
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    processIOSSemanticScript();
+#endif
 
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     processMemoryEvents();

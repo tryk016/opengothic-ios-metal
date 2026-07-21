@@ -27,6 +27,10 @@ NEW_GAME=0
 REQUIRE_BINK_SELF_TEST=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 APP_INPUT=""
+readonly DURABLE_ZERO_MAX_CYCLES=3
+readonly DURABLE_ZERO_SCANS_PER_CYCLE=10
+readonly DURABLE_ZERO_INTERVAL_SECONDS=10
+readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
 
 fail() {
   echo "FAIL: $*" >&2
@@ -76,6 +80,21 @@ APP_EXECUTABLE=""
 BUNDLE_ID=""
 EXPECTED_SHA=""
 RUNTIME_ARMED=0
+DEVICE_FOREGROUND_PARKED=0
+DEVICE_PROCESS_STOPPED=0
+DURABLE_ZERO_CYCLES_USED=0
+DURABLE_ZERO_SCANS_ATTEMPTED=0
+DURABLE_ZERO_SCANS_COMPLETED=0
+DURABLE_ZERO_RESPAWNS_DETECTED=0
+DURABLE_ZERO_QUERY_FAILURES=0
+DURABLE_ZERO_STABLE=0
+DURABLE_ZERO_STABLE_SECONDS=0
+DURABLE_ZERO_FINAL_ZERO=0
+DURABLE_ZERO_ACTIVE_CYCLE=0
+DURABLE_ZERO_ACTIVE_CYCLE_STARTED=0
+BATTERY_FALLBACK_ATTEMPTS=0
+BATTERY_FALLBACK_FINAL_ZERO=0
+STOP_RUNNING_APP_QUERY_FAILED=0
 PRE_CRASH_SHA=""
 POST_CRASH_SHA=""
 APP_EXECUTABLE="$(
@@ -88,20 +107,12 @@ strings "$APP_INPUT/$APP_EXECUTABLE" |
   rg -Fx 'RendererIOS diagnostics: ON frames-in-flight=' >/dev/null ||
   fail "app is not a diagnostics-enabled RendererIOS build"
 
-stop_running_app() {
-  local strict="${1:-0}"
-  local attempt json mode pid pids
+list_game_pids() {
+  local output="$1"
 
-  [[ -n "$DEVICE" && -n "$APP_EXECUTABLE" ]] || return 0
-  for attempt in 1 2 3 4 5; do
-    json="$WORK/processes-stop-$(uuidgen).json"
-    if ! xcrun devicectl device info processes --device "$DEVICE" \
-        --json-output "$json" >/dev/null 2>>"$WORK/cleanup.log"; then
-      [[ "$strict" == 0 ]] ||
-        echo "FAIL: could not query processes while stopping $APP_EXECUTABLE" >&2
-      return 1
-    fi
-    if ! pids="$(python3 - "$json" "$APP_EXECUTABLE" <<'PY'
+  xcrun devicectl device info processes --device "$DEVICE" \
+    --json-output "$output" >/dev/null 2>>"$WORK/cleanup.log" || return 1
+  python3 - "$output" "$APP_EXECUTABLE" 2>>"$WORK/cleanup.log" <<'PY'
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
@@ -112,9 +123,20 @@ for process in processes:
             raise SystemExit("non-numeric process identifier")
         print(pid)
 PY
-    )"; then
+}
+
+stop_running_app() {
+  local strict="${1:-0}"
+  local attempt json mode pid pids
+
+  STOP_RUNNING_APP_QUERY_FAILED=0
+  [[ -n "$DEVICE" && -n "$APP_EXECUTABLE" ]] || return 0
+  for attempt in 1 2 3 4 5; do
+    json="$WORK/processes-stop-$(uuidgen).json"
+    if ! pids="$(list_game_pids "$json")"; then
+      STOP_RUNNING_APP_QUERY_FAILED=1
       [[ "$strict" == 0 ]] ||
-        echo "FAIL: invalid process list while stopping $APP_EXECUTABLE" >&2
+        echo "FAIL: could not query processes while stopping $APP_EXECUTABLE" >&2
       return 1
     fi
     [[ -n "$pids" ]] || return 0
@@ -140,6 +162,286 @@ PY
   [[ "$strict" == 0 ]] ||
     echo "FAIL: $APP_EXECUTABLE is still running on the device" >&2
   return 1
+}
+
+park_settings_foreground() {
+  [[ -n "$DEVICE" ]] || return 0
+  xcrun devicectl device process launch --device "$DEVICE" \
+    --terminate-existing --activate com.apple.Preferences \
+    >>"$WORK/park-settings.log" 2>&1 || return 1
+  DEVICE_FOREGROUND_PARKED=1
+}
+
+write_durable_event_json() {
+  local output="$1" cycle="$2" scan="$3" scheduled="$4"
+  local elapsed="$5" result="$6" pids="${7:-}"
+
+  python3 - "$output" "$cycle" "$scan" "$scheduled" "$elapsed" \
+      "$result" "$pids" <<'PY'
+import datetime
+import json
+import pathlib
+import sys
+
+output, cycle, scan, scheduled, elapsed, result, pids = sys.argv[1:]
+payload = {
+    "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    ),
+    "cycle": int(cycle),
+    "scan": None if scan == "none" else int(scan),
+    "scheduled_elapsed_seconds": (
+        None if scheduled == "none" else int(scheduled)
+    ),
+    "elapsed_seconds": int(elapsed),
+    "result": result,
+    "process_count": len([pid for pid in pids.splitlines() if pid]),
+}
+pathlib.Path(output).write_text(json.dumps(payload, sort_keys=True) + "\n")
+PY
+}
+
+write_durable_cycle_json() {
+  local cycle="$1" elapsed="$2" result="$3"
+
+  python3 - "$WORK/durable-zero-cycle-$cycle-summary.json" \
+      "$cycle" "$elapsed" "$result" "$DURABLE_ZERO_STABLE_SECONDS" \
+      "$DURABLE_ZERO_FINAL_ZERO" <<'PY'
+import datetime
+import json
+import pathlib
+import sys
+
+output, cycle, elapsed, result, stable_seconds, final_zero = sys.argv[1:]
+payload = {
+    "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    ),
+    "cycle": int(cycle),
+    "elapsed_seconds": int(elapsed),
+    "result": result,
+    "stable_seconds": int(stable_seconds),
+    "final_zero": int(final_zero),
+}
+pathlib.Path(output).write_text(json.dumps(payload, sort_keys=True) + "\n")
+PY
+}
+
+run_battery_safety_fallback() {
+  local attempt elapsed fallback_started park_ok=0 pids result stop_ok=0
+
+  BATTERY_FALLBACK_ATTEMPTS=$((BATTERY_FALLBACK_ATTEMPTS+1))
+  attempt="$BATTERY_FALLBACK_ATTEMPTS"
+  fallback_started=$SECONDS
+  BATTERY_FALLBACK_FINAL_ZERO=0
+  DEVICE_PROCESS_STOPPED=0
+  DEVICE_FOREGROUND_PARKED=0
+  result=stop-failure
+  if stop_running_app 1; then
+    stop_ok=1
+  elif ((STOP_RUNNING_APP_QUERY_FAILED != 0)); then
+    DURABLE_ZERO_QUERY_FAILURES=$((DURABLE_ZERO_QUERY_FAILURES+1))
+    result=query-failure
+  fi
+  if park_settings_foreground; then
+    park_ok=1
+  else
+    result=park-failure
+  fi
+  if pids="$(list_game_pids \
+      "$WORK/processes-durable-zero-battery-fallback-$attempt-final.json")"; then
+    if [[ -z "$pids" ]]; then
+      BATTERY_FALLBACK_FINAL_ZERO=1
+      result=zero
+    elif [[ -n "$pids" ]]; then
+      DURABLE_ZERO_RESPAWNS_DETECTED=$((DURABLE_ZERO_RESPAWNS_DETECTED+1))
+      DEVICE_FOREGROUND_PARKED=0
+      result=respawn
+    fi
+  else
+    DURABLE_ZERO_QUERY_FAILURES=$((DURABLE_ZERO_QUERY_FAILURES+1))
+    DEVICE_FOREGROUND_PARKED=0
+    result=query-failure
+  fi
+  elapsed=$((SECONDS-fallback_started))
+  write_durable_event_json \
+    "$WORK/durable-zero-battery-fallback-$attempt-final.json" \
+    0 none none "$elapsed" "$result" "${pids:-}" || true
+  echo "durable-zero battery-fallback=$attempt stop-ok=$stop_ok park-ok=$park_ok elapsed-seconds=$elapsed result=$result" \
+    >>"$WORK/cleanup.log"
+  [[ "$BATTERY_FALLBACK_FINAL_ZERO" == 1 ]]
+}
+
+ensure_durable_zero() {
+  local cycle scan scheduled_elapsed wait_seconds cycle_attempt_started
+  local cycle_started elapsed
+  local pids result stable
+
+  if ((DURABLE_ZERO_STABLE != 0 &&
+       DURABLE_ZERO_STABLE_SECONDS >= DURABLE_ZERO_REQUIRED_STABLE_SECONDS &&
+       DURABLE_ZERO_FINAL_ZERO != 0)); then
+    DEVICE_PROCESS_STOPPED=1
+    return 0
+  fi
+  [[ -n "$DEVICE" && -n "$APP_EXECUTABLE" ]] || return 1
+  DEVICE_PROCESS_STOPPED=0
+
+  while ((DURABLE_ZERO_CYCLES_USED < DURABLE_ZERO_MAX_CYCLES)); do
+    cycle=$((DURABLE_ZERO_CYCLES_USED+1))
+    DURABLE_ZERO_CYCLES_USED=$cycle
+    DURABLE_ZERO_STABLE=0
+    DURABLE_ZERO_STABLE_SECONDS=0
+    DURABLE_ZERO_FINAL_ZERO=0
+    DEVICE_FOREGROUND_PARKED=0
+    cycle_attempt_started=$SECONDS
+    DURABLE_ZERO_ACTIVE_CYCLE=$cycle
+    DURABLE_ZERO_ACTIVE_CYCLE_STARTED=$cycle_attempt_started
+    write_durable_cycle_json "$cycle" 0 started || true
+
+    if ! stop_running_app 1; then
+      result=stop-failure
+      if ((STOP_RUNNING_APP_QUERY_FAILED != 0)); then
+        DURABLE_ZERO_QUERY_FAILURES=$((DURABLE_ZERO_QUERY_FAILURES+1))
+        result=query-failure
+      fi
+      elapsed=$((SECONDS-cycle_attempt_started))
+      write_durable_cycle_json "$cycle" "$elapsed" "$result" || true
+      DURABLE_ZERO_ACTIVE_CYCLE=0
+      echo "durable-zero cycle=$cycle phase=stop elapsed-seconds=$elapsed result=$result" \
+        >>"$WORK/cleanup.log"
+      continue
+    fi
+    if ! park_settings_foreground; then
+      elapsed=$((SECONDS-cycle_attempt_started))
+      write_durable_cycle_json "$cycle" "$elapsed" park-failure || true
+      DURABLE_ZERO_ACTIVE_CYCLE=0
+      echo "durable-zero cycle=$cycle phase=park elapsed-seconds=$elapsed result=failure" \
+        >>"$WORK/cleanup.log"
+      continue
+    fi
+
+    # The durable window starts only after strict stop and Settings activation.
+    # Its ten scans are scheduled at t=0,10,...,90 seconds from this point.
+    cycle_started=$SECONDS
+    DURABLE_ZERO_ACTIVE_CYCLE_STARTED=$cycle_started
+    stable=1
+    for ((scan=1; scan<=DURABLE_ZERO_SCANS_PER_CYCLE; ++scan)); do
+      scheduled_elapsed=$(((scan-1)*DURABLE_ZERO_INTERVAL_SECONDS))
+      wait_seconds=$((scheduled_elapsed-(SECONDS-cycle_started)))
+      ((wait_seconds <= 0)) || sleep "$wait_seconds"
+      elapsed=$((SECONDS-cycle_started))
+      DURABLE_ZERO_SCANS_ATTEMPTED=$((DURABLE_ZERO_SCANS_ATTEMPTED+1))
+      if ! pids="$(list_game_pids \
+          "$WORK/processes-durable-zero-cycle-$cycle-scan-$scan.json")"; then
+        DURABLE_ZERO_QUERY_FAILURES=$((DURABLE_ZERO_QUERY_FAILURES+1))
+        DEVICE_FOREGROUND_PARKED=0
+        stable=0
+        write_durable_event_json \
+          "$WORK/durable-zero-cycle-$cycle-scan-$scan.json" \
+          "$cycle" "$scan" "$scheduled_elapsed" "$elapsed" \
+          query-failure || true
+        result=query-failure
+        break
+      fi
+      DURABLE_ZERO_SCANS_COMPLETED=$((DURABLE_ZERO_SCANS_COMPLETED+1))
+      if [[ -n "$pids" ]]; then
+        DURABLE_ZERO_RESPAWNS_DETECTED=$((DURABLE_ZERO_RESPAWNS_DETECTED+1))
+        DEVICE_FOREGROUND_PARKED=0
+        stable=0
+        write_durable_event_json \
+          "$WORK/durable-zero-cycle-$cycle-scan-$scan.json" \
+          "$cycle" "$scan" "$scheduled_elapsed" "$elapsed" respawn "$pids" || true
+        result=respawn
+        break
+      fi
+      DURABLE_ZERO_STABLE_SECONDS=$elapsed
+      write_durable_event_json \
+        "$WORK/durable-zero-cycle-$cycle-scan-$scan.json" \
+        "$cycle" "$scan" "$scheduled_elapsed" "$elapsed" zero || {
+          DEVICE_FOREGROUND_PARKED=0
+          stable=0
+          result=evidence-write-failure
+          break
+        }
+      echo "durable-zero cycle=$cycle scan=$scan scheduled-seconds=$scheduled_elapsed elapsed-seconds=$elapsed result=zero" \
+        >>"$WORK/cleanup.log"
+    done
+
+    if ((stable == 0)); then
+      elapsed=$((SECONDS-cycle_started))
+      write_durable_cycle_json "$cycle" "$elapsed" "$result" || true
+      DURABLE_ZERO_ACTIVE_CYCLE=0
+      echo "durable-zero cycle=$cycle elapsed-seconds=$elapsed result=$result" \
+        >>"$WORK/cleanup.log"
+      continue
+    fi
+
+    wait_seconds=$((DURABLE_ZERO_REQUIRED_STABLE_SECONDS-(SECONDS-cycle_started)))
+    ((wait_seconds <= 0)) || sleep "$wait_seconds"
+    elapsed=$((SECONDS-cycle_started))
+    DURABLE_ZERO_STABLE_SECONDS=$elapsed
+    if ! pids="$(list_game_pids \
+        "$WORK/processes-durable-zero-cycle-$cycle-final.json")"; then
+      DURABLE_ZERO_QUERY_FAILURES=$((DURABLE_ZERO_QUERY_FAILURES+1))
+      DEVICE_FOREGROUND_PARKED=0
+      result=query-failure
+    elif [[ -n "$pids" ]]; then
+      DURABLE_ZERO_RESPAWNS_DETECTED=$((DURABLE_ZERO_RESPAWNS_DETECTED+1))
+      DEVICE_FOREGROUND_PARKED=0
+      result=respawn
+    else
+      result=zero
+    fi
+    if [[ "$result" == zero ]] &&
+       ((elapsed < DURABLE_ZERO_REQUIRED_STABLE_SECONDS)); then
+      result=stable-window-too-short
+    fi
+    write_durable_event_json \
+      "$WORK/durable-zero-cycle-$cycle-final.json" \
+      "$cycle" none none "$elapsed" "$result" "${pids:-}" || {
+        DEVICE_FOREGROUND_PARKED=0
+        result=evidence-write-failure
+      }
+    if [[ "$result" == zero ]]; then
+      DURABLE_ZERO_STABLE=1
+      DURABLE_ZERO_FINAL_ZERO=1
+      DEVICE_PROCESS_STOPPED=1
+      write_durable_cycle_json "$cycle" "$elapsed" pass || true
+      DURABLE_ZERO_ACTIVE_CYCLE=0
+      echo "durable-zero cycle=$cycle stable-seconds=$DURABLE_ZERO_STABLE_SECONDS final-zero=1 result=pass" \
+        >>"$WORK/cleanup.log"
+      return 0
+    fi
+    write_durable_cycle_json "$cycle" "$elapsed" "$result" || true
+    DURABLE_ZERO_ACTIVE_CYCLE=0
+    echo "durable-zero cycle=$cycle stable-seconds=$DURABLE_ZERO_STABLE_SECONDS final-zero=0 result=$result" \
+      >>"$WORK/cleanup.log"
+  done
+
+  DURABLE_ZERO_STABLE=0
+  DURABLE_ZERO_FINAL_ZERO=0
+  DEVICE_PROCESS_STOPPED=0
+  run_battery_safety_fallback || true
+  return 1
+}
+
+write_durable_result_fields() {
+  echo "device_process_stopped=$DEVICE_PROCESS_STOPPED"
+  echo "device_foreground_parked=$DEVICE_FOREGROUND_PARKED"
+  echo "durable_zero_max_cycles=$DURABLE_ZERO_MAX_CYCLES"
+  echo "durable_zero_scans_per_cycle=$DURABLE_ZERO_SCANS_PER_CYCLE"
+  echo "durable_zero_interval_seconds=$DURABLE_ZERO_INTERVAL_SECONDS"
+  echo "durable_zero_required_stable_seconds=$DURABLE_ZERO_REQUIRED_STABLE_SECONDS"
+  echo "durable_zero_cycles_used=$DURABLE_ZERO_CYCLES_USED"
+  echo "durable_zero_scans_attempted=$DURABLE_ZERO_SCANS_ATTEMPTED"
+  echo "durable_zero_scans_completed=$DURABLE_ZERO_SCANS_COMPLETED"
+  echo "durable_zero_respawns_detected=$DURABLE_ZERO_RESPAWNS_DETECTED"
+  echo "durable_zero_query_failures=$DURABLE_ZERO_QUERY_FAILURES"
+  echo "durable_zero_stable=$DURABLE_ZERO_STABLE"
+  echo "durable_zero_stable_seconds=$DURABLE_ZERO_STABLE_SECONDS"
+  echo "durable_zero_final_zero=$DURABLE_ZERO_FINAL_ZERO"
+  echo "battery_fallback_attempts=$BATTERY_FALLBACK_ATTEMPTS"
+  echo "battery_fallback_final_zero=$BATTERY_FALLBACK_FINAL_ZERO"
 }
 
 pull_runtime_logs() {
@@ -168,11 +470,17 @@ preserve_failure_evidence() {
   mkdir -p "$failure_dir"
   for candidate in \
       launch.log cleanup.log \
+      park-settings.log \
       log.txt stderr.log crash.log crash-before.log \
       log-before-cleanup.txt stderr-before-cleanup.log crash-before-cleanup.log \
       log-after-cleanup.txt stderr-after-cleanup.log crash-after-cleanup.log; do
     [[ -f "$WORK/$candidate" ]] || continue
     ditto "$WORK/$candidate" "$failure_dir/$candidate"
+  done
+  for candidate in "$WORK"/processes-durable-zero-*.json \
+      "$WORK"/durable-zero-*.json; do
+    [[ -f "$candidate" ]] || continue
+    ditto "$candidate" "$failure_dir/$(basename "$candidate")"
   done
   {
     echo "result=FAIL"
@@ -183,20 +491,29 @@ preserve_failure_evidence() {
     echo "cleanup_status=$cleanup_status"
     echo "pre_crash_sha256=$PRE_CRASH_SHA"
     echo "post_crash_sha256=$POST_CRASH_SHA"
+    write_durable_result_fields
   } >"$failure_dir/result.txt"
   echo "failure evidence: $failure_dir" >&2
 }
 
 cleanup() {
   local status=$?
-  local cleanup_status=0 final_status="$status"
+  local cleanup_status=0 elapsed=0 final_status="$status"
   trap - EXIT INT TERM HUP
   set +e
+  if ((DURABLE_ZERO_ACTIVE_CYCLE != 0)); then
+    elapsed=$((SECONDS-DURABLE_ZERO_ACTIVE_CYCLE_STARTED))
+    write_durable_cycle_json \
+      "$DURABLE_ZERO_ACTIVE_CYCLE" "$elapsed" interrupted || true
+    echo "durable-zero cycle=$DURABLE_ZERO_ACTIVE_CYCLE elapsed-seconds=$elapsed result=interrupted" \
+      >>"$WORK/cleanup.log"
+    DURABLE_ZERO_ACTIVE_CYCLE=0
+  fi
   if [[ -n "$DEVICE" && -n "$APP_EXECUTABLE" ]]; then
     if ((RUNTIME_ARMED != 0)); then
       pull_runtime_logs before-cleanup
     fi
-    if stop_running_app 0; then
+    if ensure_durable_zero; then
       echo "phase=trap-cleanup game_processes=0" >>"$WORK/cleanup.log"
     else
       cleanup_status=1
@@ -335,6 +652,7 @@ TEAM_ID="${OPENGOTHIC_IOS_TEAM_ID:-${BUNDLE_ID##*.}}"
 
 echo "== stopping any previous $BUNDLE_ID process before preflight =="
 stop_running_app 1 || fail "preflight application cleanup failed"
+park_settings_foreground || fail "could not park Settings after preflight cleanup"
 
 xcrun devicectl device info files --device "$DEVICE" \
   --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
@@ -487,6 +805,7 @@ fi
 
 echo "== stopping any previous $BUNDLE_ID process =="
 stop_running_app 1 || fail "pre-launch application cleanup failed"
+park_settings_foreground || fail "could not park Settings before install"
 
 echo "== installing $BUNDLE_ID =="
 xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null
@@ -505,6 +824,7 @@ if ((NEW_GAME != 0)); then
 else
   echo "== unattended launch: save slot $SAVE_SLOT, ${DURATION}s =="
 fi
+DEVICE_FOREGROUND_PARKED=0
 RUNTIME_ARMED=1
 if ! xcrun devicectl device process launch --device "$DEVICE" \
     --terminate-existing -- "$BUNDLE_ID" "${LAUNCH_ARGS[@]}" \
@@ -531,6 +851,7 @@ PY
 
 echo "== stopping $BUNDLE_ID after smoke window =="
 stop_running_app 1 || fail "application cleanup failed"
+park_settings_foreground || fail "could not park Settings after smoke window"
 RUNTIME_ARMED=0
 
 for name in log.txt stderr.log crash.log; do
@@ -934,11 +1255,33 @@ if [[ -n "$POST_CRASH_SHA" && "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
   fail "crash.log changed during the smoke run"
 fi
 
+# Validation can take long enough for SpringBoard to recreate a still-active
+# foreground scene after process termination. Reassert both conditions at the
+# final PASS boundary so the unattended harness leaves the game durably off.
+stop_running_app 1 || fail "final application cleanup failed"
+park_settings_foreground || fail "could not park Settings at PASS boundary"
+ensure_durable_zero || fail "durable final application cleanup failed"
+((DEVICE_PROCESS_STOPPED == 1 && DURABLE_ZERO_STABLE == 1 &&
+  DURABLE_ZERO_STABLE_SECONDS >= DURABLE_ZERO_REQUIRED_STABLE_SECONDS &&
+  DURABLE_ZERO_FINAL_ZERO == 1)) ||
+  fail "durable final application cleanup did not establish stable zero"
+((DEVICE_FOREGROUND_PARKED == 1)) ||
+  fail "Settings was not parked at the durable PASS boundary"
+
 OUT="$ROOT/build/device-smoke/$EXPECTED_SHA"
 mkdir -p "$OUT"
 ditto "$WORK/log.txt" "$OUT/log.txt"
 [[ ! -f "$WORK/stderr.log" ]] || ditto "$WORK/stderr.log" "$OUT/stderr.log"
 ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
+[[ ! -f "$WORK/cleanup.log" ]] || ditto "$WORK/cleanup.log" "$OUT/cleanup.log"
+[[ ! -f "$WORK/park-settings.log" ]] ||
+  ditto "$WORK/park-settings.log" "$OUT/park-settings.log"
+rm -f "$OUT"/processes-durable-zero-*.json "$OUT"/durable-zero-*.json
+for candidate in "$WORK"/processes-durable-zero-*.json \
+    "$WORK"/durable-zero-*.json; do
+  [[ -f "$candidate" ]] || continue
+  ditto "$candidate" "$OUT/$(basename "$candidate")"
+done
 {
   echo "result=PASS"
   echo "source_sha=$EXPECTED_SHA"
@@ -953,7 +1296,9 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
   echo "bink_self_test_passed=$REQUIRE_BINK_SELF_TEST"
   echo "metallib_sha256=$METALLIB_SHA"
   echo "log_sha256=$(shasum -a 256 "$WORK/log.txt" | awk '{print $1}')"
-  echo "device_process_stopped=1"
+  # device_process_stopped=1 is emitted only after the durable stable window
+  # and its independent final process query both prove zero.
+  write_durable_result_fields
   cat "$WORK/runtime-compilation-summary.txt"
 } >"$OUT/result.txt"
 

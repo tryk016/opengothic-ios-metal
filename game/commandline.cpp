@@ -51,6 +51,10 @@ CommandLine::CommandLine(int argc, const char** argv) {
   if(argc<1)
     return;
 
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  size_t iosSemanticSaveArgumentCount = 0;
+  bool   iosSemanticSaveArgumentValid = false;
+#endif
   std::string_view mod;
   for(int i=1;i<argc;++i) {
     std::string_view arg = argv[i];
@@ -69,8 +73,19 @@ CommandLine::CommandLine(int argc, const char** argv) {
       devmode = true;
       }
     else if(arg=="-save") {
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      ++iosSemanticSaveArgumentCount;
+#endif
       ++i;
       if(i<argc){
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        const std::string_view value = argv[i];
+        iosSemanticSaveArgumentValid =
+          !value.empty() && value.front()>='1' && value.front()<='9' &&
+          std::all_of(value.begin()+1,value.end(),[](char ch) {
+            return ch>='0' && ch<='9';
+            });
+#endif
         if(std::strcmp(argv[i],"q")==0) {
           saveDef = "save_slot_0.sav";
           } else {
@@ -168,10 +183,66 @@ CommandLine::CommandLine(int argc, const char** argv) {
       // after Gothic data validation, before Metal/cache construction.
       }
 #endif
+#if defined(__IOS__)
+    else if(arg.find("-renderer-ios-semantic-script")==0u) {
+#if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      throw std::invalid_argument(
+        "RendererIOS semantic script requires diagnostics");
+#else
+      constexpr std::string_view expected =
+        "-renderer-ios-semantic-script=save-ui-lifecycle-v1";
+      if(arg!=expected)
+        throw std::invalid_argument(
+          "unknown RendererIOS semantic script argument");
+      if(iosSemanticScript)
+        throw std::invalid_argument(
+          "duplicate RendererIOS semantic script argument");
+      iosSemanticScript = true;
+#endif
+      }
+    else if(arg.find("-renderer-ios-semantic-nonce")==0u) {
+#if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      throw std::invalid_argument(
+        "RendererIOS semantic nonce requires diagnostics");
+#else
+      constexpr std::string_view prefix = "-renderer-ios-semantic-nonce=";
+      if(arg.find(prefix)!=0u)
+        throw std::invalid_argument(
+          "unknown RendererIOS semantic nonce argument");
+      if(!iosSemanticNonce.empty())
+        throw std::invalid_argument(
+          "duplicate RendererIOS semantic nonce argument");
+      const std::string_view value = arg.substr(prefix.size());
+      const bool valid = value.size()==32u &&
+        std::all_of(value.begin(),value.end(),[](char ch) {
+          return (ch>='0' && ch<='9') || (ch>='a' && ch<='f');
+          });
+      if(!valid)
+        throw std::invalid_argument(
+          "invalid RendererIOS semantic nonce argument");
+      iosSemanticNonce.assign(value);
+#endif
+      }
+#endif
     else {
       Log::i("unreacognized commandline option: \"", arg, "\"");
       }
     }
+
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  if(iosSemanticScript) {
+    if(iosSemanticNonce.empty())
+      throw std::invalid_argument("missing RendererIOS semantic nonce argument");
+    if(iosSemanticSaveArgumentCount!=1u ||
+       !iosSemanticSaveArgumentValid || saveDef.empty())
+      throw std::invalid_argument(
+        "RendererIOS semantic script requires one numeric save argument");
+    }
+  else if(!iosSemanticNonce.empty()) {
+    throw std::invalid_argument(
+      "RendererIOS semantic nonce requires semantic script argument");
+    }
+#endif
 
 #if defined(__IOS__)
   // Most iOS GPUs lack Metal mesh shaders; use the raster fallback by default.

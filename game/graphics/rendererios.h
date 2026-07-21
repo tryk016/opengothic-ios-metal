@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "iosframeinput.h"
+#include "iosfunctionalevidence.h"
 
 namespace Tempest {
 class Device;
@@ -90,6 +91,9 @@ class RendererIOS final {
 
     void dbgDraw(Tempest::Painter& painter);
     bool ssaoBuffersAllocated() const noexcept;
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    IOSFunctionalEvidenceSnapshot functionalEvidenceSnapshot() const noexcept;
+#endif
 
   private:
     struct Impl;

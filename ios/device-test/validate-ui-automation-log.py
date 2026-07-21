@@ -90,11 +90,20 @@ def validate(
     require(events, "no terminal functional evidence markers")
     for expected_ui in ("inventory", "quickring-items", "quickring-weapons"):
         matching = [event for event in events if event[1] == expected_ui]
-        count = len(matching)
-        require(count == 1, f"expected exactly one terminal {expected_ui} marker")
+        require(
+            1 <= len(matching) <= 2,
+            f"expected one surface marker and at most one later item proof for {expected_ui}",
+        )
+        positive = [event for event in matching if event[2] > 0]
+        require(len(positive) <= 1, f"duplicate terminal {expected_ui} item proof")
+        if len(matching) == 2:
+            require(
+                matching[0][2] == 0 and matching[1][2] > 0,
+                f"terminal {expected_ui} retry is not zero-then-positive",
+            )
         if require_ui_items:
             require(
-                matching[0][2] > 0,
+                len(positive) == 1,
                 f"terminal {expected_ui} marker has no encoded item draw",
             )
     if require_bink:
@@ -176,6 +185,12 @@ def self_test() -> None:
         base,
     )
     validate(surface_only, require_bink=True)
+    delayed_positive = base.replace(
+        "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=0 serial=90 ui=inventory ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0",
+        "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=2 serial=89 ui=inventory ui-item-draw-count=0 real-bink-ordinal=0 resume-cycle=0\n"
+        "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=0 serial=90 ui=inventory ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0",
+    )
+    validate(delayed_positive, require_bink=True, require_ui_items=True)
     try:
         validate(surface_only, require_bink=True, require_ui_items=True)
     except ValidationError:
@@ -206,6 +221,11 @@ def self_test() -> None:
             1,
         ),
         "missing-draw-count": base.replace(" ui-item-draw-count=7", "", 1),
+        "duplicate-positive": base.replace(
+            "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=0 serial=90 ui=inventory ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0",
+            "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=2 serial=89 ui=inventory ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0\n"
+            "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=0 serial=90 ui=inventory ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0",
+        ),
         "preterminal": base.replace("fence-terminal=1", "fence-terminal=0", 1),
         "not-presented": base.replace("presented=1", "presented=0", 1),
         "bad-slot": base.replace("slot=2 serial=30", "slot=3 serial=30"),

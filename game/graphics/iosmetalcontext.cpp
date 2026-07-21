@@ -1172,6 +1172,21 @@ struct IOSMetalContext::Impl final {
     return true;
     }
 
+  bool uiSurfaceItemsAlreadyProven(
+      RendererIOSUISurfaceEvidence value) const noexcept {
+    switch(value) {
+      case RendererIOSUISurfaceEvidence::None:
+        return true;
+      case RendererIOSUISurfaceEvidence::Inventory:
+        return functionalEvidenceSnapshot.inventorySerial!=0u;
+      case RendererIOSUISurfaceEvidence::QuickRingItems:
+        return functionalEvidenceSnapshot.itemRingSerial!=0u;
+      case RendererIOSUISurfaceEvidence::QuickRingWeapons:
+        return functionalEvidenceSnapshot.weaponRingSerial!=0u;
+      }
+    return true;
+    }
+
   void markUiSurfaceProven(RendererIOSUISurfaceEvidence value) noexcept {
     switch(value) {
       case RendererIOSUISurfaceEvidence::None:             return;
@@ -1195,7 +1210,13 @@ struct IOSMetalContext::Impl final {
       return;
       }
 
-    const bool proveUi = !uiSurfaceAlreadyProven(evidence.uiSurface);
+    const bool proveUiSurface =
+      !uiSurfaceAlreadyProven(evidence.uiSurface);
+    // Preserve the surface-only new-game oracle, but let a later populated
+    // terminal frame independently prove real item draws for save tests.
+    const bool proveUiItems = evidence.uiItemDrawCount>0u &&
+                              !uiSurfaceItemsAlreadyProven(evidence.uiSurface);
+    const bool proveUi = proveUiSurface || proveUiItems;
     const bool proveBink =
       (evidence.realBinkOrdinal==1u && !realBinkFirstEvidenceProven) ||
       (evidence.realBinkOrdinal==30u && !realBinkThirtyEvidenceProven);
@@ -1217,16 +1238,40 @@ struct IOSMetalContext::Impl final {
              " ui-item-draw-count=",proveUi ? evidence.uiItemDrawCount : 0u,
              " real-bink-ordinal=",proveBink ? evidence.realBinkOrdinal : 0u,
              " resume-cycle=",proveResume ? evidence.resumeCycle : 0u);
-      if(proveUi)
+      if(proveUiSurface)
         markUiSurfaceProven(evidence.uiSurface);
+      if(proveUiItems) {
+        switch(evidence.uiSurface) {
+          case RendererIOSUISurfaceEvidence::None:
+            break;
+          case RendererIOSUISurfaceEvidence::Inventory:
+            functionalEvidenceSnapshot.inventorySerial = evidence.serial;
+            functionalEvidenceSnapshot.inventoryItemDrawCount =
+              evidence.uiItemDrawCount;
+            break;
+          case RendererIOSUISurfaceEvidence::QuickRingItems:
+            functionalEvidenceSnapshot.itemRingSerial = evidence.serial;
+            functionalEvidenceSnapshot.itemRingItemDrawCount =
+              evidence.uiItemDrawCount;
+            break;
+          case RendererIOSUISurfaceEvidence::QuickRingWeapons:
+            functionalEvidenceSnapshot.weaponRingSerial = evidence.serial;
+            functionalEvidenceSnapshot.weaponRingItemDrawCount =
+              evidence.uiItemDrawCount;
+            break;
+          }
+        }
       if(proveBink) {
         if(evidence.realBinkOrdinal==1u)
           realBinkFirstEvidenceProven = true;
         if(evidence.realBinkOrdinal==30u)
           realBinkThirtyEvidenceProven = true;
         }
-      if(proveResume)
+      if(proveResume) {
         resumeEvidenceCycleProven = evidence.resumeCycle;
+        functionalEvidenceSnapshot.resumeSerial = evidence.serial;
+        functionalEvidenceSnapshot.resumeCycle  = evidence.resumeCycle;
+        }
       }
     catch(...) {
       }
@@ -1428,6 +1473,7 @@ struct IOSMetalContext::Impl final {
   bool                                         inventoryEvidenceProven = false;
   bool                                         quickRingItemsEvidenceProven = false;
   bool                                         quickRingWeaponsEvidenceProven = false;
+  IOSFunctionalEvidenceSnapshot                functionalEvidenceSnapshot;
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   Attachment                                   binkSelfTestTarget;
@@ -1871,7 +1917,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       if(uiSurface!=RendererIOSUISurfaceEvidence::None &&
-         !impl->uiSurfaceAlreadyProven(uiSurface)) {
+         (!impl->uiSurfaceAlreadyProven(uiSurface) ||
+          (uiItemDrawCount>0u &&
+           !impl->uiSurfaceItemsAlreadyProven(uiSurface)))) {
         frameContext.functionalEvidence.uiSurface = uiSurface;
         frameContext.functionalEvidence.uiItemDrawCount = uiItemDrawCount;
         }
@@ -2258,6 +2306,13 @@ void IOSMetalContext::dbgDraw(Painter& painter) {
 bool IOSMetalContext::ssaoBuffersAllocated() const noexcept {
   return false;
   }
+
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+IOSFunctionalEvidenceSnapshot
+IOSMetalContext::functionalEvidenceSnapshot() const noexcept {
+  return impl->functionalEvidenceSnapshot;
+  }
+#endif
 
 void IOSMetalContext::cancelFrame(uint64_t serial) noexcept {
   if(!impl || !impl->frameActive || impl->activeSerial!=serial)

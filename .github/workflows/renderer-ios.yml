@@ -683,9 +683,41 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'stop_running_app 1 || fail "application cleanup failed"' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'park_settings_foreground || fail "could not park Settings at PASS boundary"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq -- '--terminate-existing --activate com.apple.Preferences' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'stop_running_app 1 || fail "final application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
           grep -Fq -- '--kill --quiet' ios/device-test/run-smoke-test.sh
           grep -Fq 'original_exit_status=' ios/device-test/run-smoke-test.sh
-          grep -Fq 'device_process_stopped=1' ios/device-test/run-smoke-test.sh
+          test "$(grep -Fc 'echo "device_process_stopped=$DEVICE_PROCESS_STOPPED"' \
+            ios/device-test/run-smoke-test.sh)" -eq 1
+          grep -Fxq 'readonly DURABLE_ZERO_MAX_CYCLES=3' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_SCANS_PER_CYCLE=10' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_INTERVAL_SECONDS=10' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'ensure_durable_zero || fail "durable final application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'processes-durable-zero-cycle-$cycle-scan-$scan.json' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'run_battery_safety_fallback || true' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'durable_zero_stable_seconds=$DURABLE_ZERO_STABLE_SECONDS' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'durable_zero_required_stable_seconds=$DURABLE_ZERO_REQUIRED_STABLE_SECONDS' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'durable_zero_final_zero=$DURABLE_ZERO_FINAL_ZERO' \
+            ios/device-test/run-smoke-test.sh
+          test "$(grep -Fc \
+            'DURABLE_ZERO_STABLE_SECONDS >= DURABLE_ZERO_REQUIRED_STABLE_SECONDS' \
+            ios/device-test/run-smoke-test.sh)" -eq 2
+          grep -Fq 'battery_fallback_final_zero=$BATTERY_FALLBACK_FINAL_ZERO' \
+            ios/device-test/run-smoke-test.sh
           test "$(grep -Fc 'echo "scenario=$SCENARIO"' \
             ios/device-test/run-smoke-test.sh)" -eq 2
           test "$(grep -Fc 'echo "save_slot=$SCENARIO_SAVE_SLOT"' \
@@ -728,16 +760,77 @@ jobs:
               'compiled scripts/system preflight failed before install')
           install = source.index('echo "== installing $BUNDLE_ID =="')
           stopped = source.index('stop_running_app 1 || fail "application cleanup failed"')
+          durable = source.index(
+              'ensure_durable_zero || fail "durable final application cleanup failed"')
           result = source.index('echo "result=PASS"')
           passed = source.index('echo "PASS — offline metallib')
           if not selection < bundle:
               raise SystemExit("bounded device selection retry runs after app inspection")
           if not bundle < data_preflight < scripts_preflight < install:
               raise SystemExit("game-data preflight does not fail before install")
-          if not stopped < result < passed:
+          if not stopped < durable < result < passed:
               raise SystemExit("device PASS is emitted before cleanup proof")
           if not stopped < selection_evidence < result:
               raise SystemExit("device selection evidence is copied before cleanup proof")
+          durable_function = source.split("ensure_durable_zero() {", 1)[1].split(
+              "\nwrite_durable_result_fields() {", 1)[0]
+          durable_contract = (
+              'while ((DURABLE_ZERO_CYCLES_USED < DURABLE_ZERO_MAX_CYCLES)); do',
+              'stop_running_app 1',
+              'park_settings_foreground',
+              'for ((scan=1; scan<=DURABLE_ZERO_SCANS_PER_CYCLE; ++scan)); do',
+              'processes-durable-zero-cycle-$cycle-scan-$scan.json',
+              'processes-durable-zero-cycle-$cycle-final.json',
+              'DURABLE_ZERO_FINAL_ZERO=1',
+              'run_battery_safety_fallback || true',
+          )
+          durable_positions = [
+              durable_function.index(literal) for literal in durable_contract
+          ]
+          if durable_positions != sorted(durable_positions):
+              raise SystemExit("physical smoke durable-zero contract is out of order")
+          if 'DURABLE_ZERO_CYCLES_USED=0' in durable_function:
+              raise SystemExit("physical smoke durable-zero resets its global cycle budget")
+          schedule_contract = (
+              'scheduled_elapsed=$(((scan-1)*DURABLE_ZERO_INTERVAL_SECONDS))',
+              'wait_seconds=$((scheduled_elapsed-(SECONDS-cycle_started)))',
+              '((wait_seconds <= 0)) || sleep "$wait_seconds"',
+          )
+          schedule_positions = [
+              durable_function.index(literal) for literal in schedule_contract
+          ]
+          if schedule_positions != sorted(schedule_positions):
+              raise SystemExit("physical smoke durable scan schedule is out of order")
+          if durable_function.rfind('return 1') < durable_function.index(
+              'run_battery_safety_fallback || true'):
+              raise SystemExit("physical smoke durable-zero exhaustion is not fail-closed")
+          cleanup_function = source.split("cleanup() {", 1)[1].split(
+              "\ntrap cleanup EXIT", 1)[0]
+          cleanup_contract = (
+              'local status=$?',
+              'if ensure_durable_zero; then',
+              'phase=trap-cleanup game_processes=0',
+              'cleanup_status=1',
+          )
+          cleanup_positions = [
+              cleanup_function.index(literal) for literal in cleanup_contract
+          ]
+          if cleanup_positions != sorted(cleanup_positions):
+              raise SystemExit("physical smoke EXIT trap bypasses durable-zero cleanup")
+          pass_boundary = source.split(
+              '# Validation can take long enough for SpringBoard', 1)[1]
+          pass_contract = (
+              'stop_running_app 1 || fail "final application cleanup failed"',
+              'park_settings_foreground || fail "could not park Settings at PASS boundary"',
+              'ensure_durable_zero || fail "durable final application cleanup failed"',
+              'DURABLE_ZERO_STABLE_SECONDS >= DURABLE_ZERO_REQUIRED_STABLE_SECONDS',
+              'DURABLE_ZERO_FINAL_ZERO == 1',
+              'echo "result=PASS"',
+              'echo "PASS — offline metallib',
+          )
+          pass_positions = [pass_boundary.index(literal) for literal in pass_contract]
+          if pass_positions != sorted(pass_positions):
+              raise SystemExit("physical smoke PASS is emitted before durable-zero proof")
           PY
 
       - name: Configure RendererIOS
@@ -806,6 +899,15 @@ jobs:
           test -x ios/device-test/validate-ui-automation-log.py
           bash -n ios/device-test/run-ui-automation-test.sh
           python3 ios/device-test/validate-ui-automation-log.py --self-test
+          test -x ios/device-test/run-semantic-ui-lifecycle-test.sh
+          test -x ios/device-test/validate-semantic-ui-lifecycle-log.py
+          test -x ios/device-test/semantic-console-supervisor.py
+          test -x ios/device-test/test-semantic-console-harness.sh
+          bash -n ios/device-test/run-semantic-ui-lifecycle-test.sh
+          bash -n ios/device-test/test-semantic-console-harness.sh
+          python3 ios/device-test/validate-semantic-ui-lifecycle-log.py --self-test
+          python3 ios/device-test/semantic-console-supervisor.py self-test
+          bash ios/device-test/test-semantic-console-harness.sh
           grep -Fq 'trap cleanup EXIT' \
             ios/device-test/run-ui-automation-test.sh
           grep -Fq -- '--kill --quiet' \
@@ -831,6 +933,377 @@ jobs:
           grep -Fq '++drawCalls;' game/graphics/inventoryrenderer.cpp
           grep -Fq 'uiItemDrawCount = inventory.draw(encoder);' \
             game/graphics/iosmetalcontext.cpp
+          grep -Fq 'unknown RendererIOS semantic script argument' \
+            game/commandline.cpp
+          grep -Fq '"-renderer-ios-semantic-script=save-ui-lifecycle-v1";' \
+            game/commandline.cpp
+          grep -Fq 'RendererIOS semantic script requires diagnostics' \
+            game/commandline.cpp
+          grep -Fq 'duplicate RendererIOS semantic script argument' \
+            game/commandline.cpp
+          grep -Fq 'missing RendererIOS semantic nonce argument' \
+            game/commandline.cpp
+          grep -Fq 'RendererIOS semantic script requires one numeric save argument' \
+            game/commandline.cpp
+          grep -Fq 'IOSFunctionalEvidenceSnapshot functionalEvidenceSnapshot() const noexcept' \
+            game/graphics/rendererios.h
+          grep -Fq 'functionalEvidenceSnapshot.inventoryItemDrawCount' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'const bool proveUiItems = evidence.uiItemDrawCount>0u' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'uiAction(KeyCodec::Inventory);' game/mainwindow.cpp
+          grep -Fq 'padOpenItemRing();' game/mainwindow.cpp
+          grep -Fq 'padOpenWeaponsRing();' game/mainwindow.cpp
+          grep -Fq 'padRingCancel();' game/mainwindow.cpp
+          grep -Fq 'com.apple.Preferences' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq -- '--terminate-existing --activate com.apple.Preferences' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'SEMANTIC FALLBACK PASS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'select_device_record()' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'require_same_game_pid before-cleanup || status=1' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'finalize_runtime 1 || fail' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq -- '--terminate-existing --console --json-output "$WORK/console-launch.json"' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq -- '--stop-request "$WORK/console-stop-request"' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq -- '--instance-token "$CONSOLE_INSTANCE_TOKEN"' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'begin_console_startup_critical_section' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'CONSOLE_STARTUP_PID=$!' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'finish_console_startup_critical_section || fail' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'wait_for_game_pid || fail' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'readonly PROCESS_QUERY_TIMEOUT_SECONDS=5' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq -- '--timeout "$PROCESS_QUERY_TIMEOUT_SECONDS"' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_launcher_reaped=$CONSOLE_LAUNCHER_REAPED' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_launcher_exit_code=$CONSOLE_LAUNCHER_EXIT_CODE' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_launcher_premature_exit=$CONSOLE_LAUNCHER_PREMATURE_EXIT' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_launcher_forced_kill=$CONSOLE_LAUNCHER_FORCED_KILL' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_observer_state=$CONSOLE_OBSERVER_STATE' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_observer_errors=$CONSOLE_OBSERVER_ERRORS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_stop_requested=$CONSOLE_STOP_REQUESTED' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_prestop_liveness=$CONSOLE_PRESTOP_LIVENESS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_startup_signal_status=$CONSOLE_STARTUP_SIGNAL_STATUS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'console_marker_hits=$CONSOLE_MARKER_HITS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'start_new_session=True' \
+            ios/device-test/semantic-console-supervisor.py
+          grep -Fq 'signal.signal(caught, signal.SIG_IGN)' \
+            ios/device-test/semantic-console-supervisor.py
+          grep -Fq 'with raw_path.open("xb", buffering=0) as raw:' \
+            ios/device-test/semantic-console-supervisor.py
+          grep -Fq 'os.replace(temporary, path)' \
+            ios/device-test/semantic-console-supervisor.py
+          ! grep -Fq -- '--terminate-existing --console --timeout' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          ! grep -Fq 'pull_live_log' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          ! grep -Fq 'log-live.txt' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          ! grep -Fq 'snapshot_logs before-cleanup' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'readonly DOCUMENT_COPY_MAX_ATTEMPTS=3' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'for ((attempt=1; attempt<=DOCUMENT_COPY_MAX_ATTEMPTS; ++attempt)); do' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'copy-retry file=$name attempt=$attempt/$DOCUMENT_COPY_MAX_ATTEMPTS result=provider-failure' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'provider listed Documents/$name but copy failed after $DOCUMENT_COPY_MAX_ATTEMPTS attempts' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'could not distinguish missing Documents/$name from provider failure after $DOCUMENT_COPY_MAX_ATTEMPTS attempts' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_MAX_CYCLES=3' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_SCANS_PER_CYCLE=10' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_INTERVAL_SECONDS=10' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fxq 'readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'while ((DURABLE_ZERO_CYCLES_USED < DURABLE_ZERO_MAX_CYCLES)); do' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'for ((scan=1; scan<=DURABLE_ZERO_SCANS_PER_CYCLE; ++scan)); do' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'elapsed-seconds=$cycle_elapsed result=respawn' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'processes-durable-zero-cycle-$cycle-final.json' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_respawns_detected=$DURABLE_ZERO_RESPAWNS_DETECTED' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_query_failures=$DURABLE_ZERO_QUERY_FAILURES' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_stop_failures=$DURABLE_ZERO_STOP_FAILURES' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_park_failures=$DURABLE_ZERO_PARK_FAILURES' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_stable=$DURABLE_ZERO_STABLE' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_stable_seconds=$DURABLE_ZERO_STABLE_SECONDS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_final_zero=$DURABLE_ZERO_FINAL_ZERO' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'durable_zero_elapsed_seconds=$DURABLE_ZERO_ELAPSED_SECONDS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'DURABLE_ZERO_STABLE_SECONDS < DURABLE_ZERO_REQUIRED_STABLE_SECONDS' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          ! grep -Eq 'device process (suspend|resume)' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          harness = Path("ios/device-test/run-semantic-ui-lifecycle-test.sh").read_text()
+          supervisor = Path("ios/device-test/semantic-console-supervisor.py").read_text()
+          copy_function = harness.split("copy_document_file() {", 1)[1].split("\nsnapshot_logs() {", 1)[0]
+          copy_contract = (
+              'for ((attempt=1; attempt<=DOCUMENT_COPY_MAX_ATTEMPTS; ++attempt)); do',
+              'document_file_exists',
+              'xcrun devicectl device copy from',
+              '((attempt == DOCUMENT_COPY_MAX_ATTEMPTS)) || sleep 1',
+              'return 2',
+          )
+          copy_positions = [copy_function.index(literal) for literal in copy_contract]
+          if copy_positions != sorted(copy_positions):
+              raise SystemExit("semantic document-copy retry contract is out of order")
+          durable_function = harness.split("ensure_durable_zero() {", 1)[1].split("\ndocument_file_exists() {", 1)[0]
+          durable_contract = (
+              'while ((DURABLE_ZERO_CYCLES_USED < DURABLE_ZERO_MAX_CYCLES)); do',
+              'if ! stop_running_app 1; then',
+              'if ! park_settings_foreground; then',
+              'for ((scan=1; scan<=DURABLE_ZERO_SCANS_PER_CYCLE; ++scan)); do',
+              'sleep "$DURABLE_ZERO_INTERVAL_SECONDS"',
+              'processes-durable-zero-cycle-$cycle-scan-$scan.json',
+              'scan=$scan elapsed-seconds=$cycle_elapsed result=query-failure',
+              'scan=$scan elapsed-seconds=$cycle_elapsed result=respawn',
+              'DURABLE_ZERO_STABLE_SECONDS < DURABLE_ZERO_REQUIRED_STABLE_SECONDS',
+              'processes-durable-zero-cycle-$cycle-final.json',
+              'DURABLE_ZERO_FINAL_ZERO=1',
+              'processes-durable-zero-emergency-final.json',
+          )
+          durable_positions = [durable_function.index(literal) for literal in durable_contract]
+          if durable_positions != sorted(durable_positions):
+              raise SystemExit("semantic durable-zero cleanup contract is out of order")
+          if 'DURABLE_ZERO_CYCLES_USED=0' in durable_function:
+              raise SystemExit("semantic durable-zero cleanup resets its global cycle budget")
+          if 'DURABLE_ZERO_QUERY_FAILURES=0' in durable_function:
+              raise SystemExit("semantic durable-zero cleanup resets query-failure evidence")
+          if harness.count('DEVICE_PROCESS_STOPPED=1') != 2:
+              raise SystemExit("device_process_stopped has an unguarded success assignment")
+          if 'FINALIZATION_ATTEMPTED' in harness:
+              raise SystemExit("trap cleanup may not be gated by a finalization-attempt flag")
+          constants = {}
+          for name in (
+              "DURABLE_ZERO_MAX_CYCLES",
+              "DURABLE_ZERO_SCANS_PER_CYCLE",
+              "DURABLE_ZERO_INTERVAL_SECONDS",
+              "DURABLE_ZERO_REQUIRED_STABLE_SECONDS",
+          ):
+              match = re.search(rf"^readonly {name}=([0-9]+)$", harness, re.MULTILINE)
+              if match is None:
+                  raise SystemExit(f"missing semantic durable-zero constant: {name}")
+              constants[name] = int(match.group(1))
+          scheduled_span = (
+              constants["DURABLE_ZERO_SCANS_PER_CYCLE"] - 1
+          ) * constants["DURABLE_ZERO_INTERVAL_SECONDS"]
+          if constants["DURABLE_ZERO_MAX_CYCLES"] > 3:
+              raise SystemExit("semantic durable-zero cleanup exceeds three global cycles")
+          if constants["DURABLE_ZERO_SCANS_PER_CYCLE"] < 10 or scheduled_span < 90:
+              raise SystemExit("semantic durable-zero scan schedule is shorter than t=0..90s")
+          if constants["DURABLE_ZERO_REQUIRED_STABLE_SECONDS"] < 90:
+              raise SystemExit("semantic durable-zero stable-window gate is shorter than 90 seconds")
+          cleanup_function = harness.split("cleanup() {", 1)[1].split("\ntrap cleanup", 1)[0]
+          if 'local status=$?' not in cleanup_function:
+              raise SystemExit("semantic trap cleanup does not preserve the original status")
+          if 'finalize_runtime || cleanup_status=1' not in cleanup_function:
+              raise SystemExit("semantic trap cleanup does not consume the remaining durable budget")
+          if durable_function.rfind('return 1') < durable_function.index('processes-durable-zero-emergency-final.json'):
+              raise SystemExit("semantic durable-zero exhaustion is not fail-closed")
+          game_pid_function = harness.split("wait_for_game_pid() {", 1)[1].split("\nwait_for_marker() {", 1)[0]
+          game_pid_contract = (
+              'deadline=$((SECONDS+GAME_PID_DISCOVERY_SECONDS))',
+              'while ((SECONDS < deadline)); do',
+              'list_game_pids',
+              'require_console_running game-pid-discovery',
+              'GAME_PID="$pids"',
+          )
+          game_pid_positions = [game_pid_function.index(literal) for literal in game_pid_contract]
+          if game_pid_positions != sorted(game_pid_positions):
+              raise SystemExit("semantic console GAME_PID discovery contract is out of order")
+          wait_function = harness.split("wait_for_marker() {", 1)[1].split("\npreserve_evidence() {", 1)[0]
+          wait_contract = (
+              'require_same_game_pid "$label"',
+              '"$CONSOLE_SUPERVISOR" probe',
+              'script-fail)',
+              'duplicate)',
+              'require_console_running "marker-$label"',
+              '[[ "$marker_state" == marker ]]',
+              'CONSOLE_MARKER_HITS=$((CONSOLE_MARKER_HITS+1))',
+          )
+          wait_positions = [wait_function.index(literal) for literal in wait_contract]
+          if wait_positions != sorted(wait_positions):
+              raise SystemExit("semantic raw-console marker wait contract is out of order")
+          if any(forbidden in wait_function for forbidden in (
+              "copy_document_file", "snapshot_logs", "Documents/", "log-live.txt"
+          )):
+              raise SystemExit("semantic marker wait reads the live Documents provider")
+          active_runtime = harness.split("RUNTIME_ARMED=1", 1)[1].split("finalize_runtime 1 || fail", 1)[0]
+          if "copy_document_file" in active_runtime or "snapshot_logs" in active_runtime:
+              raise SystemExit("semantic active runtime still polls the Documents provider")
+          console_launch = active_runtime.split('"$CONSOLE_SUPERVISOR" supervise', 1)[1].split("CONSOLE_STARTUP_PID=$!", 1)[0]
+          if "--timeout" in console_launch:
+              raise SystemExit("semantic devicectl console launch has an overall timeout")
+          if harness.count("snapshot_logs ") != 2:
+              raise SystemExit("semantic harness must only snapshot Documents pre-test and final")
+          finalize_function = harness.split("finalize_runtime() {", 1)[1].split("\ncleanup() {", 1)[0]
+          finalize_contract = (
+              'snapshot_console_before_stop || status=1',
+              'require_same_game_pid before-cleanup || status=1',
+              'require_console_running before-stop',
+              'CONSOLE_PRESTOP_LIVENESS=1',
+              'if ensure_durable_zero; then',
+              'reap_console_launcher || status=1',
+              '((CONSOLE_LAUNCHER_REAPED != 0)) || status=1',
+              'if ((durable_zero != 0 && CONSOLE_LAUNCHER_REAPED != 0)); then',
+              'snapshot_logs final || status=1',
+          )
+          finalize_positions = [finalize_function.index(literal) for literal in finalize_contract]
+          if finalize_positions != sorted(finalize_positions):
+              raise SystemExit("semantic raw/stop/reap/final-copy contract is out of order")
+          reap_function = harness.split("reap_console_launcher() {", 1)[1].split("\nsnapshot_console_before_stop() {", 1)[0]
+          reap_contract = (
+              'request_console_stop || true',
+              'observe_console_launcher',
+              'capture_console_launcher_exit reaped-after-device-zero',
+              'request_console_stop || return 1',
+              'observe_console_launcher',
+              'capture_console_launcher_exit reaped-after-supervisor-stop-request',
+              'refusing unsafe PID kill',
+          )
+          reap_positions = []
+          cursor = 0
+          for literal in reap_contract:
+              position = reap_function.index(literal, cursor)
+              reap_positions.append(position)
+              cursor = position + len(literal)
+          capture_function = harness.split("capture_console_launcher_exit() {", 1)[1].split("\nrequest_console_stop() {", 1)[0]
+          capture_contract = (
+              'observe_console_launcher',
+              '[[ "$CONSOLE_OBSERVER_STATE" == EXITED ]]',
+              'wait "$CONSOLE_LAUNCHER_PID"',
+              'read_console_status',
+              '[[ "$CONSOLE_STREAM_STATE" != exited ]]',
+          )
+          capture_positions = [capture_function.index(literal) for literal in capture_contract]
+          if capture_positions != sorted(capture_positions):
+              raise SystemExit("semantic console wait is not gated by proven process exit")
+          request_function = harness.split("request_console_stop() {", 1)[1].split("\ndefer_console_startup_signal() {", 1)[0]
+          observer_function = harness.split("observe_console_launcher() {", 1)[1].split("\nrequire_console_running() {", 1)[0]
+          pid_action_pattern = re.compile(r"(?m)^\s*(?:if\s+|!\s*)?kill(?:\s|$)")
+          for name, function in (
+              ("capture", capture_function),
+              ("request", request_function),
+              ("reap", reap_function),
+          ):
+              if pid_action_pattern.search(function):
+                  raise SystemExit(f"semantic console {name} may not signal a PID")
+          observer_kill_lines = [
+              line.strip() for line in observer_function.splitlines()
+              if re.match(r"^\s*(?:if\s+|!\s*)?kill(?:\s|$)", line)
+          ]
+          if observer_kill_lines != [
+              'if kill -0 "$CONSOLE_LAUNCHER_PID" 2>/dev/null; then'
+          ]:
+              raise SystemExit("semantic console observer may only use exact kill -0 liveness probe")
+          observer_identity = (
+              'ps -ww -p "$CONSOLE_LAUNCHER_PID"',
+              '"$process_parent" == "$CONSOLE_PARENT_PID" &&',
+              '"$process_command" == *"$CONSOLE_SUPERVISOR"* &&',
+              '"$process_command" == *" supervise "* &&',
+              '"$process_command" == *"--instance-token $CONSOLE_INSTANCE_TOKEN"* &&',
+              '"$process_command" == *"--status $WORK/console-status.json"* &&',
+              '"$process_command" == *"--stop-request $WORK/console-stop-request"*',
+          )
+          observer_positions = [observer_function.index(literal) for literal in observer_identity]
+          if observer_positions != sorted(observer_positions):
+              raise SystemExit("semantic console observer identity contract is out of order")
+          begin_startup = harness.split("begin_console_startup_critical_section() {", 1)[1].split("\nfinish_console_startup_critical_section() {", 1)[0]
+          finish_startup = harness.split("finish_console_startup_critical_section() {", 1)[1].split("\nreap_console_launcher() {", 1)[0]
+          for literal in (
+              "trap 'defer_console_startup_signal 130' INT",
+              "trap 'defer_console_startup_signal 143' TERM",
+              "trap 'defer_console_startup_signal 129' HUP",
+          ):
+              if literal not in begin_startup:
+                  raise SystemExit("semantic console startup does not defer all exit signals")
+          finish_contract = (
+              'CONSOLE_LAUNCHER_PID="$CONSOLE_STARTUP_PID"',
+              "trap 'exit 130' INT",
+              "trap 'exit 143' TERM",
+              "trap 'exit 129' HUP",
+              'exit "$CONSOLE_STARTUP_SIGNAL_STATUS"',
+          )
+          finish_positions = [finish_startup.index(literal) for literal in finish_contract]
+          if finish_positions != sorted(finish_positions):
+              raise SystemExit("semantic console startup PID/signal handoff is out of order")
+          supervisor_contract = (
+              'signal.signal(caught, signal.SIG_IGN)',
+              'with raw_path.open("xb", buffering=0) as raw:',
+              'start_new_session=True',
+              'requested_token = stop_request_path.read_text().strip()',
+              'if requested_token == instance_token:',
+              'child.kill()',
+              'returncode = child.wait()',
+              'base["forced_kill"] = True',
+          )
+          supervisor_positions = [supervisor.index(literal) for literal in supervisor_contract]
+          if supervisor_positions != sorted(supervisor_positions):
+              raise SystemExit("semantic console supervisor contract is out of order")
+          if supervisor.rfind('state="exited"') < supervisor.index('returncode = child.wait()'):
+              raise SystemExit("semantic console supervisor does not publish terminal child status")
+          for fixture in ("lf", "crlf", "partial", "bare-cr", "crcrlf", "wrong-nonce", "current-fail", "duplicate", "early exit", "wrong stop token", "authenticated stop", "publish-failure"):
+              if fixture not in supervisor:
+                  raise SystemExit(f"semantic console supervisor lacks {fixture} self-test")
+          ordered = (
+              'stop_running_app 1 || fail "pre-test game cleanup failed"',
+              'snapshot_logs pre-test || fail',
+              'begin_console_startup_critical_section',
+              'RUNTIME_ARMED=1',
+              '"$CONSOLE_SUPERVISOR" supervise',
+              '--terminate-existing --console --json-output "$WORK/console-launch.json"',
+              'CONSOLE_STARTUP_PID=$!',
+              'finish_console_startup_critical_section || fail',
+              'wait_for_game_pid || fail',
+              'wait_for_marker armed',
+              'finalize_runtime 1 || fail',
+              '[[ -s "$WORK/log-final.txt" ]]',
+              'python3 - "$WORK/log-final.txt" "$EXPECTED_SHA"',
+              'VALIDATOR_ARGS=("$WORK/log-final.txt" --nonce "$NONCE")',
+              '"$VALIDATOR" "${VALIDATOR_ARGS[@]}"',
+              'echo "SEMANTIC FALLBACK PASS',
+          )
+          main_flow = harness.split("SETTINGS_AVAILABLE=1", 1)[1]
+          positions = [main_flow.index(literal) for literal in ordered]
+          if positions != sorted(positions):
+              raise SystemExit("semantic cleanup/validation/PASS contract is out of order")
+          PY
           xcodebuild \
             -project ios/device-test/ui-automation/RendererIOSUITests.xcodeproj \
             -scheme RendererIOSUITests \
@@ -864,6 +1337,15 @@ jobs:
             grep -Fxq ' ui-item-draw-count=' "$APP_STRINGS"
             grep -Fxq 'quickring-items' "$APP_STRINGS"
             grep -Fxq 'quickring-weapons' "$APP_STRINGS"
+            grep -Fxq -- '-renderer-ios-semantic-nonce=' \
+              "$APP_STRINGS"
+            grep -Fxq ' mode=save-ui-lifecycle-v1' \
+              "$APP_STRINGS"
+            grep -Fxq 'RendererIOS semantic script: ARMED mode=save-ui-lifecycle-v1' \
+              "$APP_STRINGS"
+            grep -Fxq 'RendererIOS semantic script: SCRIPT PASS' \
+              "$APP_STRINGS"
+            grep -Fxq 'WAIT_RESUME_EVIDENCE' "$APP_STRINGS"
           else
             ! grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \
               "$APP_STRINGS"
@@ -874,6 +1356,15 @@ jobs:
             ! grep -Fxq ' ui-item-draw-count=' "$APP_STRINGS"
             ! grep -Fxq 'quickring-items' "$APP_STRINGS"
             ! grep -Fxq 'quickring-weapons' "$APP_STRINGS"
+            ! grep -Fxq -- '-renderer-ios-semantic-nonce=' \
+              "$APP_STRINGS"
+            ! grep -Fxq ' mode=save-ui-lifecycle-v1' \
+              "$APP_STRINGS"
+            ! grep -Fxq 'RendererIOS semantic script: ARMED mode=save-ui-lifecycle-v1' \
+              "$APP_STRINGS"
+            ! grep -Fxq 'RendererIOS semantic script: SCRIPT PASS' \
+              "$APP_STRINGS"
+            ! grep -Fxq 'WAIT_RESUME_EVIDENCE' "$APP_STRINGS"
           fi
 
       - name: Package unsigned device-test IPA

@@ -48,6 +48,10 @@ class CommandLine {
     bool                doForceG2NR()      const { return forceG2NR;    }
     bool                aaPreset()         const { return aaPresetId;   }
     std::string_view    defaultSave()      const { return saveDef;    }
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    bool rendererIOSSemanticScript() const { return iosSemanticScript; }
+    std::string_view rendererIOSSemanticNonce() const { return iosSemanticNonce; }
+#endif
 
     std::string         wrldDef;
 
@@ -79,5 +83,8 @@ class CommandLine {
     bool                forceG2      = false;
     bool                forceG2NR    = false;
     uint32_t            aaPresetId = 0;
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    bool                iosSemanticScript = false;
+    std::string         iosSemanticNonce;
+#endif
   };
-
