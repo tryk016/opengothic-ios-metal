@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <vector>
 
-inline constexpr uint32_t IOSFramePlanABIVersion = 2u;
+inline constexpr uint32_t IOSFramePlanABIVersion = 3u;
 
-// P2.2b adds absolute 2D layout and declared logical usage. Physical alias
-// groups, storage, heaps, hazards, caches and runtime capabilities stay out.
+// P2.2c adds logical MAY-alias groups. Physical compatibility, storage,
+// heaps, hazards, caches and runtime capabilities stay out.
 
 struct IOSResourceId final {
   uint32_t value = 0u;
@@ -26,6 +26,16 @@ struct IOSPassId final {
     }
 
   friend bool operator==(IOSPassId,IOSPassId) = default;
+  };
+
+struct IOSAliasGroupId final {
+  uint32_t value = 0u;
+
+  constexpr explicit operator bool() const noexcept {
+    return value!=0u;
+    }
+
+  friend bool operator==(IOSAliasGroupId,IOSAliasGroupId) = default;
   };
 
 enum class IOSResourceKind : uint8_t {
@@ -151,6 +161,7 @@ struct IOSResourceDesc final {
   IOSInitialContent   initialContent = IOSInitialContent::Undefined;
   bool                memoryless = false;
   bool                aliasable = false;
+  IOSAliasGroupId     aliasGroup;
   IOSResourceLayout   layout;
   IOSResourceUsage    usage = IOSResourceUsage::None;
   };
@@ -213,6 +224,9 @@ enum class IOSFramePlanError : uint8_t {
   IncompatibleFormatUsage          = 41,
   InvalidMultisample               = 42,
   MissingDeclaredUsage             = 43,
+  InvalidAliasGroupMember          = 44,
+  SingletonAliasGroup              = 45,
+  OverlappingAliasGroupUse         = 46,
   };
 
 struct IOSFramePlanValidation final {

@@ -552,5 +552,45 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
         }
       }
     }
+
+  for(const auto& resource:resources) {
+    if(resource.aliasGroup && !resource.aliasable)
+      return failure(IOSFramePlanError::InvalidAliasGroupMember,
+                     {},resource.id);
+    }
+
+  for(const auto& resource:resources) {
+    if(!resource.aliasGroup)
+      continue;
+    std::size_t members = 0u;
+    for(const auto& candidate:resources)
+      if(candidate.aliasGroup==resource.aliasGroup)
+        ++members;
+    if(members<2u)
+      return failure(IOSFramePlanError::SingletonAliasGroup,{},resource.id);
+    }
+
+  for(std::size_t laterIndex=0u; laterIndex<resources.size(); ++laterIndex) {
+    const auto& later = resources[laterIndex];
+    if(!later.aliasGroup)
+      continue;
+    const auto laterRange = useRange(later.id);
+    for(std::size_t earlierIndex=0u; earlierIndex<laterIndex; ++earlierIndex) {
+      const auto& earlier = resources[earlierIndex];
+      if(earlier.aliasGroup!=later.aliasGroup)
+        continue;
+      const auto earlierRange = useRange(earlier.id);
+      const bool disjoint = earlierRange.last.value<laterRange.first.value ||
+                            laterRange.last.value<earlierRange.first.value;
+      if(disjoint)
+        continue;
+      const IOSPassId overlap =
+          earlierRange.first.value>laterRange.first.value
+            ? earlierRange.first
+            : laterRange.first;
+      return failure(IOSFramePlanError::OverlappingAliasGroupUse,
+                     overlap,later.id);
+      }
+    }
   return {};
   }

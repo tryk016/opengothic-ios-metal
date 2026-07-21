@@ -1,9 +1,11 @@
 #include "graphics/iosframeplan.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 #include <utility>
 
 namespace {
@@ -14,7 +16,8 @@ IOSResourceDesc resource(
     IOSResourceLifetime lifetime,
     IOSInitialContent initial,
     bool memoryless = false,
-    bool aliasable = false) {
+    bool aliasable = false,
+    uint32_t aliasGroup = 0u) {
   IOSResourceDesc result;
   result.id = IOSResourceId{id};
   result.kind = kind;
@@ -22,6 +25,7 @@ IOSResourceDesc resource(
   result.initialContent = initial;
   result.memoryless = memoryless;
   result.aliasable = aliasable;
+  result.aliasGroup = IOSAliasGroupId{aliasGroup};
   if(kind==IOSResourceKind::Texture) {
     result.layout = {IOSPixelFormat::Rgba8Unorm,{64u,64u},1u,1u,0u};
     result.usage = memoryless
@@ -173,18 +177,85 @@ IOSFramePlan textureBlitPlan(IOSPixelFormat format,
   return plan;
   }
 
+IOSFramePlan aliasRangePlan(
+    const std::vector<std::vector<uint32_t>>& resourcePasses,
+    const std::vector<uint32_t>& aliasGroups) {
+  assert(resourcePasses.size()==aliasGroups.size());
+  IOSFramePlan plan;
+  plan.resources.push_back(
+      resource(1u,IOSResourceKind::Texture,IOSResourceLifetime::External,
+               IOSInitialContent::Defined));
+
+  uint32_t resourceId = 2u;
+  uint32_t maximumPass = 0u;
+  for(std::size_t i=0u; i<resourcePasses.size(); ++i) {
+    assert(!resourcePasses[i].empty());
+    plan.resources.push_back(
+        resource(resourceId,IOSResourceKind::Buffer,
+                 IOSResourceLifetime::Transient,
+                 IOSInitialContent::Undefined,false,true,aliasGroups[i]));
+    ++resourceId;
+    for(const uint32_t passId:resourcePasses[i]) {
+      assert(passId!=0u);
+      if(passId>maximumPass)
+        maximumPass = passId;
+      }
+    }
+
+  for(uint32_t passId=1u; passId<=maximumPass; ++passId) {
+    std::vector<IOSResourceUse> uses;
+    resourceId = 2u;
+    for(const auto& resourceUses:resourcePasses) {
+      for(const uint32_t usedPass:resourceUses) {
+        if(usedPass!=passId)
+          continue;
+        const IOSUseSemantic semantic = resourceUses.front()==passId
+                                      ? IOSUseSemantic::FullOverwrite
+                                      : IOSUseSemantic::Read;
+        uses.push_back(use(resourceId,semantic));
+        break;
+        }
+      ++resourceId;
+      }
+    if(!uses.empty())
+      plan.passes.push_back(pass(passId,IOSPassKind::Compute,std::move(uses)));
+    }
+  plan.passes.push_back(pass(maximumPass+1u,IOSPassKind::Present,{
+    use(1u,IOSUseSemantic::PresentSource),
+    }));
+  return plan;
+  }
+
+IOSFramePlan aliasRangePlan(
+    const std::vector<std::vector<uint32_t>>& resourcePasses,
+    uint32_t aliasGroup) {
+  return aliasRangePlan(
+      resourcePasses,std::vector<uint32_t>(resourcePasses.size(),aliasGroup));
+  }
+
 }
 
 int main() {
-  static_assert(IOSFramePlanABIVersion==2u);
+  static_assert(IOSFramePlanABIVersion==3u);
   static_assert(sizeof(IOSResourceId)==sizeof(uint32_t));
   static_assert(sizeof(IOSPassId)==sizeof(uint32_t));
+  static_assert(sizeof(IOSAliasGroupId)==sizeof(uint32_t));
+  static_assert(std::is_same_v<decltype(IOSResourceDesc::aliasGroup),
+                               IOSAliasGroupId>);
+  static_assert(offsetof(IOSResourceDesc,aliasGroup)>
+                offsetof(IOSResourceDesc,aliasable));
   static_assert(IOSResourceId{7u}==IOSResourceId{7u});
   static_assert(IOSPassId{9u}==IOSPassId{9u});
+  static_assert(IOSAliasGroupId{11u}==IOSAliasGroupId{11u});
+  static_assert(IOSAliasGroupId{11u}!=IOSAliasGroupId{12u});
   static_assert(bool(IOSResourceId{1u}));
   static_assert(!bool(IOSResourceId{}));
   static_assert(bool(IOSPassId{1u}));
   static_assert(!bool(IOSPassId{}));
+  static_assert(bool(IOSAliasGroupId{1u}));
+  static_assert(bool(IOSAliasGroupId{
+      std::numeric_limits<uint32_t>::max()}));
+  static_assert(!bool(IOSAliasGroupId{}));
 #define IOS_ASSERT_ORDINAL(type,name,value) \
   static_assert(static_cast<uint8_t>(type::name)==value)
   IOS_ASSERT_ORDINAL(IOSResourceKind,Texture,0u);
@@ -275,6 +346,9 @@ int main() {
   IOS_ASSERT_ORDINAL(IOSFramePlanError,IncompatibleFormatUsage,41u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidMultisample,42u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,MissingDeclaredUsage,43u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidAliasGroupMember,44u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,SingletonAliasGroup,45u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,OverlappingAliasGroupUse,46u);
 #undef IOS_ASSERT_ORDINAL
 
   static_assert(static_cast<uint32_t>(IOSResourceUsage::None)==0u);
@@ -1244,5 +1318,173 @@ int main() {
       use(3u,IOSUseSemantic::AccelerationStructureBuildOutput),
       });
     expect(plan,IOSFramePlanError::IncompatibleResourceUse,2u,3u);
+  }
+
+  {
+    auto plan = aliasRangePlan({{1u},{1u}},0u);
+    expect(plan,IOSFramePlanError::None,0u,0u);
+    plan.resources[1].aliasable = false;
+    plan.resources[2].aliasable = false;
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u},{2u}},7u);
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    const auto plan = aliasRangePlan({{2u},{1u}},7u);
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u},{2u},{3u}},7u);
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    const auto plan = aliasRangePlan(
+        {{1u},{2u},{3u},{4u},{5u},{6u}},
+        {31u,2u,std::numeric_limits<uint32_t>::max(),31u,
+         std::numeric_limits<uint32_t>::max(),2u});
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    const auto plan = aliasRangePlan(
+        {{1u},{2u},{1u},{2u}},
+        {5u,5u,7u,7u});
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    IOSFramePlan plan;
+    plan.resources = {
+      resource(1u,IOSResourceKind::Texture,IOSResourceLifetime::External,
+               IOSInitialContent::Defined),
+      resource(2u,IOSResourceKind::Texture,IOSResourceLifetime::Transient,
+               IOSInitialContent::Undefined,false,true,91u),
+      resource(3u,IOSResourceKind::Buffer,IOSResourceLifetime::Transient,
+               IOSInitialContent::Undefined,false,true,91u),
+      resource(4u,IOSResourceKind::AccelerationStructure,
+               IOSResourceLifetime::Transient,IOSInitialContent::Undefined,
+               false,true,91u),
+      resource(5u,IOSResourceKind::Texture,IOSResourceLifetime::Transient,
+               IOSInitialContent::Undefined,false,true,91u),
+      };
+    plan.resources[1].layout = {
+      IOSPixelFormat::R16Float,{13u,7u},2u,1u,0u};
+    plan.resources[1].usage = IOSResourceUsage::RenderAttachment;
+    plan.resources[2].layout.byteSize =
+        std::numeric_limits<uint64_t>::max();
+    plan.resources[2].usage = IOSResourceUsage::BlitDestination;
+    plan.resources[3].usage =
+        IOSResourceUsage::AccelerationStructureBuildOutput;
+    plan.resources[4].layout = {
+      IOSPixelFormat::Rgba16Float,{3u,5u},1u,1u,0u};
+    plan.resources[4].usage = IOSResourceUsage::ShaderWrite;
+    plan.passes = {
+      pass(1u,IOSPassKind::Render,{
+        use(2u,IOSUseSemantic::RenderAttachment,
+            IOSLoadAction::Clear,IOSStoreAction::Store),
+        }),
+      pass(2u,IOSPassKind::Blit,{
+        use(3u,IOSUseSemantic::FullOverwrite),
+        }),
+      pass(3u,IOSPassKind::AccelerationStructureBuild,{
+        use(4u,IOSUseSemantic::AccelerationStructureBuildOutput),
+        }),
+      pass(4u,IOSPassKind::Compute,{
+        use(5u,IOSUseSemantic::FullOverwrite),
+        }),
+      pass(5u,IOSPassKind::Present,{
+        use(1u,IOSUseSemantic::PresentSource),
+        }),
+      };
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    auto plan = aliasRangePlan({{1u},{2u}},9u);
+    plan.resources[2].aliasable = false;
+    expect(plan,IOSFramePlanError::InvalidAliasGroupMember,0u,3u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u}},9u);
+    expect(plan,IOSFramePlanError::SingletonAliasGroup,0u,2u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u},{1u}},9u);
+    expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,1u,3u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u,2u},{2u,3u}},9u);
+    expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,2u,3u);
+  }
+  {
+    const auto plan = aliasRangePlan({{3u,4u},{1u,5u}},9u);
+    expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,3u,3u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u,3u},{2u}},9u);
+    expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,2u,3u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u,3u},{4u},{2u}},9u);
+    expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,2u,4u);
+  }
+  {
+    const auto plan = aliasRangePlan(
+        {{3u,4u},{1u,2u},{2u,3u},{2u,4u}},
+        {9u,1u,9u,1u});
+    expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,3u,4u);
+  }
+
+  {
+    auto plan = aliasRangePlan({{1u},{2u},{3u}},{5u,7u,7u});
+    plan.resources[2].aliasable = false;
+    expect(plan,IOSFramePlanError::InvalidAliasGroupMember,0u,3u);
+  }
+  {
+    const auto plan = aliasRangePlan({{1u},{2u},{2u}},{5u,7u,7u});
+    expect(plan,IOSFramePlanError::SingletonAliasGroup,0u,2u);
+  }
+
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.resources[0].id = IOSResourceId{};
+    expect(plan,IOSFramePlanError::ResourceIdZero,0u,0u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.resources[1].lifetime = IOSResourceLifetime::Persistent;
+    expect(plan,IOSFramePlanError::InvalidAliasableResource,0u,2u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.passes.back().kind = IOSPassKind::Blit;
+    expect(plan,IOSFramePlanError::MissingPresent,0u,0u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.resources.push_back(
+        resource(3u,IOSResourceKind::Buffer,IOSResourceLifetime::Persistent,
+                 IOSInitialContent::Defined));
+    expect(plan,IOSFramePlanError::UnusedResource,0u,3u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.passes[0].uses[0].semantic = IOSUseSemantic::Read;
+    expect(plan,IOSFramePlanError::ReadBeforeWrite,1u,2u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.resources[0].initialContent = IOSInitialContent::Undefined;
+    expect(plan,IOSFramePlanError::PresentUndefined,2u,1u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.resources[1].layout.byteSize = 0u;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,2u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.resources[1].usage = IOSResourceUsage::ShaderRead;
+    expect(plan,IOSFramePlanError::MissingDeclaredUsage,1u,2u);
   }
   }
