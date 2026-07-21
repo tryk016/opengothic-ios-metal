@@ -145,6 +145,16 @@ bool valid(IOSStoreAction value) noexcept {
   return false;
   }
 
+bool valid(IOSAttachmentWriteMode value) noexcept {
+  switch(value) {
+    case IOSAttachmentWriteMode::NotApplicable:
+    case IOSAttachmentWriteMode::MayPreserve:
+    case IOSAttachmentWriteMode::FullOverwrite:
+      return true;
+    }
+  return false;
+  }
+
 const IOSResourceDesc* findResource(
     const std::vector<IOSResourceDesc>& resources,
     IOSResourceId id) noexcept {
@@ -426,6 +436,9 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
         return failure(IOSFramePlanError::UnknownLoadAction,pass.id,use.resource);
       if(!valid(use.store))
         return failure(IOSFramePlanError::UnknownStoreAction,pass.id,use.resource);
+      if(!valid(use.attachmentWriteMode))
+        return failure(IOSFramePlanError::UnknownAttachmentWriteMode,
+                       pass.id,use.resource);
       }
     }
 
@@ -461,8 +474,12 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
       if(!compatible(pass.kind,use.semantic))
         return failure(IOSFramePlanError::IncompatiblePassUse,
                        pass.id,use.resource);
-      if((use.semantic==IOSUseSemantic::RenderAttachment ||
-          use.semantic==IOSUseSemantic::PresentSource) &&
+      if(use.semantic==IOSUseSemantic::RenderAttachment &&
+         (resource->kind!=IOSResourceKind::Texture ||
+          resource->layout.mipLevels!=1u))
+        return failure(IOSFramePlanError::IncompatibleResourceUse,
+                       pass.id,use.resource);
+      if(use.semantic==IOSUseSemantic::PresentSource &&
          resource->kind!=IOSResourceKind::Texture)
         return failure(IOSFramePlanError::IncompatibleResourceUse,
                        pass.id,use.resource);
@@ -481,6 +498,17 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
       else if(use.load!=IOSLoadAction::NotApplicable ||
               use.store!=IOSStoreAction::NotApplicable)
         return failure(IOSFramePlanError::InvalidLoadStore,
+                       pass.id,use.resource);
+
+      if(attachment) {
+        if(use.attachmentWriteMode!=IOSAttachmentWriteMode::MayPreserve &&
+           use.attachmentWriteMode!=IOSAttachmentWriteMode::FullOverwrite)
+          return failure(IOSFramePlanError::InvalidAttachmentWriteMode,
+                         pass.id,use.resource);
+        }
+      else if(use.attachmentWriteMode!=
+                IOSAttachmentWriteMode::NotApplicable)
+        return failure(IOSFramePlanError::InvalidAttachmentWriteMode,
                        pass.id,use.resource);
 
       const IOSResourceUsage required = requiredUsage(pass.kind,use.semantic);
@@ -536,11 +564,24 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
                            : IOSFramePlanError::ReadBeforeWrite,
                          pass.id,resource.id);
           }
-        if(use.semantic==IOSUseSemantic::FullOverwrite ||
-           use.semantic==IOSUseSemantic::AccelerationStructureBuildOutput ||
-           (use.semantic==IOSUseSemantic::RenderAttachment &&
-            (use.load==IOSLoadAction::Clear ||
-             use.load==IOSLoadAction::Discard))) {
+        if(use.semantic==IOSUseSemantic::RenderAttachment) {
+          if(use.load==IOSLoadAction::Clear) {
+            defined = true;
+            discarded = false;
+            }
+          else if(use.load==IOSLoadAction::Discard) {
+            defined = false;
+            discarded = true;
+            }
+          if(use.attachmentWriteMode==
+               IOSAttachmentWriteMode::FullOverwrite) {
+            defined = true;
+            discarded = false;
+            }
+          }
+        else if(use.semantic==IOSUseSemantic::FullOverwrite ||
+                use.semantic==
+                  IOSUseSemantic::AccelerationStructureBuildOutput) {
           defined = true;
           discarded = false;
           }

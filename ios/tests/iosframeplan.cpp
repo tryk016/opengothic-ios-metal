@@ -62,8 +62,10 @@ IOSResourceUse use(
     uint32_t id,
     IOSUseSemantic semantic,
     IOSLoadAction load = IOSLoadAction::NotApplicable,
-    IOSStoreAction store = IOSStoreAction::NotApplicable) {
-  return {IOSResourceId{id},semantic,load,store};
+    IOSStoreAction store = IOSStoreAction::NotApplicable,
+    IOSAttachmentWriteMode attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable) {
+  return {IOSResourceId{id},semantic,load,store,attachmentWriteMode};
   }
 
 IOSPassDesc pass(uint32_t id, IOSPassKind kind,
@@ -82,9 +84,11 @@ IOSFramePlan validPlan() {
   plan.passes = {
     pass(1u,IOSPassKind::Render,{
       use(1u,IOSUseSemantic::RenderAttachment,
-          IOSLoadAction::Clear,IOSStoreAction::Store),
+          IOSLoadAction::Clear,IOSStoreAction::Store,
+          IOSAttachmentWriteMode::MayPreserve),
       use(2u,IOSUseSemantic::RenderAttachment,
-          IOSLoadAction::Discard,IOSStoreAction::Discard),
+          IOSLoadAction::Discard,IOSStoreAction::Discard,
+          IOSAttachmentWriteMode::MayPreserve),
       }),
     pass(2u,IOSPassKind::External,{
       use(1u,IOSUseSemantic::ReadWrite),
@@ -128,6 +132,8 @@ IOSFramePlan usagePlan(IOSPassKind kind, IOSUseSemantic semantic,
                       IOSResourceLifetime::Transient,
                       IOSInitialContent::Undefined);
     targetUse = use(3u,semantic,IOSLoadAction::Clear,IOSStoreAction::Store);
+    targetUse.attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
     }
   else if(semantic==IOSUseSemantic::AccelerationStructureBuildOutput) {
     target = resource(3u,IOSResourceKind::AccelerationStructure,
@@ -233,10 +239,39 @@ IOSFramePlan aliasRangePlan(
       resourcePasses,std::vector<uint32_t>(resourcePasses.size(),aliasGroup));
   }
 
+IOSFramePlan attachmentContentPlan(
+    IOSInitialContent initial,
+    IOSLoadAction load,
+    IOSAttachmentWriteMode attachmentWriteMode,
+    IOSStoreAction store) {
+  IOSFramePlan plan;
+  plan.resources = {
+    resource(1u,IOSResourceKind::Texture,IOSResourceLifetime::External,
+             IOSInitialContent::Defined),
+    resource(2u,IOSResourceKind::Texture,IOSResourceLifetime::Persistent,
+             initial),
+    };
+  plan.resources[1].usage = IOSResourceUsage::RenderAttachment |
+                            IOSResourceUsage::ExternalRead;
+  plan.passes = {
+    pass(1u,IOSPassKind::Render,{
+      use(2u,IOSUseSemantic::RenderAttachment,load,store,
+          attachmentWriteMode),
+      }),
+    pass(2u,IOSPassKind::External,{
+      use(2u,IOSUseSemantic::Read),
+      }),
+    pass(3u,IOSPassKind::Present,{
+      use(1u,IOSUseSemantic::PresentSource),
+      }),
+    };
+  return plan;
+  }
+
 }
 
 int main() {
-  static_assert(IOSFramePlanABIVersion==3u);
+  static_assert(IOSFramePlanABIVersion==4u);
   static_assert(sizeof(IOSResourceId)==sizeof(uint32_t));
   static_assert(sizeof(IOSPassId)==sizeof(uint32_t));
   static_assert(sizeof(IOSAliasGroupId)==sizeof(uint32_t));
@@ -244,6 +279,13 @@ int main() {
                                IOSAliasGroupId>);
   static_assert(offsetof(IOSResourceDesc,aliasGroup)>
                 offsetof(IOSResourceDesc,aliasable));
+  static_assert(std::is_same_v<
+      decltype(IOSResourceUse::attachmentWriteMode),
+      IOSAttachmentWriteMode>);
+  static_assert(offsetof(IOSResourceUse,attachmentWriteMode)>
+                offsetof(IOSResourceUse,store));
+  static_assert(IOSResourceUse{}.attachmentWriteMode==
+                IOSAttachmentWriteMode::NotApplicable);
   static_assert(IOSResourceId{7u}==IOSResourceId{7u});
   static_assert(IOSPassId{9u}==IOSPassId{9u});
   static_assert(IOSAliasGroupId{11u}==IOSAliasGroupId{11u});
@@ -302,6 +344,9 @@ int main() {
   IOS_ASSERT_ORDINAL(IOSStoreAction,NotApplicable,0u);
   IOS_ASSERT_ORDINAL(IOSStoreAction,Store,1u);
   IOS_ASSERT_ORDINAL(IOSStoreAction,Discard,2u);
+  IOS_ASSERT_ORDINAL(IOSAttachmentWriteMode,NotApplicable,0u);
+  IOS_ASSERT_ORDINAL(IOSAttachmentWriteMode,MayPreserve,1u);
+  IOS_ASSERT_ORDINAL(IOSAttachmentWriteMode,FullOverwrite,2u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,None,0u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,ResourceIdZero,1u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,DuplicateResourceId,2u);
@@ -349,6 +394,8 @@ int main() {
   IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidAliasGroupMember,44u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,SingletonAliasGroup,45u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,OverlappingAliasGroupUse,46u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,UnknownAttachmentWriteMode,47u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidAttachmentWriteMode,48u);
 #undef IOS_ASSERT_ORDINAL
 
   static_assert(static_cast<uint32_t>(IOSResourceUsage::None)==0u);
@@ -402,7 +449,8 @@ int main() {
                  IOSInitialContent::Undefined,false,true));
     plan.passes[0].uses.push_back(
         use(3u,IOSUseSemantic::RenderAttachment,
-            IOSLoadAction::Clear,IOSStoreAction::Discard));
+            IOSLoadAction::Clear,IOSStoreAction::Discard,
+            IOSAttachmentWriteMode::MayPreserve));
     plan.passes[1].uses.push_back(use(3u,IOSUseSemantic::FullOverwrite));
     plan.passes[2] = pass(3u,IOSPassKind::External,{
       use(3u,IOSUseSemantic::Read),
@@ -422,9 +470,58 @@ int main() {
                  IOSInitialContent::Undefined));
     plan.passes[0].uses.push_back(
         use(3u,IOSUseSemantic::RenderAttachment,
-            IOSLoadAction::Discard,IOSStoreAction::Store));
+            IOSLoadAction::Discard,IOSStoreAction::Store,
+            IOSAttachmentWriteMode::FullOverwrite));
     plan.passes[1].uses.push_back(use(3u,IOSUseSemantic::Read));
     expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    const IOSInitialContent initialContents[] = {
+      IOSInitialContent::Undefined,
+      IOSInitialContent::Defined,
+      };
+    const IOSLoadAction loads[] = {
+      IOSLoadAction::Clear,
+      IOSLoadAction::Discard,
+      IOSLoadAction::Load,
+      };
+    const IOSAttachmentWriteMode writeModes[] = {
+      IOSAttachmentWriteMode::MayPreserve,
+      IOSAttachmentWriteMode::FullOverwrite,
+      };
+    const IOSStoreAction stores[] = {
+      IOSStoreAction::Store,
+      IOSStoreAction::Discard,
+      };
+    for(const auto initial:initialContents) {
+      for(const auto load:loads) {
+        for(const auto writeMode:writeModes) {
+          for(const auto store:stores) {
+            const auto plan = attachmentContentPlan(
+                initial,load,writeMode,store);
+            if(initial==IOSInitialContent::Undefined &&
+               load==IOSLoadAction::Load) {
+              expect(plan,IOSFramePlanError::ReadBeforeWrite,1u,2u);
+              continue;
+              }
+
+            bool defined = initial==IOSInitialContent::Defined;
+            if(load==IOSLoadAction::Clear)
+              defined = true;
+            else if(load==IOSLoadAction::Discard)
+              defined = false;
+            if(writeMode==IOSAttachmentWriteMode::FullOverwrite)
+              defined = true;
+            if(store==IOSStoreAction::Discard)
+              defined = false;
+            expect(plan,defined ? IOSFramePlanError::None
+                                : IOSFramePlanError::ReadAfterDiscard,
+                   defined ? 0u : 2u,defined ? 0u : 2u);
+            }
+          }
+        }
+      }
   }
 
   {
@@ -444,9 +541,11 @@ int main() {
     plan.passes = {
       pass(1u,IOSPassKind::Render,{
         use(1u,IOSUseSemantic::RenderAttachment,
-            IOSLoadAction::Clear,IOSStoreAction::Store),
+            IOSLoadAction::Clear,IOSStoreAction::Store,
+            IOSAttachmentWriteMode::MayPreserve),
         use(2u,IOSUseSemantic::RenderAttachment,
-            IOSLoadAction::Discard,IOSStoreAction::Discard),
+            IOSLoadAction::Discard,IOSStoreAction::Discard,
+            IOSAttachmentWriteMode::MayPreserve),
         }),
       pass(2u,IOSPassKind::Compute,{
         use(3u,IOSUseSemantic::FullOverwrite),
@@ -629,6 +728,20 @@ int main() {
     expect(plan,IOSFramePlanError::None,0u,0u);
     plan.resources[2].layout.mipLevels = 3u;
     expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,3u);
+  }
+  {
+    auto plan = textureReadPlan(
+        IOSPixelFormat::Rgba8Unorm,
+        IOSResourceUsage::ShaderRead|IOSResourceUsage::RenderAttachment);
+    plan.resources[2].layout.mipLevels = 2u;
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+  {
+    auto plan = usagePlan(IOSPassKind::Render,
+                          IOSUseSemantic::RenderAttachment,
+                          IOSResourceUsage::RenderAttachment);
+    plan.resources[2].layout.mipLevels = 2u;
+    expect(plan,IOSFramePlanError::IncompatibleResourceUse,3u,3u);
   }
   {
     auto plan = usagePlan(IOSPassKind::External,IOSUseSemantic::Read,
@@ -1125,7 +1238,24 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[1].uses[0].semantic = static_cast<IOSUseSemantic>(255u);
     plan.passes[1].uses[0].load = static_cast<IOSLoadAction>(255u);
+    plan.passes[1].uses[0].store = static_cast<IOSStoreAction>(255u);
+    plan.passes[1].uses[0].attachmentWriteMode =
+        static_cast<IOSAttachmentWriteMode>(255u);
+    expect(plan,IOSFramePlanError::UnknownUseSemantic,2u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[1].uses[0].load = static_cast<IOSLoadAction>(255u);
+    expect(plan,IOSFramePlanError::UnknownLoadAction,2u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[1].uses[0].load = static_cast<IOSLoadAction>(255u);
+    plan.passes[1].uses[0].store = static_cast<IOSStoreAction>(255u);
+    plan.passes[1].uses[0].attachmentWriteMode =
+        static_cast<IOSAttachmentWriteMode>(255u);
     expect(plan,IOSFramePlanError::UnknownLoadAction,2u,1u);
   }
   {
@@ -1135,8 +1265,28 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[1].uses[0].store = static_cast<IOSStoreAction>(255u);
+    plan.passes[1].uses[0].attachmentWriteMode =
+        static_cast<IOSAttachmentWriteMode>(255u);
+    expect(plan,IOSFramePlanError::UnknownStoreAction,2u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[1].uses[0].attachmentWriteMode =
+        static_cast<IOSAttachmentWriteMode>(255u);
+    expect(plan,IOSFramePlanError::UnknownAttachmentWriteMode,2u,1u);
+  }
+  {
+    auto plan = validPlan();
     plan.passes[0].kind = IOSPassKind::Compute;
     expect(plan,IOSFramePlanError::IncompatiblePassUse,1u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[1].kind = IOSPassKind::Render;
+    plan.passes[1].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::IncompatiblePassUse,2u,1u);
   }
   {
     const IOSPassKind kinds[] = {
@@ -1165,6 +1315,15 @@ int main() {
     expect(plan,IOSFramePlanError::IncompatibleResourceUse,1u,1u);
   }
   {
+    auto plan = usagePlan(IOSPassKind::Render,
+                          IOSUseSemantic::RenderAttachment,
+                          IOSResourceUsage::RenderAttachment);
+    plan.resources[2].layout.mipLevels = 2u;
+    plan.passes[2].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
+    expect(plan,IOSFramePlanError::IncompatibleResourceUse,3u,3u);
+  }
+  {
     auto plan = validPlan();
     plan.passes[1].uses[0].load = IOSLoadAction::Load;
     expect(plan,IOSFramePlanError::InvalidLoadStore,2u,1u);
@@ -1177,17 +1336,53 @@ int main() {
   {
     auto plan = validPlan();
     plan.passes[0].uses[0].load = IOSLoadAction::NotApplicable;
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
     expect(plan,IOSFramePlanError::InvalidLoadStore,1u,1u);
   }
   {
     auto plan = validPlan();
     plan.passes[0].uses[0].store = IOSStoreAction::NotApplicable;
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
     expect(plan,IOSFramePlanError::InvalidLoadStore,1u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,1u);
+  }
+  {
+    const IOSAttachmentWriteMode invalidForRead[] = {
+      IOSAttachmentWriteMode::MayPreserve,
+      IOSAttachmentWriteMode::FullOverwrite,
+      };
+    for(const auto writeMode:invalidForRead) {
+      auto plan = validPlan();
+      plan.passes[1].uses[0].attachmentWriteMode = writeMode;
+      expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,2u,1u);
+      }
+  }
+  {
+    auto plan = usagePlan(IOSPassKind::Render,
+                          IOSUseSemantic::RenderAttachment,
+                          IOSResourceUsage::ShaderRead);
+    plan.passes[2].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,3u,3u);
   }
   {
     auto plan = validPlan();
     plan.passes[0].uses[0].load = IOSLoadAction::Load;
     expect(plan,IOSFramePlanError::ReadBeforeWrite,1u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[0].uses[0].load = IOSLoadAction::Load;
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,1u);
   }
   {
     auto plan = validPlan();
@@ -1214,6 +1409,13 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[0].uses[0].store = IOSStoreAction::Discard;
+    plan.passes[1].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,2u,1u);
+  }
+  {
+    auto plan = validPlan();
     plan.resources.push_back(
         resource(3u,IOSResourceKind::Buffer,IOSResourceLifetime::Persistent,
                  IOSInitialContent::Defined));
@@ -1225,9 +1427,40 @@ int main() {
     expect(plan,IOSFramePlanError::UnusedResource,0u,2u);
   }
   {
+    const IOSLoadAction loads[] = {
+      IOSLoadAction::Discard,
+      IOSLoadAction::Clear,
+      };
+    const IOSAttachmentWriteMode writeModes[] = {
+      IOSAttachmentWriteMode::MayPreserve,
+      IOSAttachmentWriteMode::FullOverwrite,
+      };
+    for(const auto load:loads) {
+      for(const auto writeMode:writeModes) {
+        auto plan = validPlan();
+        plan.passes[0].uses[1].load = load;
+        plan.passes[0].uses[1].attachmentWriteMode = writeMode;
+        expect(plan,IOSFramePlanError::None,0u,0u);
+        }
+      }
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[0].uses[1].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,2u);
+  }
+  {
     auto plan = validPlan();
     plan.passes[0].uses[1].store = IOSStoreAction::Store;
     expect(plan,IOSFramePlanError::InvalidMemorylessUse,1u,2u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[0].uses[1].store = IOSStoreAction::Store;
+    plan.passes[0].uses[1].attachmentWriteMode =
+        IOSAttachmentWriteMode::NotApplicable;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,2u);
   }
   {
     auto plan = validPlan();
@@ -1260,6 +1493,20 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[2].kind = IOSPassKind::Blit;
+    plan.passes[1].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::MissingPresent,0u,0u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[2].kind = IOSPassKind::Blit;
+    plan.passes[1].uses[0].attachmentWriteMode =
+        static_cast<IOSAttachmentWriteMode>(255u);
+    expect(plan,IOSFramePlanError::UnknownAttachmentWriteMode,2u,1u);
+  }
+  {
+    auto plan = validPlan();
     plan.passes.push_back(pass(4u,IOSPassKind::Present,{
       use(1u,IOSUseSemantic::PresentSource),
       }));
@@ -1267,6 +1514,24 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[1].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    plan.passes.push_back(pass(4u,IOSPassKind::Present,{
+      use(1u,IOSUseSemantic::PresentSource),
+      }));
+    expect(plan,IOSFramePlanError::MultiplePresent,4u,0u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes.push_back(pass(4u,IOSPassKind::External,{
+      use(1u,IOSUseSemantic::Read),
+      }));
+    expect(plan,IOSFramePlanError::PresentNotLast,3u,0u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[1].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
     plan.passes.push_back(pass(4u,IOSPassKind::External,{
       use(1u,IOSUseSemantic::Read),
       }));
@@ -1288,6 +1553,30 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[2].uses[0].semantic = IOSUseSemantic::Read;
+    plan.passes[2].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidPresentUse,3u,1u);
+  }
+  {
+    const IOSAttachmentWriteMode invalidForPresent[] = {
+      IOSAttachmentWriteMode::MayPreserve,
+      IOSAttachmentWriteMode::FullOverwrite,
+      };
+    for(const auto writeMode:invalidForPresent) {
+      auto plan = validPlan();
+      plan.passes[2].uses[0].attachmentWriteMode = writeMode;
+      expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,3u,1u);
+      }
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[2].uses[0].attachmentWriteMode =
+        static_cast<IOSAttachmentWriteMode>(255u);
+    expect(plan,IOSFramePlanError::UnknownAttachmentWriteMode,3u,1u);
+  }
+  {
+    auto plan = validPlan();
     plan.resources[0].lifetime = IOSResourceLifetime::Persistent;
     expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,1u);
   }
@@ -1301,12 +1590,33 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.resources[0].kind = IOSResourceKind::Buffer;
+    plan.resources[0].layout = {};
+    plan.resources[0].layout.byteSize = 4096u;
+    plan.resources[0].usage = IOSResourceUsage::ShaderRead;
+    plan.passes[2].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidPresentResource,3u,1u);
+  }
+  {
+    auto plan = validPlan();
     plan.resources.push_back(
         resource(3u,IOSResourceKind::Buffer,IOSResourceLifetime::Transient,
                  IOSInitialContent::Undefined));
     plan.passes[0].uses[0].store = IOSStoreAction::Discard;
     plan.passes[1].uses[0] = use(3u,IOSUseSemantic::FullOverwrite);
     expect(plan,IOSFramePlanError::PresentUndefined,3u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources.push_back(
+        resource(3u,IOSResourceKind::Buffer,IOSResourceLifetime::Transient,
+                 IOSInitialContent::Undefined));
+    plan.passes[0].uses[0].store = IOSStoreAction::Discard;
+    plan.passes[1].uses[0] = use(3u,IOSUseSemantic::FullOverwrite);
+    plan.passes[2].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,3u,1u);
   }
 
   {
@@ -1368,7 +1678,7 @@ int main() {
                IOSInitialContent::Undefined,false,true,91u),
       };
     plan.resources[1].layout = {
-      IOSPixelFormat::R16Float,{13u,7u},2u,1u,0u};
+      IOSPixelFormat::R16Float,{13u,7u},1u,1u,0u};
     plan.resources[1].usage = IOSResourceUsage::RenderAttachment;
     plan.resources[2].layout.byteSize =
         std::numeric_limits<uint64_t>::max();
@@ -1381,7 +1691,8 @@ int main() {
     plan.passes = {
       pass(1u,IOSPassKind::Render,{
         use(2u,IOSUseSemantic::RenderAttachment,
-            IOSLoadAction::Clear,IOSStoreAction::Store),
+            IOSLoadAction::Clear,IOSStoreAction::Store,
+            IOSAttachmentWriteMode::MayPreserve),
         }),
       pass(2u,IOSPassKind::Blit,{
         use(3u,IOSUseSemantic::FullOverwrite),
@@ -1405,12 +1716,31 @@ int main() {
     expect(plan,IOSFramePlanError::InvalidAliasGroupMember,0u,3u);
   }
   {
+    auto plan = aliasRangePlan({{1u},{2u}},9u);
+    plan.resources[2].aliasable = false;
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,2u);
+  }
+  {
     const auto plan = aliasRangePlan({{1u}},9u);
     expect(plan,IOSFramePlanError::SingletonAliasGroup,0u,2u);
   }
   {
+    auto plan = aliasRangePlan({{1u}},9u);
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,2u);
+  }
+  {
     const auto plan = aliasRangePlan({{1u},{1u}},9u);
     expect(plan,IOSFramePlanError::OverlappingAliasGroupUse,1u,3u);
+  }
+  {
+    auto plan = aliasRangePlan({{1u},{1u}},9u);
+    plan.passes[0].uses[0].attachmentWriteMode =
+        IOSAttachmentWriteMode::MayPreserve;
+    expect(plan,IOSFramePlanError::InvalidAttachmentWriteMode,1u,2u);
   }
   {
     const auto plan = aliasRangePlan({{1u,2u},{2u,3u}},9u);

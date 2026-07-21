@@ -151,7 +151,7 @@ jobs:
             -Ilib/Tempest/Engine/include -fsyntax-only \
             lib/Tempest/Tests/tests/metalapi_borrowed_handle_compile_test.cpp
 
-      - name: Verify neutral P2.2 frame plan
+      - name: Verify neutral P2.2d frame plan
         run: |
           set -euo pipefail
 
@@ -162,19 +162,19 @@ jobs:
           if grep -nF '\' \
               game/graphics/iosframeplan.h \
               game/graphics/iosframeplan.cpp; then
-            echo 'neutral P2.2c frame-plan contract uses forbidden line continuation'
+            echo 'neutral P2.2d frame-plan contract uses forbidden line continuation'
             exit 1
           fi
           if grep -nE '/\*|\*/' \
               game/graphics/iosframeplan.h \
               game/graphics/iosframeplan.cpp; then
-            echo 'neutral P2.2c frame-plan contract uses forbidden block comment'
+            echo 'neutral P2.2d frame-plan contract uses forbidden block comment'
             exit 1
           fi
           if LC_ALL=C grep -nE '[^[:blank:][:graph:]]' \
               game/graphics/iosframeplan.h \
               game/graphics/iosframeplan.cpp; then
-            echo 'neutral P2.2c frame-plan contract is not printable ASCII'
+            echo 'neutral P2.2d frame-plan contract is not printable ASCII'
             exit 1
           fi
 
@@ -195,7 +195,7 @@ jobs:
               'Tempest|Objective-C|MTL|Metal|CAMetalLayer|IOSMetalContext|IOSFrameGraph|allocator|Drawable|Swapchain|CommandBuffer|Encoder|Fence|WorldView|DrawCommands|Shaders|InventoryMenu|VideoWidget|QuartzCore|Foundation|UIKit|CoreFoundation|void[[:space:]]*\*|NativeHandle' \
               game/graphics/iosframeplan.h \
               game/graphics/iosframeplan.cpp; then
-            echo 'neutral P2.2c frame-plan contract leaks runtime or transport types'
+            echo 'neutral P2.2d frame-plan contract leaks runtime or transport types'
             exit 1
           fi
 

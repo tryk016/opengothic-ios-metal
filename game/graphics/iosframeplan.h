@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <vector>
 
-inline constexpr uint32_t IOSFramePlanABIVersion = 3u;
+inline constexpr uint32_t IOSFramePlanABIVersion = 4u;
 
-// P2.2c adds logical MAY-alias groups. Physical compatibility, storage,
-// heaps, hazards, caches and runtime capabilities stay out.
+// P2.2d makes full attachment writes explicit. Physical compatibility,
+// geometry, storage, heaps, hazards, caches and runtime capabilities stay out.
 
 struct IOSResourceId final {
   uint32_t value = 0u;
@@ -154,6 +154,14 @@ enum class IOSStoreAction : uint8_t {
   Discard       = 2,
   };
 
+// FullOverwrite guarantees every stored texel and sample independently of
+// prior content. Draw geometry alone does not establish that guarantee.
+enum class IOSAttachmentWriteMode : uint8_t {
+  NotApplicable = 0,
+  MayPreserve   = 1,
+  FullOverwrite = 2,
+  };
+
 struct IOSResourceDesc final {
   IOSResourceId       id;
   IOSResourceKind     kind = IOSResourceKind::Texture;
@@ -167,10 +175,12 @@ struct IOSResourceDesc final {
   };
 
 struct IOSResourceUse final {
-  IOSResourceId       resource;
-  IOSUseSemantic      semantic = IOSUseSemantic::Read;
-  IOSLoadAction       load = IOSLoadAction::NotApplicable;
-  IOSStoreAction      store = IOSStoreAction::NotApplicable;
+  IOSResourceId            resource;
+  IOSUseSemantic           semantic = IOSUseSemantic::Read;
+  IOSLoadAction            load = IOSLoadAction::NotApplicable;
+  IOSStoreAction           store = IOSStoreAction::NotApplicable;
+  IOSAttachmentWriteMode   attachmentWriteMode =
+      IOSAttachmentWriteMode::NotApplicable;
   };
 
 struct IOSPassDesc final {
@@ -227,6 +237,8 @@ enum class IOSFramePlanError : uint8_t {
   InvalidAliasGroupMember          = 44,
   SingletonAliasGroup              = 45,
   OverlappingAliasGroupUse         = 46,
+  UnknownAttachmentWriteMode       = 47,
+  InvalidAttachmentWriteMode       = 48,
   };
 
 struct IOSFramePlanValidation final {
