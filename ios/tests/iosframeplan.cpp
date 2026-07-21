@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -14,7 +15,43 @@ IOSResourceDesc resource(
     IOSInitialContent initial,
     bool memoryless = false,
     bool aliasable = false) {
-  return {IOSResourceId{id},kind,lifetime,initial,memoryless,aliasable};
+  IOSResourceDesc result;
+  result.id = IOSResourceId{id};
+  result.kind = kind;
+  result.lifetime = lifetime;
+  result.initialContent = initial;
+  result.memoryless = memoryless;
+  result.aliasable = aliasable;
+  if(kind==IOSResourceKind::Texture) {
+    result.layout = {IOSPixelFormat::Rgba8Unorm,{64u,64u},1u,1u,0u};
+    result.usage = memoryless
+                 ? IOSResourceUsage::RenderAttachment
+                 : IOSResourceUsage::ShaderRead |
+                   IOSResourceUsage::ShaderWrite |
+                   IOSResourceUsage::RenderAttachment |
+                   IOSResourceUsage::BlitSource |
+                   IOSResourceUsage::BlitDestination |
+                   IOSResourceUsage::ExternalRead |
+                   IOSResourceUsage::ExternalWrite;
+    if(!memoryless && lifetime==IOSResourceLifetime::External)
+      result.usage = result.usage|IOSResourceUsage::Present;
+    }
+  else if(kind==IOSResourceKind::Buffer) {
+    result.layout.byteSize = 4096u;
+    result.usage = IOSResourceUsage::ShaderRead |
+                   IOSResourceUsage::ShaderWrite |
+                   IOSResourceUsage::BlitSource |
+                   IOSResourceUsage::BlitDestination |
+                   IOSResourceUsage::ExternalRead |
+                   IOSResourceUsage::ExternalWrite |
+                   IOSResourceUsage::AccelerationStructureBuildInput;
+    }
+  else if(kind==IOSResourceKind::AccelerationStructure) {
+    result.usage = IOSResourceUsage::ExternalRead |
+                   IOSResourceUsage::AccelerationStructureBuildInput |
+                   IOSResourceUsage::AccelerationStructureBuildOutput;
+    }
+  return result;
   }
 
 IOSResourceUse use(
@@ -57,10 +94,12 @@ IOSFramePlan validPlan() {
 
 void expect(const IOSFramePlan& plan, IOSFramePlanError error,
             uint32_t passId, uint32_t resourceId) {
+  static uint32_t call = 0u;
+  ++call;
   const auto result = plan.validate();
   if(result.error!=error || result.pass.value!=passId ||
      result.resource.value!=resourceId)
-    std::fprintf(stderr,"expected %u/%u/%u, got %u/%u/%u\n",
+    std::fprintf(stderr,"call %u expected %u/%u/%u, got %u/%u/%u\n",call,
                  static_cast<unsigned>(error),passId,resourceId,
                  static_cast<unsigned>(result.error),result.pass.value,
                  result.resource.value);
@@ -69,10 +108,75 @@ void expect(const IOSFramePlan& plan, IOSFramePlanError error,
   assert(result.resource.value==resourceId);
   }
 
+IOSResourceUsage withoutUsage(IOSResourceUsage value,
+                              IOSResourceUsage removed) {
+  return static_cast<IOSResourceUsage>(
+      static_cast<uint32_t>(value)&~static_cast<uint32_t>(removed));
+  }
+
+IOSFramePlan usagePlan(IOSPassKind kind, IOSUseSemantic semantic,
+                       IOSResourceUsage declared) {
+  auto plan = validPlan();
+  IOSResourceDesc target;
+  IOSResourceUse targetUse;
+  if(semantic==IOSUseSemantic::RenderAttachment) {
+    target = resource(3u,IOSResourceKind::Texture,
+                      IOSResourceLifetime::Transient,
+                      IOSInitialContent::Undefined);
+    targetUse = use(3u,semantic,IOSLoadAction::Clear,IOSStoreAction::Store);
+    }
+  else if(semantic==IOSUseSemantic::AccelerationStructureBuildOutput) {
+    target = resource(3u,IOSResourceKind::AccelerationStructure,
+                      IOSResourceLifetime::Transient,
+                      IOSInitialContent::Undefined);
+    targetUse = use(3u,semantic);
+    }
+  else {
+    target = resource(3u,IOSResourceKind::Buffer,
+                      IOSResourceLifetime::Persistent,
+                      IOSInitialContent::Defined);
+    targetUse = use(3u,semantic);
+    }
+  target.usage = declared;
+  plan.resources.push_back(target);
+  plan.passes[2].id = IOSPassId{4u};
+  plan.passes.insert(plan.passes.begin()+2,pass(3u,kind,{targetUse}));
+  return plan;
+  }
+
+IOSFramePlan textureReadPlan(IOSPixelFormat format,
+                             IOSResourceUsage usage) {
+  auto plan = validPlan();
+  auto texture = resource(3u,IOSResourceKind::Texture,
+                          IOSResourceLifetime::Persistent,
+                          IOSInitialContent::Defined);
+  texture.layout.format = format;
+  texture.usage = usage;
+  plan.resources.push_back(texture);
+  plan.passes[0].uses.push_back(use(3u,IOSUseSemantic::Read));
+  return plan;
+  }
+
+IOSFramePlan textureBlitPlan(IOSPixelFormat format,
+                             IOSResourceUsage usage) {
+  auto plan = validPlan();
+  auto texture = resource(3u,IOSResourceKind::Texture,
+                          IOSResourceLifetime::Persistent,
+                          IOSInitialContent::Defined);
+  texture.layout.format = format;
+  texture.usage = usage;
+  plan.resources.push_back(texture);
+  plan.passes[2].id = IOSPassId{4u};
+  plan.passes.insert(plan.passes.begin()+2,pass(3u,IOSPassKind::Blit,{
+    use(3u,IOSUseSemantic::ReadWrite),
+    }));
+  return plan;
+  }
+
 }
 
 int main() {
-  static_assert(IOSFramePlanABIVersion==1u);
+  static_assert(IOSFramePlanABIVersion==2u);
   static_assert(sizeof(IOSResourceId)==sizeof(uint32_t));
   static_assert(sizeof(IOSPassId)==sizeof(uint32_t));
   static_assert(IOSResourceId{7u}==IOSResourceId{7u});
@@ -92,6 +196,22 @@ int main() {
   IOS_ASSERT_ORDINAL(IOSResourceLifetime,Transient,3u);
   IOS_ASSERT_ORDINAL(IOSInitialContent,Undefined,0u);
   IOS_ASSERT_ORDINAL(IOSInitialContent,Defined,1u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Undefined,0u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,R8Unorm,1u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,R16Float,2u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,R32Float,3u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,R32Uint,4u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Rg16Float,5u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Rg32Uint,6u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Rgba8Unorm,7u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Bgra8Unorm,8u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Rg11B10Float,9u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Rgba16Float,10u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Depth16Unorm,11u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Depth32Float,12u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Bc1Rgba,13u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Bc2Rgba,14u);
+  IOS_ASSERT_ORDINAL(IOSPixelFormat,Bc3Rgba,15u);
   IOS_ASSERT_ORDINAL(IOSPassKind,Render,0u);
   IOS_ASSERT_ORDINAL(IOSPassKind,Compute,1u);
   IOS_ASSERT_ORDINAL(IOSPassKind,Blit,2u);
@@ -146,7 +266,30 @@ int main() {
   IOS_ASSERT_ORDINAL(IOSFramePlanError,ReadBeforeWrite,32u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,ReadAfterDiscard,33u);
   IOS_ASSERT_ORDINAL(IOSFramePlanError,PresentUndefined,34u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,UnknownFormat,35u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,EmptyUsage,36u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,UnknownUsage,37u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidTextureLayout,38u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidBufferLayout,39u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidAccelerationStructureLayout,40u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,IncompatibleFormatUsage,41u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,InvalidMultisample,42u);
+  IOS_ASSERT_ORDINAL(IOSFramePlanError,MissingDeclaredUsage,43u);
 #undef IOS_ASSERT_ORDINAL
+
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::None)==0u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::ShaderRead)==1u<<0u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::ShaderWrite)==1u<<1u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::RenderAttachment)==1u<<2u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::BlitSource)==1u<<3u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::BlitDestination)==1u<<4u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::Present)==1u<<5u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::ExternalRead)==1u<<6u);
+  static_assert(static_cast<uint32_t>(IOSResourceUsage::ExternalWrite)==1u<<7u);
+  static_assert(static_cast<uint32_t>(
+      IOSResourceUsage::AccelerationStructureBuildInput)==1u<<8u);
+  static_assert(static_cast<uint32_t>(
+      IOSResourceUsage::AccelerationStructureBuildOutput)==1u<<9u);
 
   const auto valid = validPlan();
   expect(valid,IOSFramePlanError::None,0u,0u);
@@ -253,6 +396,521 @@ int main() {
         }),
       };
     expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    const IOSPixelFormat formats[] = {
+      IOSPixelFormat::R8Unorm,
+      IOSPixelFormat::R16Float,
+      IOSPixelFormat::R32Float,
+      IOSPixelFormat::R32Uint,
+      IOSPixelFormat::Rg16Float,
+      IOSPixelFormat::Rg32Uint,
+      IOSPixelFormat::Rgba8Unorm,
+      IOSPixelFormat::Bgra8Unorm,
+      IOSPixelFormat::Rg11B10Float,
+      IOSPixelFormat::Rgba16Float,
+      };
+    for(const auto format:formats) {
+      auto plan = validPlan();
+      plan.resources[0].layout.format = format;
+      expect(plan,IOSFramePlanError::None,0u,0u);
+      }
+  }
+
+  {
+    const uint32_t samples[] = {1u,2u,4u,8u};
+    for(const uint32_t sampleCount:samples) {
+      auto plan = usagePlan(IOSPassKind::Render,
+                            IOSUseSemantic::RenderAttachment,
+                            IOSResourceUsage::RenderAttachment);
+      plan.resources[2].layout.sampleCount = sampleCount;
+      expect(plan,IOSFramePlanError::None,0u,0u);
+      }
+  }
+
+  {
+    const IOSPixelFormat depths[] = {
+      IOSPixelFormat::Depth16Unorm,
+      IOSPixelFormat::Depth32Float,
+      };
+    for(const auto format:depths) {
+      auto plan = usagePlan(IOSPassKind::Render,
+                            IOSUseSemantic::RenderAttachment,
+                            IOSResourceUsage::RenderAttachment);
+      plan.resources[2].layout.format = format;
+      expect(plan,IOSFramePlanError::None,0u,0u);
+      }
+  }
+
+  {
+    const IOSPixelFormat compressed[] = {
+      IOSPixelFormat::Bc1Rgba,
+      IOSPixelFormat::Bc2Rgba,
+      IOSPixelFormat::Bc3Rgba,
+      };
+    for(const auto format:compressed) {
+      const auto plan = textureReadPlan(format,IOSResourceUsage::ShaderRead);
+      expect(plan,IOSFramePlanError::None,0u,0u);
+      }
+  }
+
+  {
+    const IOSPixelFormat compressed[] = {
+      IOSPixelFormat::Bc1Rgba,
+      IOSPixelFormat::Bc2Rgba,
+      IOSPixelFormat::Bc3Rgba,
+      };
+    for(const auto format:compressed) {
+      const auto plan = textureBlitPlan(
+          format,IOSResourceUsage::BlitSource |
+                 IOSResourceUsage::BlitDestination);
+      expect(plan,IOSFramePlanError::None,0u,0u);
+      }
+  }
+
+  {
+    const IOSPixelFormat depths[] = {
+      IOSPixelFormat::Depth16Unorm,
+      IOSPixelFormat::Depth32Float,
+      };
+    for(const auto format:depths) {
+      auto plan = textureBlitPlan(
+          format,IOSResourceUsage::ShaderRead |
+                 IOSResourceUsage::BlitSource |
+                 IOSResourceUsage::BlitDestination);
+      plan.passes[0].uses.push_back(use(3u,IOSUseSemantic::Read));
+      expect(plan,IOSFramePlanError::None,0u,0u);
+      }
+  }
+
+  {
+    auto plan = usagePlan(
+        IOSPassKind::Render,IOSUseSemantic::RenderAttachment,
+        IOSResourceUsage::RenderAttachment|IOSResourceUsage::ShaderRead);
+    plan.resources[2].layout.sampleCount = 4u;
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    auto plan = usagePlan(
+        IOSPassKind::Render,IOSUseSemantic::RenderAttachment,
+        IOSResourceUsage::RenderAttachment|IOSResourceUsage::BlitSource);
+    plan.resources[2].layout.sampleCount = 2u;
+    plan.passes[3].id = IOSPassId{5u};
+    plan.passes.insert(plan.passes.begin()+3,pass(4u,IOSPassKind::Blit,{
+      use(3u,IOSUseSemantic::Read),
+      }));
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    const IOSResourceUsage forbidden[] = {
+      IOSResourceUsage::RenderAttachment|IOSResourceUsage::ShaderWrite,
+      IOSResourceUsage::RenderAttachment|IOSResourceUsage::ShaderRead|
+        IOSResourceUsage::ShaderWrite,
+      };
+    for(const auto usage:forbidden) {
+      auto plan = usagePlan(
+          IOSPassKind::Render,IOSUseSemantic::RenderAttachment,usage);
+      plan.resources[2].layout.sampleCount = 2u;
+      expect(plan,IOSFramePlanError::InvalidMultisample,0u,3u);
+      }
+  }
+
+  {
+    auto plan = usagePlan(
+        IOSPassKind::AccelerationStructureBuild,IOSUseSemantic::Read,
+        IOSResourceUsage::ExternalRead |
+        IOSResourceUsage::AccelerationStructureBuildInput);
+    plan.resources[2].layout.byteSize = 1u;
+    plan.passes[1].uses.push_back(use(3u,IOSUseSemantic::Read));
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    auto plan = usagePlan(
+        IOSPassKind::Compute,IOSUseSemantic::Read,
+        IOSResourceUsage::ShaderRead);
+    plan.resources[2].kind = IOSResourceKind::AccelerationStructure;
+    plan.resources[2].layout = {};
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    auto plan = textureReadPlan(
+        IOSPixelFormat::Rgba8Unorm,IOSResourceUsage::ShaderRead);
+    plan.resources[2].layout.extent = {
+      std::numeric_limits<uint32_t>::max(),1u};
+    plan.resources[2].layout.mipLevels = 32u;
+    expect(plan,IOSFramePlanError::None,0u,0u);
+    plan.resources[2].layout.mipLevels = 33u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,3u);
+  }
+  {
+    auto plan = textureReadPlan(
+        IOSPixelFormat::Rgba8Unorm,IOSResourceUsage::ShaderRead);
+    plan.resources[2].layout.extent = {3u,1u};
+    plan.resources[2].layout.mipLevels = 2u;
+    expect(plan,IOSFramePlanError::None,0u,0u);
+    plan.resources[2].layout.mipLevels = 3u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,3u);
+  }
+  {
+    auto plan = usagePlan(IOSPassKind::External,IOSUseSemantic::Read,
+                          IOSResourceUsage::ExternalRead);
+    plan.resources[2].layout.byteSize =
+        std::numeric_limits<uint64_t>::max();
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  struct UsageCase final {
+    IOSPassKind passKind;
+    IOSUseSemantic semantic;
+    IOSResourceUsage required;
+    };
+  const UsageCase usageCases[] = {
+    {IOSPassKind::Render,IOSUseSemantic::Read,
+     IOSResourceUsage::ShaderRead},
+    {IOSPassKind::Render,IOSUseSemantic::RenderAttachment,
+     IOSResourceUsage::RenderAttachment},
+    {IOSPassKind::Compute,IOSUseSemantic::Read,
+     IOSResourceUsage::ShaderRead},
+    {IOSPassKind::Compute,IOSUseSemantic::FullOverwrite,
+     IOSResourceUsage::ShaderWrite},
+    {IOSPassKind::Compute,IOSUseSemantic::ReadWrite,
+     IOSResourceUsage::ShaderRead|IOSResourceUsage::ShaderWrite},
+    {IOSPassKind::Blit,IOSUseSemantic::Read,
+     IOSResourceUsage::BlitSource},
+    {IOSPassKind::Blit,IOSUseSemantic::FullOverwrite,
+     IOSResourceUsage::BlitDestination},
+    {IOSPassKind::Blit,IOSUseSemantic::ReadWrite,
+     IOSResourceUsage::BlitSource|IOSResourceUsage::BlitDestination},
+    {IOSPassKind::External,IOSUseSemantic::Read,
+     IOSResourceUsage::ExternalRead},
+    {IOSPassKind::External,IOSUseSemantic::FullOverwrite,
+     IOSResourceUsage::ExternalWrite},
+    {IOSPassKind::External,IOSUseSemantic::ReadWrite,
+     IOSResourceUsage::ExternalRead|IOSResourceUsage::ExternalWrite},
+    {IOSPassKind::AccelerationStructureBuild,IOSUseSemantic::Read,
+     IOSResourceUsage::AccelerationStructureBuildInput},
+    {IOSPassKind::AccelerationStructureBuild,
+     IOSUseSemantic::AccelerationStructureBuildOutput,
+     IOSResourceUsage::AccelerationStructureBuildOutput},
+    };
+  const IOSResourceUsage usageBits[] = {
+    IOSResourceUsage::ShaderRead,
+    IOSResourceUsage::ShaderWrite,
+    IOSResourceUsage::RenderAttachment,
+    IOSResourceUsage::BlitSource,
+    IOSResourceUsage::BlitDestination,
+    IOSResourceUsage::ExternalRead,
+    IOSResourceUsage::ExternalWrite,
+    IOSResourceUsage::AccelerationStructureBuildInput,
+    IOSResourceUsage::AccelerationStructureBuildOutput,
+    };
+  for(const auto& item:usageCases) {
+    const auto accepted = usagePlan(item.passKind,item.semantic,item.required);
+    expect(accepted,IOSFramePlanError::None,0u,0u);
+    for(const auto bit:usageBits) {
+      if(!iosHasUsage(item.required,bit))
+        continue;
+      auto declared = withoutUsage(item.required,bit);
+      if(declared==IOSResourceUsage::None) {
+        if(item.semantic==IOSUseSemantic::RenderAttachment)
+          declared = IOSResourceUsage::ShaderRead;
+        else if(item.semantic==
+                  IOSUseSemantic::AccelerationStructureBuildOutput)
+          declared = IOSResourceUsage::ExternalRead;
+        else
+          declared = IOSResourceUsage::ShaderRead==bit
+                   ? IOSResourceUsage::ExternalRead
+                   : IOSResourceUsage::ShaderRead;
+        }
+      const auto missing = usagePlan(item.passKind,item.semantic,declared);
+      expect(missing,IOSFramePlanError::MissingDeclaredUsage,3u,3u);
+      }
+  }
+
+  {
+    auto plan = validPlan();
+    plan.resources[0].usage = withoutUsage(
+        plan.resources[0].usage,IOSResourceUsage::Present);
+    expect(plan,IOSFramePlanError::MissingDeclaredUsage,3u,1u);
+  }
+  {
+    const IOSResourceUsage allKnown =
+        IOSResourceUsage::ShaderRead |
+        IOSResourceUsage::ShaderWrite |
+        IOSResourceUsage::BlitSource |
+        IOSResourceUsage::BlitDestination |
+        IOSResourceUsage::ExternalRead |
+        IOSResourceUsage::ExternalWrite |
+        IOSResourceUsage::AccelerationStructureBuildInput;
+    const auto plan = usagePlan(
+        IOSPassKind::Compute,IOSUseSemantic::ReadWrite,allKnown);
+    expect(plan,IOSFramePlanError::None,0u,0u);
+  }
+
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.format = static_cast<IOSPixelFormat>(255u);
+    expect(plan,IOSFramePlanError::UnknownFormat,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].usage = IOSResourceUsage::None;
+    expect(plan,IOSFramePlanError::EmptyUsage,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].usage = static_cast<IOSResourceUsage>(1u<<10u);
+    expect(plan,IOSFramePlanError::UnknownUsage,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].usage = static_cast<IOSResourceUsage>(1u<<31u);
+    expect(plan,IOSFramePlanError::UnknownUsage,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].usage = static_cast<IOSResourceUsage>(
+        static_cast<uint32_t>(plan.resources[0].usage)|(1u<<31u));
+    expect(plan,IOSFramePlanError::UnknownUsage,0u,1u);
+  }
+
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout = {};
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.format = IOSPixelFormat::Undefined;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.extent.width = 0u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.extent.height = 0u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.mipLevels = 0u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.mipLevels = 8u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.byteSize = 1u;
+    expect(plan,IOSFramePlanError::InvalidTextureLayout,0u,1u);
+  }
+
+  {
+    const uint32_t invalidSamples[] = {0u,3u,16u};
+    for(const uint32_t sampleCount:invalidSamples) {
+      auto plan = validPlan();
+      plan.resources[0].layout.sampleCount = sampleCount;
+      expect(plan,IOSFramePlanError::InvalidMultisample,0u,1u);
+      }
+  }
+  {
+    auto plan = usagePlan(IOSPassKind::Render,
+                          IOSUseSemantic::RenderAttachment,
+                          IOSResourceUsage::RenderAttachment);
+    plan.resources[2].layout.sampleCount = 2u;
+    plan.resources[2].layout.mipLevels = 2u;
+    expect(plan,IOSFramePlanError::InvalidMultisample,0u,3u);
+  }
+  {
+    auto plan = usagePlan(IOSPassKind::Render,
+                          IOSUseSemantic::RenderAttachment,
+                          IOSResourceUsage::ShaderRead);
+    plan.resources[2].layout.sampleCount = 2u;
+    expect(plan,IOSFramePlanError::InvalidMultisample,0u,3u);
+  }
+  {
+    auto plan = usagePlan(
+        IOSPassKind::Render,IOSUseSemantic::RenderAttachment,
+        IOSResourceUsage::RenderAttachment|IOSResourceUsage::Present);
+    plan.resources[2].layout.sampleCount = 2u;
+    expect(plan,IOSFramePlanError::InvalidMultisample,0u,3u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.mipLevels = 2u;
+    expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,1u);
+  }
+
+  {
+    const IOSPixelFormat compressed[] = {
+      IOSPixelFormat::Bc1Rgba,
+      IOSPixelFormat::Bc2Rgba,
+      IOSPixelFormat::Bc3Rgba,
+      };
+    const IOSResourceUsage forbidden[] = {
+      IOSResourceUsage::RenderAttachment,
+      IOSResourceUsage::ShaderWrite,
+      IOSResourceUsage::Present,
+      };
+    for(const auto format:compressed) {
+      for(const auto bit:forbidden) {
+        auto plan = textureReadPlan(
+            format,IOSResourceUsage::ShaderRead|bit);
+        expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,3u);
+        }
+      auto plan = textureReadPlan(format,IOSResourceUsage::ShaderRead);
+      plan.resources[2].layout.sampleCount = 2u;
+      expect(plan,IOSFramePlanError::InvalidMultisample,0u,3u);
+      }
+  }
+
+  {
+    const IOSPixelFormat depths[] = {
+      IOSPixelFormat::Depth16Unorm,
+      IOSPixelFormat::Depth32Float,
+      };
+    const IOSResourceUsage forbidden[] = {
+      IOSResourceUsage::ShaderWrite,
+      IOSResourceUsage::Present,
+      };
+    for(const auto format:depths) {
+      for(const auto bit:forbidden) {
+        auto plan = usagePlan(
+            IOSPassKind::Render,IOSUseSemantic::RenderAttachment,
+            IOSResourceUsage::RenderAttachment|bit);
+        plan.resources[2].layout.format = format;
+        expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,3u);
+        }
+      }
+  }
+
+  {
+    auto plan = validPlan();
+    plan.resources[1].usage = IOSResourceUsage::RenderAttachment |
+                              IOSResourceUsage::ShaderRead;
+    expect(plan,IOSFramePlanError::InvalidMemorylessResource,0u,2u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[1].layout.mipLevels = 2u;
+    expect(plan,IOSFramePlanError::InvalidMemorylessResource,0u,2u);
+  }
+
+  {
+    const IOSResourceUsage forbidden[] = {
+      IOSResourceUsage::AccelerationStructureBuildInput,
+      IOSResourceUsage::AccelerationStructureBuildOutput,
+      };
+    for(const auto bit:forbidden) {
+      auto plan = validPlan();
+      plan.resources[0].usage = plan.resources[0].usage|bit;
+      expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,1u);
+      }
+  }
+
+  {
+    const IOSResourceUsage forbidden[] = {
+      IOSResourceUsage::RenderAttachment,
+      IOSResourceUsage::Present,
+      IOSResourceUsage::AccelerationStructureBuildOutput,
+      };
+    for(const auto bit:forbidden) {
+      auto plan = usagePlan(IOSPassKind::External,IOSUseSemantic::Read,
+                            IOSResourceUsage::ExternalRead|bit);
+      expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,3u);
+      }
+  }
+
+  {
+    const IOSResourceUsage forbidden[] = {
+      IOSResourceUsage::ShaderWrite,
+      IOSResourceUsage::RenderAttachment,
+      IOSResourceUsage::BlitSource,
+      IOSResourceUsage::BlitDestination,
+      IOSResourceUsage::Present,
+      };
+    for(const auto bit:forbidden) {
+      auto plan = usagePlan(
+          IOSPassKind::AccelerationStructureBuild,
+          IOSUseSemantic::AccelerationStructureBuildOutput,
+          IOSResourceUsage::AccelerationStructureBuildOutput|bit);
+      expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,3u);
+      }
+  }
+
+  {
+    auto plan = validPlan();
+    plan.resources[0].layout.sampleCount = 2u;
+    expect(plan,IOSFramePlanError::InvalidMultisample,0u,1u);
+  }
+
+  {
+    auto plan = validPlan();
+    plan.resources[0].lifetime = IOSResourceLifetime::Persistent;
+    expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,1u);
+  }
+  {
+    auto plan = validPlan();
+    plan.resources[0].lifetime = IOSResourceLifetime::Transient;
+    expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,1u);
+  }
+
+  {
+    auto base = usagePlan(IOSPassKind::External,IOSUseSemantic::Read,
+                          IOSResourceUsage::ExternalRead);
+    auto plan = base;
+    plan.resources[2].layout.format = IOSPixelFormat::R8Unorm;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.extent.width = 1u;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.extent.height = 1u;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.mipLevels = 1u;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.sampleCount = 1u;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.byteSize = 0u;
+    expect(plan,IOSFramePlanError::InvalidBufferLayout,0u,3u);
+  }
+
+  {
+    auto base = usagePlan(
+        IOSPassKind::AccelerationStructureBuild,
+        IOSUseSemantic::AccelerationStructureBuildOutput,
+        IOSResourceUsage::AccelerationStructureBuildOutput);
+    auto plan = base;
+    plan.resources[2].layout.format = IOSPixelFormat::R8Unorm;
+    expect(plan,IOSFramePlanError::InvalidAccelerationStructureLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.extent.width = 1u;
+    expect(plan,IOSFramePlanError::InvalidAccelerationStructureLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.extent.height = 1u;
+    expect(plan,IOSFramePlanError::InvalidAccelerationStructureLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.mipLevels = 1u;
+    expect(plan,IOSFramePlanError::InvalidAccelerationStructureLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.sampleCount = 1u;
+    expect(plan,IOSFramePlanError::InvalidAccelerationStructureLayout,0u,3u);
+    plan = base;
+    plan.resources[2].layout.byteSize = 1u;
+    expect(plan,IOSFramePlanError::InvalidAccelerationStructureLayout,0u,3u);
   }
 
   {
@@ -425,6 +1083,9 @@ int main() {
         resource(3u,IOSResourceKind::Texture,IOSResourceLifetime::External,
                  IOSInitialContent::Defined));
     plan.resources[0].kind = IOSResourceKind::Buffer;
+    plan.resources[0].layout = {};
+    plan.resources[0].layout.byteSize = 4096u;
+    plan.resources[0].usage = IOSResourceUsage::ShaderRead;
     plan.passes[1].uses.push_back(use(3u,IOSUseSemantic::Read));
     plan.passes[2].uses[0].resource = IOSResourceId{3u};
     expect(plan,IOSFramePlanError::IncompatibleResourceUse,1u,1u);
@@ -486,8 +1147,26 @@ int main() {
   }
   {
     auto plan = validPlan();
+    plan.passes[0].uses.erase(plan.passes[0].uses.begin()+1);
+    expect(plan,IOSFramePlanError::UnusedResource,0u,2u);
+  }
+  {
+    auto plan = validPlan();
     plan.passes[0].uses[1].store = IOSStoreAction::Store;
     expect(plan,IOSFramePlanError::InvalidMemorylessUse,1u,2u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[0].uses[1] = use(2u,IOSUseSemantic::FullOverwrite);
+    expect(plan,IOSFramePlanError::IncompatiblePassUse,1u,2u);
+  }
+  {
+    auto plan = validPlan();
+    plan.passes[0].uses.erase(plan.passes[0].uses.begin());
+    plan.passes[0].kind = IOSPassKind::AccelerationStructureBuild;
+    plan.passes[0].uses[0] = use(
+        2u,IOSUseSemantic::AccelerationStructureBuildOutput);
+    expect(plan,IOSFramePlanError::IncompatibleResourceUse,1u,2u);
   }
   {
     auto plan = validPlan();
@@ -536,11 +1215,14 @@ int main() {
   {
     auto plan = validPlan();
     plan.resources[0].lifetime = IOSResourceLifetime::Persistent;
-    expect(plan,IOSFramePlanError::InvalidPresentResource,3u,1u);
+    expect(plan,IOSFramePlanError::IncompatibleFormatUsage,0u,1u);
   }
   {
     auto plan = validPlan();
     plan.resources[0].kind = IOSResourceKind::Buffer;
+    plan.resources[0].layout = {};
+    plan.resources[0].layout.byteSize = 4096u;
+    plan.resources[0].usage = IOSResourceUsage::ShaderRead;
     expect(plan,IOSFramePlanError::InvalidPresentResource,3u,1u);
   }
   {

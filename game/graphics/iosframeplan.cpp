@@ -40,6 +40,64 @@ bool valid(IOSInitialContent value) noexcept {
   return false;
   }
 
+bool valid(IOSPixelFormat value) noexcept {
+  switch(value) {
+    case IOSPixelFormat::Undefined:
+    case IOSPixelFormat::R8Unorm:
+    case IOSPixelFormat::R16Float:
+    case IOSPixelFormat::R32Float:
+    case IOSPixelFormat::R32Uint:
+    case IOSPixelFormat::Rg16Float:
+    case IOSPixelFormat::Rg32Uint:
+    case IOSPixelFormat::Rgba8Unorm:
+    case IOSPixelFormat::Bgra8Unorm:
+    case IOSPixelFormat::Rg11B10Float:
+    case IOSPixelFormat::Rgba16Float:
+    case IOSPixelFormat::Depth16Unorm:
+    case IOSPixelFormat::Depth32Float:
+    case IOSPixelFormat::Bc1Rgba:
+    case IOSPixelFormat::Bc2Rgba:
+    case IOSPixelFormat::Bc3Rgba:
+      return true;
+    }
+  return false;
+  }
+
+bool isBlockCompressed(IOSPixelFormat value) noexcept {
+  return value==IOSPixelFormat::Bc1Rgba ||
+         value==IOSPixelFormat::Bc2Rgba ||
+         value==IOSPixelFormat::Bc3Rgba;
+  }
+
+bool isDepth(IOSPixelFormat value) noexcept {
+  return value==IOSPixelFormat::Depth16Unorm ||
+         value==IOSPixelFormat::Depth32Float;
+  }
+
+uint32_t maximumMipLevels(IOSExtent2D extent) noexcept {
+  uint32_t maximum = extent.width>extent.height
+                   ? extent.width
+                   : extent.height;
+  uint32_t levels = 0u;
+  while(maximum!=0u) {
+    ++levels;
+    maximum /= 2u;
+    }
+  return levels;
+  }
+
+constexpr uint32_t knownUsageMask =
+    static_cast<uint32_t>(IOSResourceUsage::ShaderRead) |
+    static_cast<uint32_t>(IOSResourceUsage::ShaderWrite) |
+    static_cast<uint32_t>(IOSResourceUsage::RenderAttachment) |
+    static_cast<uint32_t>(IOSResourceUsage::BlitSource) |
+    static_cast<uint32_t>(IOSResourceUsage::BlitDestination) |
+    static_cast<uint32_t>(IOSResourceUsage::Present) |
+    static_cast<uint32_t>(IOSResourceUsage::ExternalRead) |
+    static_cast<uint32_t>(IOSResourceUsage::ExternalWrite) |
+    static_cast<uint32_t>(IOSResourceUsage::AccelerationStructureBuildInput) |
+    static_cast<uint32_t>(IOSResourceUsage::AccelerationStructureBuildOutput);
+
 bool valid(IOSPassKind value) noexcept {
   switch(value) {
     case IOSPassKind::Render:
@@ -116,6 +174,55 @@ bool compatible(IOSPassKind pass, IOSUseSemantic use) noexcept {
   return false;
   }
 
+IOSResourceUsage requiredUsage(IOSPassKind pass,
+                               IOSUseSemantic use) noexcept {
+  switch(pass) {
+    case IOSPassKind::Render:
+      if(use==IOSUseSemantic::Read)
+        return IOSResourceUsage::ShaderRead;
+      if(use==IOSUseSemantic::RenderAttachment)
+        return IOSResourceUsage::RenderAttachment;
+      break;
+    case IOSPassKind::Compute:
+      if(use==IOSUseSemantic::Read)
+        return IOSResourceUsage::ShaderRead;
+      if(use==IOSUseSemantic::FullOverwrite)
+        return IOSResourceUsage::ShaderWrite;
+      if(use==IOSUseSemantic::ReadWrite)
+        return IOSResourceUsage::ShaderRead|IOSResourceUsage::ShaderWrite;
+      break;
+    case IOSPassKind::Blit:
+      if(use==IOSUseSemantic::Read)
+        return IOSResourceUsage::BlitSource;
+      if(use==IOSUseSemantic::FullOverwrite)
+        return IOSResourceUsage::BlitDestination;
+      if(use==IOSUseSemantic::ReadWrite)
+        return IOSResourceUsage::BlitSource|
+               IOSResourceUsage::BlitDestination;
+      break;
+    case IOSPassKind::External:
+      if(use==IOSUseSemantic::Read)
+        return IOSResourceUsage::ExternalRead;
+      if(use==IOSUseSemantic::FullOverwrite)
+        return IOSResourceUsage::ExternalWrite;
+      if(use==IOSUseSemantic::ReadWrite)
+        return IOSResourceUsage::ExternalRead|
+               IOSResourceUsage::ExternalWrite;
+      break;
+    case IOSPassKind::AccelerationStructureBuild:
+      if(use==IOSUseSemantic::Read)
+        return IOSResourceUsage::AccelerationStructureBuildInput;
+      if(use==IOSUseSemantic::AccelerationStructureBuildOutput)
+        return IOSResourceUsage::AccelerationStructureBuildOutput;
+      break;
+    case IOSPassKind::Present:
+      if(use==IOSUseSemantic::PresentSource)
+        return IOSResourceUsage::Present;
+      break;
+    }
+  return IOSResourceUsage::None;
+  }
+
 bool requiresDefinedContent(IOSUseSemantic semantic,
                             IOSLoadAction load) noexcept {
   return semantic==IOSUseSemantic::Read ||
@@ -178,6 +285,104 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
         resource.lifetime!=IOSResourceLifetime::Transient ||
         resource.aliasable))
       return failure(IOSFramePlanError::InvalidMemorylessResource,{},resource.id);
+
+    if(!valid(resource.layout.format))
+      return failure(IOSFramePlanError::UnknownFormat,{},resource.id);
+    const uint32_t usage = static_cast<uint32_t>(resource.usage);
+    if(usage==0u)
+      return failure(IOSFramePlanError::EmptyUsage,{},resource.id);
+    if((usage&~knownUsageMask)!=0u)
+      return failure(IOSFramePlanError::UnknownUsage,{},resource.id);
+
+    if(resource.kind==IOSResourceKind::Texture) {
+      const auto& layout = resource.layout;
+      if(layout.format==IOSPixelFormat::Undefined ||
+         layout.extent.width==0u || layout.extent.height==0u ||
+         layout.mipLevels==0u ||
+         layout.mipLevels>maximumMipLevels(layout.extent) ||
+         layout.byteSize!=0u)
+        return failure(IOSFramePlanError::InvalidTextureLayout,{},resource.id);
+      if(layout.sampleCount!=1u && layout.sampleCount!=2u &&
+         layout.sampleCount!=4u && layout.sampleCount!=8u)
+        return failure(IOSFramePlanError::InvalidMultisample,{},resource.id);
+      if(layout.sampleCount>1u &&
+         (layout.mipLevels!=1u ||
+          !iosHasUsage(resource.usage,IOSResourceUsage::RenderAttachment) ||
+          iosHasUsage(resource.usage,IOSResourceUsage::ShaderWrite) ||
+          iosHasUsage(resource.usage,IOSResourceUsage::Present)))
+        return failure(IOSFramePlanError::InvalidMultisample,{},resource.id);
+      if(isBlockCompressed(layout.format) && layout.sampleCount!=1u)
+        return failure(IOSFramePlanError::InvalidMultisample,{},resource.id);
+
+      const IOSResourceUsage forbiddenTexture =
+          IOSResourceUsage::AccelerationStructureBuildInput |
+          IOSResourceUsage::AccelerationStructureBuildOutput;
+      const IOSResourceUsage forbiddenBc =
+          IOSResourceUsage::RenderAttachment |
+          IOSResourceUsage::ShaderWrite |
+          IOSResourceUsage::Present;
+      const IOSResourceUsage forbiddenDepth =
+          IOSResourceUsage::ShaderWrite |
+          IOSResourceUsage::Present;
+      if((resource.usage&forbiddenTexture)!=IOSResourceUsage::None ||
+         (isBlockCompressed(layout.format) &&
+          (resource.usage&forbiddenBc)!=IOSResourceUsage::None) ||
+         (isDepth(layout.format) &&
+          (resource.usage&forbiddenDepth)!=IOSResourceUsage::None))
+        return failure(IOSFramePlanError::IncompatibleFormatUsage,
+                       {},resource.id);
+      }
+    else if(resource.kind==IOSResourceKind::Buffer) {
+      const auto& layout = resource.layout;
+      if(layout.format!=IOSPixelFormat::Undefined ||
+         layout.extent.width!=0u || layout.extent.height!=0u ||
+         layout.mipLevels!=0u || layout.sampleCount!=0u ||
+         layout.byteSize==0u)
+        return failure(IOSFramePlanError::InvalidBufferLayout,{},resource.id);
+      const IOSResourceUsage forbiddenBuffer =
+          IOSResourceUsage::RenderAttachment |
+          IOSResourceUsage::Present |
+          IOSResourceUsage::AccelerationStructureBuildOutput;
+      if((resource.usage&forbiddenBuffer)!=IOSResourceUsage::None)
+        return failure(IOSFramePlanError::IncompatibleFormatUsage,
+                       {},resource.id);
+      }
+    else {
+      const auto& layout = resource.layout;
+      if(layout.format!=IOSPixelFormat::Undefined ||
+         layout.extent.width!=0u || layout.extent.height!=0u ||
+         layout.mipLevels!=0u || layout.sampleCount!=0u ||
+         layout.byteSize!=0u)
+        return failure(
+            IOSFramePlanError::InvalidAccelerationStructureLayout,
+            {},resource.id);
+      const IOSResourceUsage forbiddenAccelerationStructure =
+          IOSResourceUsage::ShaderWrite |
+          IOSResourceUsage::RenderAttachment |
+          IOSResourceUsage::BlitSource |
+          IOSResourceUsage::BlitDestination |
+          IOSResourceUsage::Present;
+      if((resource.usage&forbiddenAccelerationStructure)!=
+           IOSResourceUsage::None)
+        return failure(IOSFramePlanError::IncompatibleFormatUsage,
+                       {},resource.id);
+      }
+
+    if(iosHasUsage(resource.usage,IOSResourceUsage::Present) &&
+       (resource.kind!=IOSResourceKind::Texture ||
+        resource.lifetime!=IOSResourceLifetime::External ||
+        resource.layout.mipLevels!=1u ||
+        resource.layout.sampleCount!=1u ||
+        isBlockCompressed(resource.layout.format) ||
+        isDepth(resource.layout.format)))
+      return failure(IOSFramePlanError::IncompatibleFormatUsage,
+                     {},resource.id);
+
+    if(resource.memoryless &&
+       (resource.usage!=IOSResourceUsage::RenderAttachment ||
+        resource.layout.mipLevels!=1u))
+      return failure(IOSFramePlanError::InvalidMemorylessResource,
+                     {},resource.id);
     }
 
   IOSPassId previousPass;
@@ -244,7 +449,9 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
   const auto& presentUse = present->uses.front();
   const auto* presentResource = findResource(resources,presentUse.resource);
   if(presentResource->kind!=IOSResourceKind::Texture ||
-     presentResource->lifetime!=IOSResourceLifetime::External)
+     presentResource->lifetime!=IOSResourceLifetime::External ||
+     presentResource->layout.sampleCount!=1u ||
+     presentResource->layout.mipLevels!=1u)
     return failure(IOSFramePlanError::InvalidPresentResource,
                    present->id,presentUse.resource);
 
@@ -274,6 +481,16 @@ IOSFramePlanValidation IOSFramePlan::validate() const noexcept {
       else if(use.load!=IOSLoadAction::NotApplicable ||
               use.store!=IOSStoreAction::NotApplicable)
         return failure(IOSFramePlanError::InvalidLoadStore,
+                       pass.id,use.resource);
+
+      const IOSResourceUsage required = requiredUsage(pass.kind,use.semantic);
+      const bool deferInvalidMemorylessUse =
+          resource->memoryless &&
+          (use.semantic!=IOSUseSemantic::RenderAttachment ||
+           use.store!=IOSStoreAction::Discard);
+      if(!iosHasUsage(resource->usage,required) &&
+         !deferInvalidMemorylessUse)
+        return failure(IOSFramePlanError::MissingDeclaredUsage,
                        pass.id,use.resource);
 
       }

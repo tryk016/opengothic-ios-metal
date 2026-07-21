@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <vector>
 
-inline constexpr uint32_t IOSFramePlanABIVersion = 1u;
+inline constexpr uint32_t IOSFramePlanABIVersion = 2u;
 
-// P2.2a describes only logical identity, lifetime and content transitions.
-// Format, extent, sample count, usage and physical aliasing belong to P2.2b.
+// P2.2b adds absolute 2D layout and declared logical usage. Physical alias
+// groups, storage, heaps, hazards, caches and runtime capabilities stay out.
 
 struct IOSResourceId final {
   uint32_t value = 0u;
@@ -44,6 +44,73 @@ enum class IOSResourceLifetime : uint8_t {
 enum class IOSInitialContent : uint8_t {
   Undefined = 0,
   Defined   = 1,
+  };
+
+enum class IOSPixelFormat : uint8_t {
+  Undefined    = 0,
+  R8Unorm      = 1,
+  R16Float     = 2,
+  R32Float     = 3,
+  R32Uint      = 4,
+  Rg16Float    = 5,
+  Rg32Uint     = 6,
+  Rgba8Unorm   = 7,
+  Bgra8Unorm   = 8,
+  Rg11B10Float = 9,
+  Rgba16Float  = 10,
+  Depth16Unorm = 11,
+  Depth32Float = 12,
+  Bc1Rgba      = 13,
+  Bc2Rgba      = 14,
+  Bc3Rgba      = 15,
+  };
+
+enum class IOSResourceUsage : uint32_t {
+  None                             = 0u,
+  ShaderRead                       = 1u << 0u,
+  ShaderWrite                      = 1u << 1u,
+  RenderAttachment                 = 1u << 2u,
+  BlitSource                       = 1u << 3u,
+  BlitDestination                  = 1u << 4u,
+  Present                          = 1u << 5u,
+  ExternalRead                     = 1u << 6u,
+  ExternalWrite                    = 1u << 7u,
+  AccelerationStructureBuildInput  = 1u << 8u,
+  AccelerationStructureBuildOutput = 1u << 9u,
+  };
+
+constexpr IOSResourceUsage operator|(IOSResourceUsage lhs,
+                                     IOSResourceUsage rhs) noexcept {
+  return static_cast<IOSResourceUsage>(
+      static_cast<uint32_t>(lhs)|static_cast<uint32_t>(rhs));
+  }
+
+constexpr IOSResourceUsage operator&(IOSResourceUsage lhs,
+                                     IOSResourceUsage rhs) noexcept {
+  return static_cast<IOSResourceUsage>(
+      static_cast<uint32_t>(lhs)&static_cast<uint32_t>(rhs));
+  }
+
+constexpr bool iosHasUsage(IOSResourceUsage declared,
+                           IOSResourceUsage required) noexcept {
+  return (declared&required)==required;
+  }
+
+struct IOSExtent2D final {
+  uint32_t width = 0u;
+  uint32_t height = 0u;
+
+  friend bool operator==(IOSExtent2D,IOSExtent2D) = default;
+  };
+
+struct IOSResourceLayout final {
+  IOSPixelFormat format = IOSPixelFormat::Undefined;
+  IOSExtent2D    extent;
+  uint32_t       mipLevels = 0u;
+  uint32_t       sampleCount = 0u;
+  uint64_t       byteSize = 0u;
+
+  friend bool operator==(IOSResourceLayout,IOSResourceLayout) = default;
   };
 
 enum class IOSPassKind : uint8_t {
@@ -84,6 +151,8 @@ struct IOSResourceDesc final {
   IOSInitialContent   initialContent = IOSInitialContent::Undefined;
   bool                memoryless = false;
   bool                aliasable = false;
+  IOSResourceLayout   layout;
+  IOSResourceUsage    usage = IOSResourceUsage::None;
   };
 
 struct IOSResourceUse final {
@@ -135,6 +204,15 @@ enum class IOSFramePlanError : uint8_t {
   ReadBeforeWrite                  = 32,
   ReadAfterDiscard                 = 33,
   PresentUndefined                 = 34,
+  UnknownFormat                    = 35,
+  EmptyUsage                       = 36,
+  UnknownUsage                     = 37,
+  InvalidTextureLayout             = 38,
+  InvalidBufferLayout              = 39,
+  InvalidAccelerationStructureLayout = 40,
+  IncompatibleFormatUsage          = 41,
+  InvalidMultisample               = 42,
+  MissingDeclaredUsage             = 43,
   };
 
 struct IOSFramePlanValidation final {
