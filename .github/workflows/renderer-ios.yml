@@ -310,7 +310,7 @@ jobs:
             ios/device-test/run-pipeline-archive-test.sh
           grep -Fq 'base-smoke-evidence-path.txt' \
             ios/device-test/run-pipeline-archive-test.sh
-          grep -Fq 'wrapper/smoke SHA-local evidence contract self-test passed' \
+          grep -Fq 'pipeline archive wrapper/smoke SHA-local contract self-test passed' \
             ios/device-test/run-pipeline-archive-test.sh
 
           grep -Fq 'FirstFlushPresent = 300u' \
