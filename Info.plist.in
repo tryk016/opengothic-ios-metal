@@ -67,5 +67,6 @@
   <true/>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.games</string>
+${OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY}
 </dict>
 </plist>

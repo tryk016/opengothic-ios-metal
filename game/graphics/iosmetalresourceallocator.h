@@ -40,9 +40,10 @@ const char* iosMetalResourcePreflightStatusName(
 const char* iosMetalResourceStorageName(
     IOSMetalResourceStorage storage) noexcept;
 
-#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
-// Diagnostic-only process counters. The API and its native atomic accounting
-// are compiled out together when the resource allocator self-test is OFF.
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+// Diagnostic-only process counters. The API and native atomic accounting are
+// compiled out unless one of the two allocator lifetime probes is enabled.
 struct IOSMetalResourceLifetimeSnapshot final {
   uint64_t created = 0u;
   uint64_t live = 0u;
@@ -105,6 +106,7 @@ class IOSMetalResourceTexture final {
     std::unique_ptr<Impl> impl;
 
   friend class IOSMetalResourceAllocator;
+  friend class IOSMetalResourceTextureNativeAccess;
   };
 
 class IOSMetalResourceAllocator final {

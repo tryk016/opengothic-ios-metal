@@ -32,6 +32,11 @@ if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
     "RendererIOS resource allocator self-test is available only for iOS")
 endif()
 
+if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+  message(FATAL_ERROR
+    "RendererIOS clear-only pass self-test is available only for iOS")
+endif()
+
 if(MSVC)
   add_definitions(-D_USE_MATH_DEFINES)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -79,6 +84,13 @@ elseif(IOS)
          "Encode and read back one deterministic RendererIOS Bink frame" OFF)
   option(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST
          "Allocate and release deterministic Private/Memoryless RendererIOS textures" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST
+         "Encode and submit deterministic Private/Memoryless clear-only passes" OFF)
+  set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")
+  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY
+        "  <key>MetalCaptureEnabled</key>\n  <true/>")
+  endif()
   set(_renderer_ios_fault_modes
       none
       preview-attachment-missing
@@ -175,6 +187,22 @@ elseif(IOS)
     message(FATAL_ERROR
       "RendererIOS resource allocator and Bink self-tests are mutually exclusive")
   endif()
+  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST AND
+     NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    message(FATAL_ERROR
+      "RendererIOS clear-only pass self-test requires OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST AND
+     NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
+    message(FATAL_ERROR
+      "RendererIOS clear-only pass self-test requires OPENGOTHIC_RENDERER_IOS_FAULT_MODE=none")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST AND
+     (OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST))
+    message(FATAL_ERROR
+      "RendererIOS clear-only pass, resource allocator and Bink self-tests are mutually exclusive")
+  endif()
   if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=1)
@@ -182,6 +210,10 @@ elseif(IOS)
   if(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1)
   endif()
 
   if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")

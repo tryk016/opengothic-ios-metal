@@ -45,17 +45,22 @@ on:
         required: true
         default: false
         type: boolean
+      clear_only_pass_self_test:
+        description: 'Build the diagnostics-ON artifact with the two-pass Private/Memoryless clear-only gate (fault none, no other self-test or pipeline archive)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'resource-allocator-self-test' || 'no-resource-allocator-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'resource-allocator-self-test' || 'no-resource-allocator-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'clear-only-pass-self-test' || 'no-clear-only-pass-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }} resource-allocator-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test || false }}
+    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }} resource-allocator-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test || false }} clear-only-pass-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test || false }}
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -347,7 +352,10 @@ jobs:
               raise SystemExit("resource allocator self-test constructs a local allocator")
           if context.count('#include "iosmetalresourceallocator.h"') != 1:
               raise SystemExit("resource allocator production include is not unique")
-          if context.count("iosMetalResourceLifetimeSnapshot()") != 3:
+          allocator_self_test = context.split(
+              "void runIOSResourceAllocatorSelfTest(", 1
+          )[1].split("\n#endif", 1)[0]
+          if allocator_self_test.count("iosMetalResourceLifetimeSnapshot()") != 3:
               raise SystemExit("resource allocator lifetime proof is not before/inside/after")
           lifetime_oracle = (
               "createdDelta==2u",
@@ -357,7 +365,7 @@ jobs:
               "lifetimeAfter.live==lifetimeBefore.live",
           )
           for contract in lifetime_oracle:
-              if context.count(contract) != 1:
+              if allocator_self_test.count(contract) != 1:
                   raise SystemExit(f"resource allocator lifetime oracle is missing: {contract}")
           native_lifetime_updates = (
               "ResourceLifetime.created.fetch_add(1u,std::memory_order_relaxed);",
@@ -388,6 +396,606 @@ jobs:
               "ios/tests/iosframeplan.cpp"
           ).read_text():
               raise SystemExit("IOSFramePlan ABI4 host gate is missing")
+          PY
+
+      - name: Verify P2.3c clear-only pass contract
+        env:
+          CLEAR_ONLY_PASS_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}
+          REQUESTED_FAULT: ${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
+          REQUESTED_BINK_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}
+          REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
+        run: |
+          set -euo pipefail
+
+          probe_files=(
+            game/graphics/iosmetalresourceclearpassprobe.h
+            game/graphics/iosmetalresourceclearpassprobe.cpp
+            game/graphics/iosmetalresourceclearpassprobe.mm
+            game/graphics/iosmetalresourceallocatornative.h
+          )
+          for file in "${probe_files[@]}" \
+              ios/tests/iosmetalresourceclearpassprobe.cpp; do
+            test -f "$file"
+          done
+          test -x ios/device-test/validate-clear-only-pass-self-test-log.py
+          test -x ios/device-test/validate-metal-capture-artifact.py
+          python3 ios/device-test/validate-clear-only-pass-self-test-log.py --self-test
+          python3 ios/device-test/validate-metal-capture-artifact.py --self-test
+          ios/device-test/run-smoke-test.sh \
+            --require-clear-only-pass-self-test --self-test
+          if ios/device-test/run-smoke-test.sh \
+              --require-clear-only-pass-self-test \
+              --require-bink-self-test --self-test; then
+            echo 'clear-only pass/Bink harness conflict survived'
+            exit 1
+          fi
+          if ios/device-test/run-smoke-test.sh \
+              --require-clear-only-pass-self-test \
+              --require-resource-allocator-self-test --self-test; then
+            echo 'clear-only pass/resource allocator harness conflict survived'
+            exit 1
+          fi
+          if ios/device-test/run-smoke-test.sh \
+              --require-clear-only-pass-self-test \
+              --expected-fault post-submit-suboptimal --self-test; then
+            echo 'clear-only pass/fault harness conflict survived'
+            exit 1
+          fi
+          if OPENGOTHIC_IOS_EXPECTED_FAULT=post-submit-suboptimal \
+              ios/device-test/run-smoke-test.sh \
+              --require-clear-only-pass-self-test --self-test; then
+            echo 'clear-only pass host profile accepted an injected fault'
+            exit 1
+          fi
+          if ios/device-test/run-smoke-test.sh \
+              --require-clear-only-pass-self-test \
+              --pipeline-archive-test-mode cold --self-test; then
+            echo 'clear-only pass/pipeline archive harness conflict survived'
+            exit 1
+          fi
+          if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] && {
+              [ "$REQUESTED_FAULT" != none ] ||
+              [ "$REQUESTED_BINK_SELF_TEST" = ON ] ||
+              [ "$REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST" = ON ];
+          }; then
+            echo 'clear-only pass workflow input conflicts with fault/other self-test'
+            exit 1
+          fi
+
+          bash -n ios/device-test/run-smoke-test.sh
+          python3 -m py_compile \
+            ios/device-test/validate-clear-only-pass-self-test-log.py \
+            ios/device-test/validate-metal-capture-artifact.py
+          grep -Fq -- '--require-clear-only-pass-self-test' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'validate_clear_only_pass_binary_profile()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'build/device-self-test/%s/clear-only-pass/%s-%s-%s' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'clear_only_pass_self_test_process_survived=' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'self_test_profile=clear-only-pass' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'processes-clear-only-pass-window-start.json' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'trap cleanup EXIT' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_crash_state before' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_crash_state after' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'ensure_durable_zero || fail "durable final application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_crash_state final' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_clear_only_capture_artifact()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'clear_only_capture_manifest_sha256=' \
+            ios/device-test/run-smoke-test.sh
+          test "$(grep -Fc \
+            'signed_executable_sha256=$APP_EXECUTABLE_SHA256' \
+            ios/device-test/run-smoke-test.sh)" -eq 3
+
+          if grep -nEi \
+              'newCommandQueue|MTLCommandQueue|newCommandBuffer|waitIdle|nextDrawable|presentDrawable|drawPrimitives|drawIndexedPrimitives|newRenderPipelineState|newComputePipelineState|newLibrary|blitCommandEncoder|readPixels|getBytes|MTLHeap|newHeap|sizeAndAlign|makeAliasable|supportsFamily|supportsTextureSampleCount|MSAA|capabilit' \
+              "${probe_files[@]}"; then
+            echo 'P2.3c clear-only probe escaped its exact two-pass scope'
+            exit 1
+          fi
+
+          xcrun clang++ -std=c++20 \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1 \
+            -DOPENGOTHIC_IOS_CAPTURE_NORMALIZER_TEST_FAULTS=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame -isystem lib/Tempest/Engine/include \
+            ios/tests/iosmetalresourceclearpassprobe.cpp \
+            game/graphics/iosmetalresourceclearpassprobe.cpp \
+            game/graphics/iosmetalresourceallocator.cpp \
+            game/graphics/iosframeplan.cpp \
+            -o "$RUNNER_TEMP/iosmetalresourceclearpassprobe"
+          "$RUNNER_TEMP/iosmetalresourceclearpassprobe"
+
+          xcrun clang++ -x c++ -std=c++20 \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include -fsyntax-only \
+            game/graphics/iosmetalresourceclearpassprobe.cpp
+          xcrun --sdk iphoneos clang++ -x objective-c++ -std=c++20 \
+            -arch arm64 -miphoneos-version-min=16.4 -fno-objc-arc \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include \
+            -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
+            game/graphics/iosmetalresourceclearpassprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 -fno-objc-arc \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include \
+            -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
+            game/graphics/iosmetalresourceclearpassprobe.mm
+
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+
+          context = Path("game/graphics/iosmetalcontext.cpp").read_text()
+          harness = Path("ios/device-test/run-smoke-test.sh").read_text()
+          workflow = Path(".github/workflows/renderer-ios.yml").read_text()
+          neutral = Path(
+              "game/graphics/iosmetalresourceclearpassprobe.cpp"
+          ).read_text()
+          native = Path(
+              "game/graphics/iosmetalresourceclearpassprobe.mm"
+          ).read_text()
+          validator = Path(
+              "ios/device-test/validate-clear-only-pass-self-test-log.py"
+          ).read_text()
+          capture_validator = Path(
+              "ios/device-test/validate-metal-capture-artifact.py"
+          ).read_text()
+          host_test = Path(
+              "ios/tests/iosmetalresourceclearpassprobe.cpp"
+          ).read_text()
+          cmake = Path("CMakeLists.txt").read_text()
+          plist_template = Path("Info.plist.in").read_text()
+          markers = (
+              "RendererIOS clear-only pass self-test: ARMED "
+              "case=pm-clear-v1 abi=4 resources=3 "
+              "logical-passes=3 private=1 memoryless=1",
+              "RendererIOS clear-only pass self-test: ENCODED "
+              "case=pm-clear-v1 physical-passes=2 "
+              "command-buffers=1 render-encoders=2 private-load=clear "
+              "private-store=store memoryless-load=clear "
+              "memoryless-store=dont-care draws=0 pipelines=0 drawable=0 present=0",
+              "RendererIOS clear-only pass self-test: SUBMITTED "
+              "case=pm-clear-v1 command-buffers=1 submits=1",
+              "RendererIOS clear-only pass self-test: PASS "
+              "case=pm-clear-v1 terminal=completed "
+              "created=2 live=0 released=2 wait-idle=0",
+          )
+
+          def require_marker_byte_budget(candidates):
+              if len(candidates) != 4:
+                  raise RuntimeError("clear-only marker set is not exactly four lines")
+              lengths = tuple(len(marker.encode("utf-8")) for marker in candidates)
+              if any(length > 250 for length in lengths):
+                  raise RuntimeError(
+                      f"clear-only marker exceeds 250-byte device limit: {lengths}"
+                  )
+              return lengths
+
+          marker_lengths = require_marker_byte_budget(markers)
+          if marker_lengths != (119, 246, 93, 119):
+              raise SystemExit(
+                  f"clear-only marker byte lengths changed unexpectedly: {marker_lengths}"
+              )
+          overlong_markers = list(markers)
+          overlong_markers[1] += "x" * (251-marker_lengths[1])
+          try:
+              require_marker_byte_budget(tuple(overlong_markers))
+          except RuntimeError:
+              pass
+          else:
+              raise SystemExit("overlong clear-only marker mutation survived")
+
+          marker_scope = context.split(
+              "constexpr char RendererIOSClearOnlyPassSelfTestArmed[]", 1
+          )[1].split("\n#endif", 1)[0]
+          for marker in markers:
+              if marker_scope.count(marker) != 1:
+                  raise SystemExit(
+                      f"clear-only pass production marker is not exact: {marker}"
+                  )
+          capture_marker_max = (
+              "RendererIOS clear-only capture: ACQUIRED case=pm-clear-v1 "
+              "file=RendererIOS-pm-clear-v1.gputrace kind=directory "
+              "bytes=18446744073709551615"
+          )
+          if len(capture_marker_max.encode("utf-8")) > 250:
+              raise SystemExit("clear-only capture marker exceeds device log budget")
+          if context.count(
+              '"\\x01RendererIOS clear-only capture: ACQUIRED"'
+          ) != 1:
+              raise SystemExit("clear-only capture binary marker is not exact")
+
+          capture_cmake = cmake.split(
+              'option(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST', 1
+          )[1].split('set(_renderer_ios_fault_modes', 1)[0]
+          for literal in (
+              'set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")',
+              'if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)',
+              '<key>MetalCaptureEnabled</key>',
+              '<true/>',
+          ):
+              if capture_cmake.count(literal) != 1:
+                  raise SystemExit(f"capture plist CMake contract is not exact: {literal}")
+          placeholder = '${OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY}'
+          if plist_template.count(placeholder) != 1:
+              raise SystemExit("capture plist template placeholder is not exact")
+          off_plist = plistlib.loads(
+              plist_template.replace(placeholder, "").encode("utf-8")
+          )
+          on_plist = plistlib.loads(
+              plist_template.replace(
+                  placeholder,
+                  "  <key>MetalCaptureEnabled</key>\n  <true/>",
+              ).encode("utf-8")
+          )
+          if "MetalCaptureEnabled" in off_plist:
+              raise SystemExit("normal plist enables programmatic capture")
+          if on_plist.get("MetalCaptureEnabled") is not True:
+              raise SystemExit("clear-only plist does not enable programmatic capture")
+
+          def build_step(source):
+              return source.split(
+                  "      - name: Build iOS Release", 1
+              )[1].split(
+                  "\n      - name: Package unsigned device-test IPA", 1
+              )[0]
+
+          def require_exact_binary_cardinality(scope):
+              contracts = []
+              for marker in markers:
+                  exact = f"grep -Fxc -- '{marker}'"
+                  if scope.count(exact) != 1:
+                      raise RuntimeError(
+                          f"binary profile cardinality is not exact: {marker}"
+                      )
+                  position = scope.index(exact)
+                  start = scope.rfind("\n", 0, position) + 1
+                  first_end = scope.index("\n", position)
+                  second_end = scope.index("\n", first_end + 1)
+                  contract = scope[start:second_end]
+                  if not contract.lstrip().startswith('test "$(grep -Fxc --'):
+                      raise RuntimeError(
+                          f"binary profile reverted to presence-only: {marker}"
+                      )
+                  if '"$APP_STRINGS" || true)" -eq 1' not in contract:
+                      raise RuntimeError(
+                          f"binary profile does not require cardinality one: {marker}"
+                      )
+                  if f"grep -Fxq '{marker}'" in scope:
+                      raise RuntimeError(
+                          f"binary profile retains a presence-only oracle: {marker}"
+                      )
+                  contracts.append(contract)
+              return contracts
+
+          binary_scope = build_step(workflow)
+          binary_contracts = require_exact_binary_cardinality(binary_scope)
+          presence_only_contract = binary_contracts[0].replace(
+              "grep -Fxc --", "grep -Fxq --", 1
+          )
+          presence_only = binary_scope.replace(
+              binary_contracts[0], presence_only_contract, 1
+          )
+          try:
+              require_exact_binary_cardinality(presence_only)
+          except RuntimeError:
+              pass
+          else:
+              raise SystemExit("presence-only binary profile mutation survived")
+          duplicate = binary_scope.replace(
+              binary_contracts[0],
+              binary_contracts[0] + "\n" + binary_contracts[0],
+              1,
+          )
+          try:
+              require_exact_binary_cardinality(duplicate)
+          except RuntimeError:
+              pass
+          else:
+              raise SystemExit("duplicate binary cardinality oracle survived")
+          external_fixture = workflow + "\n# fixture duplicate: " + markers[0] + "\n"
+          require_exact_binary_cardinality(build_step(external_fixture))
+          start_probe = context.split(
+              "void startClearOnlyPassSelfTest() noexcept {", 1
+          )[1].split("\n  void pollClearOnlyPassSelfTest() noexcept {", 1)[0]
+          poll_probe = context.split(
+              "void pollClearOnlyPassSelfTest() noexcept {", 1
+          )[1].split(
+              "\n  void settleClearOnlyPassAfterConfirmedIdle() noexcept {", 1
+          )[0]
+          finish_probe = context.split(
+              "bool finishClearOnlyPassAfterTerminal(", 1
+          )[1].split("\n  void startClearOnlyPassSelfTest() noexcept {", 1)[0]
+          if start_probe.count("device.commandBuffer()") != 1:
+              raise SystemExit("clear-only probe must create exactly one Tempest command buffer")
+          if start_probe.count("device.submit(clearOnlyCommand)") != 1:
+              raise SystemExit("clear-only probe must perform exactly one Tempest submit")
+          capture_start = start_probe.index("clearOnlyCapture.start(device,captureReason)")
+          private_allocation = start_probe.index("resourceAllocator.allocate(")
+          command_buffer = start_probe.index("device.commandBuffer()")
+          submit = start_probe.index("device.submit(clearOnlyCommand)")
+          capture_stop = start_probe.index("clearOnlyCapture.stopAndInspect(")
+          if not capture_start < private_allocation < command_buffer < submit < capture_stop:
+              raise SystemExit("programmatic capture boundary is out of order")
+          if poll_probe.count("clearOnlyFence.wait(0u)") != 1:
+              raise SystemExit("clear-only PASS path must use exactly one zero-timeout fence poll")
+          if finish_probe.count("RendererIOSClearOnlyPassSelfTestPassed") != 1:
+              raise SystemExit("clear-only PASS marker is not terminal-lifetime scoped")
+          if "waitIdle" in start_probe + poll_probe + finish_probe:
+              raise SystemExit("clear-only PASS path invokes waitIdle")
+          if native.count(
+              "renderCommandEncoderWithDescriptor:descriptor.get()"
+          ) != 1:
+              raise SystemExit("clear-only native helper has an ambiguous encoder source")
+          if native.count("encodeClear(nativeCommand") != 2:
+              raise SystemExit("clear-only native callback must invoke exactly two render passes")
+          if native.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1:
+              raise SystemExit("clear-only probe must borrow exactly one active command buffer")
+          for literal in (
+              "RendererIOS-pm-clear-v1.gputrace",
+              "supportsDestination:MTLCaptureDestinationGPUTraceDocument",
+              "startCaptureWithDescriptor:descriptor.get()",
+              "descriptor.get().captureObject = nativeDevice",
+              "RIOS pm-clear CB",
+              "RIOS private 4x4",
+              "RIOS memoryless 4x4",
+              "RIOS private clear",
+              "RIOS memoryless clear",
+          ):
+              if native.count(literal) != 1:
+                  raise SystemExit(f"programmatic capture contract is not exact: {literal}")
+          for forbidden in ("Sha256", "CommonCrypto", "newCommandQueue"):
+              if forbidden in native:
+                  raise SystemExit(f"programmatic capture contains forbidden runtime code: {forbidden}")
+          cancel_capture = native.split(
+              "void IOSMetalResourceClearPassCapture::cancel() noexcept {", 1
+          )[1].split(
+              "\nbool IOSMetalResourceClearPassCapture::active() const noexcept {", 1
+          )[0]
+          cancel_try, cancel_catch = cancel_capture.split("@catch", 1)
+          if (
+              cancel_try.count("[impl->manager stopCapture];") != 1
+              or cancel_try.count("impl->captureActive = false;") != 1
+              or "impl->captureActive = false;" in cancel_catch
+          ):
+              raise SystemExit("capture cancel hides an ambiguous stop exception")
+          for literal in (
+              "capture package contains a symlink",
+              "capture package contains a special node",
+              "capture package regular-file content is empty",
+              "capture package exceeds the accepted byte limit",
+              'f"{digest}  {relative}\\n"',
+          ):
+              if literal not in capture_validator:
+                  raise SystemExit(f"host capture validator omits: {literal}")
+          normalizer_contract = (
+              "MaxCaptureArtifactBytes = 512u*1024u*1024u",
+              "ScopedFileDescriptor rootParentDescriptor(::open(",
+              "::fstatat(rootParentDescriptor.get(),rootName.c_str(),&requestedStat,",
+              "ScopedFileDescriptor rootDescriptor(::openat(",
+              "sameNodeIdentity(requestedStat,openedRootStat)",
+              "rootDirectoryEntryIdentityMatches(",
+              "::fdopendir(duplicate)",
+              "::rewinddir(value)",
+              "::readdir(stream.get())",
+              "::fstatat(directoryDescriptor,name.c_str(),&entryStat,",
+              "readlinkat(",
+              "openRootedDirectory(",
+              "O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC",
+              "O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC",
+              "AT_SYMLINK_NOFOLLOW",
+              'value==".."',
+              "relativeTarget==relativeLink",
+              "sameFileIdentity(sourceStat,plan.targetStat)",
+              "copyRegularFile(source.get(),temporary.get(),sourceBytes)",
+              "::fsync(destination)==0",
+              "prepareCaptureLinkTemporary(rootDescriptor.get(),plan)",
+              "renameat(parent.get(),temporaryName.c_str(),",
+              "::symlinkat(plan.rawTarget.c_str(),parent.get(),",
+              "rollbackCaptureLinks(",
+              '"capture-package-rollback-failed"',
+              "inspectNormalizedDirectory(",
+              "rootDescriptor.get(),plannedBytes,artifact",
+              'reason = "capture-package-post-normalization-invalid"',
+          )
+          for literal in normalizer_contract:
+              if literal not in neutral:
+                  raise SystemExit(f"capture normalizer omits: {literal}")
+          prepare_all = neutral.index(
+              "for(const auto& relativeLink:relativeLinks)"
+          )
+          copy_all = neutral.index(
+              "for(auto& plan:linkPlans)"
+          )
+          commit_all = neutral.index(
+              "for(std::size_t index=0u;index<linkPlans.size();++index)"
+          )
+          final_rescan = neutral.index(
+              "normalized = inspectNormalizedDirectory("
+          )
+          final_root_identity = neutral.index(
+              "if(!rootDirectoryEntryIdentityMatches(",
+              final_rescan,
+          )
+          final_success = neutral.index("reason = nullptr;", final_root_identity)
+          if not (
+              prepare_all < copy_all < commit_all < final_rescan
+              < final_root_identity < final_success
+          ):
+              raise SystemExit(
+                  "capture normalization is not validate/copy/commit/rescan/root-check"
+              )
+          normalizer_entry = neutral.split(
+              "bool iosMetalNormalizeAndInspectCaptureArtifact(", 1
+          )[1].split("IOSFramePlan iosMetalResourceClearPassPlan()", 1)[0]
+          if normalizer_entry.count(
+              "rootDirectoryEntryIdentityMatches("
+          ) != 2:
+              raise SystemExit(
+                  "capture normalizer does not revalidate file and directory roots"
+              )
+          for forbidden in (
+              "recursive_directory_iterator",
+              "std::filesystem::canonical",
+              "std::filesystem::symlink_status",
+              "std::filesystem::file_size",
+          ):
+              if forbidden in neutral:
+                  raise SystemExit(
+                      f"capture normalizer returned to path traversal: {forbidden}"
+                  )
+          p23_compile_scope = workflow.split(
+              "      - name: Verify P2.3c clear-only pass contract", 1
+          )[1].split("          python3 - <<'PY'", 1)[0]
+          if p23_compile_scope.count(
+              "-DOPENGOTHIC_IOS_CAPTURE_NORMALIZER_TEST_FAULTS=1"
+          ) != 1:
+              raise SystemExit("capture rollback fault hook is not host-test-only")
+          for literal in (
+              "MTLTexture-26-0-mipmap0-slice0",
+              "MTLTexture-27-0-mipmap0-slice0",
+              "MTLTexture-28-0-mipmap0-slice0",
+              'std::filesystem::create_symlink("../outside"',
+              "capture-package-special-node",
+              ".rendererios-materializing",
+              ".rendererios-rollback",
+              "iosMetalCaptureNormalizerFailCommitForTesting(1u)",
+              "iosMetalCaptureNormalizerSetBeforeRootCheckHookForTesting(",
+              '"capture-package-materialization-failed"',
+              '"capture-artifact-root-changed"',
+              "RootSwapHookSucceeded",
+              "RegularRootSwapHookSucceeded",
+          ):
+              if literal not in host_test:
+                  raise SystemExit(f"capture normalization host test omits: {literal}")
+          report_oracle = neutral.split(
+              "bool iosMetalResourceClearPassNativeReportMatches(", 1
+          )[1]
+          for zero_counter in (
+              "report.draws==0u",
+              "report.pipelines==0u",
+              "report.drawable==0u",
+              "report.present==0u",
+          ):
+              if report_oracle.count(zero_counter) != 1:
+                  raise SystemExit(
+                      f"clear-only physical zero oracle is not exact: {zero_counter}"
+                  )
+          begin_frame = context.split(
+              "std::optional<IOSMetalContext::FrameLease> "
+              "IOSMetalContext::beginFrame() {", 1
+          )[1].split(
+              "\nbool IOSMetalContext::frameAdmissionActive() const noexcept {", 1
+          )[0]
+          profile_gate = begin_frame.split(
+              "#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)",
+              1,
+          )[1].split("#endif", 1)[0]
+          if profile_gate.count("impl->pollClearOnlyPassSelfTest();") != 1:
+              raise SystemExit("clear-only profile does not own frame admission")
+          if profile_gate.count("return std::nullopt;") != 1:
+              raise SystemExit("clear-only profile can enter production frame admission")
+          for production_call in (
+              "pollPresentFailure",
+              "startEncoding",
+              "device.submit",
+              "swapchain",
+              "gpuScene",
+          ):
+              if production_call in profile_gate:
+                  raise SystemExit(
+                      f"clear-only admission gate invokes production work: {production_call}"
+                  )
+          if begin_frame.index("impl->pollClearOnlyPassSelfTest();") > begin_frame.index(
+              'impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")'
+          ):
+              raise SystemExit("clear-only probe begins after production present polling")
+          if "not ordinary_frame_lines" not in validator:
+              raise SystemExit(
+                  "clear-only runtime validator does not require zero ordinary frames"
+              )
+          evidence_resolver = harness.split(
+              "smoke_evidence_path() {", 1
+          )[1].split("\npublish_evidence_path() {", 1)[0]
+          if evidence_resolver.count(
+              "build/device-self-test/%s/clear-only-pass/%s-%s-%s"
+          ) != 1:
+              raise SystemExit("clear-only evidence resolver is not exact and scoped")
+          failure_evidence = harness.split(
+              "preserve_failure_evidence() {", 1
+          )[1].split("\ncleanup() {", 1)[0]
+          for artifact in (
+              "clear-only-pass-self-test-summary.txt",
+              "clear-only-capture-summary.txt",
+              "clear-only-capture-listing.json",
+              "$CLEAR_ONLY_CAPTURE_NAME",
+              "processes-clear-only-pass-window-start.json",
+              "processes-clear-only-pass-window-start-attempt-*.json",
+              "write_clear_only_pass_self_test_result_fields",
+          ):
+              if artifact not in failure_evidence:
+                  raise SystemExit(
+                      f"clear-only failure evidence omits {artifact}"
+                  )
+          cleanup = harness.split("cleanup() {", 1)[1].split(
+              "\ntrap cleanup EXIT", 1
+          )[0]
+          if cleanup.index("ensure_durable_zero") > cleanup.index(
+              "preserve_failure_evidence"
+          ):
+              raise SystemExit(
+                  "clear-only failure evidence is preserved before durable cleanup"
+              )
+          if cleanup.index("capture_clear_only_capture_artifact") > cleanup.index(
+              "preserve_failure_evidence"
+          ):
+              raise SystemExit("capture recovery runs after failure evidence preservation")
+          initialization = harness.split(
+              'WORK="$(mktemp -d -t opengothic-device-smoke)"', 1
+          )[1].split('APP_EXECUTABLE="$(', 1)[0]
+          if initialization.count(
+              "CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED=0"
+          ) != 1:
+              raise SystemExit("clear-only survival evidence lacks one fail-closed default")
+          if initialization.count('CLEAR_ONLY_CAPTURE_STATUS="not-required"') != 1:
+              raise SystemExit("clear-only capture status lacks one fail-closed default")
+          pid_check = harness.index(
+              'str(matches[0].get("processIdentifier")) '
+              '!= expected_clear_only_pass_pid'
+          )
+          survived = harness.index("CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED=1")
+          stop = harness.index('echo "== stopping $BUNDLE_ID after smoke window =="')
+          if not pid_check < survived < stop:
+              raise SystemExit("clear-only pass same-PID survival proof is out of order")
+          clear_branch = harness.index(
+              "if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then",
+              harness.index('[[ -s "$WORK/log.txt" ]]'),
+          )
+          id3_branch = harness.index(
+              'if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]',
+              clear_branch,
+          )
+          healthy_parser = harness.index(
+              'python3 - "$WORK/log.txt" "$WORK/runtime-compilation-summary.txt"',
+              id3_branch,
+          )
+          if not clear_branch < id3_branch < healthy_parser:
+              raise SystemExit(
+                  "clear-only pass validation is not before fault/healthy parsers"
+              )
           PY
 
       - name: Verify RendererIOS save-preview routing policy
@@ -1338,6 +1946,7 @@ jobs:
             -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}" \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="${GITHUB_SHA}"
 
       - name: Assert legacy renderer is not in the target
@@ -1365,6 +1974,17 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosgpubink\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosmetalresourceclearpassprobe\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosmetalresourceclearpassprobe\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          for source in iosmetalresourceclearpassprobe.cpp \
+              iosmetalresourceclearpassprobe.mm; do
+            awk -v source="$source" '
+              /Begin PBXSourcesBuildPhase section/ { in_sources=1 }
+              /End PBXSourcesBuildPhase section/ { in_sources=0 }
+              in_sources && index($0,source)>0 { found=1 }
+              END { exit found ? 0 : 1 }
+            ' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          done
           grep -Eq '(^|[^[:alnum:]_])rendereriosplatform\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Fq 'legacyShaders(Shaders::CompilationProfile::RendererIOSBridge)' game/graphics/iosmetalcontext.cpp
           grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=builtin,bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' game/graphics/shaders.cpp
@@ -1386,6 +2006,9 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST' CMakeLists.txt
           grep -Fq -- '--require-resource-allocator-self-test' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST' CMakeLists.txt
+          grep -Fq -- '--require-clear-only-pass-self-test' \
             ios/device-test/run-smoke-test.sh
 
       - name: Verify RendererIOS UI automation contract
@@ -1814,6 +2437,7 @@ jobs:
         env:
           DIAGNOSTICS: ${{ matrix.diagnostics }}
           RESOURCE_ALLOCATOR_SELF_TEST: ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
+          CLEAR_ONLY_PASS_SELF_TEST: ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}
         run: |
           set -euo pipefail
           cmake --build build-renderer-ios --config Release -- \
@@ -1822,8 +2446,10 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
           APP_BINARY='build-renderer-ios/opengothic/Release/Gothic2Notr.app/Gothic2Notr'
+          APP_INFO='build-renderer-ios/opengothic/Release/Gothic2Notr.app/Info.plist'
           APP_STRINGS="$RUNNER_TEMP/Gothic2Notr-$DIAGNOSTICS.strings"
           test -f "$APP_BINARY"
+          test -f "$APP_INFO"
           strings "$APP_BINARY" >"$APP_STRINGS"
           if [ "$DIAGNOSTICS" = ON ]; then
             grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \
@@ -1873,6 +2499,27 @@ jobs:
             ! grep -Fq 'RendererIOS resource allocator self-test:' \
               "$APP_STRINGS"
           fi
+          if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ]; then
+            test "$(grep -Fxc -- 'RendererIOS clear-only pass self-test: ARMED case=pm-clear-v1 abi=4 resources=3 logical-passes=3 private=1 memoryless=1' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS clear-only pass self-test: ENCODED case=pm-clear-v1 physical-passes=2 command-buffers=1 render-encoders=2 private-load=clear private-store=store memoryless-load=clear memoryless-store=dont-care draws=0 pipelines=0 drawable=0 present=0' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS clear-only pass self-test: SUBMITTED case=pm-clear-v1 command-buffers=1 submits=1' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS clear-only pass self-test: PASS case=pm-clear-v1 terminal=completed created=2 live=0 released=2 wait-idle=0' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS clear-only capture: ACQUIRED' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+              "$APP_INFO")" = true
+          else
+            ! grep -Fq 'RendererIOS clear-only pass self-test:' \
+              "$APP_STRINGS"
+            ! grep -Fq 'RendererIOS clear-only capture:' \
+              "$APP_STRINGS"
+            ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+              "$APP_INFO" >/dev/null 2>&1
+          fi
 
       - name: Package unsigned device-test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
@@ -1880,6 +2527,7 @@ jobs:
           ACTIVE_FAULT_MODE: ${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}
           BINK_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.bink_self_test && 'ON' || 'OFF' }}
           RESOURCE_ALLOCATOR_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
+          CLEAR_ONLY_PASS_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}
           DIAGNOSTICS: ${{ matrix.diagnostics }}
           IOS_VERSION: 1.0.${{ github.run_number }}
           TEMPEST_PROFILE: ${{ inputs.tempest_profile }}
@@ -1929,6 +2577,17 @@ jobs:
             echo "unexpected minimum iOS version: $MINIMUM_OS (expected 16.4)"
             exit 1
           fi
+          if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ]; then
+            if [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+                "$INFO_PLIST")" != true ]; then
+              echo 'clear-only pass package does not enable Metal capture'
+              exit 1
+            fi
+          elif /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+              "$INFO_PLIST" >/dev/null 2>&1; then
+            echo 'unrequested package enables Metal capture'
+            exit 1
+          fi
           if [ ! -f "$APP/$EXECUTABLE" ]; then
             echo "missing app executable: $APP/$EXECUTABLE"
             exit 1
@@ -1948,7 +2607,7 @@ jobs:
           fi
 
           SHORT_SHA="${GITHUB_SHA:0:12}"
-          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}-resource-allocator-self-test-${RESOURCE_ALLOCATOR_SELF_TEST}"
+          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}-resource-allocator-self-test-${RESOURCE_ALLOCATOR_SELF_TEST}-clear-only-pass-self-test-${CLEAR_ONLY_PASS_SELF_TEST}"
           ARTIFACT_DIR="$GITHUB_WORKSPACE/device-artifact"
           PACKAGE_ROOT="$RUNNER_TEMP/renderer-ios-device-package"
           rm -rf "$ARTIFACT_DIR" "$PACKAGE_ROOT"
@@ -1977,6 +2636,7 @@ jobs:
           fault_mode=$ACTIVE_FAULT_MODE
           bink_self_test=$BINK_SELF_TEST
           resource_allocator_self_test=$RESOURCE_ALLOCATOR_SELF_TEST
+          clear_only_pass_self_test=$CLEAR_ONLY_PASS_SELF_TEST
           save_preview_route=$SAVE_PREVIEW_ROUTE
           bundle_id=$BUNDLE_ID
           bundle_version=$BUNDLE_VERSION
@@ -1990,7 +2650,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         uses: actions/upload-artifact@v4
         with:
-          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}-resource-allocator-self-test-${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test || false }}
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}-resource-allocator-self-test-${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test || false }}-clear-only-pass-self-test-${{ matrix.diagnostics == 'ON' && inputs.clear_only_pass_self_test || false }}
           path: device-artifact/
           if-no-files-found: error
           retention-days: 14

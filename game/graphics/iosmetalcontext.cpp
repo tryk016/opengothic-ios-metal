@@ -15,7 +15,8 @@
 
 #include <algorithm>
 #include <array>
-#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
 #include <atomic>
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -34,6 +35,7 @@
 #include "iosbinkselftest.h"
 #endif
 #include "iosmetalresourceallocator.h"
+#include "iosmetalresourceclearpassprobe.h"
 #include "iospipelinearchivepolicy.h"
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
@@ -101,6 +103,24 @@ constexpr char RendererIOSConfiguredFaultModeEvidence[] =
 
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) && defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #error "RendererIOS resource allocator and Bink self-tests are mutually exclusive"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) && !defined(__IOS__)
+#error "RendererIOS clear-only pass self-test requires iOS"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) && !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS clear-only pass self-test requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) && OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
+#error "RendererIOS clear-only pass self-test requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) && \
+    (defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST))
+#error "RendererIOS clear-only pass, resource allocator and Bink self-tests are mutually exclusive"
 #endif
 
 namespace {
@@ -491,6 +511,29 @@ void runIOSResourceAllocatorSelfTest(IOSMetalResourceAllocator& allocator,
   }
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+constexpr char RendererIOSClearOnlyPassSelfTestArmed[] =
+  "\x01RendererIOS clear-only pass self-test: ARMED case=pm-clear-v1 abi=4 resources=3 logical-passes=3 private=1 memoryless=1";
+constexpr char RendererIOSClearOnlyPassSelfTestEncoded[] =
+  "\x01RendererIOS clear-only pass self-test: ENCODED case=pm-clear-v1 physical-passes=2 command-buffers=1 render-encoders=2 private-load=clear private-store=store memoryless-load=clear memoryless-store=dont-care draws=0 pipelines=0 drawable=0 present=0";
+constexpr char RendererIOSClearOnlyPassSelfTestSubmitted[] =
+  "\x01RendererIOS clear-only pass self-test: SUBMITTED case=pm-clear-v1 command-buffers=1 submits=1";
+constexpr char RendererIOSClearOnlyPassSelfTestPassed[] =
+  "\x01RendererIOS clear-only pass self-test: PASS case=pm-clear-v1 terminal=completed created=2 live=0 released=2 wait-idle=0";
+constexpr char RendererIOSClearOnlyCaptureAcquired[] =
+  "\x01RendererIOS clear-only capture: ACQUIRED";
+
+const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
+  // The volatile load makes the non-printable leading byte part of the
+  // observable object. It prevents Mach-O/link layout from joining an exact
+  // marker to a preceding printable byte while the runtime log starts after
+  // the sentinel and remains byte-for-byte unchanged.
+  const volatile char* const observableStorage = storage;
+  (void)*observableStorage;
+  return storage+1u;
+  }
+#endif
+
 }
 
 struct IOSMetalContext::Impl final {
@@ -518,6 +561,18 @@ struct IOSMetalContext::Impl final {
     Fatal,
     Stopped,
     };
+
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+  enum class ClearOnlyPassSelfTestState : uint8_t {
+    Armed,
+    Encoded,
+    Submitted,
+    SubmittedFailed,
+    Ambiguous,
+    Passed,
+    Failed,
+    };
+#endif
 
   struct SubmissionCounters final {
     uint64_t submitAttempts  = 0;
@@ -633,6 +688,326 @@ struct IOSMetalContext::Impl final {
     catch(...) {
       }
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+  bool clearOnlyRuntimeCompilationUnchanged() const noexcept {
+    const MetalRuntimeCompilationSnapshot runtime =
+        MetalApi::runtimeCompilationSnapshot(device);
+    const MetalBuiltinRuntimeSnapshot builtin =
+        MetalApi::builtinRuntimeSnapshot(device);
+    return clearOnlyRuntimeBefore.available && runtime.available &&
+           runtime.sourceLibraryRequests==
+             clearOnlyRuntimeBefore.sourceLibraryRequests &&
+           runtime.computePsoRequests==
+             clearOnlyRuntimeBefore.computePsoRequests &&
+           runtime.renderPsoRequests==
+             clearOnlyRuntimeBefore.renderPsoRequests &&
+           clearOnlyBuiltinRuntimeBefore.available && builtin.available &&
+           builtin.sourceLibraryRequests==
+             clearOnlyBuiltinRuntimeBefore.sourceLibraryRequests &&
+           builtin.renderPsoRequests==
+             clearOnlyBuiltinRuntimeBefore.renderPsoRequests;
+    }
+
+  void logClearOnlyPassFailure(const char* reason) noexcept {
+    try {
+      Log::e("RendererIOS clear-only pass self-test: FAIL case=pm-clear-v1 reason=",
+             reason);
+      }
+    catch(...) {
+      }
+    }
+
+  void releaseClearOnlyPassAfterCommand() noexcept {
+    clearOnlyCommand = CommandBuffer();
+    clearOnlyCommandActive = false;
+    clearOnlyMemorylessTexture = IOSMetalResourceTexture();
+    clearOnlyPrivateTexture = IOSMetalResourceTexture();
+    }
+
+  void failClearOnlyPassBeforeSubmit(const char* reason) noexcept {
+    clearOnlyCapture.cancel();
+    releaseClearOnlyPassAfterCommand();
+    clearOnlyPassState = ClearOnlyPassSelfTestState::Failed;
+    logClearOnlyPassFailure(reason);
+    fail("RendererIOS clear-only pass self-test failed",reason);
+    }
+
+  void failClearOnlyPassAmbiguous(const char* reason) noexcept {
+    // Device::submit may have enqueued the command before throwing. Keep the
+    // command and both unretained texture owners until waitIdle confirms the
+    // terminal point; the existing fail-stop path performs that settle.
+    clearOnlyCapture.cancel();
+    clearOnlyPassState = ClearOnlyPassSelfTestState::Ambiguous;
+    logClearOnlyPassFailure(reason);
+    fail("RendererIOS clear-only pass self-test failed",reason);
+    }
+
+  bool clearOnlyLifetimeLive() const noexcept {
+    const IOSMetalResourceLifetimeSnapshot current =
+        iosMetalResourceLifetimeSnapshot();
+    return current.created>=clearOnlyLifetimeBefore.created &&
+           current.live>=clearOnlyLifetimeBefore.live &&
+           current.released>=clearOnlyLifetimeBefore.released &&
+           current.created-clearOnlyLifetimeBefore.created==2u &&
+           current.live-clearOnlyLifetimeBefore.live==2u &&
+           current.released-clearOnlyLifetimeBefore.released==0u;
+    }
+
+  bool clearOnlyLifetimeReleased() const noexcept {
+    const IOSMetalResourceLifetimeSnapshot current =
+        iosMetalResourceLifetimeSnapshot();
+    return current.created>=clearOnlyLifetimeBefore.created &&
+           current.live==clearOnlyLifetimeBefore.live &&
+           current.released>=clearOnlyLifetimeBefore.released &&
+           current.created-clearOnlyLifetimeBefore.created==2u &&
+           current.released-clearOnlyLifetimeBefore.released==2u;
+    }
+
+  bool finishClearOnlyPassAfterTerminal(bool polledWithoutWaitIdle) noexcept {
+    const bool preReleasePassed = polledWithoutWaitIdle &&
+                                  clearOnlyFenceActive &&
+                                  clearOnlyCommandActive &&
+                                  bool(clearOnlyPrivateTexture) &&
+                                  bool(clearOnlyMemorylessTexture) &&
+                                  !clearOnlyCapture.active() &&
+                                  clearOnlyCaptureArtifact.bytes>0u &&
+                                  clearOnlyLifetimeLive() &&
+                                  clearOnlyRuntimeCompilationUnchanged();
+
+    // Terminal fence first, then command, then the two texture owners. This is
+    // the retainedReferences=false lifetime boundary.
+    clearOnlyFence = Fence();
+    clearOnlyFenceActive = false;
+    releaseClearOnlyPassAfterCommand();
+
+    const bool postReleasePassed = !clearOnlyFenceActive &&
+                                   !clearOnlyCommandActive &&
+                                   !clearOnlyPrivateTexture &&
+                                   !clearOnlyMemorylessTexture &&
+                                   clearOnlyLifetimeReleased() &&
+                                   clearOnlyRuntimeCompilationUnchanged();
+    if(!preReleasePassed || !postReleasePassed) {
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Failed;
+      const char* const reason = !polledWithoutWaitIdle
+                               ? "wait-idle-used"
+                               : "terminal-lifetime-or-runtime-mismatch";
+      logClearOnlyPassFailure(reason);
+      fail("RendererIOS clear-only pass self-test failed",reason);
+      return false;
+      }
+
+    clearOnlyPassState = ClearOnlyPassSelfTestState::Passed;
+    try {
+      Log::i(rendererIOSClearOnlyPassMarkerText(
+        RendererIOSClearOnlyPassSelfTestPassed));
+      }
+    catch(...) {
+      }
+    return true;
+    }
+
+  void startClearOnlyPassSelfTest() noexcept {
+    if(clearOnlyPassStarted)
+      return;
+    clearOnlyPassStarted = true;
+    static_assert(IOSFramePlanABIVersion==4u);
+    try {
+      Log::i(rendererIOSClearOnlyPassMarkerText(
+        RendererIOSClearOnlyPassSelfTestArmed));
+      }
+    catch(...) {
+      }
+
+    IOSFramePlan plan;
+    try {
+      plan = iosMetalResourceClearPassPlan();
+      }
+    catch(const std::exception& e) {
+      failClearOnlyPassBeforeSubmit(e.what());
+      return;
+      }
+    catch(...) {
+      failClearOnlyPassBeforeSubmit("frame-plan-allocation-failed");
+      return;
+      }
+    const IOSMetalResourceClearPassSelection selection =
+        iosMetalResourceSelectClearPassPlan(plan);
+    if(!selection) {
+      failClearOnlyPassBeforeSubmit("invalid-or-unsupported-plan");
+      return;
+      }
+
+    clearOnlyRuntimeBefore = MetalApi::runtimeCompilationSnapshot(device);
+    clearOnlyBuiltinRuntimeBefore = MetalApi::builtinRuntimeSnapshot(device);
+    clearOnlyLifetimeBefore = iosMetalResourceLifetimeSnapshot();
+    const char* captureReason = nullptr;
+    if(!clearOnlyCapture.start(device,captureReason)) {
+      failClearOnlyPassBeforeSubmit(
+        captureReason!=nullptr ? captureReason : "capture-start-failed");
+      return;
+      }
+    clearOnlyPrivateTexture =
+        resourceAllocator.allocate(plan.resources[selection.privateResource]);
+    clearOnlyMemorylessTexture =
+        resourceAllocator.allocate(plan.resources[selection.memorylessResource]);
+    if(!clearOnlyPrivateTexture || !clearOnlyMemorylessTexture ||
+       !iosMetalTextureMatches(
+         clearOnlyPrivateTexture.snapshot(),
+         plan.resources[selection.privateResource],
+         IOSMetalResourceStorage::Private) ||
+       !iosMetalTextureMatches(
+         clearOnlyMemorylessTexture.snapshot(),
+         plan.resources[selection.memorylessResource],
+         IOSMetalResourceStorage::Memoryless) ||
+       !clearOnlyLifetimeLive() || !clearOnlyRuntimeCompilationUnchanged()) {
+      failClearOnlyPassBeforeSubmit("allocation-or-lifetime-mismatch");
+      return;
+      }
+
+    try {
+      clearOnlyCommand = device.commandBuffer();
+      clearOnlyCommandActive = true;
+      bool encodeAccepted = false;
+      {
+        auto encoder = clearOnlyCommand.startEncoding(device);
+        encodeAccepted = iosMetalResourceEncodeClearPassProbe(
+            device,encoder,clearOnlyPrivateTexture,
+            clearOnlyMemorylessTexture,clearOnlyNativeReport);
+        }
+      if(!encodeAccepted ||
+         !iosMetalResourceClearPassNativeReportMatches(
+           clearOnlyNativeReport) ||
+         !clearOnlyLifetimeLive() ||
+         !clearOnlyRuntimeCompilationUnchanged()) {
+        failClearOnlyPassBeforeSubmit(
+          !encodeAccepted ? "native-encode-rejected"
+                          : "encoded-contract-mismatch");
+        return;
+        }
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Encoded;
+      Log::i(rendererIOSClearOnlyPassMarkerText(
+        RendererIOSClearOnlyPassSelfTestEncoded));
+      }
+    catch(const std::exception& e) {
+      failClearOnlyPassBeforeSubmit(e.what());
+      return;
+      }
+    catch(...) {
+      failClearOnlyPassBeforeSubmit("native-encode-exception");
+      return;
+      }
+
+    try {
+      Fence submitted = device.submit(clearOnlyCommand);
+      clearOnlyFence = std::move(submitted);
+      clearOnlyFenceActive = true;
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Submitted;
+      }
+    catch(const std::exception& e) {
+      failClearOnlyPassAmbiguous(e.what());
+      return;
+      }
+    catch(...) {
+      failClearOnlyPassAmbiguous("submit-exception-ambiguous");
+      return;
+      }
+    if(!clearOnlyCapture.stopAndInspect(
+         clearOnlyCaptureArtifact,captureReason)) {
+      clearOnlyCapture.cancel();
+      clearOnlyPassState = ClearOnlyPassSelfTestState::SubmittedFailed;
+      const char* const reason = captureReason!=nullptr
+                               ? captureReason
+                               : "capture-artifact-invalid";
+      logClearOnlyPassFailure(reason);
+      fail("RendererIOS clear-only pass self-test failed",reason);
+      return;
+      }
+    try {
+      Log::i(rendererIOSClearOnlyPassMarkerText(
+        RendererIOSClearOnlyPassSelfTestSubmitted));
+      Log::i(rendererIOSClearOnlyPassMarkerText(
+               RendererIOSClearOnlyCaptureAcquired),
+             " case=pm-clear-v1 file=RendererIOS-pm-clear-v1.gputrace kind=",
+             iosMetalCaptureArtifactKindName(clearOnlyCaptureArtifact.kind),
+             " bytes=",clearOnlyCaptureArtifact.bytes);
+      }
+    catch(...) {
+      }
+    }
+
+  void pollClearOnlyPassSelfTest() noexcept {
+    if(!clearOnlyPassStarted) {
+      startClearOnlyPassSelfTest();
+      return;
+      }
+    if(clearOnlyPassState!=ClearOnlyPassSelfTestState::Submitted)
+      return;
+    try {
+      if(!clearOnlyFence.wait(0u))
+        return;
+      (void)finishClearOnlyPassAfterTerminal(true);
+      }
+    catch(const std::exception& e) {
+      clearOnlyFence = Fence();
+      clearOnlyFenceActive = false;
+      releaseClearOnlyPassAfterCommand();
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Failed;
+      logClearOnlyPassFailure(e.what());
+      fail("RendererIOS clear-only pass self-test failed",e.what());
+      }
+    catch(...) {
+      clearOnlyFence = Fence();
+      clearOnlyFenceActive = false;
+      releaseClearOnlyPassAfterCommand();
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Failed;
+      logClearOnlyPassFailure("terminal-fence-error");
+      fail("RendererIOS clear-only pass self-test failed",
+           "terminal-fence-error");
+      }
+    }
+
+  void settleClearOnlyPassAfterConfirmedIdle() noexcept {
+    if(clearOnlyPassState==ClearOnlyPassSelfTestState::Ambiguous) {
+      releaseClearOnlyPassAfterCommand();
+      return;
+      }
+    if(clearOnlyPassState==ClearOnlyPassSelfTestState::SubmittedFailed) {
+      clearOnlyFence = Fence();
+      clearOnlyFenceActive = false;
+      releaseClearOnlyPassAfterCommand();
+      return;
+      }
+    if(clearOnlyPassState!=ClearOnlyPassSelfTestState::Submitted)
+      return;
+    try {
+      if(!clearOnlyFence.wait(0u)) {
+        logClearOnlyPassFailure("fence-nonterminal-after-wait-idle");
+        fail("RendererIOS clear-only pass self-test failed",
+             "fence-nonterminal-after-wait-idle");
+        return;
+        }
+      (void)finishClearOnlyPassAfterTerminal(false);
+      }
+    catch(const std::exception& e) {
+      clearOnlyFence = Fence();
+      clearOnlyFenceActive = false;
+      releaseClearOnlyPassAfterCommand();
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Failed;
+      logClearOnlyPassFailure(e.what());
+      fail("RendererIOS clear-only pass self-test failed",e.what());
+      }
+    catch(...) {
+      clearOnlyFence = Fence();
+      clearOnlyFenceActive = false;
+      releaseClearOnlyPassAfterCommand();
+      clearOnlyPassState = ClearOnlyPassSelfTestState::Failed;
+      logClearOnlyPassFailure("terminal-fence-error-after-wait-idle");
+      fail("RendererIOS clear-only pass self-test failed",
+           "terminal-fence-error-after-wait-idle");
+      }
+    }
+#endif
 
   void logRuntimeCompilationBridge() noexcept {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -1569,6 +1944,10 @@ struct IOSMetalContext::Impl final {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = true;
 
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    settleClearOnlyPassAfterConfirmedIdle();
+#endif
+
     // An exception from Metal commit has ambiguous disposition. Only after
     // waitIdle succeeds may the encoded command be destroyed; do that before
     // releasing the borrowed buffers' scene/video owners below.
@@ -1658,6 +2037,26 @@ struct IOSMetalContext::Impl final {
 
   Device&                                      device;
   IOSMetalResourceAllocator                    resourceAllocator;
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+  // Declaration order is the retainedReferences=false ownership contract:
+  // capture is stopped explicitly after submit; reverse destruction otherwise
+  // stops it before dropping fence, command, Memoryless, then Private.
+  IOSMetalResourceTexture                      clearOnlyPrivateTexture;
+  IOSMetalResourceTexture                      clearOnlyMemorylessTexture;
+  CommandBuffer                                clearOnlyCommand;
+  Fence                                        clearOnlyFence;
+  IOSMetalResourceClearPassCapture             clearOnlyCapture;
+  IOSMetalCaptureArtifact                      clearOnlyCaptureArtifact;
+  MetalRuntimeCompilationSnapshot              clearOnlyRuntimeBefore;
+  MetalBuiltinRuntimeSnapshot                  clearOnlyBuiltinRuntimeBefore;
+  IOSMetalResourceLifetimeSnapshot             clearOnlyLifetimeBefore;
+  IOSMetalResourceClearPassNativeReport        clearOnlyNativeReport;
+  ClearOnlyPassSelfTestState                   clearOnlyPassState =
+                                                  ClearOnlyPassSelfTestState::Armed;
+  bool                                         clearOnlyPassStarted = false;
+  bool                                         clearOnlyCommandActive = false;
+  bool                                         clearOnlyFenceActive = false;
+#endif
   Swapchain                                    swapchain;
 
   // The P2.1a public frame ABI is neutral. VectorImage, InventoryRenderer and
@@ -1735,6 +2134,12 @@ IOSMetalContext::~IOSMetalContext() = default;
 std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
   if(impl->lifecycleState!=Impl::LifecycleState::Active)
     return std::nullopt;
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+  // The diagnostic profile owns admission: it submits only its isolated
+  // clear-only probe and never reaches the production frame/present path.
+  impl->pollClearOnlyPassSelfTest();
+  return std::nullopt;
+#endif
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
     return std::nullopt;
   if(impl->frameActive)

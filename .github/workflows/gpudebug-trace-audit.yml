@@ -1,0 +1,338 @@
+name: RendererIOS private gpudebug audit
+run-name: gpudebug audit ${{ inputs.draft_tag }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_tag:
+        description: Exact ephemeral draft release tag
+        required: true
+        type: string
+      asset_name:
+        description: Exact encrypted release asset name
+        required: true
+        default: RendererIOS-pm-clear-v1.tar.gz.gpg
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: rendererios-private-gpudebug-v1
+  cancel-in-progress: false
+
+jobs:
+  audit:
+    runs-on: macos-26
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+
+    steps:
+      - name: Initialize isolated directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          private_dir="$RUNNER_TEMP/gpudebug-private-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          audit_dir="$RUNNER_TEMP/gpudebug-audit-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+          audit_file="$audit_dir/audit.txt"
+          case "$private_dir" in
+            "$RUNNER_TEMP"/gpudebug-private-*) ;;
+            *) exit 1 ;;
+          esac
+          case "$audit_dir" in
+            "$RUNNER_TEMP"/gpudebug-audit-*) ;;
+            *) exit 1 ;;
+          esac
+          case "$audit_file" in
+            "$audit_dir"/audit.txt) ;;
+            *) exit 1 ;;
+          esac
+          {
+            echo "PRIVATE_DIR=$private_dir"
+            echo "AUDIT_DIR=$audit_dir"
+            echo "AUDIT_FILE=$audit_file"
+          } >> "$GITHUB_ENV"
+          mkdir -m 700 "$private_dir" "$audit_dir"
+          {
+            echo 'schema=rendererios-gpudebug-audit-v1'
+            echo "run_id=$GITHUB_RUN_ID"
+            echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+            echo "runner_arch=$(uname -m)"
+            echo "runner_image_version=${ImageVersion:-unknown}"
+            echo 'initial_state=INCOMPLETE'
+          } > "$audit_file"
+
+      - name: Sparse checkout pinned validators without a token
+        id: checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          git init --quiet
+          git remote add origin \
+            "https://github.com/$GITHUB_REPOSITORY.git"
+          git sparse-checkout init --no-cone
+          {
+            echo '/ios/device-test/validate-metal-capture-artifact.py'
+            echo '/ios/device-test/validate-gpudebug-trace.py'
+            echo '/.github/workflows/gpudebug-trace-audit.yml'
+          } > .git/info/sparse-checkout
+          git fetch --quiet --no-tags --depth=1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach FETCH_HEAD
+          git remote remove origin
+
+      - name: Verify pinned runner and validators
+        id: verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(uname -m)" = arm64
+          test -d /Applications/Xcode_26.6.app
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 26.6'
+          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 17F113'
+          GPUD="$(xcrun --find gpudebug)"
+          test -x "$GPUD"
+          python3 -m py_compile \
+            ios/device-test/validate-metal-capture-artifact.py \
+            ios/device-test/validate-gpudebug-trace.py
+          python3 ios/device-test/validate-metal-capture-artifact.py --self-test
+          python3 ios/device-test/validate-gpudebug-trace.py self-test
+          test "$(grep -Ec '\$\{\{[[:space:]]*runner\.temp' \
+            .github/workflows/gpudebug-trace-audit.yml || true)" -eq 0
+          {
+            echo 'runner_contract=PASS'
+            echo 'xcode_version=26.6'
+            echo 'xcode_build=17F113'
+            echo 'validator_self_tests=PASS'
+          } >> "$AUDIT_FILE"
+
+      - name: Download exact encrypted draft asset
+        id: download
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRAFT_TAG: ${{ inputs.draft_tag }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+        run: |
+          set -euo pipefail
+          umask 077
+
+          fail() {
+            echo "transport_result=FAIL:$1" >> "$AUDIT_FILE"
+            exit 1
+          }
+
+          [[ "$DRAFT_TAG" =~ ^gpudebug-[A-Za-z0-9._-]{1,100}$ ]] ||
+            fail invalid_draft_tag
+          [[ "$ASSET_NAME" == RendererIOS-pm-clear-v1.tar.gz.gpg ]] ||
+            fail invalid_asset_name
+
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases?per_page=100" |
+            jq -s 'add' > "$PRIVATE_DIR/releases.json"
+
+          python3 - \
+            "$PRIVATE_DIR/releases.json" "$DRAFT_TAG" "$ASSET_NAME" \
+            "$PRIVATE_DIR/asset-id" "$PRIVATE_DIR/api-cipher-digest" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          source, tag, name, identifier_output, digest_output = sys.argv[1:]
+          releases = json.loads(pathlib.Path(source).read_text(encoding="utf-8"))
+          matches = [
+              release for release in releases
+              if release.get("tag_name") == tag and release.get("draft") is True
+          ]
+          if len(matches) != 1:
+              raise SystemExit("expected exactly one matching draft release")
+          assets = matches[0].get("assets", [])
+          if not isinstance(assets, list) or len(assets) != 1:
+              raise SystemExit("draft release must contain exactly one asset")
+          asset = assets[0]
+          if asset.get("name") != name or asset.get("state") != "uploaded":
+              raise SystemExit("the only draft asset is not the exact encrypted input")
+          if not isinstance(asset.get("id"), int):
+              raise SystemExit("asset id is invalid")
+          if not isinstance(asset.get("size"), int) or not 0 < asset["size"] <= 671088640:
+              raise SystemExit("asset size is invalid")
+          digest = asset.get("digest")
+          if not isinstance(digest, str) or not digest.startswith("sha256:"):
+              raise SystemExit("asset API SHA-256 digest is unavailable")
+          digest = digest.removeprefix("sha256:")
+          if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+              raise SystemExit("asset API SHA-256 digest is invalid")
+          pathlib.Path(identifier_output).write_text(str(asset["id"]), encoding="utf-8")
+          pathlib.Path(digest_output).write_text(digest, encoding="utf-8")
+          PY
+
+          asset_id="$(tr -d '\r\n' < "$PRIVATE_DIR/asset-id")"
+          [[ "$asset_id" =~ ^[0-9]+$ ]] || fail invalid_asset_id
+          gh api \
+            -H 'Accept: application/octet-stream' \
+            "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id" \
+            > "$PRIVATE_DIR/trace.tar.gz.gpg"
+          test -s "$PRIVATE_DIR/trace.tar.gz.gpg" || fail empty_download
+          echo 'transport_result=PASS' >> "$AUDIT_FILE"
+
+      - name: Decrypt verify extract and audit
+        id: audit
+        shell: bash
+        env:
+          GPUDEBUG_TRACE_ENVELOPE: ${{ secrets.GPUDEBUG_TRACE_ENVELOPE }}
+          DRAFT_TAG: ${{ inputs.draft_tag }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+
+          test -n "$GPUDEBUG_TRACE_ENVELOPE" || {
+            echo 'preaudit_class=BLOCKED' >> "$AUDIT_FILE"
+            echo 'preaudit_reason=missing_secret' >> "$AUDIT_FILE"
+            exit 1
+          }
+          python3 ios/device-test/validate-gpudebug-trace.py split-envelope \
+            --value-env GPUDEBUG_TRACE_ENVELOPE \
+            --directory "$PRIVATE_DIR" \
+            --expected-tag "$DRAFT_TAG" \
+            --expected-asset "$ASSET_NAME"
+          unset GPUDEBUG_TRACE_ENVELOPE
+
+          test "$(
+            shasum -a 256 "$PRIVATE_DIR/trace.tar.gz.gpg" | awk '{print $1}'
+          )" = "$(<"$PRIVATE_DIR/cipher-sha256")"
+          test "$(<"$PRIVATE_DIR/api-cipher-digest")" = \
+            "$(<"$PRIVATE_DIR/cipher-sha256")"
+          echo 'cipher_sha256=matched' >> "$AUDIT_FILE"
+
+          gpg --batch --yes --no-symkey-cache \
+            --pinentry-mode loopback \
+            --passphrase-fd 3 \
+            --output "$PRIVATE_DIR/trace.tar.gz" \
+            --decrypt "$PRIVATE_DIR/trace.tar.gz.gpg" \
+            3<"$PRIVATE_DIR/passphrase" \
+            >"$PRIVATE_DIR/gpg.stdout" 2>"$PRIVATE_DIR/gpg.stderr"
+          rm -f "$PRIVATE_DIR/passphrase"
+
+          test "$(
+            shasum -a 256 "$PRIVATE_DIR/trace.tar.gz" | awk '{print $1}'
+          )" = "$(<"$PRIVATE_DIR/plain-sha256")"
+          echo 'plain_archive_sha256=matched' >> "$AUDIT_FILE"
+
+          python3 ios/device-test/validate-gpudebug-trace.py safe-extract \
+            --archive "$PRIVATE_DIR/trace.tar.gz" \
+            --directory "$PRIVATE_DIR/extracted" \
+            --expected-capture-bytes "$(<"$PRIVATE_DIR/capture-bytes")"
+          python3 ios/device-test/validate-metal-capture-artifact.py \
+            --artifact \
+              "$PRIVATE_DIR/extracted/RendererIOS-pm-clear-v1.gputrace" \
+            --summary "$PRIVATE_DIR/recomputed-summary.txt"
+          python3 ios/device-test/validate-gpudebug-trace.py verify-manifest \
+            --transport-summary "$PRIVATE_DIR/extracted/capture-summary.txt" \
+            --recomputed-summary "$PRIVATE_DIR/recomputed-summary.txt" \
+            --expected-manifest \
+              "$(<"$PRIVATE_DIR/capture-manifest-sha256")"
+          echo 'capture_manifest_sha256=matched' >> "$AUDIT_FILE"
+
+          GPUD="$(xcrun --find gpudebug)"
+          python3 ios/device-test/validate-gpudebug-trace.py audit \
+            --gpudebug "$GPUD" \
+            --trace \
+              "$PRIVATE_DIR/extracted/RendererIOS-pm-clear-v1.gputrace" \
+            --audit "$AUDIT_FILE" \
+            --command-timeout 60 \
+            --global-timeout 720
+
+      - name: Finalize exact audit result
+        if: always()
+        shell: bash
+        env:
+          CHECKOUT_OUTCOME: ${{ steps.checkout.outcome }}
+          VERIFY_OUTCOME: ${{ steps.verify.outcome }}
+          DOWNLOAD_OUTCOME: ${{ steps.download.outcome }}
+          AUDIT_OUTCOME: ${{ steps.audit.outcome }}
+        run: |
+          set -euo pipefail
+          umask 077
+          case "${AUDIT_DIR:-}" in
+            "$RUNNER_TEMP"/gpudebug-audit-*)
+              AUDIT_FILE="${AUDIT_FILE:-$AUDIT_DIR/audit.txt}"
+              ;;
+            "")
+              AUDIT_DIR="$RUNNER_TEMP/gpudebug-audit-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+              AUDIT_FILE="$AUDIT_DIR/audit.txt"
+              ;;
+            *) exit 1 ;;
+          esac
+          {
+            echo "AUDIT_DIR=$AUDIT_DIR"
+            echo "AUDIT_FILE=$AUDIT_FILE"
+          } >> "$GITHUB_ENV"
+          if ! test -f "$AUDIT_FILE" || test -L "$AUDIT_FILE"; then
+            rm -rf -- "$AUDIT_DIR"
+            mkdir -m 700 "$AUDIT_DIR"
+            {
+              echo 'schema=rendererios-gpudebug-audit-v1'
+              echo "run_id=$GITHUB_RUN_ID"
+              echo "run_attempt=$GITHUB_RUN_ATTEMPT"
+              echo 'initial_state=INCOMPLETE'
+            } > "$AUDIT_FILE"
+          fi
+          test "$(grep -Ec '^result=' "$AUDIT_FILE" || true)" -eq 0
+
+          terminal=BLOCKED
+          reason=stage_incomplete
+          gpudebug_count="$(
+            grep -Ec '^gpudebug_result=(PASS|FAIL|BLOCKED)$' \
+              "$AUDIT_FILE" || true
+          )"
+          if test "$CHECKOUT_OUTCOME" = success && \
+             test "$VERIFY_OUTCOME" = success && \
+             test "$DOWNLOAD_OUTCOME" = success && \
+             test "$AUDIT_OUTCOME" = success && \
+             test "$gpudebug_count" -eq 1 && \
+             grep -qx 'gpudebug_result=PASS' "$AUDIT_FILE"; then
+            terminal=PASS
+            reason=complete_schema_and_semantics
+          elif test "$gpudebug_count" -eq 1 && \
+               grep -qx 'gpudebug_result=FAIL' "$AUDIT_FILE"; then
+            terminal=FAIL
+            reason=semantic_contradiction
+          elif test "$gpudebug_count" -eq 1 && \
+               grep -qx 'gpudebug_result=BLOCKED' "$AUDIT_FILE"; then
+            reason=gpudebug_blocked
+          fi
+          {
+            echo "checkout_outcome=$CHECKOUT_OUTCOME"
+            echo "verify_outcome=$VERIFY_OUTCOME"
+            echo "download_outcome=$DOWNLOAD_OUTCOME"
+            echo "audit_outcome=$AUDIT_OUTCOME"
+            echo "terminal_reason=$reason"
+            echo "result=$terminal"
+          } >> "$AUDIT_FILE"
+          test "$(grep -Ec '^result=(PASS|FAIL|BLOCKED)$' \
+            "$AUDIT_FILE")" -eq 1
+
+      - name: Remove raw runner-side material
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          case "${PRIVATE_DIR:-}" in
+            "$RUNNER_TEMP"/gpudebug-private-*) rm -rf -- "$PRIVATE_DIR" ;;
+          esac
+
+      - name: Upload text audit only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: gpudebug-audit-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ env.AUDIT_FILE }}
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
+          include-hidden-files: false

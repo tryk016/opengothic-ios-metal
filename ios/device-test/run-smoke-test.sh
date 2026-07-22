@@ -10,6 +10,7 @@
 #   ... --new-game APP
 #   ... --require-bink-self-test APP
 #   ... --require-resource-allocator-self-test APP
+#   ... --require-clear-only-pass-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
 #   ... --expected-fault preview-fence-error-after-terminal APP
@@ -30,6 +31,7 @@ SAVE_SLOT_EXPLICIT=0
 NEW_GAME=0
 REQUIRE_BINK_SELF_TEST=0
 REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
 EVIDENCE_PATH_FILE=""
@@ -42,6 +44,14 @@ readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PREFIX='RendererIOS resource allocator self-test:'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_ARMED='RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PASS='RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2'
+readonly CLEAR_ONLY_PASS_SELF_TEST_PREFIX='RendererIOS clear-only pass self-test:'
+readonly CLEAR_ONLY_PASS_SELF_TEST_ARMED='RendererIOS clear-only pass self-test: ARMED case=pm-clear-v1 abi=4 resources=3 logical-passes=3 private=1 memoryless=1'
+readonly CLEAR_ONLY_PASS_SELF_TEST_ENCODED='RendererIOS clear-only pass self-test: ENCODED case=pm-clear-v1 physical-passes=2 command-buffers=1 render-encoders=2 private-load=clear private-store=store memoryless-load=clear memoryless-store=dont-care draws=0 pipelines=0 drawable=0 present=0'
+readonly CLEAR_ONLY_PASS_SELF_TEST_SUBMITTED='RendererIOS clear-only pass self-test: SUBMITTED case=pm-clear-v1 command-buffers=1 submits=1'
+readonly CLEAR_ONLY_PASS_SELF_TEST_PASS='RendererIOS clear-only pass self-test: PASS case=pm-clear-v1 terminal=completed created=2 live=0 released=2 wait-idle=0'
+readonly CLEAR_ONLY_CAPTURE_PREFIX='RendererIOS clear-only capture:'
+readonly CLEAR_ONLY_CAPTURE_ACQUIRED='RendererIOS clear-only capture: ACQUIRED'
+readonly CLEAR_ONLY_CAPTURE_NAME='RendererIOS-pm-clear-v1.gputrace'
 
 fail() {
   echo "FAIL: $*" >&2
@@ -58,6 +68,11 @@ smoke_evidence_path() {
   local evidence_root
 
   [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
+  if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/clear-only-pass/%s-%s-%s\n' \
+      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
+    return 0
+  fi
   if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
     printf '%s/build/device-self-test/%s/resource-allocator/%s-%s-%s\n' \
       "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
@@ -130,6 +145,27 @@ validate_resource_allocator_binary_profile() {
   ! grep -Fq "$RESOURCE_ALLOCATOR_SELF_TEST_PREFIX" "$strings_file"
 }
 
+validate_clear_only_pass_binary_profile() {
+  local strings_file="$1"
+
+  [[ -f "$strings_file" ]] || return 1
+  if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+    [[ "$(grep -Fxc "$CLEAR_ONLY_PASS_SELF_TEST_ARMED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$CLEAR_ONLY_PASS_SELF_TEST_ENCODED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$CLEAR_ONLY_PASS_SELF_TEST_SUBMITTED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$CLEAR_ONLY_PASS_SELF_TEST_PASS" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$CLEAR_ONLY_CAPTURE_ACQUIRED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    return 0
+  fi
+  ! grep -Fq "$CLEAR_ONLY_PASS_SELF_TEST_PREFIX" "$strings_file" &&
+    ! grep -Fq "$CLEAR_ONLY_CAPTURE_PREFIX" "$strings_file"
+}
+
 run_host_contract_self_test() {
   local expected_sha="${OPENGOTHIC_IOS_EXPECTED_SHA:-0123456789abcdef0123456789abcdef01234567}"
   local expected_build="${OPENGOTHIC_IOS_EXPECTED_BUILD:-${expected_sha}-local}"
@@ -137,9 +173,11 @@ run_host_contract_self_test() {
   local timestamp="${OPENGOTHIC_IOS_EVIDENCE_TIMESTAMP:-20000101T000000Z}"
   local process_id="${OPENGOTHIC_IOS_EVIDENCE_PID:-4242}"
   local self_test_work evidence_file actual expected expected_plain expected_resource
+  local expected_clear clear_path clear_failure_path clear_committed_path
   local plain_path resource_path resource_failure_path resource_committed_path
-  local plain_binary self_test_binary duplicate_binary
+  local plain_binary self_test_binary duplicate_binary clear_binary duplicate_clear_binary
   local requested_resource_allocator_self_test="$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST"
+  local requested_clear_only_pass_self_test="$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST"
 
   [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
     fail "self-test expected SHA is invalid"
@@ -157,12 +195,15 @@ run_host_contract_self_test() {
     fail "self-test evidence process id is invalid"
   ((requested_resource_allocator_self_test == 0)) || [[ "$expected_fault" == none ]] ||
     fail "resource allocator host contract self-test requires expected fault none"
+  ((requested_clear_only_pass_self_test == 0)) || [[ "$expected_fault" == none ]] ||
+    fail "clear-only pass host contract self-test requires expected fault none"
 
   self_test_work="$(mktemp -d -t opengothic-smoke-contract)"
   evidence_file="$EVIDENCE_PATH_FILE"
   [[ -n "$evidence_file" ]] || evidence_file="$self_test_work/evidence-path.txt"
   EVIDENCE_PATH_FILE="$evidence_file"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
   plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
@@ -192,12 +233,37 @@ run_host_contract_self_test() {
     fail "committed resource allocator evidence path self-test failed"
   [[ "$resource_committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
     fail "committed resource allocator evidence overlaps plain committed smoke"
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=1
+  clear_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  expected_clear="$ROOT/build/device-self-test/$expected_build/clear-only-pass/pass-$timestamp-$process_id"
+  [[ "$clear_path" == "$expected_clear" ]] ||
+    fail "clear-only pass smoke evidence path self-test failed"
+  [[ "$clear_path" != "$plain_path" && "$clear_path" != "$resource_path" ]] ||
+    fail "clear-only pass smoke evidence path overlaps another profile"
+  clear_failure_path="$(smoke_evidence_path failure "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  [[ "$clear_failure_path" == \
+     "$ROOT/build/device-self-test/$expected_build/clear-only-pass/failure-$timestamp-$process_id" ]] ||
+    fail "clear-only pass failure evidence path self-test failed"
+  clear_committed_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  [[ "$clear_committed_path" == \
+     "$ROOT/build/device-self-test/$expected_sha/clear-only-pass/pass-$timestamp-$process_id" ]] ||
+    fail "committed clear-only pass evidence path self-test failed"
+  [[ "$clear_committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
+    fail "committed clear-only pass evidence overlaps plain committed smoke"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
   actual="$plain_path"
   expected="$expected_plain"
   if ((requested_resource_allocator_self_test != 0)); then
     actual="$resource_path"
     expected="$expected_resource"
+  elif ((requested_clear_only_pass_self_test != 0)); then
+    actual="$clear_path"
+    expected="$expected_clear"
   fi
   publish_evidence_path "$actual"
   [[ "$(cat "$evidence_file")" == "$expected" ]] ||
@@ -206,6 +272,8 @@ run_host_contract_self_test() {
   plain_binary="$self_test_work/plain-binary.txt"
   self_test_binary="$self_test_work/resource-allocator-binary.txt"
   duplicate_binary="$self_test_work/resource-allocator-duplicate-binary.txt"
+  clear_binary="$self_test_work/clear-only-pass-binary.txt"
+  duplicate_clear_binary="$self_test_work/clear-only-pass-duplicate-binary.txt"
   printf '%s\n' 'RendererIOS diagnostics: ON' >"$plain_binary"
   printf '%s\n%s\n%s\n' \
     "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
@@ -217,11 +285,32 @@ run_host_contract_self_test() {
     "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
     "$RESOURCE_ALLOCATOR_SELF_TEST_PASS" \
     >"$duplicate_binary"
+  printf '%s\n%s\n%s\n%s\n%s\n' \
+    "$CLEAR_ONLY_PASS_SELF_TEST_ARMED" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_ENCODED" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_SUBMITTED" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_PASS" \
+    "$CLEAR_ONLY_CAPTURE_ACQUIRED" \
+    >"$clear_binary"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$CLEAR_ONLY_PASS_SELF_TEST_ARMED" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_ENCODED" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_SUBMITTED" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_PASS" \
+    "$CLEAR_ONLY_CAPTURE_ACQUIRED" \
+    "$CLEAR_ONLY_CAPTURE_ACQUIRED" \
+    >"$duplicate_clear_binary"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
   validate_resource_allocator_binary_profile "$plain_binary" ||
     fail "plain binary profile self-test failed"
   if validate_resource_allocator_binary_profile "$self_test_binary"; then
     fail "unrequested resource allocator binary profile survived"
+  fi
+  validate_clear_only_pass_binary_profile "$plain_binary" ||
+    fail "plain clear-only pass binary profile self-test failed"
+  if validate_clear_only_pass_binary_profile "$clear_binary"; then
+    fail "unrequested clear-only pass binary profile survived"
   fi
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
   validate_resource_allocator_binary_profile "$self_test_binary" ||
@@ -232,7 +321,20 @@ run_host_contract_self_test() {
   if validate_resource_allocator_binary_profile "$duplicate_binary"; then
     fail "duplicate resource allocator binary marker survived"
   fi
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=1
+  validate_clear_only_pass_binary_profile "$clear_binary" ||
+    fail "clear-only pass binary profile self-test failed"
+  if validate_clear_only_pass_binary_profile "$plain_binary"; then
+    fail "clear-only pass binary profile accepted a plain artifact"
+  fi
+  if validate_clear_only_pass_binary_profile "$duplicate_clear_binary"; then
+    fail "duplicate clear-only pass binary marker survived"
+  fi
+  python3 "$ROOT/ios/device-test/validate-metal-capture-artifact.py" \
+    --self-test || fail "Metal capture artifact validator self-test failed"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
 
   printf '%s\n' '{"result":{"files":[]}}' >"$self_test_work/missing.json"
   printf '%s\n' \
@@ -250,7 +352,7 @@ run_host_contract_self_test() {
 
   find "$self_test_work" -type f -delete
   rmdir "$self_test_work"
-  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator crash-states=3"
+  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass crash-states=3"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -267,6 +369,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
       shift
       ;;
+    --require-clear-only-pass-self-test)
+      REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=1
+      shift
+      ;;
     --pipeline-archive-test-mode)
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
@@ -280,7 +386,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -315,8 +421,16 @@ done
   fail "Bink self-test requires expected fault none"
 ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
   fail "resource allocator self-test requires expected fault none"
+((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
+  fail "clear-only pass self-test requires expected fault none"
 ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
   fail "resource allocator and Bink self-tests are mutually exclusive"
+((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
+  fail "clear-only pass and Bink self-tests are mutually exclusive"
+((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0 || REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)) ||
+  fail "clear-only pass and resource allocator self-tests are mutually exclusive"
+((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)) || [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
+  fail "clear-only pass self-test requires an empty pipeline archive profile"
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -340,6 +454,7 @@ fi
 WORK="$(mktemp -d -t opengothic-device-smoke)"
 DEVICE=""
 APP_EXECUTABLE=""
+APP_EXECUTABLE_SHA256="uncomputed"
 BUNDLE_ID=""
 EXPECTED_SHA=""
 EXPECTED_BUILD=""
@@ -366,6 +481,15 @@ RESOURCE_ALLOCATOR_SELF_TEST_VALIDATION="not-required"
 RESOURCE_ALLOCATOR_SELF_TEST_PID="none"
 RESOURCE_ALLOCATOR_SELF_TEST_PID_DISCOVERY_ATTEMPTS=0
 RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED=0
+CLEAR_ONLY_PASS_SELF_TEST_VALIDATION="not-required"
+CLEAR_ONLY_PASS_SELF_TEST_PID="none"
+CLEAR_ONLY_PASS_SELF_TEST_PID_DISCOVERY_ATTEMPTS=0
+CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED=0
+CLEAR_ONLY_CAPTURE_ATTEMPTED=0
+CLEAR_ONLY_CAPTURE_STATUS="not-required"
+CLEAR_ONLY_CAPTURE_KIND="missing"
+CLEAR_ONLY_CAPTURE_BYTES=0
+CLEAR_ONLY_CAPTURE_MANIFEST_SHA256="missing"
 PROCESS_SURVIVED_FAULT_WINDOW=0
 ID3_SEMANTIC_NONCE="none"
 ID3_SAVE_PREFLIGHT_CAPTURED=0
@@ -791,6 +915,101 @@ capture_crash_state() {
   printf -v "$variable" '%s' "$sha"
 }
 
+capture_clear_only_capture_artifact() {
+  local listing="$WORK/clear-only-capture-listing.json"
+  local destination="$WORK/$CLEAR_ONLY_CAPTURE_NAME"
+  local summary="$WORK/clear-only-capture-summary.txt"
+  local listed_kind values
+
+  ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)) || return 0
+  if ((CLEAR_ONLY_CAPTURE_ATTEMPTED != 0)); then
+    [[ "$CLEAR_ONLY_CAPTURE_STATUS" == acquired ]]
+    return
+  fi
+  CLEAR_ONLY_CAPTURE_ATTEMPTED=1
+  CLEAR_ONLY_CAPTURE_STATUS="failed"
+  [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
+  [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$listing" >/dev/null || return 1
+  listed_kind="$(python3 - "$listing" "$CLEAR_ONLY_CAPTURE_NAME" <<'PY'
+import json
+import sys
+
+files = json.load(open(sys.argv[1], encoding="utf-8")).get("result", {}).get("files")
+if not isinstance(files, list):
+    raise SystemExit("capture listing provider returned no files array")
+matches = [entry for entry in files if entry.get("name") == sys.argv[2]]
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one flat capture artifact, found {len(matches)}")
+resources = matches[0].get("resources", {})
+if resources.get("isSymbolicLink") is not False:
+    raise SystemExit("capture artifact listing is a symlink or has unknown link state")
+is_directory = resources.get("isDirectory")
+if is_directory is True:
+    print("directory")
+elif is_directory is False:
+    print("file")
+else:
+    raise SystemExit("capture artifact listing has unknown file kind")
+PY
+  )" || return 1
+  [[ "$listed_kind" == file || "$listed_kind" == directory ]] || return 1
+
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "Documents/$CLEAR_ONLY_CAPTURE_NAME" \
+    --destination "$destination" >/dev/null || return 1
+  [[ -e "$destination" && ! -L "$destination" ]] || return 1
+  python3 "$ROOT/ios/device-test/validate-metal-capture-artifact.py" \
+    --artifact "$destination" --summary "$summary" || return 1
+  values="$(python3 - "$summary" <<'PY'
+import pathlib
+import re
+import sys
+
+values = {}
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.count("=") != 1:
+        raise SystemExit("invalid capture summary line")
+    key, value = line.split("=", 1)
+    if key in values:
+        raise SystemExit("duplicate capture summary key")
+    values[key] = value
+expected = {
+    "capture_name",
+    "capture_kind",
+    "capture_bytes",
+    "capture_manifest_sha256",
+}
+if set(values) != expected:
+    raise SystemExit("capture summary key set is not exact")
+if values["capture_name"] != "RendererIOS-pm-clear-v1.gputrace":
+    raise SystemExit("capture summary name mismatch")
+if values["capture_kind"] not in ("file", "directory"):
+    raise SystemExit("capture summary kind mismatch")
+if re.fullmatch(r"[1-9][0-9]*", values["capture_bytes"]) is None:
+    raise SystemExit("capture summary byte count mismatch")
+if re.fullmatch(r"[0-9a-f]{64}", values["capture_manifest_sha256"]) is None:
+    raise SystemExit("capture summary digest mismatch")
+print("\t".join((
+    values["capture_kind"],
+    values["capture_bytes"],
+    values["capture_manifest_sha256"],
+)))
+PY
+  )" || return 1
+  IFS=$'\t' read -r CLEAR_ONLY_CAPTURE_KIND CLEAR_ONLY_CAPTURE_BYTES \
+    CLEAR_ONLY_CAPTURE_MANIFEST_SHA256 <<<"$values"
+  [[ "$CLEAR_ONLY_CAPTURE_KIND" == "$listed_kind" ]] || return 1
+  [[ "$CLEAR_ONLY_CAPTURE_BYTES" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$CLEAR_ONLY_CAPTURE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  CLEAR_ONLY_CAPTURE_STATUS="acquired"
+}
+
 create_id3_recovery_path() {
   local recovery_root timestamp
 
@@ -1087,6 +1306,39 @@ discover_resource_allocator_self_test_pid() {
   return 1
 }
 
+write_clear_only_pass_self_test_result_fields() {
+  ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)) || return 0
+  echo "self_test_profile=clear-only-pass"
+  echo "clear_only_pass_self_test_required=1"
+  echo "clear_only_pass_self_test_validation=$CLEAR_ONLY_PASS_SELF_TEST_VALIDATION"
+  echo "clear_only_pass_self_test_pid=$CLEAR_ONLY_PASS_SELF_TEST_PID"
+  echo "clear_only_pass_self_test_pid_discovery_attempts=$CLEAR_ONLY_PASS_SELF_TEST_PID_DISCOVERY_ATTEMPTS"
+  echo "clear_only_pass_self_test_process_survived=$CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED"
+  echo "clear_only_capture_attempted=$CLEAR_ONLY_CAPTURE_ATTEMPTED"
+  echo "clear_only_capture_status=$CLEAR_ONLY_CAPTURE_STATUS"
+  echo "clear_only_capture_name=$CLEAR_ONLY_CAPTURE_NAME"
+  echo "clear_only_capture_kind=$CLEAR_ONLY_CAPTURE_KIND"
+  echo "clear_only_capture_bytes=$CLEAR_ONLY_CAPTURE_BYTES"
+  echo "clear_only_capture_manifest_sha256=$CLEAR_ONLY_CAPTURE_MANIFEST_SHA256"
+}
+
+discover_clear_only_pass_self_test_pid() {
+  local attempt output pids
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    output="$WORK/processes-clear-only-pass-window-start-attempt-$attempt.json"
+    if pids="$(list_game_pids "$output")" && [[ "$pids" =~ ^[0-9]+$ ]]; then
+      CLEAR_ONLY_PASS_SELF_TEST_PID="$pids"
+      CLEAR_ONLY_PASS_SELF_TEST_PID_DISCOVERY_ATTEMPTS="$attempt"
+      ditto "$output" "$WORK/processes-clear-only-pass-window-start.json" || return 1
+      return 0
+    fi
+    ((attempt == 10)) || sleep 1
+  done
+  CLEAR_ONLY_PASS_SELF_TEST_PID_DISCOVERY_ATTEMPTS=10
+  return 1
+}
+
 wait_for_id3_completion() {
   local attempt log="$WORK/log-id3-completion-check.txt"
 
@@ -1145,10 +1397,13 @@ preserve_failure_evidence() {
       park-settings.log \
       fault-log-summary.txt \
       resource-allocator-self-test-summary.txt \
+      clear-only-pass-self-test-summary.txt \
+      clear-only-capture-summary.txt clear-only-capture-listing.json \
       id3-protected-before.sha256 id3-protected-after.sha256 \
       id3-saves-before.json id3-saves-after.json save_slot_20.sav \
       processes-id3-window-start.json \
       processes-resource-allocator-window-start.json \
+      processes-clear-only-pass-window-start.json \
       processes.json \
       log-id3-completion-check.txt \
       log.txt stderr.log crash.log crash-before.log \
@@ -1157,9 +1412,15 @@ preserve_failure_evidence() {
     [[ -f "$WORK/$candidate" ]] || continue
     ditto "$WORK/$candidate" "$failure_dir/$candidate"
   done
+  if [[ -e "$WORK/$CLEAR_ONLY_CAPTURE_NAME" &&
+        ! -L "$WORK/$CLEAR_ONLY_CAPTURE_NAME" ]]; then
+    ditto "$WORK/$CLEAR_ONLY_CAPTURE_NAME" \
+      "$failure_dir/$CLEAR_ONLY_CAPTURE_NAME"
+  fi
   for candidate in "$WORK"/processes-durable-zero-*.json \
       "$WORK"/processes-id3-window-start-attempt-*.json \
       "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
+      "$WORK"/processes-clear-only-pass-window-start-attempt-*.json \
       "$WORK"/durable-zero-*.json \
       "$WORK"/crash-listing-*.json; do
     [[ -f "$candidate" ]] || continue
@@ -1169,10 +1430,12 @@ preserve_failure_evidence() {
     echo "result=FAIL"
     echo "source_sha=$EXPECTED_SHA"
     echo "expected_build=$EXPECTED_BUILD"
+    echo "signed_executable_sha256=$APP_EXECUTABLE_SHA256"
     echo "expected_fault=$EXPECTED_FAULT"
     echo "fault_log_validation=$FAULT_LOG_VALIDATION"
     echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
     write_resource_allocator_self_test_result_fields
+    write_clear_only_pass_self_test_result_fields
     echo "scenario=$SCENARIO"
     echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
@@ -1185,6 +1448,8 @@ preserve_failure_evidence() {
       cat "$WORK/fault-log-summary.txt"
     [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
       cat "$WORK/resource-allocator-self-test-summary.txt"
+    [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
+      cat "$WORK/clear-only-pass-self-test-summary.txt"
   } >"$failure_dir/result.txt"
   echo "failure evidence: $failure_dir" >&2
 }
@@ -1210,6 +1475,13 @@ cleanup() {
       echo "phase=trap-cleanup game_processes=0" >>"$WORK/cleanup.log"
     else
       cleanup_status=1
+    fi
+    if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0 &&
+         CLEAR_ONLY_CAPTURE_ATTEMPTED == 0)); then
+      if ! capture_clear_only_capture_artifact; then
+        echo "phase=trap-cleanup clear-only-capture=failed" >>"$WORK/cleanup.log"
+        cleanup_status=1
+      fi
     fi
     if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] &&
        ((ID3_SAVE_PREFLIGHT_CAPTURED == 1 && ID3_SAVE_POSTFLIGHT_CAPTURED == 0)); then
@@ -1260,9 +1532,11 @@ cleanup() {
       echo "result=FAIL"
       echo "source_sha=$EXPECTED_SHA"
       echo "expected_build=$EXPECTED_BUILD"
+      echo "signed_executable_sha256=$APP_EXECUTABLE_SHA256"
       echo "expected_fault=$EXPECTED_FAULT"
       echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
       write_resource_allocator_self_test_result_fields
+      write_clear_only_pass_self_test_result_fields
       echo "failure_reason=exit-cleanup-invalidated-provisional-pass"
       echo "cleanup_status=$cleanup_status"
       echo "pre_crash_sha256=$PRE_CRASH_SHA"
@@ -1273,6 +1547,8 @@ cleanup() {
         cat "$WORK/fault-log-summary.txt"
       [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
         cat "$WORK/resource-allocator-self-test-summary.txt"
+      [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
+        cat "$WORK/clear-only-pass-self-test-summary.txt"
     } >"$PASS_EVIDENCE_DIR/result.txt"
     echo "FAIL: final cleanup invalidated provisional PASS: $PASS_EVIDENCE_DIR" >&2
   fi
@@ -1280,7 +1556,9 @@ cleanup() {
     final_status=1
   fi
   if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
-    if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+    if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+      echo "PASS — clear-only capture acquired for later GPU semantic inspection; app stopped"
+    elif [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
       echo "PASS — ID3 terminal preview-fence placeholder save gate proven; app stopped"
     elif [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
       echo "PASS — ID4 terminal frame-fence fatal gate proven; app stopped"
@@ -1314,6 +1592,18 @@ grep -Fxq "$EXPECTED_BUILD" "$WORK/app-strings.txt" ||
   fail "app binary does not contain exact expected RendererIOS build"
 validate_resource_allocator_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary resource allocator self-test profile does not match the request"
+validate_clear_only_pass_binary_profile "$WORK/app-strings.txt" ||
+  fail "app binary clear-only pass self-test profile does not match the request"
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+      "$APP_INPUT/Info.plist" 2>/dev/null || true)" == true ]] ||
+    fail "clear-only pass app does not enable programmatic Metal capture"
+else
+  if /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+      "$APP_INPUT/Info.plist" >/dev/null 2>&1; then
+    fail "unrequested profile enables programmatic Metal capture"
+  fi
+fi
 [[ "$(grep -Ec '^RendererIOS configured fault mode=' "$WORK/app-strings.txt" || true)" -eq 1 ]] ||
   fail "app binary does not contain exactly one configured fault marker"
 grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT" \
@@ -1574,6 +1864,11 @@ codesign -f -s "$IDENTITY" --entitlements "$WORK/entitlements.plist" \
   --generate-entitlement-der "$APP"
 codesign -vv --deep --strict "$APP"
 
+APP_EXECUTABLE_SHA256="$(
+  shasum -a 256 "$APP/$APP_EXECUTABLE" | awk '{print $1}'
+)"
+[[ "$APP_EXECUTABLE_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "could not fingerprint the signed app executable"
 METALLIB_SHA="$(shasum -a 256 "$APP/RendererIOS.metallib" | awk '{print $1}')"
 echo "== stopping any previous $BUNDLE_ID process =="
 stop_running_app 1 || fail "pre-launch application cleanup failed"
@@ -1631,6 +1926,10 @@ if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
   discover_resource_allocator_self_test_pid ||
     fail "resource allocator self-test did not establish exactly one bounded process within 10 seconds"
 fi
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+  discover_clear_only_pass_self_test_pid ||
+    fail "clear-only pass self-test did not establish exactly one bounded process within 10 seconds"
+fi
 sleep "$DURATION"
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   wait_for_id3_completion ||
@@ -1643,7 +1942,9 @@ xcrun devicectl device info processes --device "$DEVICE" \
   --json-output "$WORK/processes.json" >/dev/null
 python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" \
     "$ID3_FAULT_WINDOW_PID" "$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST" \
-    "$RESOURCE_ALLOCATOR_SELF_TEST_PID" <<'PY' ||
+    "$RESOURCE_ALLOCATOR_SELF_TEST_PID" \
+    "$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST" \
+    "$CLEAR_ONLY_PASS_SELF_TEST_PID" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
@@ -1651,6 +1952,8 @@ expected_fault = sys.argv[3]
 expected_id3_pid = sys.argv[4]
 require_resource_allocator_self_test = sys.argv[5] == "1"
 expected_resource_allocator_pid = sys.argv[6]
+require_clear_only_pass_self_test = sys.argv[7] == "1"
+expected_clear_only_pass_pid = sys.argv[8]
 matches = [
     p for p in processes
     if pathlib.PurePosixPath(p.get("executable", "")).name == expected
@@ -1669,6 +1972,11 @@ if require_resource_allocator_self_test and (
     or str(matches[0].get("processIdentifier")) != expected_resource_allocator_pid
 ):
     raise SystemExit(1)
+if require_clear_only_pass_self_test and (
+    len(matches) != 1
+    or str(matches[0].get("processIdentifier")) != expected_clear_only_pass_pid
+):
+    raise SystemExit(1)
 if expected_fault not in (
     "preview-fence-error-after-terminal",
     "frame-fence-error-after-terminal",
@@ -1678,6 +1986,9 @@ PY
   fail "application process did not survive the smoke window"
 if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
   RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED=1
+fi
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+  CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED=1
 fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ||
       "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
@@ -1694,6 +2005,10 @@ for name in log.txt stderr.log; do
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$name" --destination "$WORK/$name" >/dev/null 2>&1 || true
 done
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+  capture_clear_only_capture_artifact ||
+    fail "clear-only pass programmatic Metal capture was not copied and validated"
+fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   capture_id3_save_postflight_raw ||
     fail "ID3 did not capture raw saves 1..4 and a non-empty fault slot 20 artifact"
@@ -1762,8 +2077,83 @@ if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)); then
     --log "$WORK/log.txt" --expect-absent ||
     fail "unrequested resource allocator self-test marker appeared at runtime"
 fi
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)); then
+  python3 "$ROOT/ios/device-test/validate-clear-only-pass-self-test-log.py" \
+    --log "$WORK/log.txt" --expect-absent ||
+    fail "unrequested clear-only pass self-test marker appeared at runtime"
+fi
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+  ((CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED == 1)) ||
+    fail "clear-only pass process did not survive its exact same-PID observation window"
+  CLEAR_ONLY_PASS_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --expected-capture-kind "$CLEAR_ONLY_CAPTURE_KIND"
+    --expected-capture-bytes "$CLEAR_ONLY_CAPTURE_BYTES"
+    --summary "$WORK/clear-only-pass-self-test-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    CLEAR_ONLY_PASS_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  CLEAR_ONLY_PASS_SELF_TEST_VALIDATION="failed"
+  python3 "$ROOT/ios/device-test/validate-clear-only-pass-self-test-log.py" \
+    "${CLEAR_ONLY_PASS_VALIDATOR_ARGS[@]}" ||
+    fail "clear-only pass self-test log validation failed"
+  python3 - "$WORK/clear-only-pass-self-test-summary.txt" \
+      "$EXPECTED_BUILD" <<'PY' ||
+import pathlib
+import sys
+
+summary = {}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.count("=") != 1:
+        raise SystemExit(f"invalid clear-only pass summary line: {line!r}")
+    key, value = line.split("=", 1)
+    if key in summary:
+        raise SystemExit(f"duplicate clear-only pass summary key: {key}")
+    summary[key] = value
+expected = {
+    "clear_only_pass_self_test_expected_build": sys.argv[2],
+    "clear_only_pass_self_test_armed_count": "1",
+    "clear_only_pass_self_test_encoded_count": "1",
+    "clear_only_pass_self_test_submitted_count": "1",
+    "clear_only_pass_self_test_pass_count": "1",
+    "clear_only_pass_self_test_fail_count": "0",
+    "clear_only_pass_self_test_abi": "4",
+    "clear_only_pass_self_test_resources": "3",
+    "clear_only_pass_self_test_logical_passes": "3",
+    "clear_only_pass_self_test_physical_passes": "2",
+    "clear_only_pass_self_test_command_buffers": "1",
+    "clear_only_pass_self_test_render_encoders": "2",
+    "clear_only_pass_self_test_submits": "1",
+    "clear_only_pass_self_test_private": "clear-store",
+    "clear_only_pass_self_test_memoryless": "clear-dont-care",
+    "clear_only_pass_self_test_draws": "0",
+    "clear_only_pass_self_test_pipelines": "0",
+    "clear_only_pass_self_test_drawable": "0",
+    "clear_only_pass_self_test_present": "0",
+    "clear_only_pass_self_test_terminal_completed": "1",
+    "clear_only_pass_self_test_created": "2",
+    "clear_only_pass_self_test_live": "0",
+    "clear_only_pass_self_test_released": "2",
+    "clear_only_pass_self_test_wait_idle": "0",
+}
+if summary != expected:
+    missing = sorted(expected.keys() - summary.keys())
+    extra = sorted(summary.keys() - expected.keys())
+    wrong = sorted(
+        key for key in expected.keys() & summary.keys()
+        if summary[key] != expected[key]
+    )
+    raise SystemExit(
+        f"clear-only pass summary mismatch: missing={missing} extra={extra} "
+        f"wrong={wrong}"
+    )
+PY
+    fail "clear-only pass self-test summary validation failed"
+  CLEAR_ONLY_PASS_SELF_TEST_VALIDATION="passed"
+else
 rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=4' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
 rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=4 manifest=1 fail-closed=1' \
@@ -2440,6 +2830,7 @@ PY
   FAULT_LOG_VALIDATION="passed"
 fi
 fi
+fi
 
 capture_crash_state after "$WORK/crash.log" POST_CRASH_SHA ||
   fail "could not establish post-run crash.log state"
@@ -2482,10 +2873,35 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
 [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
   ditto "$WORK/resource-allocator-self-test-summary.txt" \
     "$OUT/resource-allocator-self-test-summary.txt"
+[[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
+  ditto "$WORK/clear-only-pass-self-test-summary.txt" \
+    "$OUT/clear-only-pass-self-test-summary.txt"
+[[ ! -f "$WORK/clear-only-capture-summary.txt" ]] ||
+  ditto "$WORK/clear-only-capture-summary.txt" \
+    "$OUT/clear-only-capture-summary.txt"
+[[ ! -f "$WORK/clear-only-capture-listing.json" ]] ||
+  ditto "$WORK/clear-only-capture-listing.json" \
+    "$OUT/clear-only-capture-listing.json"
+if [[ -e "$WORK/$CLEAR_ONLY_CAPTURE_NAME" &&
+      ! -L "$WORK/$CLEAR_ONLY_CAPTURE_NAME" ]]; then
+  ditto "$WORK/$CLEAR_ONLY_CAPTURE_NAME" "$OUT/$CLEAR_ONLY_CAPTURE_NAME"
+fi
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+  [[ "$CLEAR_ONLY_CAPTURE_STATUS" == acquired ]] ||
+    fail "clear-only capture was not acquired at the PASS evidence boundary"
+  python3 "$ROOT/ios/device-test/validate-metal-capture-artifact.py" \
+    --artifact "$OUT/$CLEAR_ONLY_CAPTURE_NAME" \
+    --summary "$WORK/clear-only-capture-evidence-summary.txt" ||
+    fail "preserved clear-only capture is invalid"
+  cmp -s "$WORK/clear-only-capture-summary.txt" \
+    "$WORK/clear-only-capture-evidence-summary.txt" ||
+    fail "preserved clear-only capture fingerprint changed"
+fi
 for candidate in id3-protected-before.sha256 id3-protected-after.sha256 \
     id3-saves-before.json id3-saves-after.json save_slot_20.sav \
     processes.json processes-id3-window-start.json \
     processes-resource-allocator-window-start.json \
+    processes-clear-only-pass-window-start.json \
     log-id3-completion-check.txt; do
   [[ -f "$WORK/$candidate" ]] || continue
   ditto "$WORK/$candidate" "$OUT/$candidate"
@@ -2498,6 +2914,7 @@ done
 rm -f "$OUT"/processes-durable-zero-*.json "$OUT"/durable-zero-*.json
 for candidate in "$WORK"/processes-durable-zero-*.json \
     "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
+    "$WORK"/processes-clear-only-pass-window-start-attempt-*.json \
     "$WORK"/durable-zero-*.json; do
   [[ -f "$candidate" ]] || continue
   ditto "$candidate" "$OUT/$(basename "$candidate")"
@@ -2506,10 +2923,12 @@ done
   echo "result=PASS"
   echo "source_sha=$EXPECTED_SHA"
   echo "expected_build=$EXPECTED_BUILD"
+  echo "signed_executable_sha256=$APP_EXECUTABLE_SHA256"
   echo "expected_fault=$EXPECTED_FAULT"
   echo "fault_log_validation=$FAULT_LOG_VALIDATION"
   echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
   write_resource_allocator_self_test_result_fields
+  write_clear_only_pass_self_test_result_fields
   echo "pre_crash_sha256=$PRE_CRASH_SHA"
   echo "post_crash_sha256=$POST_CRASH_SHA"
   echo "bundle_id=$BUNDLE_ID"
@@ -2533,4 +2952,6 @@ done
     cat "$WORK/fault-log-summary.txt"
   [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
     cat "$WORK/resource-allocator-self-test-summary.txt"
+  [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
+    cat "$WORK/clear-only-pass-self-test-summary.txt"
 } >"$OUT/result.txt"
