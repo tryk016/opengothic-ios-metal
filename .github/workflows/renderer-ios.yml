@@ -1192,11 +1192,17 @@ jobs:
               '[[ "$expected_fault" == none && '
               '"$expected_build" == "$expected_sha" ]]; then'
           )
-          if source.count(legacy_guard) != 1:
+          evidence_resolver = source.split(
+              'smoke_evidence_path() {', 1)[1].split(
+              '\npublish_evidence_path() {', 1)[0]
+          if evidence_resolver.count(legacy_guard) != 1:
               raise SystemExit("legacy smoke evidence path is not clean-none-only")
-          if source.count('%s/build/device-fault/%s/%s/%s-%s-%s') != 1:
+          if evidence_resolver.count('%s/build/device-fault/%s/%s/%s-%s-%s') != 1:
               raise SystemExit("fault evidence does not use exact build/fault namespace")
-          if source.count('smoke_evidence_path failure') != 1:
+          failure_evidence = source.split(
+              'preserve_failure_evidence() {', 1)[1].split(
+              '\ncleanup() {', 1)[0]
+          if failure_evidence.count('smoke_evidence_path failure') != 1:
               raise SystemExit("fault failure evidence bypasses the shared resolver")
           raw_capture = source.index(
               'capture_id3_save_postflight_raw ||',
