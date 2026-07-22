@@ -15,6 +15,9 @@
 
 #include <algorithm>
 #include <array>
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
+#include <atomic>
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #include <chrono>
 #endif
@@ -30,6 +33,7 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
+#include "iosmetalresourceallocator.h"
 #include "iospipelinearchivepolicy.h"
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
@@ -81,6 +85,22 @@ constexpr char RendererIOSConfiguredFaultModeEvidence[] =
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST) && OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
 #error "RendererIOS Bink self-test requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) && !defined(__IOS__)
+#error "RendererIOS resource allocator self-test requires iOS"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) && !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS resource allocator self-test requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) && OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
+#error "RendererIOS resource allocator self-test requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) && defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
+#error "RendererIOS resource allocator and Bink self-tests are mutually exclusive"
 #endif
 
 namespace {
@@ -282,6 +302,195 @@ Pixmap blackPixmap(uint32_t w, uint32_t h) {
   return image;
   }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
+constexpr char RendererIOSResourceAllocatorSelfTestArmed[] = "RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1";
+constexpr char RendererIOSResourceAllocatorSelfTestPassed[] = "RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2";
+
+IOSResourceDesc iosResourceAllocatorSelfTestTexture(
+    uint32_t id, bool memoryless) noexcept {
+  IOSResourceDesc resource;
+  resource.id = IOSResourceId{id};
+  resource.kind = IOSResourceKind::Texture;
+  resource.lifetime = IOSResourceLifetime::Transient;
+  resource.initialContent = IOSInitialContent::Undefined;
+  resource.memoryless = memoryless;
+  resource.aliasable = false;
+  resource.aliasGroup = {};
+  resource.layout = {
+    IOSPixelFormat::Rgba8Unorm,{4u,4u},1u,1u,0u,
+    };
+  resource.usage = IOSResourceUsage::RenderAttachment;
+  return resource;
+  }
+
+IOSFramePlan iosResourceAllocatorSelfTestPlan(bool memoryless) {
+  IOSResourceDesc present;
+  present.id = IOSResourceId{1u};
+  present.kind = IOSResourceKind::Texture;
+  present.lifetime = IOSResourceLifetime::External;
+  present.initialContent = IOSInitialContent::Undefined;
+  present.layout = {
+    IOSPixelFormat::Bgra8Unorm,{4u,4u},1u,1u,0u,
+    };
+  present.usage = IOSResourceUsage::RenderAttachment |
+                  IOSResourceUsage::Present;
+
+  IOSFramePlan plan;
+  plan.resources = {
+    present,
+    iosResourceAllocatorSelfTestTexture(2u,memoryless),
+    };
+  plan.passes = {
+    {IOSPassId{1u},IOSPassKind::Render,{
+      {IOSResourceId{1u},IOSUseSemantic::RenderAttachment,
+       IOSLoadAction::Clear,IOSStoreAction::Store,
+       IOSAttachmentWriteMode::MayPreserve},
+      {IOSResourceId{2u},IOSUseSemantic::RenderAttachment,
+       IOSLoadAction::Clear,IOSStoreAction::Discard,
+       IOSAttachmentWriteMode::MayPreserve},
+      }},
+    {IOSPassId{2u},IOSPassKind::Present,{
+      {IOSResourceId{1u},IOSUseSemantic::PresentSource,
+       IOSLoadAction::NotApplicable,IOSStoreAction::NotApplicable,
+       IOSAttachmentWriteMode::NotApplicable},
+      }},
+    };
+  return plan;
+  }
+
+void runIOSResourceAllocatorSelfTest(IOSMetalResourceAllocator& allocator,
+                                     Device& device) {
+  static_assert(IOSFramePlanABIVersion==4u);
+  static std::atomic_flag started = ATOMIC_FLAG_INIT;
+  if(started.test_and_set())
+    return;
+  Log::i(RendererIOSResourceAllocatorSelfTestArmed);
+
+  const IOSFramePlan privatePlan =
+      iosResourceAllocatorSelfTestPlan(false);
+  const IOSFramePlan memorylessPlan =
+      iosResourceAllocatorSelfTestPlan(true);
+  const IOSFramePlanValidation privateValidation = privatePlan.validate();
+  const IOSFramePlanValidation memorylessValidation =
+      memorylessPlan.validate();
+  if(!privateValidation || !memorylessValidation) {
+    const IOSFramePlanValidation& validation = !privateValidation
+                                             ? privateValidation
+                                             : memorylessValidation;
+    Log::e("RendererIOS resource allocator self-test: FAIL case=private-memoryless-4x4-rgba8-v1 reason=invalid-frame-plan error=",
+           static_cast<uint32_t>(validation.error),
+           " resource=",validation.resource.value,
+           " pass=",validation.pass.value,
+           " allocation-only=1 encoded=0 render-pass=0 submitted=0 created=0 live=0 released=0");
+    throw std::runtime_error(
+      "RendererIOS resource allocator self-test frame plan is invalid");
+    }
+
+  const IOSResourceDesc& privateResource = privatePlan.resources[1];
+  const IOSResourceDesc& memorylessResource = memorylessPlan.resources[1];
+  const bool exactRequestPair =
+      privateResource.id==memorylessResource.id &&
+      privateResource.kind==memorylessResource.kind &&
+      privateResource.lifetime==memorylessResource.lifetime &&
+      privateResource.initialContent==memorylessResource.initialContent &&
+      !privateResource.memoryless && memorylessResource.memoryless &&
+      privateResource.aliasable==memorylessResource.aliasable &&
+      privateResource.aliasGroup==memorylessResource.aliasGroup &&
+      privateResource.layout==memorylessResource.layout &&
+      privateResource.usage==memorylessResource.usage;
+  const IOSMetalResourcePreflight privatePreflight =
+      iosMetalResourcePreflight(privateResource);
+  const IOSMetalResourcePreflight memorylessPreflight =
+      iosMetalResourcePreflight(memorylessResource);
+  const BorrowedMetalDevice expectedDevice = MetalApi::borrowDevice(device);
+  const uintptr_t expectedDeviceIdentity =
+      reinterpret_cast<uintptr_t>(expectedDevice.get());
+
+  const IOSMetalResourceLifetimeSnapshot lifetimeBefore =
+      iosMetalResourceLifetimeSnapshot();
+  IOSMetalResourceLifetimeSnapshot lifetimeInside;
+  bool metadataPassed = false;
+  {
+    IOSMetalResourceTexture privateTexture =
+        allocator.allocate(privateResource);
+    IOSMetalResourceTexture memorylessTexture =
+        allocator.allocate(memorylessResource);
+
+    const IOSMetalTextureSnapshot privateSnapshot = privateTexture.snapshot();
+    const IOSMetalTextureSnapshot memorylessSnapshot =
+        memorylessTexture.snapshot();
+    lifetimeInside = iosMetalResourceLifetimeSnapshot();
+    metadataPassed = exactRequestPair && bool(expectedDevice) &&
+                     bool(privatePreflight) && bool(memorylessPreflight) &&
+                     privatePreflight.storage==IOSMetalResourceStorage::Private &&
+                     memorylessPreflight.storage==IOSMetalResourceStorage::Memoryless &&
+                     iosMetalTextureMatches(
+                       privateSnapshot,privateResource,
+                       IOSMetalResourceStorage::Private) &&
+                     iosMetalTextureMatches(
+                       memorylessSnapshot,memorylessResource,
+                       IOSMetalResourceStorage::Memoryless) &&
+                     privateSnapshot.textureIdentity!=
+                       memorylessSnapshot.textureIdentity &&
+                     privateSnapshot.deviceIdentity==expectedDeviceIdentity &&
+                     memorylessSnapshot.deviceIdentity==expectedDeviceIdentity;
+    }
+
+  const IOSMetalResourceLifetimeSnapshot lifetimeAfter =
+      iosMetalResourceLifetimeSnapshot();
+  const bool createdMonotonic =
+      lifetimeInside.created>=lifetimeBefore.created &&
+      lifetimeAfter.created>=lifetimeInside.created;
+  const bool liveInsideMonotonic =
+      lifetimeInside.live>=lifetimeBefore.live;
+  const bool releasedMonotonic =
+      lifetimeInside.released>=lifetimeBefore.released &&
+      lifetimeAfter.released>=lifetimeInside.released;
+  const bool monotonic = createdMonotonic && liveInsideMonotonic &&
+                         releasedMonotonic;
+  const uint64_t createdDelta = createdMonotonic
+                              ? lifetimeAfter.created-lifetimeBefore.created
+                              : 0u;
+  const uint64_t liveInsideDelta = liveInsideMonotonic
+                                 ? lifetimeInside.live-lifetimeBefore.live
+                                 : 0u;
+  const uint64_t releasedInsideDelta = releasedMonotonic
+                                     ? lifetimeInside.released-
+                                       lifetimeBefore.released
+                                     : 0u;
+  const uint64_t releasedDelta = releasedMonotonic
+                               ? lifetimeAfter.released-
+                                 lifetimeBefore.released
+                               : 0u;
+  const bool lifetimePassed =
+      monotonic && createdDelta==2u && liveInsideDelta==2u &&
+      releasedInsideDelta==0u &&
+      lifetimeAfter.created==lifetimeInside.created &&
+      lifetimeAfter.live==lifetimeBefore.live && releasedDelta==2u;
+  if(!metadataPassed || !lifetimePassed) {
+    Log::e("RendererIOS resource allocator self-test: FAIL case=private-memoryless-4x4-rgba8-v1 reason=native-metadata-or-lifetime-mismatch allocation-only=1 encoded=0 render-pass=0 submitted=0 metadata=",
+           metadataPassed ? 1 : 0,
+           " monotonic=",monotonic ? 1 : 0,
+           " created-before=",lifetimeBefore.created,
+           " created-inside=",lifetimeInside.created,
+           " created-after=",lifetimeAfter.created,
+           " created-delta=",createdDelta,
+           " live-before=",lifetimeBefore.live,
+           " live-inside=",lifetimeInside.live,
+           " live-after=",lifetimeAfter.live,
+           " live-inside-delta=",liveInsideDelta,
+           " released-before=",lifetimeBefore.released,
+           " released-inside=",lifetimeInside.released,
+           " released-after=",lifetimeAfter.released,
+           " released-inside-delta=",releasedInsideDelta,
+           " released-delta=",releasedDelta);
+    throw std::runtime_error(
+      "RendererIOS resource allocator self-test allocation failed");
+    }
+  Log::i(RendererIOSResourceAllocatorSelfTestPassed);
+  }
+#endif
+
 }
 
 struct IOSMetalContext::Impl final {
@@ -355,7 +564,7 @@ struct IOSMetalContext::Impl final {
     };
 
   Impl(Device& device, SystemApi::Window* window)
-    : device(device), swapchain(device,window),
+    : device(device), resourceAllocator(device), swapchain(device,window),
       runtimeBeforeLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
       builtinRuntimeBeforeLegacyShaders(
         MetalApi::builtinRuntimeSnapshot(device)),
@@ -363,6 +572,9 @@ struct IOSMetalContext::Impl final {
       runtimeAfterLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
       builtinRuntimeAfterLegacyShaders(
         MetalApi::builtinRuntimeSnapshot(device)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
+    runIOSResourceAllocatorSelfTest(resourceAllocator,device);
+#endif
     static constexpr TextureFormat depthCandidates[] = {
       TextureFormat::Depth16,
       TextureFormat::Depth32F,
@@ -1445,6 +1657,7 @@ struct IOSMetalContext::Impl final {
     }
 
   Device&                                      device;
+  IOSMetalResourceAllocator                    resourceAllocator;
   Swapchain                                    swapchain;
 
   // The P2.1a public frame ABI is neutral. VectorImage, InventoryRenderer and

@@ -9,6 +9,7 @@
 #   OPENGOTHIC_IOS_DEVICE=<CoreDevice UUID> ... --duration 60 --save-slot 20 APP
 #   ... --new-game APP
 #   ... --require-bink-self-test APP
+#   ... --require-resource-allocator-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
 #   ... --expected-fault preview-fence-error-after-terminal APP
@@ -28,6 +29,7 @@ SAVE_SLOT=20
 SAVE_SLOT_EXPLICIT=0
 NEW_GAME=0
 REQUIRE_BINK_SELF_TEST=0
+REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
 EVIDENCE_PATH_FILE=""
@@ -37,6 +39,9 @@ readonly DURABLE_ZERO_MAX_CYCLES=3
 readonly DURABLE_ZERO_SCANS_PER_CYCLE=10
 readonly DURABLE_ZERO_INTERVAL_SECONDS=10
 readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
+readonly RESOURCE_ALLOCATOR_SELF_TEST_PREFIX='RendererIOS resource allocator self-test:'
+readonly RESOURCE_ALLOCATOR_SELF_TEST_ARMED='RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1'
+readonly RESOURCE_ALLOCATOR_SELF_TEST_PASS='RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2'
 
 fail() {
   echo "FAIL: $*" >&2
@@ -53,6 +58,11 @@ smoke_evidence_path() {
   local evidence_root
 
   [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
+  if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/resource-allocator/%s-%s-%s\n' \
+      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
+    return 0
+  fi
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
     evidence_root="$ROOT/build/device-smoke/$expected_sha"
     if [[ "$outcome" == pass ]]; then
@@ -106,13 +116,30 @@ print("present")
 PY
 }
 
+validate_resource_allocator_binary_profile() {
+  local strings_file="$1"
+
+  [[ -f "$strings_file" ]] || return 1
+  if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
+    [[ "$(grep -Fxc "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$RESOURCE_ALLOCATOR_SELF_TEST_PASS" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    return 0
+  fi
+  ! grep -Fq "$RESOURCE_ALLOCATOR_SELF_TEST_PREFIX" "$strings_file"
+}
+
 run_host_contract_self_test() {
   local expected_sha="${OPENGOTHIC_IOS_EXPECTED_SHA:-0123456789abcdef0123456789abcdef01234567}"
   local expected_build="${OPENGOTHIC_IOS_EXPECTED_BUILD:-${expected_sha}-local}"
   local expected_fault="${OPENGOTHIC_IOS_EXPECTED_FAULT:-none}"
   local timestamp="${OPENGOTHIC_IOS_EVIDENCE_TIMESTAMP:-20000101T000000Z}"
   local process_id="${OPENGOTHIC_IOS_EVIDENCE_PID:-4242}"
-  local self_test_work evidence_file actual expected
+  local self_test_work evidence_file actual expected expected_plain expected_resource
+  local plain_path resource_path resource_failure_path resource_committed_path
+  local plain_binary self_test_binary duplicate_binary
+  local requested_resource_allocator_self_test="$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST"
 
   [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
     fail "self-test expected SHA is invalid"
@@ -128,19 +155,84 @@ run_host_contract_self_test() {
     fail "self-test evidence timestamp is invalid"
   [[ "$process_id" =~ ^[0-9]+$ ]] ||
     fail "self-test evidence process id is invalid"
+  ((requested_resource_allocator_self_test == 0)) || [[ "$expected_fault" == none ]] ||
+    fail "resource allocator host contract self-test requires expected fault none"
 
   self_test_work="$(mktemp -d -t opengothic-smoke-contract)"
   evidence_file="$EVIDENCE_PATH_FILE"
   [[ -n "$evidence_file" ]] || evidence_file="$self_test_work/evidence-path.txt"
   EVIDENCE_PATH_FILE="$evidence_file"
-  actual="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+  plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
-  publish_evidence_path "$actual"
-  expected="$ROOT/build/device-fault/$expected_build/$expected_fault/pass-$timestamp-$process_id"
-  [[ "$actual" == "$expected" ]] ||
+  if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
+    expected_plain="$ROOT/build/device-smoke/$expected_sha"
+  else
+    expected_plain="$ROOT/build/device-fault/$expected_build/$expected_fault/pass-$timestamp-$process_id"
+  fi
+  [[ "$plain_path" == "$expected_plain" ]] ||
     fail "SHA-local smoke evidence path self-test failed"
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
+  resource_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  expected_resource="$ROOT/build/device-self-test/$expected_build/resource-allocator/pass-$timestamp-$process_id"
+  [[ "$resource_path" == "$expected_resource" ]] ||
+    fail "resource allocator smoke evidence path self-test failed"
+  [[ "$resource_path" != "$plain_path" ]] ||
+    fail "resource allocator and plain smoke evidence paths overlap"
+  resource_failure_path="$(smoke_evidence_path failure "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  [[ "$resource_failure_path" == \
+     "$ROOT/build/device-self-test/$expected_build/resource-allocator/failure-$timestamp-$process_id" ]] ||
+    fail "resource allocator failure evidence path self-test failed"
+  resource_committed_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  [[ "$resource_committed_path" == \
+     "$ROOT/build/device-self-test/$expected_sha/resource-allocator/pass-$timestamp-$process_id" ]] ||
+    fail "committed resource allocator evidence path self-test failed"
+  [[ "$resource_committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
+    fail "committed resource allocator evidence overlaps plain committed smoke"
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
+  actual="$plain_path"
+  expected="$expected_plain"
+  if ((requested_resource_allocator_self_test != 0)); then
+    actual="$resource_path"
+    expected="$expected_resource"
+  fi
+  publish_evidence_path "$actual"
   [[ "$(cat "$evidence_file")" == "$expected" ]] ||
     fail "smoke evidence path publication self-test failed"
+
+  plain_binary="$self_test_work/plain-binary.txt"
+  self_test_binary="$self_test_work/resource-allocator-binary.txt"
+  duplicate_binary="$self_test_work/resource-allocator-duplicate-binary.txt"
+  printf '%s\n' 'RendererIOS diagnostics: ON' >"$plain_binary"
+  printf '%s\n%s\n%s\n' \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_PASS" \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_PREFIX FAIL case=fixture" \
+    >"$self_test_binary"
+  printf '%s\n%s\n%s\n' \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_PASS" \
+    >"$duplicate_binary"
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
+  validate_resource_allocator_binary_profile "$plain_binary" ||
+    fail "plain binary profile self-test failed"
+  if validate_resource_allocator_binary_profile "$self_test_binary"; then
+    fail "unrequested resource allocator binary profile survived"
+  fi
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
+  validate_resource_allocator_binary_profile "$self_test_binary" ||
+    fail "resource allocator binary profile self-test failed"
+  if validate_resource_allocator_binary_profile "$plain_binary"; then
+    fail "resource allocator binary profile accepted a plain artifact"
+  fi
+  if validate_resource_allocator_binary_profile "$duplicate_binary"; then
+    fail "duplicate resource allocator binary marker survived"
+  fi
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
 
   printf '%s\n' '{"result":{"files":[]}}' >"$self_test_work/missing.json"
   printf '%s\n' \
@@ -158,7 +250,7 @@ run_host_contract_self_test() {
 
   find "$self_test_work" -type f -delete
   rmdir "$self_test_work"
-  echo "smoke host contract self-test passed: $expected_fault SHA-local + crash states"
+  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator crash-states=3"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -171,6 +263,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --new-game) NEW_GAME=1; shift ;;
     --require-bink-self-test) REQUIRE_BINK_SELF_TEST=1; shift ;;
+    --require-resource-allocator-self-test)
+      REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
+      shift
+      ;;
     --pipeline-archive-test-mode)
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
@@ -184,7 +280,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -217,6 +313,10 @@ done
   fail "frame-fence-error-after-terminal duration must be 10..45 seconds"
 ((REQUIRE_BINK_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
   fail "Bink self-test requires expected fault none"
+((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
+  fail "resource allocator self-test requires expected fault none"
+((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
+  fail "resource allocator and Bink self-tests are mutually exclusive"
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -262,6 +362,10 @@ STOP_RUNNING_APP_QUERY_FAILED=0
 PRE_CRASH_SHA="unqueried"
 POST_CRASH_SHA="unqueried"
 FAULT_LOG_VALIDATION="not-required"
+RESOURCE_ALLOCATOR_SELF_TEST_VALIDATION="not-required"
+RESOURCE_ALLOCATOR_SELF_TEST_PID="none"
+RESOURCE_ALLOCATOR_SELF_TEST_PID_DISCOVERY_ATTEMPTS=0
+RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED=0
 PROCESS_SURVIVED_FAULT_WINDOW=0
 ID3_SEMANTIC_NONCE="none"
 ID3_SAVE_PREFLIGHT_CAPTURED=0
@@ -957,6 +1061,32 @@ discover_id3_fault_window_pid() {
   return 1
 }
 
+write_resource_allocator_self_test_result_fields() {
+  ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)) || return 0
+  echo "resource_allocator_self_test_required=1"
+  echo "resource_allocator_self_test_validation=$RESOURCE_ALLOCATOR_SELF_TEST_VALIDATION"
+  echo "resource_allocator_self_test_pid=$RESOURCE_ALLOCATOR_SELF_TEST_PID"
+  echo "resource_allocator_self_test_pid_discovery_attempts=$RESOURCE_ALLOCATOR_SELF_TEST_PID_DISCOVERY_ATTEMPTS"
+  echo "resource_allocator_self_test_process_survived=$RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED"
+}
+
+discover_resource_allocator_self_test_pid() {
+  local attempt output pids
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    output="$WORK/processes-resource-allocator-window-start-attempt-$attempt.json"
+    if pids="$(list_game_pids "$output")" && [[ "$pids" =~ ^[0-9]+$ ]]; then
+      RESOURCE_ALLOCATOR_SELF_TEST_PID="$pids"
+      RESOURCE_ALLOCATOR_SELF_TEST_PID_DISCOVERY_ATTEMPTS="$attempt"
+      ditto "$output" "$WORK/processes-resource-allocator-window-start.json" || return 1
+      return 0
+    fi
+    ((attempt == 10)) || sleep 1
+  done
+  RESOURCE_ALLOCATOR_SELF_TEST_PID_DISCOVERY_ATTEMPTS=10
+  return 1
+}
+
 wait_for_id3_completion() {
   local attempt log="$WORK/log-id3-completion-check.txt"
 
@@ -1014,9 +1144,12 @@ preserve_failure_evidence() {
       launch.log cleanup.log \
       park-settings.log \
       fault-log-summary.txt \
+      resource-allocator-self-test-summary.txt \
       id3-protected-before.sha256 id3-protected-after.sha256 \
       id3-saves-before.json id3-saves-after.json save_slot_20.sav \
       processes-id3-window-start.json \
+      processes-resource-allocator-window-start.json \
+      processes.json \
       log-id3-completion-check.txt \
       log.txt stderr.log crash.log crash-before.log \
       log-before-cleanup.txt stderr-before-cleanup.log crash-before-cleanup.log \
@@ -1026,6 +1159,7 @@ preserve_failure_evidence() {
   done
   for candidate in "$WORK"/processes-durable-zero-*.json \
       "$WORK"/processes-id3-window-start-attempt-*.json \
+      "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
       "$WORK"/durable-zero-*.json \
       "$WORK"/crash-listing-*.json; do
     [[ -f "$candidate" ]] || continue
@@ -1038,6 +1172,7 @@ preserve_failure_evidence() {
     echo "expected_fault=$EXPECTED_FAULT"
     echo "fault_log_validation=$FAULT_LOG_VALIDATION"
     echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
+    write_resource_allocator_self_test_result_fields
     echo "scenario=$SCENARIO"
     echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
@@ -1048,6 +1183,8 @@ preserve_failure_evidence() {
     write_durable_result_fields
     [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
       cat "$WORK/fault-log-summary.txt"
+    [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
+      cat "$WORK/resource-allocator-self-test-summary.txt"
   } >"$failure_dir/result.txt"
   echo "failure evidence: $failure_dir" >&2
 }
@@ -1125,6 +1262,7 @@ cleanup() {
       echo "expected_build=$EXPECTED_BUILD"
       echo "expected_fault=$EXPECTED_FAULT"
       echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
+      write_resource_allocator_self_test_result_fields
       echo "failure_reason=exit-cleanup-invalidated-provisional-pass"
       echo "cleanup_status=$cleanup_status"
       echo "pre_crash_sha256=$PRE_CRASH_SHA"
@@ -1133,6 +1271,8 @@ cleanup() {
       write_durable_result_fields
       [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
         cat "$WORK/fault-log-summary.txt"
+      [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
+        cat "$WORK/resource-allocator-self-test-summary.txt"
     } >"$PASS_EVIDENCE_DIR/result.txt"
     echo "FAIL: final cleanup invalidated provisional PASS: $PASS_EVIDENCE_DIR" >&2
   fi
@@ -1172,6 +1312,8 @@ EXPECTED_BUILD="${OPENGOTHIC_IOS_EXPECTED_BUILD:-$EXPECTED_SHA}"
 strings "$APP_INPUT/$APP_EXECUTABLE" >"$WORK/app-strings.txt"
 grep -Fxq "$EXPECTED_BUILD" "$WORK/app-strings.txt" ||
   fail "app binary does not contain exact expected RendererIOS build"
+validate_resource_allocator_binary_profile "$WORK/app-strings.txt" ||
+  fail "app binary resource allocator self-test profile does not match the request"
 [[ "$(grep -Ec '^RendererIOS configured fault mode=' "$WORK/app-strings.txt" || true)" -eq 1 ]] ||
   fail "app binary does not contain exactly one configured fault marker"
 grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT" \
@@ -1485,6 +1627,10 @@ if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   discover_id3_fault_window_pid ||
     fail "ID3 fault-window start did not discover exactly one process within 10 seconds"
 fi
+if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
+  discover_resource_allocator_self_test_pid ||
+    fail "resource allocator self-test did not establish exactly one bounded process within 10 seconds"
+fi
 sleep "$DURATION"
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   wait_for_id3_completion ||
@@ -1496,12 +1642,15 @@ fi
 xcrun devicectl device info processes --device "$DEVICE" \
   --json-output "$WORK/processes.json" >/dev/null
 python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" \
-    "$ID3_FAULT_WINDOW_PID" <<'PY' ||
+    "$ID3_FAULT_WINDOW_PID" "$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST" \
+    "$RESOURCE_ALLOCATOR_SELF_TEST_PID" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
 expected_fault = sys.argv[3]
 expected_id3_pid = sys.argv[4]
+require_resource_allocator_self_test = sys.argv[5] == "1"
+expected_resource_allocator_pid = sys.argv[6]
 matches = [
     p for p in processes
     if pathlib.PurePosixPath(p.get("executable", "")).name == expected
@@ -1515,6 +1664,11 @@ if expected_fault == "preview-fence-error-after-terminal" and str(
     matches[0].get("processIdentifier")
 ) != expected_id3_pid:
     raise SystemExit(1)
+if require_resource_allocator_self_test and (
+    len(matches) != 1
+    or str(matches[0].get("processIdentifier")) != expected_resource_allocator_pid
+):
+    raise SystemExit(1)
 if expected_fault not in (
     "preview-fence-error-after-terminal",
     "frame-fence-error-after-terminal",
@@ -1522,6 +1676,9 @@ if expected_fault not in (
     raise SystemExit(1)
 PY
   fail "application process did not survive the smoke window"
+if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
+  RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED=1
+fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ||
       "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
   PROCESS_SURVIVED_FAULT_WINDOW=1
@@ -1600,6 +1757,11 @@ if configured_count != 1 or configured_faults != [expected_fault]:
     )
 PY
   fail "runtime log does not identify exact build/fault configuration"
+if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)); then
+  python3 "$ROOT/ios/device-test/validate-resource-allocator-self-test-log.py" \
+    --log "$WORK/log.txt" --expect-absent ||
+    fail "unrequested resource allocator self-test marker appeared at runtime"
+fi
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
 rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=4' \
@@ -1633,6 +1795,20 @@ if ((REQUIRE_BINK_SELF_TEST != 0)); then
     fail "Bink self-test readback evidence is incomplete"
   rg -F 'encoded-frames-delta=1' "$WORK/log.txt" >/dev/null ||
     fail "Bink self-test did not encode exactly one frame"
+fi
+if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
+  RESOURCE_ALLOCATOR_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --summary "$WORK/resource-allocator-self-test-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    RESOURCE_ALLOCATOR_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  RESOURCE_ALLOCATOR_SELF_TEST_VALIDATION="failed"
+  python3 "$ROOT/ios/device-test/validate-resource-allocator-self-test-log.py" \
+    "${RESOURCE_ALLOCATOR_VALIDATOR_ARGS[@]}" ||
+    fail "resource allocator self-test log validation failed"
+  RESOURCE_ALLOCATOR_SELF_TEST_VALIDATION="passed"
 fi
 rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=builtin,bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   "$WORK/log.txt" >/dev/null || fail "RendererIOS bridge-only shader policy marker is missing"
@@ -2303,9 +2479,14 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
   ditto "$WORK/park-settings.log" "$OUT/park-settings.log"
 [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
   ditto "$WORK/fault-log-summary.txt" "$OUT/fault-log-summary.txt"
+[[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
+  ditto "$WORK/resource-allocator-self-test-summary.txt" \
+    "$OUT/resource-allocator-self-test-summary.txt"
 for candidate in id3-protected-before.sha256 id3-protected-after.sha256 \
     id3-saves-before.json id3-saves-after.json save_slot_20.sav \
-    processes-id3-window-start.json log-id3-completion-check.txt; do
+    processes.json processes-id3-window-start.json \
+    processes-resource-allocator-window-start.json \
+    log-id3-completion-check.txt; do
   [[ -f "$WORK/$candidate" ]] || continue
   ditto "$WORK/$candidate" "$OUT/$candidate"
 done
@@ -2316,6 +2497,7 @@ for candidate in crash-before.log crash.log crash-final.log \
 done
 rm -f "$OUT"/processes-durable-zero-*.json "$OUT"/durable-zero-*.json
 for candidate in "$WORK"/processes-durable-zero-*.json \
+    "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
     "$WORK"/durable-zero-*.json; do
   [[ -f "$candidate" ]] || continue
   ditto "$candidate" "$OUT/$(basename "$candidate")"
@@ -2327,6 +2509,7 @@ done
   echo "expected_fault=$EXPECTED_FAULT"
   echo "fault_log_validation=$FAULT_LOG_VALIDATION"
   echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
+  write_resource_allocator_self_test_result_fields
   echo "pre_crash_sha256=$PRE_CRASH_SHA"
   echo "post_crash_sha256=$POST_CRASH_SHA"
   echo "bundle_id=$BUNDLE_ID"
@@ -2348,4 +2531,6 @@ done
     cat "$WORK/runtime-compilation-summary.txt"
   [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
     cat "$WORK/fault-log-summary.txt"
+  [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
+    cat "$WORK/resource-allocator-self-test-summary.txt"
 } >"$OUT/result.txt"

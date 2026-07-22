@@ -40,17 +40,22 @@ on:
         required: true
         default: false
         type: boolean
+      resource_allocator_self_test:
+        description: 'Build the diagnostics-ON artifact with the allocation-only Private/Memoryless resource gate (fault none, no Bink self-test)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'resource-allocator-self-test' || 'no-resource-allocator-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }}
+    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }} resource-allocator-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test || false }}
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -213,6 +218,177 @@ jobs:
             game/graphics/iosframeplan.cpp \
             -o "$RUNNER_TEMP/iosframeplan"
           "$RUNNER_TEMP/iosframeplan"
+
+      - name: Verify P2.3b resource allocator contract
+        run: |
+          set -euo pipefail
+
+          allocator_files=(
+            game/graphics/iosmetalresourceallocator.h
+            game/graphics/iosmetalresourceallocator.cpp
+            game/graphics/iosmetalresourceallocator.mm
+          )
+          for file in "${allocator_files[@]}" ios/tests/iosmetalresourceallocator.cpp; do
+            test -f "$file"
+          done
+
+          if grep -nE \
+              '#import|<Metal/|Objective-C|id[[:space:]]*<|void[[:space:]]*\*|MTL[A-Z]' \
+              game/graphics/iosmetalresourceallocator.h; then
+            echo 'P2.3b public allocator contract is not host-neutral'
+            exit 1
+          fi
+
+          if grep -nE \
+              'MTLHeap|newHeap|[Hh]eap|sizeAndAlign|makeAliasable|supportsFamily|supportsTextureSampleCount|newCommandQueue|MTLCommandQueue|MTLCommandBuffer|MTL.*CommandEncoder|MTLRenderPass|renderCommandEncoder|computeCommandEncoder|blitCommandEncoder|renderPassDescriptor|Tempest::(CommandBuffer|Encoder)|commandBuffer|setFramebuffer|submit|FrameContext|IOSMetalResourceIntent' \
+              "${allocator_files[@]}"; then
+            echo 'P2.3b allocator escaped the D-050 allocation-only scope'
+            exit 1
+          fi
+          if grep -nE \
+              'IOSFramePlanABIVersion[[:space:]]*=[[:space:]]*[^4]' \
+              game/graphics/iosframeplan.h; then
+            echo 'P2.3b changed the frozen IOSFramePlan ABI'
+            exit 1
+          fi
+
+          xcrun clang++ -std=c++20 \
+            -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame -isystem lib/Tempest/Engine/include \
+            ios/tests/iosmetalresourceallocator.cpp \
+            game/graphics/iosmetalresourceallocator.cpp \
+            -o "$RUNNER_TEMP/iosmetalresourceallocator"
+          "$RUNNER_TEMP/iosmetalresourceallocator"
+
+          xcrun --sdk iphoneos clang++ -x objective-c++ -std=c++20 \
+            -arch arm64 -miphoneos-version-min=16.4 -fno-objc-arc \
+            -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include -fsyntax-only \
+            game/graphics/iosmetalresourceallocator.mm
+          xcrun clang++ -x objective-c++ -std=c++20 -fno-objc-arc \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include -fsyntax-only \
+            game/graphics/iosmetalresourceallocator.mm
+
+          test -x ios/device-test/validate-resource-allocator-self-test-log.py
+          python3 ios/device-test/validate-resource-allocator-self-test-log.py --self-test
+          ios/device-test/run-smoke-test.sh \
+            --require-resource-allocator-self-test --self-test
+          if ios/device-test/run-smoke-test.sh \
+              --require-resource-allocator-self-test \
+              --require-bink-self-test --self-test; then
+            echo 'resource allocator/Bink harness conflict survived'
+            exit 1
+          fi
+          if ios/device-test/run-smoke-test.sh \
+              --require-resource-allocator-self-test \
+              --expected-fault post-submit-suboptimal --self-test; then
+            echo 'resource allocator/fault harness conflict survived'
+            exit 1
+          fi
+          if OPENGOTHIC_IOS_EXPECTED_FAULT=post-submit-suboptimal \
+              ios/device-test/run-smoke-test.sh \
+              --require-resource-allocator-self-test --self-test; then
+            echo 'resource allocator host profile accepted an injected fault'
+            exit 1
+          fi
+          grep -Fq -- '--require-resource-allocator-self-test' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'validate_resource_allocator_binary_profile()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'unrequested resource allocator binary profile survived' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'RESOURCE_ALLOCATOR_SELF_TEST_PID' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'build/device-self-test/%s/resource-allocator/%s-%s-%s' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'resource_allocator_self_test_process_survived=' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'processes.json processes-id3-window-start.json' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq -- '--expect-absent' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'ensure_durable_zero || fail "durable final application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_crash_state final' \
+            ios/device-test/run-smoke-test.sh
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          context = Path("game/graphics/iosmetalcontext.cpp").read_text()
+          native = Path("game/graphics/iosmetalresourceallocator.mm").read_text()
+          harness = Path("ios/device-test/run-smoke-test.sh").read_text()
+          armed = (
+              "RendererIOS resource allocator self-test: ARMED "
+              "case=private-memoryless-4x4-rgba8-v1"
+          )
+          passed = (
+              "allocation-only=1 encoded=0 render-pass=0 submitted=0 "
+              "created=2 live=0 released=2"
+          )
+          if context.count(armed) != 1 or context.count(passed) != 1:
+              raise SystemExit("resource allocator device markers are not exact and unique")
+          ownership = (
+              r"\bIOSMetalResourceAllocator\s+resourceAllocator\s*;",
+              r"\bresourceAllocator\s*\(\s*device\s*\)",
+              r"runIOSResourceAllocatorSelfTest\s*\(\s*resourceAllocator\s*,\s*device\s*\)\s*;",
+          )
+          for contract in ownership:
+              if len(re.findall(contract, context)) != 1:
+                  raise SystemExit(
+                      f"resource allocator Impl ownership contract is not unique: {contract}"
+                  )
+          if re.search(r"\bIOSMetalResourceAllocator\s+allocator\s*\(", context):
+              raise SystemExit("resource allocator self-test constructs a local allocator")
+          if context.count('#include "iosmetalresourceallocator.h"') != 1:
+              raise SystemExit("resource allocator production include is not unique")
+          if context.count("iosMetalResourceLifetimeSnapshot()") != 3:
+              raise SystemExit("resource allocator lifetime proof is not before/inside/after")
+          lifetime_oracle = (
+              "createdDelta==2u",
+              "liveInsideDelta==2u",
+              "releasedInsideDelta==0u",
+              "releasedDelta==2u",
+              "lifetimeAfter.live==lifetimeBefore.live",
+          )
+          for contract in lifetime_oracle:
+              if context.count(contract) != 1:
+                  raise SystemExit(f"resource allocator lifetime oracle is missing: {contract}")
+          native_lifetime_updates = (
+              "ResourceLifetime.created.fetch_add(1u,std::memory_order_relaxed);",
+              "ResourceLifetime.live.fetch_add(1u,std::memory_order_relaxed);",
+              "ResourceLifetime.live.fetch_sub(1u,std::memory_order_relaxed);",
+              "ResourceLifetime.released.fetch_add(1u,std::memory_order_relaxed);",
+          )
+          if any(native.count(update) != 1 for update in native_lifetime_updates):
+              raise SystemExit("native resource owner lifetime accounting is not exact")
+          pid_check = harness.index(
+              'str(matches[0].get("processIdentifier")) '
+              '!= expected_resource_allocator_pid'
+          )
+          survived = harness.index(
+              "RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED=1"
+          )
+          stop = harness.index('echo "== stopping $BUNDLE_ID after smoke window =="')
+          if not pid_check < survived < stop:
+              raise SystemExit("resource allocator same-PID survival proof is out of order")
+          if harness.count("RESOURCE_ALLOCATOR_SELF_TEST_PROCESS_SURVIVED=0") != 1:
+              raise SystemExit("resource allocator survival evidence lacks one fail-closed default")
+          if (
+              harness.count('processes.json \\') != 1
+              or harness.count("processes.json processes-id3-window-start.json") != 1
+          ):
+              raise SystemExit("end process evidence is not preserved on PASS and failure")
+          if "IOSFramePlanABIVersion==4u" not in Path(
+              "ios/tests/iosframeplan.cpp"
+          ).read_text():
+              raise SystemExit("IOSFramePlan ABI4 host gate is missing")
+          PY
 
       - name: Verify RendererIOS save-preview routing policy
         run: |
@@ -1155,6 +1331,7 @@ jobs:
             -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="${{ matrix.diagnostics }}" \
             -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}" \
+            -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="${GITHUB_SHA}"
 
       - name: Assert legacy renderer is not in the target
@@ -1180,6 +1357,8 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iossceneextractor\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosgpuscene\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosgpubink\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])rendereriosplatform\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Fq 'legacyShaders(Shaders::CompilationProfile::RendererIOSBridge)' game/graphics/iosmetalcontext.cpp
           grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pipelines=builtin,bink legacy-batch=disabled material-pipelines=source-metadata-only pfx-pipelines=disabled' game/graphics/shaders.cpp
@@ -1198,6 +1377,9 @@ jobs:
           grep -Fq 'materializeBinkSelfTestAfterTerminal(' \
             game/graphics/iosmetalcontext.cpp
           grep -Fq -- '--require-bink-self-test' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST' CMakeLists.txt
+          grep -Fq -- '--require-resource-allocator-self-test' \
             ios/device-test/run-smoke-test.sh
 
       - name: Verify RendererIOS UI automation contract
@@ -1625,6 +1807,7 @@ jobs:
       - name: Build iOS Release
         env:
           DIAGNOSTICS: ${{ matrix.diagnostics }}
+          RESOURCE_ALLOCATOR_SELF_TEST: ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
         run: |
           set -euo pipefail
           cmake --build build-renderer-ios --config Release -- \
@@ -1675,12 +1858,22 @@ jobs:
               "$APP_STRINGS"
             ! grep -Fxq 'WAIT_RESUME_EVIDENCE' "$APP_STRINGS"
           fi
+          if [ "$RESOURCE_ALLOCATOR_SELF_TEST" = ON ]; then
+            grep -Fxq 'RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1' \
+              "$APP_STRINGS"
+            grep -Fxq 'RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2' \
+              "$APP_STRINGS"
+          else
+            ! grep -Fq 'RendererIOS resource allocator self-test:' \
+              "$APP_STRINGS"
+          fi
 
       - name: Package unsigned device-test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         env:
           ACTIVE_FAULT_MODE: ${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}
           BINK_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.bink_self_test && 'ON' || 'OFF' }}
+          RESOURCE_ALLOCATOR_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
           DIAGNOSTICS: ${{ matrix.diagnostics }}
           IOS_VERSION: 1.0.${{ github.run_number }}
           TEMPEST_PROFILE: ${{ inputs.tempest_profile }}
@@ -1749,7 +1942,7 @@ jobs:
           fi
 
           SHORT_SHA="${GITHUB_SHA:0:12}"
-          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}"
+          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}-resource-allocator-self-test-${RESOURCE_ALLOCATOR_SELF_TEST}"
           ARTIFACT_DIR="$GITHUB_WORKSPACE/device-artifact"
           PACKAGE_ROOT="$RUNNER_TEMP/renderer-ios-device-package"
           rm -rf "$ARTIFACT_DIR" "$PACKAGE_ROOT"
@@ -1777,6 +1970,7 @@ jobs:
           diagnostics=$DIAGNOSTICS
           fault_mode=$ACTIVE_FAULT_MODE
           bink_self_test=$BINK_SELF_TEST
+          resource_allocator_self_test=$RESOURCE_ALLOCATOR_SELF_TEST
           save_preview_route=$SAVE_PREVIEW_ROUTE
           bundle_id=$BUNDLE_ID
           bundle_version=$BUNDLE_VERSION
@@ -1790,7 +1984,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         uses: actions/upload-artifact@v4
         with:
-          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}-resource-allocator-self-test-${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test || false }}
           path: device-artifact/
           if-no-files-found: error
           retention-days: 14
