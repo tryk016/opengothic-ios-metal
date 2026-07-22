@@ -11,6 +11,7 @@
 #   ... --require-bink-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
+#   ... --expected-fault frame-fence-error-after-terminal APP
 #
 # The phone must be unlocked when the app is launched. No screen interaction is
 # needed: OpenGothic's own -nomenu/-save arguments load the selected save.
@@ -118,7 +119,8 @@ run_host_contract_self_test() {
      "$expected_build" == "$expected_sha-local" ]] ||
     fail "self-test expected build is not source-bound"
   [[ "$expected_fault" == none ||
-     "$expected_fault" == post-submit-suboptimal ]] ||
+     "$expected_fault" == post-submit-suboptimal ||
+     "$expected_fault" == frame-fence-error-after-terminal ]] ||
     fail "self-test expected fault is invalid"
   [[ "$timestamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] ||
     fail "self-test evidence timestamp is invalid"
@@ -154,7 +156,7 @@ run_host_contract_self_test() {
 
   find "$self_test_work" -type f -delete
   rmdir "$self_test_work"
-  echo "smoke host contract self-test passed: none SHA-local + crash states"
+  echo "smoke host contract self-test passed: $expected_fault SHA-local + crash states"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -180,7 +182,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -195,8 +197,12 @@ done
    "$PIPELINE_ARCHIVE_TEST_MODE" == corrupt ]] ||
   fail "pipeline archive test mode must be cold or corrupt"
 [[ "$EXPECTED_FAULT" == none ||
-   "$EXPECTED_FAULT" == post-submit-suboptimal ]] ||
-  fail "expected fault must be none or post-submit-suboptimal"
+   "$EXPECTED_FAULT" == post-submit-suboptimal ||
+   "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]] ||
+  fail "expected fault must be none, post-submit-suboptimal, or frame-fence-error-after-terminal"
+[[ "$EXPECTED_FAULT" != frame-fence-error-after-terminal ]] ||
+  ((DURATION <= 45)) ||
+  fail "frame-fence-error-after-terminal duration must be 10..45 seconds"
 ((REQUIRE_BINK_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
   fail "Bink self-test requires expected fault none"
 if ((SELF_TEST != 0)); then
@@ -244,6 +250,7 @@ STOP_RUNNING_APP_QUERY_FAILED=0
 PRE_CRASH_SHA="unqueried"
 POST_CRASH_SHA="unqueried"
 FAULT_LOG_VALIDATION="not-required"
+PROCESS_SURVIVED_FAULT_WINDOW=0
 PASS_EVIDENCE_DIR=""
 APP_EXECUTABLE="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
@@ -689,6 +696,7 @@ preserve_failure_evidence() {
     echo "expected_build=$EXPECTED_BUILD"
     echo "expected_fault=$EXPECTED_FAULT"
     echo "fault_log_validation=$FAULT_LOG_VALIDATION"
+    echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
     echo "scenario=$SCENARIO"
     echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
@@ -748,6 +756,7 @@ cleanup() {
       echo "source_sha=$EXPECTED_SHA"
       echo "expected_build=$EXPECTED_BUILD"
       echo "expected_fault=$EXPECTED_FAULT"
+      echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
       echo "failure_reason=exit-cleanup-invalidated-provisional-pass"
       echo "cleanup_status=$cleanup_status"
       echo "pre_crash_sha256=$PRE_CRASH_SHA"
@@ -762,7 +771,11 @@ cleanup() {
     final_status=1
   fi
   if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
-    echo "PASS — offline metallib + scenario counters + scene/Bink gates proven; app stopped"
+    if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
+      echo "PASS — ID4 terminal frame-fence fatal gate proven; app stopped"
+    else
+      echo "PASS — offline metallib + scenario counters + scene/Bink gates proven; app stopped"
+    fi
     echo "evidence: $PASS_EVIDENCE_DIR"
   fi
   if ((cleanup_status != 0)); then
@@ -1088,15 +1101,24 @@ sleep "$DURATION"
 
 xcrun devicectl device info processes --device "$DEVICE" \
   --json-output "$WORK/processes.json" >/dev/null
-python3 - "$WORK/processes.json" "$APP_EXECUTABLE" <<'PY' ||
+python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
-if not any(pathlib.PurePosixPath(p.get("executable", "")).name == expected
-           for p in processes):
+expected_fault = sys.argv[3]
+matches = [
+    p for p in processes
+    if pathlib.PurePosixPath(p.get("executable", "")).name == expected
+]
+if expected_fault == "frame-fence-error-after-terminal" and len(matches) != 1:
+    raise SystemExit(1)
+if expected_fault != "frame-fence-error-after-terminal" and not matches:
     raise SystemExit(1)
 PY
   fail "application process did not survive the smoke window"
+if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
+  PROCESS_SURVIVED_FAULT_WINDOW=1
+fi
 
 echo "== stopping $BUNDLE_ID after smoke window =="
 stop_running_app 1 || fail "application cleanup failed"
@@ -1190,6 +1212,122 @@ rg -F 'RendererIOS legacy shader policy: profile=bridge-only eager-bridge-pipeli
 if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
 fi
+
+# ID4 is intentionally fatal after exactly one full frames-in-flight rotation.
+# Keep it outside the healthy 300/Landscape parser and its fatal denylist.
+if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
+  ((PROCESS_SURVIVED_FAULT_WINDOW == 1)) ||
+    fail "ID4 process did not survive its controlled fault observation window"
+  FRAME_FENCE_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --expected-fault "$EXPECTED_FAULT"
+    --summary "$WORK/fault-log-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    FRAME_FENCE_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  FAULT_LOG_VALIDATION="failed"
+  python3 "$ROOT/ios/device-test/validate-frame-fence-fault-log.py" \
+    "${FRAME_FENCE_VALIDATOR_ARGS[@]}" ||
+    fail "ID4 terminal frame-fence fault log validation failed"
+  python3 - "$WORK/fault-log-summary.txt" "$EXPECTED_BUILD" <<'PY' ||
+import pathlib
+import sys
+
+summary = {}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.count("=") != 1:
+        raise SystemExit(f"invalid ID4 summary line: {line!r}")
+    key, value = line.split("=", 1)
+    if key in summary:
+        raise SystemExit(f"duplicate ID4 summary key: {key}")
+    summary[key] = value
+expected = {
+    "id4_expected_build",
+    "id4_expected_fault",
+    "id4_frames_in_flight",
+    "id4_configured_count",
+    "id4_armed_count",
+    "id4_fired_count",
+    "id4_first_present",
+    "id4_last_present",
+    "id4_present_count",
+    "id4_post_fault_present_count",
+    "id4_fatal_count",
+    "id4_fatal_snapshot_submit_attempts",
+    "id4_fatal_snapshot_submit_accepted",
+    "id4_fatal_snapshot_present_attempts",
+    "id4_fatal_snapshot_present_accepted",
+    "id4_stopped_loop_count",
+    "id4_scene_retained",
+    "id4_scene_released",
+    "id4_scene_live",
+    "id4_fatal_settled_idle_confirmed",
+    "id4_fatal_settled_submit_attempts",
+    "id4_fatal_settled_submit_accepted",
+    "id4_fatal_settled_present_attempts",
+    "id4_fatal_settled_present_accepted",
+    "id4_post_delta_submit_attempts",
+    "id4_post_delta_submit_accepted",
+    "id4_post_delta_present_attempts",
+    "id4_post_delta_present_accepted",
+    "id4_resume_settled_count",
+    "id4_resumed_one_count",
+}
+if summary.keys() != expected:
+    raise SystemExit(
+        f"ID4 summary key mismatch: {sorted(summary.keys() ^ expected)}"
+    )
+if summary["id4_expected_build"] != sys.argv[2]:
+    raise SystemExit("ID4 summary build mismatch")
+if summary["id4_expected_fault"] != "frame-fence-error-after-terminal":
+    raise SystemExit("ID4 summary fault mismatch")
+n = int(summary["id4_frames_in_flight"])
+if n not in (2, 3):
+    raise SystemExit("ID4 summary has invalid frames-in-flight")
+exact_one = (
+    "id4_configured_count",
+    "id4_armed_count",
+    "id4_fired_count",
+    "id4_first_present",
+    "id4_fatal_count",
+    "id4_stopped_loop_count",
+    "id4_fatal_settled_idle_confirmed",
+)
+if any(summary[key] != "1" for key in exact_one):
+    raise SystemExit("ID4 summary lost an exact-one invariant")
+n_values = (
+    "id4_last_present",
+    "id4_present_count",
+    "id4_fatal_snapshot_submit_attempts",
+    "id4_fatal_snapshot_submit_accepted",
+    "id4_fatal_snapshot_present_attempts",
+    "id4_fatal_snapshot_present_accepted",
+    "id4_scene_retained",
+    "id4_scene_released",
+    "id4_fatal_settled_submit_attempts",
+    "id4_fatal_settled_submit_accepted",
+    "id4_fatal_settled_present_attempts",
+    "id4_fatal_settled_present_accepted",
+)
+if any(int(summary[key]) != n for key in n_values):
+    raise SystemExit("ID4 summary counters do not equal frames-in-flight")
+exact_zero = (
+    "id4_scene_live",
+    "id4_post_delta_submit_attempts",
+    "id4_post_delta_submit_accepted",
+    "id4_post_delta_present_attempts",
+    "id4_post_delta_present_accepted",
+    "id4_post_fault_present_count",
+    "id4_resume_settled_count",
+    "id4_resumed_one_count",
+)
+if any(summary[key] != "0" for key in exact_zero):
+    raise SystemExit("ID4 summary lost a zero invariant")
+PY
+    fail "ID4 terminal frame-fence summary validation failed"
+  FAULT_LOG_VALIDATION="passed"
+else
 python3 - "$WORK/log.txt" "$WORK/runtime-compilation-summary.txt" \
   "$SCENARIO" "$PIPELINE_ARCHIVE_TEST_MODE" <<'PY' ||
 import pathlib
@@ -1596,6 +1734,7 @@ PY
     fail "ID5 post-submit fault summary validation failed"
   FAULT_LOG_VALIDATION="passed"
 fi
+fi
 
 capture_crash_state after "$WORK/crash.log" POST_CRASH_SHA ||
   fail "could not establish post-run crash.log state"
@@ -1652,6 +1791,7 @@ done
   echo "expected_build=$EXPECTED_BUILD"
   echo "expected_fault=$EXPECTED_FAULT"
   echo "fault_log_validation=$FAULT_LOG_VALIDATION"
+  echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
   echo "pre_crash_sha256=$PRE_CRASH_SHA"
   echo "post_crash_sha256=$POST_CRASH_SHA"
   echo "bundle_id=$BUNDLE_ID"
@@ -1668,7 +1808,8 @@ done
   # device_process_stopped=1 is emitted only after the durable stable window
   # and its independent final process query both prove zero.
   write_durable_result_fields
-  cat "$WORK/runtime-compilation-summary.txt"
+  [[ ! -f "$WORK/runtime-compilation-summary.txt" ]] ||
+    cat "$WORK/runtime-compilation-summary.txt"
   [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
     cat "$WORK/fault-log-summary.txt"
 } >"$OUT/result.txt"

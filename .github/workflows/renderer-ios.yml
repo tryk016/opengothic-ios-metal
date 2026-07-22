@@ -688,13 +688,45 @@ jobs:
 
           test -x ios/device-test/run-smoke-test.sh
           test -x ios/device-test/validate-fault-log.py
+          test -x ios/device-test/validate-frame-fence-fault-log.py
           bash -n ios/device-test/run-smoke-test.sh
           ios/device-test/run-smoke-test.sh --self-test
+          OPENGOTHIC_IOS_EXPECTED_FAULT=post-submit-suboptimal \
+            ios/device-test/run-smoke-test.sh --self-test
+          OPENGOTHIC_IOS_EXPECTED_FAULT=frame-fence-error-after-terminal \
+            ios/device-test/run-smoke-test.sh --self-test
           python3 ios/device-test/validate-fault-log.py --self-test
+          python3 ios/device-test/validate-frame-fence-fault-log.py --self-test
           grep -Fq 'trap cleanup EXIT' ios/device-test/run-smoke-test.sh
           grep -Fq -- '--expected-fault)' ios/device-test/run-smoke-test.sh
           grep -Fq 'EXPECTED_FAULT="none"' ios/device-test/run-smoke-test.sh
           grep -Fq 'python3 "$ROOT/ios/device-test/validate-fault-log.py"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'python3 "$ROOT/ios/device-test/validate-frame-fence-fault-log.py"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'ID4 summary key mismatch' ios/device-test/run-smoke-test.sh
+          grep -Fq '"id4_post_fault_present_count"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '"id4_resume_settled_count"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '"id4_resumed_one_count"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '"id4_post_fault_present_count": post_fault_present_count' \
+            ios/device-test/validate-frame-fence-fault-log.py
+          grep -Fq '"id4_resume_settled_count": resume_settled_count' \
+            ios/device-test/validate-frame-fence-fault-log.py
+          grep -Fq '"id4_resumed_one_count": resumed_one_count' \
+            ios/device-test/validate-frame-fence-fault-log.py
+          grep -Fq 'PASS — ID4 terminal frame-fence fatal gate proven; app stopped' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'if expected_fault == "frame-fence-error-after-terminal" and len(matches) != 1:' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '((DURATION <= 45))' ios/device-test/run-smoke-test.sh
+          grep -Fq 'PROCESS_SURVIVED_FAULT_WINDOW=1' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '((PROCESS_SURVIVED_FAULT_WINDOW == 1))' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'line.startswith("RendererIOS shell: version=")' \
             ios/device-test/run-smoke-test.sh
@@ -742,6 +774,8 @@ jobs:
             ios/device-test/run-smoke-test.sh)" -eq 3
           test "$(grep -Fc 'echo "fault_log_validation=$FAULT_LOG_VALIDATION"' \
             ios/device-test/run-smoke-test.sh)" -eq 2
+          test "$(grep -Fc 'echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"' \
+            ios/device-test/run-smoke-test.sh)" -eq 3
           test "$(grep -Fc 'echo "pre_crash_sha256=$PRE_CRASH_SHA"' \
             ios/device-test/run-smoke-test.sh)" -eq 3
           test "$(grep -Fc 'echo "post_crash_sha256=$POST_CRASH_SHA"' \
@@ -863,6 +897,9 @@ jobs:
           runtime_diagnostics = source.index(
               "rg -F 'RendererIOS diagnostics: ON'"
           )
+          frame_fence_parser = source.index(
+              'python3 "$ROOT/ios/device-test/validate-frame-fence-fault-log.py"')
+          frame_fence_summary = source.index('ID4 summary key mismatch')
           fault_parser = source.index(
               'python3 "$ROOT/ios/device-test/validate-fault-log.py"')
           fault_summary = source.index('ID5 summary key mismatch')
@@ -882,8 +919,34 @@ jobs:
               raise SystemExit("bounded device selection retry runs after app inspection")
           if not bundle < data_preflight < scripts_preflight < install:
               raise SystemExit("game-data preflight does not fail before install")
-          if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
+          if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < frame_fence_parser < frame_fence_summary < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
               raise SystemExit("device PASS is emitted before cleanup proof")
+          id4_anchor = source.index(
+              "# ID4 is intentionally fatal after exactly one full frames-in-flight rotation.")
+          id4_else = source.index(
+              '\nelse\npython3 - "$WORK/log.txt" "$WORK/runtime-compilation-summary.txt"',
+              id4_anchor,
+          )
+          validation_end = source.index(
+              '\ncapture_crash_state after "$WORK/crash.log"', id4_else)
+          id4_branch = source[id4_anchor:id4_else]
+          healthy_and_id5_branch = source[id4_else:validation_end]
+          if 'validate-frame-fence-fault-log.py' not in id4_branch:
+              raise SystemExit("ID4 branch does not call its dedicated validator")
+          if 'validate-fault-log.py' in id4_branch:
+              raise SystemExit("ID4 branch calls the ID5 validator")
+          if 'ID4 summary key mismatch' not in id4_branch:
+              raise SystemExit("ID4 branch does not validate its exact summary")
+          if 'runtime-compilation-summary.txt' in id4_branch:
+              raise SystemExit("ID4 branch enters the healthy 300-present parser")
+          if 'fatal RendererIOS/runtime signature found' in id4_branch:
+              raise SystemExit("ID4 branch enters the healthy fatal denylist")
+          if 'validate-fault-log.py' not in healthy_and_id5_branch:
+              raise SystemExit("ID5 branch lost its dedicated validator")
+          if 'validate-frame-fence-fault-log.py' in healthy_and_id5_branch:
+              raise SystemExit("healthy/ID5 branch calls the ID4 validator")
+          if 'fatal RendererIOS/runtime signature found' not in healthy_and_id5_branch:
+              raise SystemExit("healthy/ID5 branch lost its fatal denylist")
           if not stopped < selection_evidence < result:
               raise SystemExit("device selection evidence is copied before cleanup proof")
           legacy_guard = (
