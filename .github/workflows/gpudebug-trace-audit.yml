@@ -26,8 +26,6 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
-    env:
-      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
 
     steps:
       - name: Initialize isolated directories
@@ -83,18 +81,21 @@ jobs:
           git checkout --quiet --detach FETCH_HEAD
           git remote remove origin
 
-      - name: Verify pinned runner and validators
+      - name: Verify macOS gpudebug and validators
         id: verify
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(uname -m)" = arm64
-          test -d /Applications/Xcode_27.0.app
-          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.0'
-          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 27A5218g'
-          GPUD="$(xcrun --find gpudebug)"
+          macos_version="$(sw_vers -productVersion)"
+          [[ "$macos_version" =~ ^([1-9][0-9]*)(\.([0-9]|[1-9][0-9]*)){1,2}$ ]]
+          macos_major="${BASH_REMATCH[1]}"
+          test "$macos_major" -ge 27
+          GPUD="$(command -v gpudebug)"
+          test -n "$GPUD"
           test -x "$GPUD"
+          PAGER=cat MANPAGER=cat man gpudebug >/dev/null 2>&1
           python3 -m py_compile \
             ios/device-test/validate-metal-capture-artifact.py \
             ios/device-test/validate-gpudebug-trace.py
@@ -104,8 +105,8 @@ jobs:
             .github/workflows/gpudebug-trace-audit.yml || true)" -eq 0
           {
             echo 'runner_contract=PASS'
-            echo 'xcode_version=27.0'
-            echo 'xcode_build=27A5218g'
+            echo "macos_version=$macos_version"
+            echo 'gpudebug_discovery=path/PASS'
             echo 'validator_self_tests=PASS'
           } >> "$AUDIT_FILE"
 
@@ -238,7 +239,9 @@ jobs:
               "$(<"$PRIVATE_DIR/capture-manifest-sha256")"
           echo 'capture_manifest_sha256=matched' >> "$AUDIT_FILE"
 
-          GPUD="$(xcrun --find gpudebug)"
+          GPUD="$(command -v gpudebug)"
+          test -n "$GPUD"
+          test -x "$GPUD"
           python3 ios/device-test/validate-gpudebug-trace.py audit \
             --gpudebug "$GPUD" \
             --trace \
