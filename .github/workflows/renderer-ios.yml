@@ -245,10 +245,10 @@ jobs:
             echo 'P2.3b allocator escaped the D-050 allocation-only scope'
             exit 1
           fi
-          if grep -nE \
-              'IOSFramePlanABIVersion[[:space:]]*=[[:space:]]*[^4]' \
-              game/graphics/iosframeplan.h; then
-            echo 'P2.3b changed the frozen IOSFramePlan ABI'
+          if [[ "$(grep -Ec \
+              '^[[:space:]]*inline constexpr uint32_t IOSFramePlanABIVersion[[:space:]]*=[[:space:]]*4u;[[:space:]]*$' \
+              game/graphics/iosframeplan.h)" -ne 1 ]]; then
+            echo 'P2.3b frozen IOSFramePlan ABI 4 declaration is missing or ambiguous'
             exit 1
           fi
 
