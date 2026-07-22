@@ -302,6 +302,16 @@ jobs:
           bash -n ios/device-test/run-pipeline-archive-test.sh
           python3 ios/device-test/validate-pipeline-archive-log.py --self-test
           ios/device-test/run-pipeline-archive-test.sh --self-test
+          grep -Fq 'OPENGOTHIC_IOS_EXPECTED_BUILD="$EXPECTED_BUILD"' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq -- '--evidence-path-file "$BASE_EVIDENCE_PATH_FILE"' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'BASE_EVIDENCE="$(read_base_smoke_evidence' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'base-smoke-evidence-path.txt' \
+            ios/device-test/run-pipeline-archive-test.sh
+          grep -Fq 'wrapper/smoke SHA-local evidence contract self-test passed' \
+            ios/device-test/run-pipeline-archive-test.sh
 
           grep -Fq 'FirstFlushPresent = 300u' \
             game/graphics/iospipelinearchivepolicy.h
@@ -677,8 +687,65 @@ jobs:
           set -euo pipefail
 
           test -x ios/device-test/run-smoke-test.sh
+          test -x ios/device-test/validate-fault-log.py
           bash -n ios/device-test/run-smoke-test.sh
+          ios/device-test/run-smoke-test.sh --self-test
+          python3 ios/device-test/validate-fault-log.py --self-test
           grep -Fq 'trap cleanup EXIT' ios/device-test/run-smoke-test.sh
+          grep -Fq -- '--expected-fault)' ios/device-test/run-smoke-test.sh
+          grep -Fq 'EXPECTED_FAULT="none"' ios/device-test/run-smoke-test.sh
+          grep -Fq 'python3 "$ROOT/ios/device-test/validate-fault-log.py"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'line.startswith("RendererIOS shell: version=")' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'line.startswith("RendererIOS configured fault mode=")' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'CONFIGURED_FAULT_RE = re.compile(' \
+            ios/device-test/validate-fault-log.py
+          grep -Fq '"missing-configured":' \
+            ios/device-test/validate-fault-log.py
+          grep -Fq '"duplicate-configured":' \
+            ios/device-test/validate-fault-log.py
+          grep -Fq '"wrong-configured":' \
+            ios/device-test/validate-fault-log.py
+          grep -Fq 'wrapped_shell = base.replace(' \
+            ios/device-test/validate-fault-log.py
+          grep -Fq -- '--summary "$WORK/fault-log-summary.txt"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '[[ "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '"id5_reset_present_baseline"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '"id5_post_reset_max_present"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq '"id5_post_reset_present_delta"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'cat "$WORK/fault-log-summary.txt"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'swapchain reset failed' \
+            ios/device-test/validate-fault-log.py
+          grep -Fq 'smoke_evidence_path()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_crash_state cleanup "$WORK/crash-after-cleanup.log"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'could not establish pre-run crash.log state' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'could not establish post-run crash.log state' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'could not establish final crash.log state' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'crash-listing-before.json crash-listing-after.json' \
+            ios/device-test/run-smoke-test.sh
+          test "$(grep -Fc 'echo "expected_build=$EXPECTED_BUILD"' \
+            ios/device-test/run-smoke-test.sh)" -eq 3
+          test "$(grep -Fc 'echo "expected_fault=$EXPECTED_FAULT"' \
+            ios/device-test/run-smoke-test.sh)" -eq 3
+          test "$(grep -Fc 'echo "fault_log_validation=$FAULT_LOG_VALIDATION"' \
+            ios/device-test/run-smoke-test.sh)" -eq 2
+          test "$(grep -Fc 'echo "pre_crash_sha256=$PRE_CRASH_SHA"' \
+            ios/device-test/run-smoke-test.sh)" -eq 3
+          test "$(grep -Fc 'echo "post_crash_sha256=$POST_CRASH_SHA"' \
+            ios/device-test/run-smoke-test.sh)" -eq 3
           grep -Fq 'stop_running_app 1 || fail "pre-launch application cleanup failed"' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'stop_running_app 1 || fail "application cleanup failed"' \
@@ -750,6 +817,37 @@ jobs:
           from pathlib import Path
 
           source = Path("ios/device-test/run-smoke-test.sh").read_text()
+          context = Path("game/graphics/iosmetalcontext.cpp").read_text()
+          resize = context.split("void IOSMetalContext::resize() {", 1)[1].split(
+              "\nbool IOSMetalContext::suspend() noexcept {", 1
+          )[0]
+          resize_contract = (
+              "impl->swapchain.reset();",
+              "impl->resetTargets();",
+              "#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)",
+              'impl->logLifecycleCounts("resize-settled",true);',
+              "#endif",
+              "catch(const SwapchainSuboptimal&)",
+          )
+          resize_positions = [resize.index(literal) for literal in resize_contract]
+          if resize_positions != sorted(resize_positions):
+              raise SystemExit("resize-settled marker is not guarded after full reset success")
+          if resize.count('impl->logLifecycleCounts("resize-settled",true);') != 1:
+              raise SystemExit("resize-settled marker is not unique")
+          fault_evidence_literal = (
+              '"RendererIOS configured fault mode=" '
+              'OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME'
+          )
+          if context.count(fault_evidence_literal) != 1:
+              raise SystemExit("compiled fault-mode evidence marker is not unique")
+          if context.count('Log::i(RendererIOSConfiguredFaultModeEvidence);') != 1:
+              raise SystemExit("compiled fault-mode evidence marker is not emitted")
+          expected_build_preflight = source.index(
+              'grep -Fxq "$EXPECTED_BUILD" "$WORK/app-strings.txt"')
+          expected_build_binding = source.index(
+              '[[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||')
+          expected_fault_preflight = source.index(
+              'grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT"')
           selection = source.index('DEVICE_RECORD="$(select_device_record)"')
           bundle = source.index('BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"')
           selection_evidence = source.index(
@@ -760,18 +858,60 @@ jobs:
               'compiled scripts/system preflight failed before install')
           install = source.index('echo "== installing $BUNDLE_ID =="')
           stopped = source.index('stop_running_app 1 || fail "application cleanup failed"')
+          runtime_shell_oracle = source.index('shell_count = sum(')
+          runtime_fault_oracle = source.index('configured_count = sum(')
+          runtime_diagnostics = source.index(
+              "rg -F 'RendererIOS diagnostics: ON'"
+          )
+          fault_parser = source.index(
+              'python3 "$ROOT/ios/device-test/validate-fault-log.py"')
+          fault_summary = source.index('ID5 summary key mismatch')
+          crash_sentinel = source.index(
+              '[[ "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]',
+              fault_summary,
+          )
           durable = source.index(
               'ensure_durable_zero || fail "durable final application cleanup failed"')
+          final_crash_sentinel = source.index(
+              'capture_crash_state final "$WORK/crash-final.log"')
+          pass_fault_namespace = source.index(
+              'OUT="$(smoke_evidence_path pass')
+          evidence_published = source.index('publish_evidence_path "$OUT"')
           result = source.index('echo "result=PASS"')
-          passed = source.index('echo "PASS — offline metallib')
-          if not selection < bundle:
+          if not expected_build_binding < expected_build_preflight < expected_fault_preflight < selection < bundle:
               raise SystemExit("bounded device selection retry runs after app inspection")
           if not bundle < data_preflight < scripts_preflight < install:
               raise SystemExit("game-data preflight does not fail before install")
-          if not stopped < durable < result < passed:
+          if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
               raise SystemExit("device PASS is emitted before cleanup proof")
           if not stopped < selection_evidence < result:
               raise SystemExit("device selection evidence is copied before cleanup proof")
+          legacy_guard = (
+              '[[ "$expected_fault" == none && '
+              '"$expected_build" == "$expected_sha" ]]; then'
+          )
+          if source.count(legacy_guard) != 1:
+              raise SystemExit("legacy smoke evidence path is not clean-none-only")
+          if source.count('%s/build/device-fault/%s/%s/%s-%s-%s') != 1:
+              raise SystemExit("fault evidence does not use exact build/fault namespace")
+          if source.count('smoke_evidence_path failure') != 1:
+              raise SystemExit("fault failure evidence bypasses the shared resolver")
+          crash_function = source.split('capture_crash_state() {', 1)[1].split(
+              '\npreserve_failure_evidence() {', 1
+          )[0]
+          crash_contract = (
+              'if ! xcrun devicectl device info files --device "$DEVICE"',
+              'state="$(crash_listing_state "$listing")"',
+              'if [[ "$state" == missing ]]',
+              'if ! xcrun devicectl device copy from --device "$DEVICE"',
+              'sha="$(shasum -a 256 "$destination"',
+          )
+          crash_positions = [crash_function.index(value) for value in crash_contract]
+          if crash_positions != sorted(crash_positions):
+              raise SystemExit("crash sentinel query/copy/hash contract is out of order")
+          for failure_state in ('query-error', 'provider-error', 'copy-error', 'hash-error'):
+              if failure_state not in crash_function:
+                  raise SystemExit(f"crash sentinel omits {failure_state}")
           durable_function = source.split("ensure_durable_zero() {", 1)[1].split(
               "\nwrite_durable_result_fields() {", 1)[0]
           durable_contract = (
@@ -817,6 +957,18 @@ jobs:
           ]
           if cleanup_positions != sorted(cleanup_positions):
               raise SystemExit("physical smoke EXIT trap bypasses durable-zero cleanup")
+          cleanup_crash_refresh = cleanup_function.index(
+              'capture_crash_state cleanup "$WORK/crash-after-cleanup.log"'
+          )
+          cleanup_crash_compare = cleanup_function.index(
+              '[[ "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]'
+          )
+          cleanup_result = cleanup_function.index('preserve_failure_evidence')
+          cleanup_pass = cleanup_function.index(
+              'echo "PASS — offline metallib + scenario counters'
+          )
+          if not cleanup_crash_refresh < cleanup_crash_compare < cleanup_result < cleanup_pass:
+              raise SystemExit("cleanup result uses stale post-crash state")
           pass_boundary = source.split(
               '# Validation can take long enough for SpringBoard', 1)[1]
           pass_contract = (
@@ -826,7 +978,6 @@ jobs:
               'DURABLE_ZERO_STABLE_SECONDS >= DURABLE_ZERO_REQUIRED_STABLE_SECONDS',
               'DURABLE_ZERO_FINAL_ZERO == 1',
               'echo "result=PASS"',
-              'echo "PASS — offline metallib',
           )
           pass_positions = [pass_boundary.index(literal) for literal in pass_contract]
           if pass_positions != sorted(pass_positions):

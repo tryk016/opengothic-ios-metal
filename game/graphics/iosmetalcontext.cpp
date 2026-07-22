@@ -64,6 +64,9 @@ static_assert(
 #define OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME "none"
 #endif
 
+constexpr char RendererIOSConfiguredFaultModeEvidence[] =
+  "RendererIOS configured fault mode=" OPENGOTHIC_RENDERER_IOS_FAULT_MODE_NAME;
+
 #if OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID < 0 || OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID > 8
 #error "Unsupported RendererIOS fault mode id"
 #endif
@@ -392,6 +395,7 @@ struct IOSMetalContext::Impl final {
     resetTargets();
     const auto platform = rendererIOSPlatformInfo();
     try {
+      Log::i(RendererIOSConfiguredFaultModeEvidence);
       Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui,inventory,save-placeholder,save-cpu-fastpath build=",
              OPENGOTHIC_RENDERER_IOS_BUILD_SHA," gpu=",device.properties().name,
              " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data(),
@@ -2082,6 +2086,9 @@ void IOSMetalContext::resize() {
   try {
     impl->swapchain.reset();
     impl->resetTargets();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    impl->logLifecycleCounts("resize-settled",true);
+#endif
     }
   catch(const SwapchainSuboptimal&) {
     throw;

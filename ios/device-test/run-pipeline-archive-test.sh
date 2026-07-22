@@ -32,6 +32,36 @@ fail() {
   exit 1
 }
 
+read_base_smoke_evidence() {
+  local path_file="$1"
+  local expected_sha="$2"
+  local expected_build="$3"
+
+  python3 - "$path_file" "$ROOT" "$expected_sha" "$expected_build" <<'PY'
+import pathlib
+import re
+import sys
+
+path_file = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
+source_sha = sys.argv[3]
+expected_build = sys.argv[4]
+lines = path_file.read_text().splitlines()
+if len(lines) != 1:
+    raise SystemExit("base smoke evidence path file must contain exactly one line")
+actual = lines[0]
+if expected_build == source_sha:
+    expected = str(root / "build" / "device-smoke" / source_sha)
+    if actual != expected:
+        raise SystemExit("clean base smoke evidence path is not canonical")
+else:
+    prefix = str(root / "build" / "device-fault" / expected_build / "none")
+    if re.fullmatch(re.escape(prefix) + r"/pass-[0-9]{8}T[0-9]{6}Z-[0-9]+", actual) is None:
+        raise SystemExit("local base smoke evidence path is not canonical")
+print(actual)
+PY
+}
+
 usage() {
   echo "usage: $0 [--duration seconds] [--save-slot number|--new-game] path/to/Gothic2Notr.app"
   echo "       $0 --self-test"
@@ -72,8 +102,29 @@ while [[ $# -gt 0 ]]; do
 done
 
 if ((SELF_TEST != 0)); then
+  self_test_work="$(mktemp -d -t opengothic-pipeline-wrapper-contract)"
+  self_test_sha="0123456789abcdef0123456789abcdef01234567"
+  self_test_build="$self_test_sha-local"
+  self_test_path_file="$self_test_work/base-smoke-evidence-path.txt"
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
-  exec python3 "$VALIDATOR" --self-test
+  python3 "$VALIDATOR" --self-test
+  OPENGOTHIC_IOS_EXPECTED_SHA="$self_test_sha" \
+  OPENGOTHIC_IOS_EXPECTED_BUILD="$self_test_build" \
+  OPENGOTHIC_IOS_EXPECTED_FAULT=none \
+  OPENGOTHIC_IOS_EVIDENCE_TIMESTAMP=20000101T000000Z \
+  OPENGOTHIC_IOS_EVIDENCE_PID=4242 \
+    "$BASE_SMOKE" --self-test \
+      --evidence-path-file "$self_test_path_file"
+  self_test_actual="$(read_base_smoke_evidence \
+    "$self_test_path_file" "$self_test_sha" "$self_test_build")" ||
+    fail "wrapper could not consume SHA-local smoke evidence path"
+  [[ "$self_test_actual" == \
+     "$ROOT/build/device-fault/$self_test_build/none/pass-20000101T000000Z-4242" ]] ||
+    fail "wrapper/smoke SHA-local evidence contract self-test failed"
+  find "$self_test_work" -type f -delete
+  rmdir "$self_test_work"
+  echo "pipeline archive wrapper/smoke SHA-local contract self-test passed"
+  exit 0
 fi
 
 [[ "$DURATION" =~ ^[0-9]+$ ]] &&
@@ -106,6 +157,31 @@ APP_EXECUTABLE="$(
 EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
   fail "expected source SHA must be exactly 40 lowercase hexadecimal characters"
+APP_STRINGS="$(mktemp -t opengothic-pipeline-app-strings)"
+strings "$APP_INPUT/$APP_EXECUTABLE" >"$APP_STRINGS"
+EXPECTED_BUILD="${OPENGOTHIC_IOS_EXPECTED_BUILD:-$(
+  python3 - "$APP_STRINGS" "$EXPECTED_SHA" <<'PY'
+import pathlib
+import sys
+
+lines = set(pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines())
+source_sha = sys.argv[2]
+allowed = {source_sha, source_sha + "-local"}
+matches = sorted(lines & allowed)
+if len(matches) != 1:
+    raise SystemExit(
+        "app must contain exactly one source-bound RendererIOS build, found "
+        + repr(matches)
+    )
+print(matches[0])
+PY
+)}"
+[[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||
+   "$EXPECTED_BUILD" == "$EXPECTED_SHA-local" ]] ||
+  fail "expected build must identify the expected source SHA"
+grep -Fxq "$EXPECTED_BUILD" "$APP_STRINGS" ||
+  fail "app binary does not contain exact expected RendererIOS build"
+rm -f "$APP_STRINGS"
 METALLIB_SHA="$(shasum -a 256 "$APP_INPUT/RendererIOS.metallib" | awk '{print $1}')"
 [[ "$METALLIB_SHA" =~ ^[0-9a-f]{64}$ ]] ||
   fail "could not compute RendererIOS.metallib SHA-256"
@@ -585,6 +661,7 @@ verify_existing_game_data before "$OUT/cold/game-data-preflight.txt"
 
 echo "== D-041 cold: one sign/install and first launch =="
 CURRENT_PHASE="cold-base-smoke"
+BASE_EVIDENCE_PATH_FILE="$WORK/base-smoke-evidence-path.txt"
 BASE_SMOKE_SCENARIO_ARGS=(--save-slot "$SAVE_SLOT")
 if ((NEW_GAME != 0)); then
   BASE_SMOKE_SCENARIO_ARGS=(--new-game)
@@ -593,15 +670,20 @@ OPENGOTHIC_IOS_DEVICE="$DEVICE" \
 OPENGOTHIC_IOS_BUNDLE_ID="$BUNDLE_ID" \
 OPENGOTHIC_IOS_TEAM_ID="$TEAM_ID" \
 OPENGOTHIC_IOS_EXPECTED_SHA="$EXPECTED_SHA" \
+OPENGOTHIC_IOS_EXPECTED_BUILD="$EXPECTED_BUILD" \
   "$BASE_SMOKE" --duration "$DURATION" \
     "${BASE_SMOKE_SCENARIO_ARGS[@]}" \
-    --pipeline-archive-test-mode cold "$APP_INPUT"
+    --pipeline-archive-test-mode cold \
+    --evidence-path-file "$BASE_EVIDENCE_PATH_FILE" "$APP_INPUT"
 
-BASE_EVIDENCE="$ROOT/build/device-smoke/$EXPECTED_SHA"
+BASE_EVIDENCE="$(read_base_smoke_evidence \
+  "$BASE_EVIDENCE_PATH_FILE" "$EXPECTED_SHA" "$EXPECTED_BUILD")" ||
+  fail "base smoke did not return canonical cold evidence path"
 [[ -f "$BASE_EVIDENCE/result.txt" ]] ||
   fail "base smoke did not produce cold result evidence"
 rg -Fx 'result=PASS' "$BASE_EVIDENCE/result.txt" >/dev/null ||
   fail "base cold smoke did not pass"
+ditto "$BASE_EVIDENCE_PATH_FILE" "$OUT/cold/base-smoke-evidence-path.txt"
 for name in log.txt stderr.log device-selection.log result.txt; do
   [[ -f "$BASE_EVIDENCE/$name" ]] || continue
   ditto "$BASE_EVIDENCE/$name" "$OUT/cold/$name"

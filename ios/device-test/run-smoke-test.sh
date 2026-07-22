@@ -10,6 +10,7 @@
 #   ... --new-game APP
 #   ... --require-bink-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
+#   ... --expected-fault post-submit-suboptimal APP
 #
 # The phone must be unlocked when the app is launched. No screen interaction is
 # needed: OpenGothic's own -nomenu/-save arguments load the selected save.
@@ -26,6 +27,9 @@ SAVE_SLOT_EXPLICIT=0
 NEW_GAME=0
 REQUIRE_BINK_SELF_TEST=0
 PIPELINE_ARCHIVE_TEST_MODE=""
+EXPECTED_FAULT="none"
+EVIDENCE_PATH_FILE=""
+SELF_TEST=0
 APP_INPUT=""
 readonly DURABLE_ZERO_MAX_CYCLES=3
 readonly DURABLE_ZERO_SCANS_PER_CYCLE=10
@@ -35,6 +39,122 @@ readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
 fail() {
   echo "FAIL: $*" >&2
   exit 1
+}
+
+smoke_evidence_path() {
+  local outcome="$1"
+  local timestamp="$2"
+  local process_id="$3"
+  local expected_sha="$4"
+  local expected_build="$5"
+  local expected_fault="$6"
+  local evidence_root
+
+  [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
+  if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
+    evidence_root="$ROOT/build/device-smoke/$expected_sha"
+    if [[ "$outcome" == pass ]]; then
+      printf '%s\n' "$evidence_root"
+    else
+      printf '%s/failure-%s-%s\n' "$evidence_root" "$timestamp" "$process_id"
+    fi
+  else
+    printf '%s/build/device-fault/%s/%s/%s-%s-%s\n' \
+      "$ROOT" "$expected_build" "$expected_fault" \
+      "$outcome" "$timestamp" "$process_id"
+  fi
+}
+
+publish_evidence_path() {
+  local path="$1"
+
+  [[ -n "$EVIDENCE_PATH_FILE" ]] || return 0
+  [[ "$EVIDENCE_PATH_FILE" == /* ]] ||
+    fail "evidence path file must be absolute"
+  [[ -d "$(dirname "$EVIDENCE_PATH_FILE")" ]] ||
+    fail "evidence path file parent does not exist"
+  printf '%s\n' "$path" >"$EVIDENCE_PATH_FILE"
+}
+
+crash_listing_state() {
+  local listing="$1"
+
+  python3 - "$listing" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    payload = json.load(source)
+files = payload.get("result", {}).get("files")
+if not isinstance(files, list):
+    raise SystemExit("crash listing provider returned no files array")
+matches = [entry for entry in files if entry.get("name") == "crash.log"]
+if len(matches) > 1:
+    raise SystemExit("crash listing contains duplicate crash.log entries")
+if not matches:
+    print("missing")
+    raise SystemExit(0)
+resources = matches[0].get("resources", {})
+if (
+    resources.get("isDirectory") is not False
+    or resources.get("isSymbolicLink") is not False
+):
+    raise SystemExit("crash.log listing is not a regular non-symlink file")
+print("present")
+PY
+}
+
+run_host_contract_self_test() {
+  local expected_sha="${OPENGOTHIC_IOS_EXPECTED_SHA:-0123456789abcdef0123456789abcdef01234567}"
+  local expected_build="${OPENGOTHIC_IOS_EXPECTED_BUILD:-${expected_sha}-local}"
+  local expected_fault="${OPENGOTHIC_IOS_EXPECTED_FAULT:-none}"
+  local timestamp="${OPENGOTHIC_IOS_EVIDENCE_TIMESTAMP:-20000101T000000Z}"
+  local process_id="${OPENGOTHIC_IOS_EVIDENCE_PID:-4242}"
+  local self_test_work evidence_file actual expected
+
+  [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
+    fail "self-test expected SHA is invalid"
+  [[ "$expected_build" == "$expected_sha" ||
+     "$expected_build" == "$expected_sha-local" ]] ||
+    fail "self-test expected build is not source-bound"
+  [[ "$expected_fault" == none ||
+     "$expected_fault" == post-submit-suboptimal ]] ||
+    fail "self-test expected fault is invalid"
+  [[ "$timestamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] ||
+    fail "self-test evidence timestamp is invalid"
+  [[ "$process_id" =~ ^[0-9]+$ ]] ||
+    fail "self-test evidence process id is invalid"
+
+  self_test_work="$(mktemp -d -t opengothic-smoke-contract)"
+  evidence_file="$EVIDENCE_PATH_FILE"
+  [[ -n "$evidence_file" ]] || evidence_file="$self_test_work/evidence-path.txt"
+  EVIDENCE_PATH_FILE="$evidence_file"
+  actual="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" "$expected_fault")"
+  publish_evidence_path "$actual"
+  expected="$ROOT/build/device-fault/$expected_build/$expected_fault/pass-$timestamp-$process_id"
+  [[ "$actual" == "$expected" ]] ||
+    fail "SHA-local smoke evidence path self-test failed"
+  [[ "$(cat "$evidence_file")" == "$expected" ]] ||
+    fail "smoke evidence path publication self-test failed"
+
+  printf '%s\n' '{"result":{"files":[]}}' >"$self_test_work/missing.json"
+  printf '%s\n' \
+    '{"result":{"files":[{"name":"crash.log","resources":{"isDirectory":false,"isSymbolicLink":false}}]}}' \
+    >"$self_test_work/present.json"
+  printf '%s\n' '{"providerError":"unavailable"}' \
+    >"$self_test_work/provider-error.json"
+  [[ "$(crash_listing_state "$self_test_work/missing.json")" == missing ]] ||
+    fail "missing crash state self-test failed"
+  [[ "$(crash_listing_state "$self_test_work/present.json")" == present ]] ||
+    fail "present crash state self-test failed"
+  if crash_listing_state "$self_test_work/provider-error.json" >/dev/null 2>&1; then
+    fail "provider-error crash state self-test survived"
+  fi
+
+  find "$self_test_work" -type f -delete
+  rmdir "$self_test_work"
+  echo "smoke host contract self-test passed: none SHA-local + crash states"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -51,7 +171,16 @@ while [[ $# -gt 0 ]]; do
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
       ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] path/to/Gothic2Notr.app" ;;
+    --expected-fault)
+      EXPECTED_FAULT="${2:?missing expected fault}"
+      shift 2
+      ;;
+    --evidence-path-file)
+      EVIDENCE_PATH_FILE="${2:?missing evidence path file}"
+      shift 2
+      ;;
+    --self-test) SELF_TEST=1; shift ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -65,6 +194,22 @@ done
    "$PIPELINE_ARCHIVE_TEST_MODE" == cold ||
    "$PIPELINE_ARCHIVE_TEST_MODE" == corrupt ]] ||
   fail "pipeline archive test mode must be cold or corrupt"
+[[ "$EXPECTED_FAULT" == none ||
+   "$EXPECTED_FAULT" == post-submit-suboptimal ]] ||
+  fail "expected fault must be none or post-submit-suboptimal"
+((REQUIRE_BINK_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
+  fail "Bink self-test requires expected fault none"
+if ((SELF_TEST != 0)); then
+  [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
+  run_host_contract_self_test
+  exit 0
+fi
+if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
+  [[ "$EVIDENCE_PATH_FILE" == /* ]] ||
+    fail "evidence path file must be absolute"
+  [[ -d "$(dirname "$EVIDENCE_PATH_FILE")" ]] ||
+    fail "evidence path file parent does not exist"
+fi
 [[ -n "$APP_INPUT" && -d "$APP_INPUT" ]] || fail "pass an existing .app directory"
 [[ -f "$APP_INPUT/RendererIOS.metallib" ]] || fail "app has no RendererIOS.metallib"
 SCENARIO=save
@@ -79,6 +224,7 @@ DEVICE=""
 APP_EXECUTABLE=""
 BUNDLE_ID=""
 EXPECTED_SHA=""
+EXPECTED_BUILD=""
 RUNTIME_ARMED=0
 DEVICE_FOREGROUND_PARKED=0
 DEVICE_PROCESS_STOPPED=0
@@ -95,8 +241,10 @@ DURABLE_ZERO_ACTIVE_CYCLE_STARTED=0
 BATTERY_FALLBACK_ATTEMPTS=0
 BATTERY_FALLBACK_FINAL_ZERO=0
 STOP_RUNNING_APP_QUERY_FAILED=0
-PRE_CRASH_SHA=""
-POST_CRASH_SHA=""
+PRE_CRASH_SHA="unqueried"
+POST_CRASH_SHA="unqueried"
+FAULT_LOG_VALIDATION="not-required"
+PASS_EVIDENCE_DIR=""
 APP_EXECUTABLE="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
     "$APP_INPUT/Info.plist" 2>/dev/null
@@ -459,6 +607,51 @@ pull_runtime_logs() {
   done
 }
 
+capture_crash_state() {
+  local label="$1"
+  local destination="$2"
+  local variable="$3"
+  local listing="$WORK/crash-listing-$label.json"
+  local state sha
+
+  rm -f "$listing" "$destination"
+  if ! xcrun devicectl device info files --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+      --username mobile --subdirectory Documents --no-recurse \
+      --json-output "$listing" >/dev/null; then
+    printf -v "$variable" '%s' "query-error"
+    return 1
+  fi
+  if ! state="$(crash_listing_state "$listing")"; then
+    printf -v "$variable" '%s' "provider-error"
+    return 1
+  fi
+  if [[ "$state" == missing ]]; then
+    printf -v "$variable" '%s' "missing"
+    return 0
+  fi
+  [[ "$state" == present ]] || {
+    printf -v "$variable" '%s' "provider-error"
+    return 1
+  }
+  if ! xcrun devicectl device copy from --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+      --source Documents/crash.log --destination "$destination" >/dev/null; then
+    printf -v "$variable" '%s' "copy-error"
+    return 1
+  fi
+  [[ -f "$destination" ]] || {
+    printf -v "$variable" '%s' "copy-error"
+    return 1
+  }
+  sha="$(shasum -a 256 "$destination" | awk '{print $1}')"
+  [[ "$sha" =~ ^[0-9a-f]{64}$ ]] || {
+    printf -v "$variable" '%s' "hash-error"
+    return 1
+  }
+  printf -v "$variable" '%s' "$sha"
+}
+
 preserve_failure_evidence() {
   local original_status="$1"
   local cleanup_status="$2"
@@ -466,11 +659,18 @@ preserve_failure_evidence() {
 
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || return 0
   timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
-  failure_dir="$ROOT/build/device-smoke/$EXPECTED_SHA/failure-$timestamp-$$"
+  if [[ ! "$EXPECTED_BUILD" =~ ^[0-9a-f]{40}(-local)?$ ]]; then
+    failure_dir="$ROOT/build/device-fault/$EXPECTED_SHA/invalid-build/failure-$timestamp-$$"
+  else
+    failure_dir="$(smoke_evidence_path failure "$timestamp" "$$" \
+      "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" || return 0
+  fi
   mkdir -p "$failure_dir"
+  publish_evidence_path "$failure_dir"
   for candidate in \
       launch.log cleanup.log \
       park-settings.log \
+      fault-log-summary.txt \
       log.txt stderr.log crash.log crash-before.log \
       log-before-cleanup.txt stderr-before-cleanup.log crash-before-cleanup.log \
       log-after-cleanup.txt stderr-after-cleanup.log crash-after-cleanup.log; do
@@ -478,13 +678,17 @@ preserve_failure_evidence() {
     ditto "$WORK/$candidate" "$failure_dir/$candidate"
   done
   for candidate in "$WORK"/processes-durable-zero-*.json \
-      "$WORK"/durable-zero-*.json; do
+      "$WORK"/durable-zero-*.json \
+      "$WORK"/crash-listing-*.json; do
     [[ -f "$candidate" ]] || continue
     ditto "$candidate" "$failure_dir/$(basename "$candidate")"
   done
   {
     echo "result=FAIL"
     echo "source_sha=$EXPECTED_SHA"
+    echo "expected_build=$EXPECTED_BUILD"
+    echo "expected_fault=$EXPECTED_FAULT"
+    echo "fault_log_validation=$FAULT_LOG_VALIDATION"
     echo "scenario=$SCENARIO"
     echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
@@ -492,6 +696,8 @@ preserve_failure_evidence() {
     echo "pre_crash_sha256=$PRE_CRASH_SHA"
     echo "post_crash_sha256=$POST_CRASH_SHA"
     write_durable_result_fields
+    [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
+      cat "$WORK/fault-log-summary.txt"
   } >"$failure_dir/result.txt"
   echo "failure evidence: $failure_dir" >&2
 }
@@ -521,12 +727,43 @@ cleanup() {
     if ((RUNTIME_ARMED != 0)); then
       pull_runtime_logs after-cleanup
     fi
+    if [[ -n "$BUNDLE_ID" ]]; then
+      if capture_crash_state cleanup "$WORK/crash-after-cleanup.log" \
+          POST_CRASH_SHA; then
+        if ((status == 0)) && [[ "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
+          cleanup_status=1
+        fi
+      else
+        cleanup_status=1
+      fi
+    fi
   fi
   if ((status != 0 || cleanup_status != 0)); then
     preserve_failure_evidence "$status" "$cleanup_status"
   fi
+  if ((status == 0 && cleanup_status != 0)) &&
+      [[ -n "$PASS_EVIDENCE_DIR" && -d "$PASS_EVIDENCE_DIR" ]]; then
+    {
+      echo "result=FAIL"
+      echo "source_sha=$EXPECTED_SHA"
+      echo "expected_build=$EXPECTED_BUILD"
+      echo "expected_fault=$EXPECTED_FAULT"
+      echo "failure_reason=exit-cleanup-invalidated-provisional-pass"
+      echo "cleanup_status=$cleanup_status"
+      echo "pre_crash_sha256=$PRE_CRASH_SHA"
+      echo "post_crash_sha256=$POST_CRASH_SHA"
+      write_durable_result_fields
+      [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
+        cat "$WORK/fault-log-summary.txt"
+    } >"$PASS_EVIDENCE_DIR/result.txt"
+    echo "FAIL: final cleanup invalidated provisional PASS: $PASS_EVIDENCE_DIR" >&2
+  fi
   if ((status == 0 && cleanup_status != 0)); then
     final_status=1
+  fi
+  if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
+    echo "PASS — offline metallib + scenario counters + scene/Bink gates proven; app stopped"
+    echo "evidence: $PASS_EVIDENCE_DIR"
   fi
   if ((cleanup_status != 0)); then
     echo "WARNING: could not confirm device app cleanup" >&2
@@ -538,6 +775,24 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
+
+EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
+[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
+  fail "expected source SHA must be exactly 40 lowercase hexadecimal characters"
+EXPECTED_BUILD="${OPENGOTHIC_IOS_EXPECTED_BUILD:-$EXPECTED_SHA}"
+[[ "$EXPECTED_BUILD" =~ ^[0-9a-f]{40}(-local)?$ ]] ||
+  fail "expected build must be a lowercase source SHA, optionally suffixed -local"
+[[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||
+   "$EXPECTED_BUILD" == "$EXPECTED_SHA-local" ]] ||
+  fail "expected build must identify the expected source SHA"
+strings "$APP_INPUT/$APP_EXECUTABLE" >"$WORK/app-strings.txt"
+grep -Fxq "$EXPECTED_BUILD" "$WORK/app-strings.txt" ||
+  fail "app binary does not contain exact expected RendererIOS build"
+[[ "$(grep -Ec '^RendererIOS configured fault mode=' "$WORK/app-strings.txt" || true)" -eq 1 ]] ||
+  fail "app binary does not contain exactly one configured fault marker"
+grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT" \
+    "$WORK/app-strings.txt" ||
+  fail "app binary configured fault mode does not match expected fault"
 
 REQUESTED_DEVICE="${OPENGOTHIC_IOS_DEVICE:-}"
 DEVICE_SELECTION_TEST_FAIL_FIRST="${OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST:-0}"
@@ -793,15 +1048,9 @@ codesign -f -s "$IDENTITY" --entitlements "$WORK/entitlements.plist" \
   --generate-entitlement-der "$APP"
 codesign -vv --deep --strict "$APP"
 
-EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
-[[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
-  fail "expected source SHA must be exactly 40 lowercase hexadecimal characters"
 METALLIB_SHA="$(shasum -a 256 "$APP/RendererIOS.metallib" | awk '{print $1}')"
-if xcrun devicectl device copy from --device "$DEVICE" \
-    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
-    --source Documents/crash.log --destination "$WORK/crash-before.log" >/dev/null 2>&1; then
-  PRE_CRASH_SHA="$(shasum -a 256 "$WORK/crash-before.log" | awk '{print $1}')"
-fi
+capture_crash_state before "$WORK/crash-before.log" PRE_CRASH_SHA ||
+  fail "could not establish pre-run crash.log state"
 
 echo "== stopping any previous $BUNDLE_ID process =="
 stop_running_app 1 || fail "pre-launch application cleanup failed"
@@ -854,35 +1103,54 @@ stop_running_app 1 || fail "application cleanup failed"
 park_settings_foreground || fail "could not park Settings after smoke window"
 RUNTIME_ARMED=0
 
-for name in log.txt stderr.log crash.log; do
+for name in log.txt stderr.log; do
   xcrun devicectl device copy from --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$name" --destination "$WORK/$name" >/dev/null 2>&1 || true
 done
 
 [[ -s "$WORK/log.txt" ]] || fail "device produced no log.txt"
-python3 - "$WORK/log.txt" "$EXPECTED_SHA" <<'PY' ||
+python3 - "$WORK/log.txt" "$EXPECTED_BUILD" "$EXPECTED_FAULT" <<'PY' ||
 import pathlib
 import re
 import sys
 
 log = pathlib.Path(sys.argv[1]).read_text(errors="replace")
-source_sha = sys.argv[2]
-allowed = {source_sha, source_sha + "-local"}
+expected_build = sys.argv[2]
+expected_fault = sys.argv[3]
 builds = re.findall(
-    r"^RendererIOS shell: [^\r\n]* build=([^\s]+) gpu=",
+    r"^RendererIOS shell: version=[^\r\n]* build=([^\s]+) gpu=[^\r\n]*$",
     log,
     flags=re.MULTILINE,
 )
-if len(builds) != 1 or builds[0] not in allowed:
+configured_faults = re.findall(
+    r"^RendererIOS configured fault mode=([^\s]+)$",
+    log,
+    flags=re.MULTILINE,
+)
+shell_count = sum(
+    line.startswith("RendererIOS shell: version=") for line in log.splitlines()
+)
+configured_count = sum(
+    line.startswith("RendererIOS configured fault mode=")
+    for line in log.splitlines()
+)
+if shell_count != 1 or builds != [expected_build]:
     raise SystemExit(
-        "expected exactly one RendererIOS shell build in "
-        + repr(sorted(allowed))
+        "expected exactly one physical RendererIOS shell line with exact build "
+        + repr(expected_build)
         + ", found "
         + repr(builds)
     )
+if configured_count != 1 or configured_faults != [expected_fault]:
+    raise SystemExit(
+        "expected exactly one short configured fault marker "
+        + repr(expected_fault)
+        + ", found "
+        + repr(configured_faults)
+    )
 PY
-  fail "runtime log does not identify exact source SHA $EXPECTED_SHA"
+  fail "runtime log does not identify exact build/fault configuration"
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
 rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=4' \
@@ -1249,9 +1517,89 @@ if rg -i 'RendererIOS (fatal|GPU shutdown failed|native Landscape encode failed|
   fail "fatal RendererIOS/runtime signature found in device logs"
 fi
 
-[[ -s "$WORK/crash.log" ]] &&
-  POST_CRASH_SHA="$(shasum -a 256 "$WORK/crash.log" | awk '{print $1}')"
-if [[ -n "$POST_CRASH_SHA" && "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
+if [[ "$EXPECTED_FAULT" == post-submit-suboptimal ]]; then
+  FAULT_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --expected-fault "$EXPECTED_FAULT"
+    --summary "$WORK/fault-log-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    FAULT_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  FAULT_LOG_VALIDATION="failed"
+  python3 "$ROOT/ios/device-test/validate-fault-log.py" \
+    "${FAULT_VALIDATOR_ARGS[@]}" ||
+    fail "ID5 post-submit fault log validation failed"
+  python3 - "$WORK/fault-log-summary.txt" "$EXPECTED_BUILD" <<'PY' ||
+import pathlib
+import sys
+
+summary = {}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.count("=") != 1:
+        raise SystemExit(f"invalid ID5 summary line: {line!r}")
+    key, value = line.split("=", 1)
+    if key in summary:
+        raise SystemExit(f"duplicate ID5 summary key: {key}")
+    summary[key] = value
+expected = {
+    "id5_expected_build",
+    "id5_expected_fault",
+    "id5_armed_count",
+    "id5_fired_count",
+    "id5_reset_attempt_count",
+    "id5_resize_settled_count",
+    "id5_reset_idle_confirmed",
+    "id5_reset_submit_attempts",
+    "id5_reset_submit_accepted",
+    "id5_reset_present_attempts",
+    "id5_reset_present_accepted",
+    "id5_reset_present_baseline",
+    "id5_post_reset_first_present",
+    "id5_post_reset_max_present",
+    "id5_post_reset_present_delta",
+    "id5_post_reset_contiguous_presents",
+}
+if summary.keys() != expected:
+    raise SystemExit(
+        f"ID5 summary key mismatch: {sorted(summary.keys() ^ expected)}"
+    )
+if summary["id5_expected_build"] != sys.argv[2]:
+    raise SystemExit("ID5 summary build mismatch")
+if summary["id5_expected_fault"] != "post-submit-suboptimal":
+    raise SystemExit("ID5 summary fault mismatch")
+exact_one = (
+    "id5_armed_count",
+    "id5_fired_count",
+    "id5_reset_attempt_count",
+    "id5_resize_settled_count",
+    "id5_reset_idle_confirmed",
+    "id5_reset_submit_attempts",
+    "id5_reset_submit_accepted",
+    "id5_post_reset_first_present",
+)
+if any(summary[key] != "1" for key in exact_one):
+    raise SystemExit("ID5 summary lost an exact-one invariant")
+exact_zero = (
+    "id5_reset_present_attempts",
+    "id5_reset_present_accepted",
+    "id5_reset_present_baseline",
+)
+if any(summary[key] != "0" for key in exact_zero):
+    raise SystemExit("ID5 summary lost its zero-present reset baseline")
+maximum = int(summary["id5_post_reset_max_present"])
+delta = int(summary["id5_post_reset_present_delta"])
+contiguous = int(summary["id5_post_reset_contiguous_presents"])
+if maximum < 300 or delta != maximum or contiguous != maximum:
+    raise SystemExit("ID5 summary does not prove 300 contiguous post-reset presents")
+PY
+    fail "ID5 post-submit fault summary validation failed"
+  FAULT_LOG_VALIDATION="passed"
+fi
+
+capture_crash_state after "$WORK/crash.log" POST_CRASH_SHA ||
+  fail "could not establish post-run crash.log state"
+if [[ "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
   fail "crash.log changed during the smoke run"
 fi
 
@@ -1267,15 +1615,31 @@ ensure_durable_zero || fail "durable final application cleanup failed"
   fail "durable final application cleanup did not establish stable zero"
 ((DEVICE_FOREGROUND_PARKED == 1)) ||
   fail "Settings was not parked at the durable PASS boundary"
+capture_crash_state final "$WORK/crash-final.log" POST_CRASH_SHA ||
+  fail "could not establish final crash.log state"
+[[ "$POST_CRASH_SHA" == "$PRE_CRASH_SHA" ]] ||
+  fail "crash.log changed before the durable PASS boundary"
 
-OUT="$ROOT/build/device-smoke/$EXPECTED_SHA"
+timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+OUT="$(smoke_evidence_path pass "$timestamp" "$$" \
+  "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" ||
+  fail "could not resolve smoke evidence path"
 mkdir -p "$OUT"
+PASS_EVIDENCE_DIR="$OUT"
+publish_evidence_path "$OUT"
 ditto "$WORK/log.txt" "$OUT/log.txt"
 [[ ! -f "$WORK/stderr.log" ]] || ditto "$WORK/stderr.log" "$OUT/stderr.log"
 ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
 [[ ! -f "$WORK/cleanup.log" ]] || ditto "$WORK/cleanup.log" "$OUT/cleanup.log"
 [[ ! -f "$WORK/park-settings.log" ]] ||
   ditto "$WORK/park-settings.log" "$OUT/park-settings.log"
+[[ ! -f "$WORK/fault-log-summary.txt" ]] ||
+  ditto "$WORK/fault-log-summary.txt" "$OUT/fault-log-summary.txt"
+for candidate in crash-before.log crash.log crash-final.log \
+    crash-listing-before.json crash-listing-after.json crash-listing-final.json; do
+  [[ -f "$WORK/$candidate" ]] || continue
+  ditto "$WORK/$candidate" "$OUT/$candidate"
+done
 rm -f "$OUT"/processes-durable-zero-*.json "$OUT"/durable-zero-*.json
 for candidate in "$WORK"/processes-durable-zero-*.json \
     "$WORK"/durable-zero-*.json; do
@@ -1285,6 +1649,11 @@ done
 {
   echo "result=PASS"
   echo "source_sha=$EXPECTED_SHA"
+  echo "expected_build=$EXPECTED_BUILD"
+  echo "expected_fault=$EXPECTED_FAULT"
+  echo "fault_log_validation=$FAULT_LOG_VALIDATION"
+  echo "pre_crash_sha256=$PRE_CRASH_SHA"
+  echo "post_crash_sha256=$POST_CRASH_SHA"
   echo "bundle_id=$BUNDLE_ID"
   echo "scenario=$SCENARIO"
   echo "save_slot=$SCENARIO_SAVE_SLOT"
@@ -1300,7 +1669,6 @@ done
   # and its independent final process query both prove zero.
   write_durable_result_fields
   cat "$WORK/runtime-compilation-summary.txt"
+  [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
+    cat "$WORK/fault-log-summary.txt"
 } >"$OUT/result.txt"
-
-echo "PASS — offline metallib + scenario counters + scene/Bink gates proven; app stopped"
-echo "evidence: $OUT"
