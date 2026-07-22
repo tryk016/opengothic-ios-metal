@@ -173,6 +173,96 @@ bool MainWindow::iosSemanticScriptRunning() const noexcept {
          iosSemanticState!=IOSSemanticScriptState::Failed;
   }
 
+const char* MainWindow::iosPreviewFenceSaveScriptStateName(
+    IOSPreviewFenceSaveScriptState state) noexcept {
+  switch(state) {
+    case IOSPreviewFenceSaveScriptState::Disabled:   return "DISABLED";
+    case IOSPreviewFenceSaveScriptState::WaitWorld:  return "WAIT_WORLD";
+    case IOSPreviewFenceSaveScriptState::Requesting: return "REQUESTING";
+    case IOSPreviewFenceSaveScriptState::Requested:  return "REQUESTED";
+    case IOSPreviewFenceSaveScriptState::Failed:     return "FAILED";
+    }
+  return "UNKNOWN";
+  }
+
+void MainWindow::failIOSPreviewFenceSaveScript(const char* reason) noexcept {
+  if(iosPreviewFenceSaveState==IOSPreviewFenceSaveScriptState::Disabled ||
+     iosPreviewFenceSaveState==IOSPreviewFenceSaveScriptState::Requested ||
+     iosPreviewFenceSaveState==IOSPreviewFenceSaveScriptState::Failed)
+    return;
+  const char* state =
+    iosPreviewFenceSaveScriptStateName(iosPreviewFenceSaveState);
+  iosPreviewFenceSaveState = IOSPreviewFenceSaveScriptState::Failed;
+  iosPreviewFenceSaveDeadlineMs = 0;
+  try {
+    Log::e("RendererIOS preview fence save script: SCRIPT FAIL",
+           " mode=preview-fence-save-v1",
+           " nonce=",CommandLine::inst().rendererIOSSemanticNonce(),
+           " slot=save_slot_20.sav",
+           " state=",state,
+           " reason=",reason);
+    }
+  catch(...) {
+    }
+  }
+
+void MainWindow::armIOSPreviewFenceSaveScript() {
+  if(!CommandLine::inst().rendererIOSPreviewFenceSaveScript())
+    return;
+  iosPreviewFenceSaveState = IOSPreviewFenceSaveScriptState::WaitWorld;
+  iosPreviewFenceSaveDeadlineMs = Application::tickCount()+180000u;
+  Log::i("RendererIOS preview fence save script: ARMED",
+         " mode=preview-fence-save-v1",
+         " nonce=",CommandLine::inst().rendererIOSSemanticNonce(),
+         " slot=save_slot_20.sav");
+  }
+
+void MainWindow::processIOSPreviewFenceSaveScript() {
+  if(iosPreviewFenceSaveState!=IOSPreviewFenceSaveScriptState::WaitWorld)
+    return;
+  if(Application::tickCount()>iosPreviewFenceSaveDeadlineMs) {
+    failIOSPreviewFenceSaveScript("watchdog-timeout");
+    return;
+    }
+
+  auto& gothic = Gothic::inst();
+  auto* world = gothic.world();
+  if(gothic.checkLoading()!=Gothic::LoadState::Idle ||
+     !gothic.isInGameAndAlive() || world==nullptr ||
+     world->player()==nullptr || world->currentCs()!=nullptr ||
+     world->isCutsceneLock() || gothic.isPause() || dialogs.isActive() ||
+     pendingSave.active() || padContext()!=PadCtx::World)
+    return;
+
+  // Consume the script before entering saveGame(): even an unexpected rejection
+  // must be fail-closed instead of issuing a second save on a later frame.
+  iosPreviewFenceSaveState = IOSPreviewFenceSaveScriptState::Requesting;
+  constexpr std::string_view slot = "save_slot_20.sav";
+  try {
+    saveGame(slot,"RendererIOS preview fence diagnostic");
+    }
+  catch(...) {
+    failIOSPreviewFenceSaveScript("save-request-threw");
+    return;
+    }
+  if(pendingSave.stage!=PendingSave::Stage::CaptureRequested ||
+     std::string_view(pendingSave.slot)!=slot || pendingSave.requestSerial!=1u) {
+    failIOSPreviewFenceSaveScript("save-request-rejected");
+    return;
+    }
+  iosPreviewFenceSaveState = IOSPreviewFenceSaveScriptState::Requested;
+  iosPreviewFenceSaveDeadlineMs = 0;
+  try {
+    Log::i("RendererIOS preview fence save script: REQUESTED",
+           " mode=preview-fence-save-v1",
+           " nonce=",CommandLine::inst().rendererIOSSemanticNonce(),
+           " slot=",slot,
+           " request=",pendingSave.requestSerial);
+    }
+  catch(...) {
+    }
+  }
+
 void MainWindow::transitionIOSSemanticScript(
     IOSSemanticScriptState state, uint64_t timeoutMs) noexcept {
   iosSemanticState      = state;
@@ -344,6 +434,7 @@ MainWindow::MainWindow(Device& device)
   safeArea = SafeArea::insets();
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   armIOSSemanticScript();
+  armIOSPreviewFenceSaveScript();
 #endif
 
   if(Gothic::inst().version().game==2)
@@ -2389,6 +2480,7 @@ void MainWindow::render(){
       return;
 
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    processIOSPreviewFenceSaveScript();
     processIOSSemanticScript();
 #endif
 
@@ -2498,8 +2590,18 @@ void MainWindow::render(){
       IOSFrameInput(std::move(scene),std::move(uiPacket),
                     std::move(videoPacket),captureRequest));
 #if defined(__IOS__)
-    if(captureSavePreview && result.savePreviewQueued)
+    if(captureSavePreview && result.savePreviewQueued) {
       pendingSave.stage   = PendingSave::Stage::AwaitingGpu;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      try {
+        Log::i("[save] RendererIOS preview queued: source=gpu-diagnostic",
+               " slot=",pendingSave.slot,
+               " request=",pendingSave.requestSerial);
+        }
+      catch(...) {
+        }
+#endif
+      }
 #endif
     if(!rendererOperational())
       return;

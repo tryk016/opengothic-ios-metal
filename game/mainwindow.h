@@ -149,6 +149,20 @@ class MainWindow : public Tempest::Window {
                                      uint64_t timeoutMs) noexcept;
     void failIOSSemanticScript(const char* reason) noexcept;
     bool iosSemanticScriptRunning() const noexcept;
+
+    enum class IOSPreviewFenceSaveScriptState : uint8_t {
+      Disabled,
+      WaitWorld,
+      Requesting,
+      Requested,
+      Failed,
+      };
+
+    static const char* iosPreviewFenceSaveScriptStateName(
+      IOSPreviewFenceSaveScriptState state) noexcept;
+    void armIOSPreviewFenceSaveScript();
+    void processIOSPreviewFenceSaveScript();
+    void failIOSPreviewFenceSaveScript(const char* reason) noexcept;
 #endif
 
     void processMouse(Tempest::MouseEvent& event, bool enable);
@@ -261,6 +275,9 @@ class MainWindow : public Tempest::Window {
     IOSSemanticScriptState       iosSemanticState = IOSSemanticScriptState::Disabled;
     IOSFunctionalEvidenceSnapshot iosSemanticBaseline;
     uint64_t                     iosSemanticDeadlineMs = 0;
+    IOSPreviewFenceSaveScriptState iosPreviewFenceSaveState =
+                                      IOSPreviewFenceSaveScriptState::Disabled;
+    uint64_t                     iosPreviewFenceSaveDeadlineMs = 0;
 #endif
 
     Tempest::Widget*          uiKeyUp=nullptr;

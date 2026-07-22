@@ -405,7 +405,7 @@ jobs:
             ios/device-test/run-pipeline-archive-test.sh
           ! grep -Fq 'device copy to' \
             ios/device-test/run-pipeline-archive-test.sh
-          ! grep -Fq 'device copy to' \
+          grep -Fq 'device copy to --device "$DEVICE"' \
             ios/device-test/run-smoke-test.sh
           ! grep -Fq -- '--remove-existing-content' \
             ios/device-test/run-pipeline-archive-test.sh
@@ -688,23 +688,29 @@ jobs:
 
           test -x ios/device-test/run-smoke-test.sh
           test -x ios/device-test/validate-fault-log.py
+          test -x ios/device-test/validate-preview-fence-fault-log.py
           test -x ios/device-test/validate-frame-fence-fault-log.py
           bash -n ios/device-test/run-smoke-test.sh
           ios/device-test/run-smoke-test.sh --self-test
           OPENGOTHIC_IOS_EXPECTED_FAULT=post-submit-suboptimal \
             ios/device-test/run-smoke-test.sh --self-test
+          OPENGOTHIC_IOS_EXPECTED_FAULT=preview-fence-error-after-terminal \
+            ios/device-test/run-smoke-test.sh --save-slot 1 --self-test
           OPENGOTHIC_IOS_EXPECTED_FAULT=frame-fence-error-after-terminal \
             ios/device-test/run-smoke-test.sh --self-test
           python3 ios/device-test/validate-fault-log.py --self-test
+          python3 ios/device-test/validate-preview-fence-fault-log.py --self-test
           python3 ios/device-test/validate-frame-fence-fault-log.py --self-test
           grep -Fq 'trap cleanup EXIT' ios/device-test/run-smoke-test.sh
           grep -Fq -- '--expected-fault)' ios/device-test/run-smoke-test.sh
           grep -Fq 'EXPECTED_FAULT="none"' ios/device-test/run-smoke-test.sh
           grep -Fq 'python3 "$ROOT/ios/device-test/validate-fault-log.py"' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'python3 "$ROOT/ios/device-test/validate-preview-fence-fault-log.py"' \
+            ios/device-test/run-smoke-test.sh
           grep -Fq 'python3 "$ROOT/ios/device-test/validate-frame-fence-fault-log.py"' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then' \
+          grep -Fq 'elif [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'ID4 summary key mismatch' ios/device-test/run-smoke-test.sh
           grep -Fq '"id4_post_fault_present_count"' \
@@ -721,13 +727,50 @@ jobs:
             ios/device-test/validate-frame-fence-fault-log.py
           grep -Fq 'PASS — ID4 terminal frame-fence fatal gate proven; app stopped' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'if expected_fault == "frame-fence-error-after-terminal" and len(matches) != 1:' \
+          grep -Fq '"preview-fence-error-after-terminal",' \
             ios/device-test/run-smoke-test.sh
           grep -Fq '((DURATION <= 45))' ios/device-test/run-smoke-test.sh
           grep -Fq 'PROCESS_SURVIVED_FAULT_WINDOW=1' \
             ios/device-test/run-smoke-test.sh
           grep -Fq '((PROCESS_SURVIVED_FAULT_WINDOW == 1))' \
             ios/device-test/run-smoke-test.sh
+          grep -Fq 'ID3 summary key mismatch' ios/device-test/run-smoke-test.sh
+          grep -Fq 'run-smoke-test.sh --save-slot 1 --self-test' \
+            .github/workflows/renderer-ios.yml
+          grep -Fq 'preview-fence-save-v1' game/commandline.cpp
+          grep -Fq 'OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 3' game/commandline.cpp
+          grep -Fq 'RendererIOS preview fence save script: REQUESTED' game/mainwindow.cpp
+          grep -Fq '[save] RendererIOS preview queued: source=gpu-diagnostic' \
+            game/mainwindow.cpp
+          grep -Fq 'ID3_COMPLETION_OBSERVED=1' ios/device-test/run-smoke-test.sh
+          grep -Fq 'ID3_POST_COMPLETION_STABLE_SECONDS=10' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'id3_protected_saves_1_4_match=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'id3_destination_restored=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'id3_recovery_path=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'id3_recovery_preserved=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'build/private-device-recovery/id3/' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_id3_save_postflight_raw()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'release_id3_recovery_if_safe()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'discover_id3_fault_window_pid()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'id3_pid_discovery_attempts=' ios/device-test/run-smoke-test.sh
+          grep -Fq 'save preview allocation failed' \
+            ios/device-test/validate-preview-fence-fault-log.py
+          grep -Fq 'allocation returned an empty image' \
+            ios/device-test/validate-preview-fence-fault-log.py
+          grep -Fq 'render-counter-regression' \
+            ios/device-test/validate-preview-fence-fault-log.py
+          grep -Fq 'queued-after-second-post-request-present' \
+            ios/device-test/validate-preview-fence-fault-log.py
+          grep -Fq 'fatal-suffix-stderr' \
+            ios/device-test/validate-preview-fence-fault-log.py
+          ! grep -Fq 'complete_us >= accepted_us' \
+            ios/device-test/validate-preview-fence-fault-log.py
+          ! grep -Fq 'completed < accepted' ios/device-test/run-smoke-test.sh
           grep -Fq 'line.startswith("RendererIOS shell: version=")' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'line.startswith("RendererIOS configured fault mode=")' \
@@ -897,6 +940,9 @@ jobs:
           runtime_diagnostics = source.index(
               "rg -F 'RendererIOS diagnostics: ON'"
           )
+          preview_fence_parser = source.index(
+              'python3 "$ROOT/ios/device-test/validate-preview-fence-fault-log.py"')
+          preview_fence_summary = source.index('ID3 summary key mismatch')
           frame_fence_parser = source.index(
               'python3 "$ROOT/ios/device-test/validate-frame-fence-fault-log.py"')
           frame_fence_summary = source.index('ID4 summary key mismatch')
@@ -919,8 +965,10 @@ jobs:
               raise SystemExit("bounded device selection retry runs after app inspection")
           if not bundle < data_preflight < scripts_preflight < install:
               raise SystemExit("game-data preflight does not fail before install")
-          if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < frame_fence_parser < frame_fence_summary < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
+          if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < preview_fence_parser < preview_fence_summary < frame_fence_parser < frame_fence_summary < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
               raise SystemExit("device PASS is emitted before cleanup proof")
+          id3_anchor = source.index(
+              "# ID3 is fatal only after its nonce-scoped save request has queued a GPU preview.")
           id4_anchor = source.index(
               "# ID4 is intentionally fatal after exactly one full frames-in-flight rotation.")
           id4_else = source.index(
@@ -929,10 +977,23 @@ jobs:
           )
           validation_end = source.index(
               '\ncapture_crash_state after "$WORK/crash.log"', id4_else)
+          id3_branch = source[id3_anchor:id4_anchor]
           id4_branch = source[id4_anchor:id4_else]
           healthy_and_id5_branch = source[id4_else:validation_end]
+          if 'validate-preview-fence-fault-log.py' not in id3_branch:
+              raise SystemExit("ID3 branch does not call its dedicated validator")
+          if 'validate-frame-fence-fault-log.py' in id3_branch or 'validate-fault-log.py' in id3_branch:
+              raise SystemExit("ID3 branch calls a different fault validator")
+          if 'ID3 summary key mismatch' not in id3_branch:
+              raise SystemExit("ID3 branch does not validate its exact summary")
+          if 'runtime-compilation-summary.txt' in id3_branch:
+              raise SystemExit("ID3 branch enters the healthy 300-present parser")
+          if 'fatal RendererIOS/runtime signature found' in id3_branch:
+              raise SystemExit("ID3 branch enters the healthy fatal denylist")
           if 'validate-frame-fence-fault-log.py' not in id4_branch:
               raise SystemExit("ID4 branch does not call its dedicated validator")
+          if 'validate-preview-fence-fault-log.py' in id4_branch:
+              raise SystemExit("ID4 branch calls the ID3 validator")
           if 'validate-fault-log.py' in id4_branch:
               raise SystemExit("ID4 branch calls the ID5 validator")
           if 'ID4 summary key mismatch' not in id4_branch:
@@ -945,6 +1006,8 @@ jobs:
               raise SystemExit("ID5 branch lost its dedicated validator")
           if 'validate-frame-fence-fault-log.py' in healthy_and_id5_branch:
               raise SystemExit("healthy/ID5 branch calls the ID4 validator")
+          if 'validate-preview-fence-fault-log.py' in healthy_and_id5_branch:
+              raise SystemExit("healthy/ID5 branch calls the ID3 validator")
           if 'fatal RendererIOS/runtime signature found' not in healthy_and_id5_branch:
               raise SystemExit("healthy/ID5 branch lost its fatal denylist")
           if not stopped < selection_evidence < result:
@@ -959,6 +1022,38 @@ jobs:
               raise SystemExit("fault evidence does not use exact build/fault namespace")
           if source.count('smoke_evidence_path failure') != 1:
               raise SystemExit("fault failure evidence bypasses the shared resolver")
+          raw_capture = source.index(
+              'capture_id3_save_postflight_raw ||',
+              source.index('echo "== stopping $BUNDLE_ID after smoke window =="'),
+          )
+          destination_restore = source.index(
+              'restore_id3_destination_if_needed ||', raw_capture)
+          integrity_verify = source.index(
+              'verify_id3_save_integrity ||', destination_restore)
+          recovery_release = source.index(
+              'release_id3_recovery_if_safe ||', integrity_verify)
+          if not raw_capture < destination_restore < integrity_verify < recovery_release:
+              raise SystemExit("ID3 raw capture/restore/integrity/release order is invalid")
+          raw_function = source.split(
+              'capture_id3_save_postflight_raw() {', 1)[1].split(
+              '\nverify_id3_save_integrity() {', 1
+          )[0]
+          if 'ID3_DESTINATION_RESTORED == 0' not in raw_function:
+              raise SystemExit("ID3 raw capture can overwrite its fault artifact after restore")
+          cleanup_function = source.split("cleanup() {", 1)[1].split(
+              "\ntrap cleanup EXIT", 1)[0]
+          cleanup_contract = (
+              'capture_id3_save_postflight_raw',
+              'restore_id3_destination_if_needed',
+              'verify_id3_save_integrity',
+              'preserve_id3_recovery_if_present',
+              'preserve_failure_evidence',
+          )
+          cleanup_positions = [
+              cleanup_function.index(literal) for literal in cleanup_contract
+          ]
+          if cleanup_positions != sorted(cleanup_positions):
+              raise SystemExit("ID3 cleanup does not preserve recovery after restore/integrity")
           crash_function = source.split('capture_crash_state() {', 1)[1].split(
               '\npreserve_failure_evidence() {', 1
           )[0]

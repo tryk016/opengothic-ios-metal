@@ -189,15 +189,29 @@ CommandLine::CommandLine(int argc, const char** argv) {
       throw std::invalid_argument(
         "RendererIOS semantic script requires diagnostics");
 #else
-      constexpr std::string_view expected =
+      constexpr std::string_view uiLifecycle =
         "-renderer-ios-semantic-script=save-ui-lifecycle-v1";
-      if(arg!=expected)
-        throw std::invalid_argument(
-          "unknown RendererIOS semantic script argument");
-      if(iosSemanticScript)
+      constexpr std::string_view previewFenceSave =
+        "-renderer-ios-semantic-script=preview-fence-save-v1";
+      if(iosSemanticScript || iosPreviewFenceSaveScript)
         throw std::invalid_argument(
           "duplicate RendererIOS semantic script argument");
-      iosSemanticScript = true;
+      if(arg==uiLifecycle) {
+        iosSemanticScript = true;
+        }
+      else if(arg==previewFenceSave) {
+#if !defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) || \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 3
+        throw std::invalid_argument(
+          "RendererIOS preview fence save script requires fault mode ID3");
+#else
+        iosPreviewFenceSaveScript = true;
+#endif
+        }
+      else {
+        throw std::invalid_argument(
+          "unknown RendererIOS semantic script argument");
+        }
 #endif
       }
     else if(arg.find("-renderer-ios-semantic-nonce")==0u) {
@@ -230,7 +244,7 @@ CommandLine::CommandLine(int argc, const char** argv) {
     }
 
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-  if(iosSemanticScript) {
+  if(iosSemanticScript || iosPreviewFenceSaveScript) {
     if(iosSemanticNonce.empty())
       throw std::invalid_argument("missing RendererIOS semantic nonce argument");
     if(iosSemanticSaveArgumentCount!=1u ||

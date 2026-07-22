@@ -50,6 +50,7 @@ class CommandLine {
     std::string_view    defaultSave()      const { return saveDef;    }
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     bool rendererIOSSemanticScript() const { return iosSemanticScript; }
+    bool rendererIOSPreviewFenceSaveScript() const { return iosPreviewFenceSaveScript; }
     std::string_view rendererIOSSemanticNonce() const { return iosSemanticNonce; }
 #endif
 
@@ -85,6 +86,7 @@ class CommandLine {
     uint32_t            aaPresetId = 0;
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     bool                iosSemanticScript = false;
+    bool                iosPreviewFenceSaveScript = false;
     std::string         iosSemanticNonce;
 #endif
   };

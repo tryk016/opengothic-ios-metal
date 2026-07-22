@@ -11,6 +11,7 @@
 #   ... --require-bink-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
+#   ... --expected-fault preview-fence-error-after-terminal APP
 #   ... --expected-fault frame-fence-error-after-terminal APP
 #
 # The phone must be unlocked when the app is launched. No screen interaction is
@@ -120,6 +121,7 @@ run_host_contract_self_test() {
     fail "self-test expected build is not source-bound"
   [[ "$expected_fault" == none ||
      "$expected_fault" == post-submit-suboptimal ||
+     "$expected_fault" == preview-fence-error-after-terminal ||
      "$expected_fault" == frame-fence-error-after-terminal ]] ||
     fail "self-test expected fault is invalid"
   [[ "$timestamp" =~ ^[0-9]{8}T[0-9]{6}Z$ ]] ||
@@ -182,7 +184,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -198,8 +200,18 @@ done
   fail "pipeline archive test mode must be cold or corrupt"
 [[ "$EXPECTED_FAULT" == none ||
    "$EXPECTED_FAULT" == post-submit-suboptimal ||
+   "$EXPECTED_FAULT" == preview-fence-error-after-terminal ||
    "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]] ||
-  fail "expected fault must be none, post-submit-suboptimal, or frame-fence-error-after-terminal"
+  fail "expected fault must be none, post-submit-suboptimal, preview-fence-error-after-terminal, or frame-fence-error-after-terminal"
+[[ "$EXPECTED_FAULT" != preview-fence-error-after-terminal ]] ||
+  ((NEW_GAME == 0)) ||
+  fail "preview-fence-error-after-terminal requires one numeric load save"
+[[ "$EXPECTED_FAULT" != preview-fence-error-after-terminal ]] ||
+  ((SAVE_SLOT_EXPLICIT == 1 && SAVE_SLOT == 1)) ||
+  fail "preview-fence-error-after-terminal requires explicit --save-slot 1"
+[[ "$EXPECTED_FAULT" != preview-fence-error-after-terminal ]] ||
+  ((DURATION <= 45)) ||
+  fail "preview-fence-error-after-terminal duration must be 10..45 seconds"
 [[ "$EXPECTED_FAULT" != frame-fence-error-after-terminal ]] ||
   ((DURATION <= 45)) ||
   fail "frame-fence-error-after-terminal duration must be 10..45 seconds"
@@ -251,6 +263,22 @@ PRE_CRASH_SHA="unqueried"
 POST_CRASH_SHA="unqueried"
 FAULT_LOG_VALIDATION="not-required"
 PROCESS_SURVIVED_FAULT_WINDOW=0
+ID3_SEMANTIC_NONCE="none"
+ID3_SAVE_PREFLIGHT_CAPTURED=0
+ID3_SAVE_POSTFLIGHT_CAPTURED=0
+ID3_SAVE_INTEGRITY_VERIFIED=0
+ID3_PROTECTED_SAVES_MATCH=0
+ID3_DESTINATION_BYTES=0
+ID3_DESTINATION_SHA256="missing"
+ID3_DESTINATION_EXISTED=0
+ID3_DESTINATION_BEFORE_SHA256="missing"
+ID3_DESTINATION_RESTORED=0
+ID3_RECOVERY_PATH="none"
+ID3_RECOVERY_PRESERVED=0
+ID3_FAULT_WINDOW_PID="none"
+ID3_PID_DISCOVERY_ATTEMPTS=0
+ID3_COMPLETION_OBSERVED=0
+ID3_POST_COMPLETION_STABLE_SECONDS=0
 PASS_EVIDENCE_DIR=""
 APP_EXECUTABLE="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
@@ -659,6 +687,314 @@ capture_crash_state() {
   printf -v "$variable" '%s' "$sha"
 }
 
+create_id3_recovery_path() {
+  local recovery_root timestamp
+
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  [[ "$ID3_RECOVERY_PATH" == none ]] || return 0
+  timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  recovery_root="$ROOT/build/private-device-recovery/id3/$EXPECTED_BUILD"
+  (umask 077 && mkdir -p "$recovery_root") || return 1
+  ID3_RECOVERY_PATH="$(mktemp -d "$recovery_root/$timestamp-$$.XXXXXX")" || return 1
+  [[ "$ID3_RECOVERY_PATH" == "$recovery_root"/* &&
+     "$ID3_RECOVERY_PATH" != "$WORK"* ]] || return 1
+  chmod 700 "$ID3_RECOVERY_PATH" || return 1
+}
+
+sync_id3_recovery_artifacts() {
+  local candidate destination manifest="$WORK/id3-recovery-files.sha256"
+
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  [[ "$ID3_RECOVERY_PATH" != none && -d "$ID3_RECOVERY_PATH" ]] || return 1
+  for candidate in \
+      id3-saves-before.json id3-protected-before.sha256 \
+      id3-before-save_slot_1.sav id3-before-save_slot_2.sav \
+      id3-before-save_slot_3.sav id3-before-save_slot_4.sav \
+      id3-destination-before.sav \
+      id3-saves-after.json id3-protected-after.sha256 \
+      id3-after-save_slot_1.sav id3-after-save_slot_2.sav \
+      id3-after-save_slot_3.sav id3-after-save_slot_4.sav \
+      save_slot_20.sav id3-destination-restore-check.sav; do
+    [[ -f "$WORK/$candidate" ]] || continue
+    destination="$ID3_RECOVERY_PATH/$candidate"
+    ditto "$WORK/$candidate" "$destination" || return 1
+    chmod 600 "$destination" || return 1
+  done
+  : >"$manifest"
+  for candidate in "$ID3_RECOVERY_PATH"/*; do
+    [[ -f "$candidate" && "$(basename "$candidate")" != recovery-files.sha256 ]] ||
+      continue
+    printf '%s  %s\n' \
+      "$(shasum -a 256 "$candidate" | awk '{print $1}')" \
+      "$(basename "$candidate")" >>"$manifest"
+  done
+  [[ -s "$manifest" ]] || return 1
+  ditto "$manifest" "$ID3_RECOVERY_PATH/recovery-files.sha256" || return 1
+  chmod 600 "$ID3_RECOVERY_PATH/recovery-files.sha256" || return 1
+}
+
+preserve_id3_recovery_if_present() {
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  if [[ "$ID3_RECOVERY_PATH" != none && -d "$ID3_RECOVERY_PATH" ]]; then
+    ID3_RECOVERY_PRESERVED=1
+    return 0
+  fi
+  return 1
+}
+
+release_id3_recovery_if_safe() {
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  ((ID3_SAVE_POSTFLIGHT_CAPTURED == 1 &&
+    ID3_SAVE_INTEGRITY_VERIFIED == 1 &&
+    ID3_PROTECTED_SAVES_MATCH == 1 &&
+    ID3_DESTINATION_EXISTED == ID3_DESTINATION_RESTORED)) || return 1
+  [[ "$ID3_RECOVERY_PATH" != none &&
+     "$ID3_RECOVERY_PATH" == "$ROOT"/build/private-device-recovery/id3/* &&
+     -d "$ID3_RECOVERY_PATH" ]] || return 1
+  find "$ID3_RECOVERY_PATH" -type f -delete || return 1
+  rmdir "$ID3_RECOVERY_PATH" || return 1
+  ID3_RECOVERY_PATH="none"
+  ID3_RECOVERY_PRESERVED=0
+}
+
+capture_id3_save_preflight() {
+  local listing="$WORK/id3-saves-before.json"
+  local slot destination manifest="$WORK/id3-protected-before.sha256"
+
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$listing" >/dev/null || return 1
+  ID3_DESTINATION_EXISTED="$(python3 - "$listing" <<'PY'
+import json, re, sys
+files = json.load(open(sys.argv[1]))["result"]["files"]
+save_entries = [
+    entry for entry in files
+    if re.fullmatch(r"save_slot_[0-9]+\.sav", str(entry.get("name", "")))
+]
+by_name = {entry.get("name"): entry for entry in save_entries}
+if len(by_name) != len(save_entries):
+    raise SystemExit("duplicate save slot entry before ID3")
+expected = {f"save_slot_{slot}.sav" for slot in range(1, 5)}
+allowed = expected | ({"save_slot_20.sav"} if "save_slot_20.sav" in by_name else set())
+if set(by_name) != allowed:
+    raise SystemExit("pre-ID3 save set is not exactly slots 1..4 plus optional slot 20")
+for name in allowed:
+    resources = by_name[name].get("resources", {})
+    if resources.get("isDirectory") is not False or resources.get("isSymbolicLink") is not False:
+        raise SystemExit(f"ID3 preflight save is not a regular file: {name}")
+print(1 if "save_slot_20.sav" in by_name else 0)
+PY
+  )" || return 1
+  [[ "$ID3_DESTINATION_EXISTED" == 0 || "$ID3_DESTINATION_EXISTED" == 1 ]] || return 1
+  if ((ID3_DESTINATION_EXISTED == 1)); then
+    xcrun devicectl device copy from --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+      --source Documents/save_slot_20.sav \
+      --destination "$WORK/id3-destination-before.sav" >/dev/null || return 1
+    [[ -s "$WORK/id3-destination-before.sav" ]] || return 1
+    ID3_DESTINATION_BEFORE_SHA256="$(
+      shasum -a 256 "$WORK/id3-destination-before.sav" | awk '{print $1}'
+    )"
+    [[ "$ID3_DESTINATION_BEFORE_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  fi
+  : >"$manifest"
+  for slot in 1 2 3 4; do
+    destination="$WORK/id3-before-save_slot_$slot.sav"
+    xcrun devicectl device copy from --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+      --source "Documents/save_slot_$slot.sav" --destination "$destination" \
+      >/dev/null || return 1
+    [[ -s "$destination" ]] || return 1
+    printf '%s  save_slot_%s.sav\n' \
+      "$(shasum -a 256 "$destination" | awk '{print $1}')" "$slot" >>"$manifest"
+  done
+  create_id3_recovery_path || return 1
+  sync_id3_recovery_artifacts || return 1
+  ID3_SAVE_PREFLIGHT_CAPTURED=1
+}
+
+restore_id3_destination_if_needed() {
+  local backup backup_sha restored_sha
+
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  ((ID3_SAVE_PREFLIGHT_CAPTURED == 1)) || return 1
+  ((ID3_SAVE_POSTFLIGHT_CAPTURED == 1)) || return 1
+  ((ID3_DESTINATION_EXISTED == 1)) || return 0
+  ((ID3_DESTINATION_RESTORED == 0)) || return 0
+  [[ "$ID3_RECOVERY_PATH" != none ]] || return 1
+  backup="$ID3_RECOVERY_PATH/id3-destination-before.sav"
+  [[ -s "$backup" ]] || return 1
+  backup_sha="$(
+    shasum -a 256 "$backup" | awk '{print $1}'
+  )"
+  [[ "$backup_sha" == "$ID3_DESTINATION_BEFORE_SHA256" ]] || return 1
+  xcrun devicectl device copy to --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "$backup" \
+    --destination Documents/save_slot_20.sav >/dev/null || return 1
+  rm -f "$WORK/id3-destination-restore-check.sav"
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source Documents/save_slot_20.sav \
+    --destination "$WORK/id3-destination-restore-check.sav" >/dev/null || return 1
+  restored_sha="$(
+    shasum -a 256 "$WORK/id3-destination-restore-check.sav" | awk '{print $1}'
+  )"
+  [[ "$restored_sha" == "$ID3_DESTINATION_BEFORE_SHA256" ]] || return 1
+  ID3_DESTINATION_RESTORED=1
+  sync_id3_recovery_artifacts || return 1
+}
+
+capture_id3_save_postflight_raw() {
+  local listing="$WORK/id3-saves-after.json"
+  local slot destination manifest="$WORK/id3-protected-after.sha256"
+
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  ((ID3_SAVE_PREFLIGHT_CAPTURED == 1)) || return 1
+  ((ID3_SAVE_POSTFLIGHT_CAPTURED == 0)) || return 0
+  ((ID3_DESTINATION_EXISTED == 0 || ID3_DESTINATION_RESTORED == 0)) || return 1
+  rm -f "$listing" "$manifest" "$WORK/save_slot_20.sav" \
+    "$WORK"/id3-after-save_slot_*.sav
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$listing" >/dev/null || return 1
+  sync_id3_recovery_artifacts || return 1
+  python3 - "$listing" <<'PY' || return 1
+import json, re, sys
+files = json.load(open(sys.argv[1]))["result"]["files"]
+save_entries = [
+    entry for entry in files
+    if re.fullmatch(r"save_slot_[0-9]+\.sav", str(entry.get("name", "")))
+]
+by_name = {entry.get("name"): entry for entry in save_entries}
+if len(by_name) != len(save_entries):
+    raise SystemExit("duplicate save slot entry after ID3")
+expected = {f"save_slot_{slot}.sav" for slot in (1, 2, 3, 4, 20)}
+if set(by_name) != expected:
+    raise SystemExit("post-ID3 save set is not exactly slots 1..4 and slot 20")
+for slot in (1, 2, 3, 4, 20):
+    name = f"save_slot_{slot}.sav"
+    entry = by_name.get(name)
+    if entry is None:
+        raise SystemExit(f"required post-ID3 save is missing: {name}")
+    resources = entry.get("resources", {})
+    if resources.get("isDirectory") is not False or resources.get("isSymbolicLink") is not False:
+        raise SystemExit(f"post-ID3 save is not a regular file: {name}")
+PY
+  : >"$manifest"
+  for slot in 1 2 3 4; do
+    destination="$WORK/id3-after-save_slot_$slot.sav"
+    xcrun devicectl device copy from --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+      --source "Documents/save_slot_$slot.sav" --destination "$destination" \
+      >/dev/null || return 1
+    [[ -s "$destination" ]] || return 1
+    printf '%s  save_slot_%s.sav\n' \
+      "$(shasum -a 256 "$destination" | awk '{print $1}')" "$slot" >>"$manifest"
+    sync_id3_recovery_artifacts || return 1
+  done
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source Documents/save_slot_20.sav --destination "$WORK/save_slot_20.sav" \
+    >/dev/null || return 1
+  [[ -s "$WORK/save_slot_20.sav" ]] || return 1
+  ID3_DESTINATION_BYTES="$(stat -f '%z' "$WORK/save_slot_20.sav")"
+  ID3_DESTINATION_SHA256="$(shasum -a 256 "$WORK/save_slot_20.sav" | awk '{print $1}')"
+  [[ "$ID3_DESTINATION_BYTES" =~ ^[1-9][0-9]*$ &&
+     "$ID3_DESTINATION_SHA256" =~ ^[0-9a-f]{64}$ ]] || return 1
+  sync_id3_recovery_artifacts || return 1
+  ID3_SAVE_POSTFLIGHT_CAPTURED=1
+}
+
+verify_id3_save_integrity() {
+  local manifest="$WORK/id3-protected-after.sha256"
+
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  ((ID3_SAVE_POSTFLIGHT_CAPTURED == 1)) || return 1
+  cmp -s "$WORK/id3-protected-before.sha256" "$manifest" || return 1
+  ID3_PROTECTED_SAVES_MATCH=1
+  ID3_SAVE_INTEGRITY_VERIFIED=1
+}
+
+write_id3_result_fields() {
+  [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
+  echo "id3_semantic_nonce=$ID3_SEMANTIC_NONCE"
+  echo "id3_save_preflight_captured=$ID3_SAVE_PREFLIGHT_CAPTURED"
+  echo "id3_save_postflight_captured=$ID3_SAVE_POSTFLIGHT_CAPTURED"
+  echo "id3_save_integrity_verified=$ID3_SAVE_INTEGRITY_VERIFIED"
+  echo "id3_protected_saves_1_4_match=$ID3_PROTECTED_SAVES_MATCH"
+  echo "id3_destination_slot=20"
+  echo "id3_destination_bytes=$ID3_DESTINATION_BYTES"
+  echo "id3_destination_sha256=$ID3_DESTINATION_SHA256"
+  echo "id3_destination_existed=$ID3_DESTINATION_EXISTED"
+  echo "id3_destination_before_sha256=$ID3_DESTINATION_BEFORE_SHA256"
+  echo "id3_destination_restored=$ID3_DESTINATION_RESTORED"
+  echo "id3_recovery_path=$ID3_RECOVERY_PATH"
+  echo "id3_recovery_preserved=$ID3_RECOVERY_PRESERVED"
+  echo "id3_fault_window_pid=$ID3_FAULT_WINDOW_PID"
+  echo "id3_pid_discovery_attempts=$ID3_PID_DISCOVERY_ATTEMPTS"
+  echo "id3_completion_observed=$ID3_COMPLETION_OBSERVED"
+  echo "id3_post_completion_stable_seconds=$ID3_POST_COMPLETION_STABLE_SECONDS"
+}
+
+discover_id3_fault_window_pid() {
+  local attempt output pids
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    output="$WORK/processes-id3-window-start-attempt-$attempt.json"
+    if pids="$(list_game_pids "$output")" && [[ "$pids" =~ ^[0-9]+$ ]]; then
+      ID3_FAULT_WINDOW_PID="$pids"
+      ID3_PID_DISCOVERY_ATTEMPTS="$attempt"
+      ditto "$output" "$WORK/processes-id3-window-start.json" || return 1
+      return 0
+    fi
+    ((attempt == 10)) || sleep 1
+  done
+  ID3_PID_DISCOVERY_ATTEMPTS=10
+  return 1
+}
+
+wait_for_id3_completion() {
+  local attempt log="$WORK/log-id3-completion-check.txt"
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    rm -f "$log"
+    if xcrun devicectl device copy from --device "$DEVICE" \
+        --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+        --source Documents/log.txt --destination "$log" >/dev/null 2>&1 &&
+       python3 - "$log" "$ID3_SEMANTIC_NONCE" <<'PY'
+import pathlib, re, sys
+log = pathlib.Path(sys.argv[1]).read_text(errors="replace")
+nonce = re.escape(sys.argv[2])
+requested = re.findall(
+    rf"^RendererIOS preview fence save script: REQUESTED "
+    rf"mode=preview-fence-save-v1 nonce={nonce} "
+    rf"slot=save_slot_20\.sav request=1$",
+    log,
+    re.MULTILINE,
+)
+completed = re.findall(
+    r"^\[save\] RendererIOS save completed: source=placeholder "
+    r"slot=save_slot_20\.sav request=1 serialize-us=\d+ "
+    r"request-to-complete-us=\d+$",
+    log,
+    re.MULTILINE,
+)
+if len(requested) != 1 or len(completed) != 1:
+    raise SystemExit(1)
+PY
+    then
+      ID3_COMPLETION_OBSERVED=1
+      return 0
+    fi
+    ((attempt == 10)) || sleep 1
+  done
+  return 1
+}
+
 preserve_failure_evidence() {
   local original_status="$1"
   local cleanup_status="$2"
@@ -678,6 +1014,10 @@ preserve_failure_evidence() {
       launch.log cleanup.log \
       park-settings.log \
       fault-log-summary.txt \
+      id3-protected-before.sha256 id3-protected-after.sha256 \
+      id3-saves-before.json id3-saves-after.json save_slot_20.sav \
+      processes-id3-window-start.json \
+      log-id3-completion-check.txt \
       log.txt stderr.log crash.log crash-before.log \
       log-before-cleanup.txt stderr-before-cleanup.log crash-before-cleanup.log \
       log-after-cleanup.txt stderr-after-cleanup.log crash-after-cleanup.log; do
@@ -685,6 +1025,7 @@ preserve_failure_evidence() {
     ditto "$WORK/$candidate" "$failure_dir/$candidate"
   done
   for candidate in "$WORK"/processes-durable-zero-*.json \
+      "$WORK"/processes-id3-window-start-attempt-*.json \
       "$WORK"/durable-zero-*.json \
       "$WORK"/crash-listing-*.json; do
     [[ -f "$candidate" ]] || continue
@@ -703,6 +1044,7 @@ preserve_failure_evidence() {
     echo "cleanup_status=$cleanup_status"
     echo "pre_crash_sha256=$PRE_CRASH_SHA"
     echo "post_crash_sha256=$POST_CRASH_SHA"
+    write_id3_result_fields
     write_durable_result_fields
     [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
       cat "$WORK/fault-log-summary.txt"
@@ -732,6 +1074,24 @@ cleanup() {
     else
       cleanup_status=1
     fi
+    if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] &&
+       ((ID3_SAVE_PREFLIGHT_CAPTURED == 1 && ID3_SAVE_POSTFLIGHT_CAPTURED == 0)); then
+      if ! capture_id3_save_postflight_raw; then
+        echo "phase=trap-cleanup id3-save-raw-capture=failed" >>"$WORK/cleanup.log"
+        cleanup_status=1
+      fi
+    fi
+    if ! restore_id3_destination_if_needed; then
+      echo "phase=trap-cleanup id3-destination-restore=failed" >>"$WORK/cleanup.log"
+      cleanup_status=1
+    fi
+    if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] &&
+       ((ID3_SAVE_POSTFLIGHT_CAPTURED == 1 && ID3_SAVE_INTEGRITY_VERIFIED == 0)); then
+      if ! verify_id3_save_integrity; then
+        echo "phase=trap-cleanup id3-save-integrity=failed" >>"$WORK/cleanup.log"
+        cleanup_status=1
+      fi
+    fi
     if ((RUNTIME_ARMED != 0)); then
       pull_runtime_logs after-cleanup
     fi
@@ -744,6 +1104,14 @@ cleanup() {
       else
         cleanup_status=1
       fi
+    fi
+  fi
+  if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] &&
+     [[ "$ID3_RECOVERY_PATH" != none ]]; then
+    if ((ID3_PROTECTED_SAVES_MATCH == 0 ||
+         ID3_DESTINATION_EXISTED != ID3_DESTINATION_RESTORED ||
+         status != 0 || cleanup_status != 0)); then
+      preserve_id3_recovery_if_present || cleanup_status=1
     fi
   fi
   if ((status != 0 || cleanup_status != 0)); then
@@ -761,6 +1129,7 @@ cleanup() {
       echo "cleanup_status=$cleanup_status"
       echo "pre_crash_sha256=$PRE_CRASH_SHA"
       echo "post_crash_sha256=$POST_CRASH_SHA"
+      write_id3_result_fields
       write_durable_result_fields
       [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
         cat "$WORK/fault-log-summary.txt"
@@ -771,7 +1140,9 @@ cleanup() {
     final_status=1
   fi
   if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
-    if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
+    if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+      echo "PASS — ID3 terminal preview-fence placeholder save gate proven; app stopped"
+    elif [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
       echo "PASS — ID4 terminal frame-fence fatal gate proven; app stopped"
     else
       echo "PASS — offline metallib + scenario counters + scene/Bink gates proven; app stopped"
@@ -1062,12 +1433,15 @@ codesign -f -s "$IDENTITY" --entitlements "$WORK/entitlements.plist" \
 codesign -vv --deep --strict "$APP"
 
 METALLIB_SHA="$(shasum -a 256 "$APP/RendererIOS.metallib" | awk '{print $1}')"
-capture_crash_state before "$WORK/crash-before.log" PRE_CRASH_SHA ||
-  fail "could not establish pre-run crash.log state"
-
 echo "== stopping any previous $BUNDLE_ID process =="
 stop_running_app 1 || fail "pre-launch application cleanup failed"
 park_settings_foreground || fail "could not park Settings before install"
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+  capture_id3_save_preflight ||
+    fail "ID3 preflight did not prove exact protected saves 1..4 and optional slot 20"
+fi
+capture_crash_state before "$WORK/crash-before.log" PRE_CRASH_SHA ||
+  fail "could not establish pre-run crash.log state"
 
 echo "== installing $BUNDLE_ID =="
 xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null
@@ -1079,6 +1453,16 @@ fi
 if [[ -n "$PIPELINE_ARCHIVE_TEST_MODE" ]]; then
   LAUNCH_ARGS+=(
     "-renderer-ios-pipeline-archive-$PIPELINE_ARCHIVE_TEST_MODE"
+  )
+fi
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+  ID3_SEMANTIC_NONCE="$(/usr/bin/openssl rand -hex 16)" ||
+    fail "could not generate ID3 semantic nonce"
+  [[ "$ID3_SEMANTIC_NONCE" =~ ^[0-9a-f]{32}$ ]] ||
+    fail "generated ID3 semantic nonce is invalid"
+  LAUNCH_ARGS+=(
+    "-renderer-ios-semantic-script=preview-fence-save-v1"
+    "-renderer-ios-semantic-nonce=$ID3_SEMANTIC_NONCE"
   )
 fi
 if ((NEW_GAME != 0)); then
@@ -1097,26 +1481,49 @@ if ! xcrun devicectl device process launch --device "$DEVICE" \
   tail -30 "$WORK/launch.log" >&2
   fail "application launch failed"
 fi
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+  discover_id3_fault_window_pid ||
+    fail "ID3 fault-window start did not discover exactly one process within 10 seconds"
+fi
 sleep "$DURATION"
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+  wait_for_id3_completion ||
+    fail "ID3 nonce-scoped placeholder save did not complete after the base window"
+  sleep 10
+  ID3_POST_COMPLETION_STABLE_SECONDS=10
+fi
 
 xcrun devicectl device info processes --device "$DEVICE" \
   --json-output "$WORK/processes.json" >/dev/null
-python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" <<'PY' ||
+python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" \
+    "$ID3_FAULT_WINDOW_PID" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
 expected_fault = sys.argv[3]
+expected_id3_pid = sys.argv[4]
 matches = [
     p for p in processes
     if pathlib.PurePosixPath(p.get("executable", "")).name == expected
 ]
-if expected_fault == "frame-fence-error-after-terminal" and len(matches) != 1:
+if expected_fault in (
+    "preview-fence-error-after-terminal",
+    "frame-fence-error-after-terminal",
+) and len(matches) != 1:
     raise SystemExit(1)
-if expected_fault != "frame-fence-error-after-terminal" and not matches:
+if expected_fault == "preview-fence-error-after-terminal" and str(
+    matches[0].get("processIdentifier")
+) != expected_id3_pid:
+    raise SystemExit(1)
+if expected_fault not in (
+    "preview-fence-error-after-terminal",
+    "frame-fence-error-after-terminal",
+) and not matches:
     raise SystemExit(1)
 PY
   fail "application process did not survive the smoke window"
-if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ||
+      "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
   PROCESS_SURVIVED_FAULT_WINDOW=1
 fi
 
@@ -1130,6 +1537,26 @@ for name in log.txt stderr.log; do
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$name" --destination "$WORK/$name" >/dev/null 2>&1 || true
 done
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+  capture_id3_save_postflight_raw ||
+    fail "ID3 did not capture raw saves 1..4 and a non-empty fault slot 20 artifact"
+  restore_id3_destination_if_needed ||
+    fail "ID3 pre-existing destination slot 20 restore was not confirmed"
+  verify_id3_save_integrity ||
+    fail "ID3 protected saves 1..4 changed during the fault run"
+  ((ID3_COMPLETION_OBSERVED == 1 &&
+    ID3_POST_COMPLETION_STABLE_SECONDS >= 10 &&
+    ID3_SAVE_PREFLIGHT_CAPTURED == 1 &&
+    ID3_SAVE_POSTFLIGHT_CAPTURED == 1 &&
+    ID3_SAVE_INTEGRITY_VERIFIED == 1 &&
+    ID3_PROTECTED_SAVES_MATCH == 1 &&
+    ID3_DESTINATION_BYTES > 0)) ||
+    fail "ID3 completion/stability/save-integrity invariants are incomplete"
+  ((ID3_DESTINATION_EXISTED == ID3_DESTINATION_RESTORED)) ||
+    fail "ID3 pre-existing destination was not restored exactly"
+  release_id3_recovery_if_safe ||
+    fail "ID3 private recovery could not be released after confirmed integrity"
+fi
 
 [[ -s "$WORK/log.txt" ]] || fail "device produced no log.txt"
 python3 - "$WORK/log.txt" "$EXPECTED_BUILD" "$EXPECTED_FAULT" <<'PY' ||
@@ -1213,9 +1640,111 @@ if rg -F 'Shader compilation took:' "$WORK/log.txt" >/dev/null; then
   fail "legacy eager shader batch ran in RendererIOS"
 fi
 
+# ID3 is fatal only after its nonce-scoped save request has queued a GPU preview.
+# Its absolute counters are dynamic, so keep it outside both the healthy parser
+# and ID4's exact frames-in-flight counter oracle.
+if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
+  ((PROCESS_SURVIVED_FAULT_WINDOW == 1)) ||
+    fail "ID3 process did not survive its controlled fault/save observation window"
+  ID3_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --expected-fault "$EXPECTED_FAULT"
+    --nonce "$ID3_SEMANTIC_NONCE"
+    --summary "$WORK/fault-log-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    ID3_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  FAULT_LOG_VALIDATION="failed"
+  python3 "$ROOT/ios/device-test/validate-preview-fence-fault-log.py" \
+    "${ID3_VALIDATOR_ARGS[@]}" ||
+    fail "ID3 terminal preview-fence fault/save log validation failed"
+  python3 - "$WORK/fault-log-summary.txt" "$EXPECTED_BUILD" \
+      "$ID3_SEMANTIC_NONCE" <<'PY' ||
+import pathlib
+import sys
+
+summary = {}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.count("=") != 1:
+        raise SystemExit(f"invalid ID3 summary line: {line!r}")
+    key, value = line.split("=", 1)
+    if key in summary:
+        raise SystemExit(f"duplicate ID3 summary key: {key}")
+    summary[key] = value
+expected = {
+    "id3_expected_build",
+    "id3_expected_fault",
+    "id3_nonce",
+    "id3_frames_in_flight",
+    "id3_pre_request_presents",
+    "id3_fatal_present",
+    "id3_post_request_presents",
+    "id3_request",
+    "id3_queued_count",
+    "id3_fired_count",
+    "id3_fatal_count",
+    "id3_scene_retained",
+    "id3_scene_released",
+    "id3_scene_live",
+    "id3_fatal_settled_idle_confirmed",
+    "id3_post_delta_submit_attempts",
+    "id3_post_delta_submit_accepted",
+    "id3_post_delta_present_attempts",
+    "id3_post_delta_present_accepted",
+    "id3_placeholder_accepted_count",
+    "id3_placeholder_completed_count",
+    "id3_placeholder_accepted_us",
+    "id3_placeholder_serialize_us",
+    "id3_placeholder_complete_us",
+}
+if summary.keys() != expected:
+    raise SystemExit(f"ID3 summary key mismatch: {sorted(summary.keys() ^ expected)}")
+if summary["id3_expected_build"] != sys.argv[2]:
+    raise SystemExit("ID3 summary build mismatch")
+if summary["id3_expected_fault"] != "preview-fence-error-after-terminal":
+    raise SystemExit("ID3 summary fault mismatch")
+if summary["id3_nonce"] != sys.argv[3]:
+    raise SystemExit("ID3 summary nonce mismatch")
+n = int(summary["id3_frames_in_flight"])
+k = int(summary["id3_pre_request_presents"])
+m = int(summary["id3_fatal_present"])
+post = int(summary["id3_post_request_presents"])
+if n not in (2, 3) or k < 0 or m <= k or post != m - k or not 1 <= post <= n:
+    raise SystemExit("ID3 dynamic present window is inconsistent")
+exact_one = (
+    "id3_request",
+    "id3_queued_count",
+    "id3_fired_count",
+    "id3_fatal_count",
+    "id3_fatal_settled_idle_confirmed",
+    "id3_placeholder_accepted_count",
+    "id3_placeholder_completed_count",
+)
+if any(summary[key] != "1" for key in exact_one):
+    raise SystemExit("ID3 summary lost an exact-one invariant")
+if int(summary["id3_scene_retained"]) != m or int(summary["id3_scene_released"]) != m:
+    raise SystemExit("ID3 scene counters do not equal fatal M")
+exact_zero = (
+    "id3_scene_live",
+    "id3_post_delta_submit_attempts",
+    "id3_post_delta_submit_accepted",
+    "id3_post_delta_present_attempts",
+    "id3_post_delta_present_accepted",
+)
+if any(summary[key] != "0" for key in exact_zero):
+    raise SystemExit("ID3 summary lost a zero invariant")
+accepted = int(summary["id3_placeholder_accepted_us"])
+serialized = int(summary["id3_placeholder_serialize_us"])
+completed = int(summary["id3_placeholder_complete_us"])
+if accepted < 0 or serialized < 0 or serialized > completed:
+    raise SystemExit("ID3 summary timings are inconsistent")
+PY
+    fail "ID3 terminal preview-fence summary validation failed"
+  FAULT_LOG_VALIDATION="passed"
 # ID4 is intentionally fatal after exactly one full frames-in-flight rotation.
 # Keep it outside the healthy 300/Landscape parser and its fatal denylist.
-if [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
+elif [[ "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
   ((PROCESS_SURVIVED_FAULT_WINDOW == 1)) ||
     fail "ID4 process did not survive its controlled fault observation window"
   FRAME_FENCE_VALIDATOR_ARGS=(
@@ -1774,6 +2303,12 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
   ditto "$WORK/park-settings.log" "$OUT/park-settings.log"
 [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
   ditto "$WORK/fault-log-summary.txt" "$OUT/fault-log-summary.txt"
+for candidate in id3-protected-before.sha256 id3-protected-after.sha256 \
+    id3-saves-before.json id3-saves-after.json save_slot_20.sav \
+    processes-id3-window-start.json log-id3-completion-check.txt; do
+  [[ -f "$WORK/$candidate" ]] || continue
+  ditto "$WORK/$candidate" "$OUT/$candidate"
+done
 for candidate in crash-before.log crash.log crash-final.log \
     crash-listing-before.json crash-listing-after.json crash-listing-final.json; do
   [[ -f "$WORK/$candidate" ]] || continue
@@ -1805,6 +2340,7 @@ done
   echo "bink_self_test_passed=$REQUIRE_BINK_SELF_TEST"
   echo "metallib_sha256=$METALLIB_SHA"
   echo "log_sha256=$(shasum -a 256 "$WORK/log.txt" | awk '{print $1}')"
+  write_id3_result_fields
   # device_process_stopped=1 is emitted only after the durable stable window
   # and its independent final process query both prove zero.
   write_durable_result_fields
