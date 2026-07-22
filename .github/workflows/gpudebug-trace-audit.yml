@@ -22,12 +22,12 @@ concurrency:
 
 jobs:
   audit:
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 20
     permissions:
       contents: write
     env:
-      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
 
     steps:
       - name: Initialize isolated directories
@@ -90,9 +90,9 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(uname -m)" = arm64
-          test -d /Applications/Xcode_26.6.app
-          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 26.6'
-          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 17F113'
+          test -d /Applications/Xcode_27.0.app
+          test "$(xcodebuild -version | sed -n '1p')" = 'Xcode 27.0'
+          test "$(xcodebuild -version | sed -n '2p')" = 'Build version 27A5218g'
           GPUD="$(xcrun --find gpudebug)"
           test -x "$GPUD"
           python3 -m py_compile \
@@ -104,8 +104,8 @@ jobs:
             .github/workflows/gpudebug-trace-audit.yml || true)" -eq 0
           {
             echo 'runner_contract=PASS'
-            echo 'xcode_version=26.6'
-            echo 'xcode_build=17F113'
+            echo 'xcode_version=27.0'
+            echo 'xcode_build=27A5218g'
             echo 'validator_self_tests=PASS'
           } >> "$AUDIT_FILE"
 
