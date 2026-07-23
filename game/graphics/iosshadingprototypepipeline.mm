@@ -1,6 +1,7 @@
 #include "iosshadingprototypepipeline.h"
 
 #include "ioslandscapeshaderabi.h"
+#include "iosshadingprototypepipelinenative.h"
 #include "iosshadingprototypeshaderabi.h"
 
 #include <Tempest/Device>
@@ -459,6 +460,49 @@ struct IOSShadingPrototypePipeline::Impl final {
   id alphaPipeline = nil;
   id lightingPipeline = nil;
   };
+
+bool IOSShadingPrototypePipelineNativeAccess::borrow(
+    const IOSShadingPrototypePipeline& pipeline,
+    IOSShadingPrototypePipelineNativeView& view) noexcept {
+  view = {};
+  if(pipeline.pipelineStatus!=
+         IOSShadingPrototypePipelineStatus::Ready ||
+     pipeline.impl==nullptr ||
+     pipeline.impl->opaquePipeline==nil ||
+     pipeline.impl->alphaPipeline==nil ||
+     pipeline.impl->lightingPipeline==nil)
+    return false;
+
+  @try {
+    id<MTLRenderPipelineState> opaque =
+        (id<MTLRenderPipelineState>)pipeline.impl->opaquePipeline;
+    id<MTLRenderPipelineState> alpha =
+        (id<MTLRenderPipelineState>)pipeline.impl->alphaPipeline;
+    id<MTLRenderPipelineState> lighting =
+        (id<MTLRenderPipelineState>)pipeline.impl->lightingPipeline;
+    id<MTLDevice> device = opaque.device;
+    if(device==nil || alpha.device!=device ||
+       lighting.device!=device)
+      return false;
+
+    view.device =
+        reinterpret_cast<MTL::Device*>((void*)device);
+    view.opaque =
+        reinterpret_cast<MTL::RenderPipelineState*>((void*)opaque);
+    view.alphaTest =
+        reinterpret_cast<MTL::RenderPipelineState*>((void*)alpha);
+    view.tileLighting =
+        reinterpret_cast<MTL::RenderPipelineState*>((void*)lighting);
+    return view.device!=nullptr &&
+           view.opaque!=nullptr &&
+           view.alphaTest!=nullptr &&
+           view.tileLighting!=nullptr;
+    }
+  @catch(NSException*) {
+    view = {};
+    return false;
+    }
+  }
 
 IOSShadingPrototypePipeline::IOSShadingPrototypePipeline() noexcept =
     default;

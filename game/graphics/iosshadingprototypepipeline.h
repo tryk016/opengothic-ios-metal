@@ -9,6 +9,8 @@ namespace Tempest {
 class Device;
 }
 
+class IOSShadingPrototypePipelineNativeAccess;
+
 namespace RendererIOSShadingPrototypePipeline {
 
 inline constexpr uint32_t ContractVersion = 1u;
@@ -220,6 +222,7 @@ class IOSShadingPrototypePipeline final {
 
   friend IOSShadingPrototypePipeline
       iosCreateShadingPrototypePipeline(Tempest::Device&) noexcept;
+  friend class IOSShadingPrototypePipelineNativeAccess;
   };
 
 // P2.5b1 only builds and reflects three Tile Deferred pipeline states.

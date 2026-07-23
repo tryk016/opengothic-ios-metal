@@ -1726,6 +1726,10 @@ jobs:
           test -f game/graphics/iosshadingprototypepipeline.h
           test -f game/graphics/iosshadingprototypepipeline.cpp
           test -f game/graphics/iosshadingprototypepipeline.mm
+          test -f game/graphics/iosshadingprototypepipelinenative.h
+          test -f game/graphics/iosshadingprototypetileprobe.h
+          test -f game/graphics/iosshadingprototypetileprobe.cpp
+          test -f game/graphics/iosshadingprototypetileprobe.mm
           test -f game/graphics/iosbuiltinshaderabi.h
           test -f game/graphics/iosinventoryshaderabi.h
           test -f game/graphics/iosbinkshaderabi.h
@@ -1743,6 +1747,7 @@ jobs:
           test -f ios/tests/iosinventoryshader.cpp
           test -f ios/tests/iosshadingprototypeshader.cpp
           test -f ios/tests/iosshadingprototypepipeline.cpp
+          test -f ios/tests/iosshadingprototypetileprobe.cpp
           test -f ios/tests/iosbinkshader.cpp
           test -f ios/tests/iosbinkselftest.cpp
 
@@ -1802,6 +1807,46 @@ jobs:
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame \
             -fsyntax-only ios/tests/iosshadingprototypepipeline.cpp
+          printf '#include "graphics/iosshadingprototypetileprobe.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosshadingprototypetileprobe.cpp \
+            game/graphics/iosshadingprototypetileprobe.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypetileprobe"
+          "$RUNNER_TEMP/iosshadingprototypetileprobe"
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosshadingprototypetileprobe.cpp \
+            game/graphics/iosshadingprototypetileprobe.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypetileprobe-sanitized"
+          "$RUNNER_TEMP/iosshadingprototypetileprobe-sanitized"
+          xcrun clang++ -x c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -fsyntax-only ios/tests/iosshadingprototypetileprobe.cpp
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only game/graphics/iosshadingprototypetileprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -c game/graphics/iosshadingprototypetileprobe.mm \
+            -o "$RUNNER_TEMP/iosshadingprototypetileprobe.o"
           xcrun clang++ -x objective-c++ -std=c++20 \
             -target arm64-apple-ios16.4 \
             -isysroot "$IOS_SDK" \
@@ -1985,6 +2030,12 @@ jobs:
             echo 'P2.5b1 factory is instantiated before its P2.5b2 gate'
             exit 1
           fi
+          if rg -n 'iosEncodeShadingPrototypeTileProbe' game \
+              --glob '!iosshadingprototypetileprobe.h' \
+              --glob '!iosshadingprototypetileprobe.mm'; then
+            echo 'P2.5b2a0 compile-only Tile probe gained a production caller'
+            exit 1
+          fi
           if grep -Eq \
               '#import|<Metal/|@interface|id<MTL|MTL[A-Z]|__OBJC__' \
               game/graphics/iosshadingprototypepipeline.h \
@@ -2030,6 +2081,73 @@ jobs:
             echo 'P2.5b1 factory attaches a mutable pipeline archive'
             exit 1
           fi
+
+          if grep -Eq \
+              '#import|<Metal/|id<MTL|MTL[A-Z]|__OBJC__' \
+              game/graphics/iosshadingprototypetileprobe.h \
+              game/graphics/iosshadingprototypetileprobe.cpp; then
+            echo 'P2.5b2a0 host report leaks Objective-C or Metal'
+            exit 1
+          fi
+          P25B2_RUNTIME_DENY='Forward|riosForward|newLibraryWithSource|newDefaultLibrary|MTLCompileOptions|newCommandQueue|commandBufferWith|newCommandBuffer|commandBuffer[[:space:]]*(\(|\])|newBufferWith|newTextureWith|newHeap|newFence|MTLFence|makeAliasable|MTLCapture|newComputePipelineState|computeCommandEncoder|blitCommandEncoder|nextDrawable|presentDrawable|readPixels|(^|[^[:alnum:]_])submit[[:space:]]*\(|commit\]|enqueue\]|waitIdle|[.]wait[[:space:]]*\(|waitUntilCompleted|addCompletedHandler|MTLBinaryArchive|addRenderPipelineFunctions|serializeToURL|MetalFX'
+          for fixture in \
+              'device.submit(command,fence)' \
+              '[queue commandBuffer]' \
+              'queue.commandBuffer()' \
+              '[command commit]' \
+              '[command enqueue]' \
+              'device.waitIdle()' \
+              'fence.wait()' \
+              '[command addCompletedHandler:handler]'; do
+            printf '%s\n' "$fixture" |
+              grep -Eq "$P25B2_RUNTIME_DENY"
+          done
+          if grep -Eq "$P25B2_RUNTIME_DENY" \
+              game/graphics/iosshadingprototypetileprobe.h \
+              game/graphics/iosshadingprototypetileprobe.cpp \
+              game/graphics/iosshadingprototypetileprobe.mm \
+              game/graphics/iosshadingprototypepipelinenative.h; then
+            echo 'P2.5b2a0 owns forbidden runtime work or references Forward'
+            exit 1
+          fi
+          test "$(grep -Fc 'Tempest::MetalApi::withActiveCommandBuffer(' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 1
+          test "$(grep -Fc 'renderCommandEncoderWithDescriptor:' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 1
+          test "$(grep -Fc 'setVertexBytes:' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 1
+          test "$(grep -Fc 'setRenderPipelineState:' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 3
+          test "$(grep -Fc 'drawPrimitives:' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 2
+          test "$(grep -Fc 'dispatchThreadsPerTile:' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 1
+          grep -Fq 'MTLClearColorMake(0.0,0.0,0.0,0.0)' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'descriptor.get().imageblockSampleLength =' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'descriptor.get().threadgroupMemoryLength =' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'descriptor.get().tileWidth =' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'descriptor.get().tileHeight =' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'report.materialTextures = 0u;' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'static_assert(sizeof(Vertices)==VertexBytes);' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          grep -Fq 'MaximumEndAttempts = 2u;' \
+            game/graphics/iosshadingprototypetileprobe.mm
+          test "$(grep -Fc '(void)attemptEnd();' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 1
+          test "$(grep -Fc 'std::terminate();' \
+              game/graphics/iosshadingprototypetileprobe.mm)" -eq 1
+          grep -Fq 'static_assert(Mutators.size()==52u);' \
+            ios/tests/iosshadingprototypetileprobe.cpp
+          grep -Fq 'static_assert(sizeof(Report)==172u);' \
+            ios/tests/iosshadingprototypetileprobe.cpp
+          grep -Fq 'static_assert(offsetof(Report,operations)==168u);' \
+            ios/tests/iosshadingprototypetileprobe.cpp
 
           if grep -Eq \
               'newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|MTLCommandBuffer|gapi/metal/mt' \
@@ -2563,8 +2681,12 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypepipeline\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypepipeline\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosshadingprototypetileprobe\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosshadingprototypetileprobe\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           for source in iosshadingprototypepipeline.cpp \
-              iosshadingprototypepipeline.mm; do
+              iosshadingprototypepipeline.mm \
+              iosshadingprototypetileprobe.cpp \
+              iosshadingprototypetileprobe.mm; do
             test "$(grep -Fc \
               "game/graphics/${source} */ = {isa = PBXBuildFile; fileRef =" \
               build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj)" -eq 1
@@ -2604,6 +2726,8 @@ jobs:
           for source in (
               "iosshadingprototypepipeline.cpp",
               "iosshadingprototypepipeline.mm",
+              "iosshadingprototypetileprobe.cpp",
+              "iosshadingprototypetileprobe.mm",
           ):
               if phase.group(1).count(source) != 1:
                   raise SystemExit(
