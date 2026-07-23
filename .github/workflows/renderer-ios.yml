@@ -1185,9 +1185,9 @@ jobs:
           grep -Fq 'transition_present <= FIRST_FLUSH_PRESENT' \
             ios/device-test/validate-pipeline-archive-log.py
           test "$(grep -Fc 'echo "scenario=$SCENARIO"' \
-            ios/device-test/run-pipeline-archive-test.sh)" -eq 5
+            ios/device-test/run-pipeline-archive-test.sh)" -eq 6
           test "$(grep -Fc 'echo "save_slot=$SCENARIO_SAVE_SLOT"' \
-            ios/device-test/run-pipeline-archive-test.sh)" -eq 5
+            ios/device-test/run-pipeline-archive-test.sh)" -eq 6
           grep -Fq 'missing new-game transition self-test passed' \
             ios/device-test/validate-pipeline-archive-log.py
           grep -Fq 'post-300 new-game transition self-test passed' \
