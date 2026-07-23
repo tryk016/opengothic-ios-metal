@@ -50,17 +50,22 @@ on:
         required: true
         default: false
         type: boolean
+      shading_prototype_tile_self_test:
+        description: 'Build the diagnostics-ON artifact with the isolated shading prototype Tile encode/capture gate (fault none, no other self-test or pipeline archive)'
+        required: true
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'resource-allocator-self-test' || 'no-resource-allocator-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'clear-only-pass-self-test' || 'no-clear-only-pass-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink-self-test' || 'no-bink-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'resource-allocator-self-test' || 'no-resource-allocator-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'clear-only-pass-self-test' || 'no-clear-only-pass-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'shading-prototype-tile-self-test' || 'no-shading-prototype-tile-self-test' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }} resource-allocator-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test || false }} clear-only-pass-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test || false }}
+    name: iOS Release profile ${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }} diagnostics ${{ matrix.diagnostics }} fault ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }} bink-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test || false }} resource-allocator-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test || false }} clear-only-pass-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test || false }} shading-prototype-tile-self-test ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test || false }}
     runs-on: macos-15
     strategy:
       fail-fast: false
@@ -253,6 +258,7 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
+          import runpy
 
           frame = Path("game/graphics/iosframeplan.h").read_text()
           header = Path(
@@ -691,6 +697,7 @@ jobs:
           REQUESTED_FAULT: ${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
           REQUESTED_BINK_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}
           REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
+          REQUESTED_SHADING_PROTOTYPE_TILE_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'ON' || 'OFF' }}
         run: |
           set -euo pipefail
 
@@ -743,7 +750,8 @@ jobs:
           if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] && {
               [ "$REQUESTED_FAULT" != none ] ||
               [ "$REQUESTED_BINK_SELF_TEST" = ON ] ||
-              [ "$REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST" = ON ];
+              [ "$REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST" = ON ] ||
+              [ "$REQUESTED_SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ];
           }; then
             echo 'clear-only pass workflow input conflicts with fault/other self-test'
             exit 1
@@ -815,11 +823,24 @@ jobs:
             -Igame -isystem lib/Tempest/Engine/include \
             -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
             game/graphics/iosmetalresourceclearpassprobe.mm
+          xcrun --sdk iphoneos clang++ -x objective-c++ -std=c++20 \
+            -arch arm64 -miphoneos-version-min=16.4 -fno-objc-arc \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include \
+            -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
+            game/graphics/iosmetalcapturesession.mm
           xcrun clang++ -x objective-c++ -std=c++20 -fno-objc-arc \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame -isystem lib/Tempest/Engine/include \
             -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
             game/graphics/iosmetalresourceclearpassprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 -fno-objc-arc \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -isystem lib/Tempest/Engine/include \
+            -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
+            game/graphics/iosmetalcapturesession.mm
 
           python3 - <<'PY'
           import plistlib
@@ -833,6 +854,9 @@ jobs:
           ).read_text()
           native = Path(
               "game/graphics/iosmetalresourceclearpassprobe.mm"
+          ).read_text()
+          capture_session = Path(
+              "game/graphics/iosmetalcapturesession.mm"
           ).read_text()
           validator = Path(
               "ios/device-test/validate-clear-only-pass-self-test-log.py"
@@ -910,7 +934,8 @@ jobs:
           )[1].split('set(_renderer_ios_fault_modes', 1)[0]
           for literal in (
               'set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")',
-              'if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)',
+              'if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR\n'
+              '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)',
               '<key>MetalCaptureEnabled</key>',
               '<true/>',
           ):
@@ -1032,10 +1057,14 @@ jobs:
           if native.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1:
               raise SystemExit("clear-only probe must borrow exactly one active command buffer")
           for literal in (
-              "RendererIOS-pm-clear-v1.gputrace",
               "supportsDestination:MTLCaptureDestinationGPUTraceDocument",
               "startCaptureWithDescriptor:descriptor.get()",
               "descriptor.get().captureObject = nativeDevice",
+          ):
+              if capture_session.count(literal) != 1:
+                  raise SystemExit(f"common programmatic capture contract is not exact: {literal}")
+          for literal in (
+              "RendererIOS-pm-clear-v1.gputrace",
               "RIOS pm-clear CB",
               "RIOS private 4x4",
               "RIOS memoryless 4x4",
@@ -1043,14 +1072,14 @@ jobs:
               "RIOS memoryless clear",
           ):
               if native.count(literal) != 1:
-                  raise SystemExit(f"programmatic capture contract is not exact: {literal}")
+                  raise SystemExit(f"clear capture adapter contract is not exact: {literal}")
           for forbidden in ("Sha256", "CommonCrypto", "newCommandQueue"):
-              if forbidden in native:
+              if forbidden in native or forbidden in capture_session:
                   raise SystemExit(f"programmatic capture contains forbidden runtime code: {forbidden}")
-          cancel_capture = native.split(
-              "void IOSMetalResourceClearPassCapture::cancel() noexcept {", 1
+          cancel_capture = capture_session.split(
+              "void IOSMetalCaptureSession::cancel() noexcept {", 1
           )[1].split(
-              "\nbool IOSMetalResourceClearPassCapture::active() const noexcept {", 1
+              "\nvoid IOSMetalCaptureSession::reset() noexcept {", 1
           )[0]
           cancel_try, cancel_catch = cancel_capture.split("@catch", 1)
           if (
@@ -2171,6 +2200,383 @@ jobs:
             exit 1
           fi
 
+      - name: Verify P2.5b2a1 shading prototype Tile self-test profile
+        if: matrix.diagnostics == 'ON'
+        env:
+          TILE_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'ON' || 'OFF' }}
+          REQUESTED_FAULT: ${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}
+          REQUESTED_BINK_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}
+          REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
+          REQUESTED_CLEAR_ONLY_PASS_SELF_TEST: ${{ github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}
+        run: |
+          set -euo pipefail
+
+          test -x ios/device-test/validate-shading-prototype-tile-self-test-log.py
+          PYTHONDONTWRITEBYTECODE=1 \
+            python3 ios/device-test/validate-shading-prototype-tile-self-test-log.py \
+              --self-test
+          /bin/bash -n ios/device-test/run-smoke-test.sh
+          PYTHONDONTWRITEBYTECODE=1 /bin/bash \
+            ios/device-test/run-smoke-test.sh \
+              --require-shading-prototype-tile-self-test --self-test
+
+          if /bin/bash ios/device-test/run-smoke-test.sh \
+              --require-shading-prototype-tile-self-test \
+              --require-bink-self-test --self-test; then
+            echo 'shading prototype Tile/Bink harness conflict survived'
+            exit 1
+          fi
+          if /bin/bash ios/device-test/run-smoke-test.sh \
+              --require-shading-prototype-tile-self-test \
+              --require-resource-allocator-self-test --self-test; then
+            echo 'shading prototype Tile/resource allocator harness conflict survived'
+            exit 1
+          fi
+          if /bin/bash ios/device-test/run-smoke-test.sh \
+              --require-shading-prototype-tile-self-test \
+              --require-clear-only-pass-self-test --self-test; then
+            echo 'shading prototype Tile/clear-only pass harness conflict survived'
+            exit 1
+          fi
+          if /bin/bash ios/device-test/run-smoke-test.sh \
+              --require-shading-prototype-tile-self-test \
+              --pipeline-archive-test-mode cold --self-test; then
+            echo 'shading prototype Tile/pipeline archive harness conflict survived'
+            exit 1
+          fi
+          if /bin/bash ios/device-test/run-smoke-test.sh \
+              --require-shading-prototype-tile-self-test \
+              --expected-fault post-submit-suboptimal --self-test; then
+            echo 'shading prototype Tile/fault harness conflict survived'
+            exit 1
+          fi
+          if OPENGOTHIC_IOS_EXPECTED_FAULT=post-submit-suboptimal \
+              /bin/bash ios/device-test/run-smoke-test.sh \
+                --require-shading-prototype-tile-self-test --self-test; then
+            echo 'shading prototype Tile host profile accepted an injected fault'
+            exit 1
+          fi
+          if [ "$TILE_SELF_TEST" = ON ] && {
+              [ "$REQUESTED_FAULT" != none ] ||
+              [ "$REQUESTED_BINK_SELF_TEST" = ON ] ||
+              [ "$REQUESTED_RESOURCE_ALLOCATOR_SELF_TEST" = ON ] ||
+              [ "$REQUESTED_CLEAR_ONLY_PASS_SELF_TEST" = ON ];
+          }; then
+            echo 'shading prototype Tile workflow input conflicts with fault/other self-test'
+            exit 1
+          fi
+
+          PYTHONPYCACHEPREFIX="$RUNNER_TEMP/renderer-ios-python-cache" \
+            python3 -m py_compile \
+              ios/device-test/validate-shading-prototype-tile-self-test-log.py
+          grep -Fq -- '--require-shading-prototype-tile-self-test' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'validate_shading_prototype_tile_binary_profile()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'build/device-self-test/%s/shading-prototype-tile/%s-%s-%s' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'self_test_profile=shading-prototype-tile' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'processes-shading-prototype-tile-window-start.json' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_shading_prototype_tile_artifact()' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'ensure_durable_zero || fail "durable final application cleanup failed"' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'capture_crash_state final' \
+            ios/device-test/run-smoke-test.sh
+          grep -Fq 'OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST' \
+            CMakeLists.txt
+          grep -Fq 'IOS AND OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST' \
+            CMakeLists.txt
+          grep -Fq 'game/graphics/iosshadingprototypeplan.cpp' \
+            CMakeLists.txt
+          grep -Fq \
+            'static_assert(sizeof(RendererIOSShadingPrototypeTileSelfTestEncoded)-2u==245u);' \
+            game/graphics/iosmetalcontext.cpp
+
+          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          tile_objc_sources=(
+            game/graphics/iosmetalcapturesession.mm
+            game/graphics/iosmetalresourceallocator.mm
+            game/graphics/iosmetalresourceclearpassprobe.mm
+            game/graphics/iosshadingprototypepipeline.mm
+            game/graphics/iosshadingprototypetileprobe.mm
+          )
+          for source in "${tile_objc_sources[@]}"; do
+            object="$RUNNER_TEMP/$(basename "${source%.mm}")-tile.o"
+            xcrun --sdk iphoneos clang++ -x objective-c++ -std=c++20 \
+              -target arm64-apple-ios16.4 -isysroot "$IOS_SDK" \
+              -fno-objc-arc \
+              -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=1 \
+              -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=1 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -isystem lib/Tempest/Engine/include \
+              -isystem lib/Tempest/Engine/thirdparty/metal-cpp \
+              -c "$source" -o "$object"
+            test -s "$object"
+          done
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import runpy
+
+          context = Path("game/graphics/iosmetalcontext.cpp").read_text()
+          harness = Path("ios/device-test/run-smoke-test.sh").read_text()
+          validator = Path(
+              "ios/device-test/validate-shading-prototype-tile-self-test-log.py"
+          ).read_text()
+          validator_module = runpy.run_path(
+              "ios/device-test/validate-shading-prototype-tile-self-test-log.py"
+          )
+          workflow = Path(".github/workflows/renderer-ios.yml").read_text()
+          cmake = Path("CMakeLists.txt").read_text()
+          markers = (
+              "RendererIOS shading prototype tile self-test: ARMED "
+              "case=tile-prototype-v1 contract=1 metallib-abi=5 "
+              "minimum-apple=4 output=4x4 rgba8-private=1",
+              "RendererIOS shading prototype tile self-test: FACTORY READY "
+              "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
+              "builtin-delta=0 archive-delta=0",
+              "RendererIOS shading prototype tile self-test: ENCODED "
+              "case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 "
+              "alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 "
+              "tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile "
+              "drawable=0 present=0",
+              "RendererIOS shading prototype tile self-test: SUBMITTED "
+              "case=tile-prototype-v1 command-buffers=1 submits=1",
+              "RendererIOS shading prototype tile self-test: PASS "
+              "case=tile-prototype-v1 terminal=completed created=1 live=0 "
+              "released=1 wait-idle=0 runtime-delta=0 builtin-delta=0 "
+              "archive-delta=0",
+              "RendererIOS shading prototype tile self-test: UNSUPPORTED "
+              "case=tile-prototype-v1 reason=apple4-required side-effects=0",
+          )
+          if tuple(len(marker.encode("utf-8")) for marker in markers) != (
+              143, 152, 245, 106, 180, 118,
+          ):
+              raise SystemExit("shading prototype Tile marker byte budget changed")
+          marker_scope = context.split(
+              "constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[]", 1
+          )[1].split("\n#endif", 1)[0]
+          validator_names = (
+              "ARMED",
+              "FACTORY_READY",
+              "ENCODED",
+              "SUBMITTED",
+              "PASS",
+              "UNSUPPORTED",
+          )
+          for marker, validator_name in zip(markers, validator_names):
+              if marker_scope.count(marker) != 1:
+                  raise SystemExit(
+                      f"shading prototype Tile production marker is not exact: {marker}"
+                  )
+              if validator_module[validator_name] != marker:
+                  raise SystemExit(
+                      f"shading prototype Tile validator marker is not exact: {marker}"
+                  )
+          if context.count(
+              '"\\x01RendererIOS shading prototype tile capture: ACQUIRED"'
+          ) != 1:
+              raise SystemExit("shading prototype Tile capture binary marker is not exact")
+          if "not ordinary" not in validator:
+              raise SystemExit("Tile validator does not require zero ordinary frames")
+          for forbidden in ("riosForward", "ForwardPlus", "Forward+"):
+              if forbidden not in validator:
+                  raise SystemExit(f"Tile validator omits Forward denylist: {forbidden}")
+          fail_reasons = (
+              "plan-contract-mismatch",
+              "snapshot-unavailable",
+              "factory-contract-mismatch",
+              "factory-counter-mismatch",
+              "unsupported-side-effect-mismatch",
+              "output-allocation-or-lifetime-mismatch",
+              "capture-start-failed",
+              "capture-start-ambiguous",
+              "command-buffer-creation-failed",
+              "native-encode-rejected",
+              "encoded-contract-mismatch",
+              "submit-exception-ambiguous",
+              "capture-acquisition-failed",
+              "terminal-fence-error",
+              "terminal-lifetime-or-counter-mismatch",
+              "fence-nonterminal-after-wait-idle",
+              "wait-idle-used",
+          )
+          for reason in fail_reasons:
+              if reason not in context or reason not in validator:
+                  raise SystemExit(f"Tile failure reason is not end-to-end: {reason}")
+          if (
+              cmake.count(
+                  "target_sources(${PROJECT_NAME} PRIVATE\n"
+                  '    "${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/'
+                  'iosshadingprototypeplan.cpp")'
+              )
+              != 1
+          ):
+              raise SystemExit("P2.5a plan source does not have one Tile-only target gate")
+          evidence_resolver = harness.split(
+              "smoke_evidence_path() {", 1
+          )[1].split("\npublish_evidence_path() {", 1)[0]
+          if evidence_resolver.count(
+              "build/device-self-test/%s/shading-prototype-tile/%s-%s-%s"
+          ) != 1:
+              raise SystemExit("Tile evidence namespace is not exact")
+          cleanup = harness.split("cleanup() {", 1)[1].split(
+              "\ntrap cleanup EXIT", 1
+          )[0]
+          if cleanup.index("ensure_durable_zero") > cleanup.index(
+              "preserve_failure_evidence"
+          ):
+              raise SystemExit("Tile failure evidence precedes durable-zero cleanup")
+          if cleanup.index("capture_shading_prototype_tile_artifact") > cleanup.index(
+              "preserve_failure_evidence"
+          ):
+              raise SystemExit("Tile capture recovery follows failure preservation")
+          configure = workflow.rsplit(
+              "      - name: Configure RendererIOS", 1
+          )[1].split(
+              "\n      - name: Assert legacy renderer is not in the target", 1
+          )[0]
+          if configure.count(
+              "-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="
+          ) != 1:
+              raise SystemExit("workflow Tile profile is not configured exactly once")
+          PY
+
+          configure_profile() {
+            local name="$1"
+            local diagnostics="$2"
+            local tile="$3"
+            local build="$RUNNER_TEMP/renderer-ios-tile-pbx-$name"
+            rm -rf "$build"
+            cmake -S . -B "$build" -G Xcode \
+              -DCMAKE_SYSTEM_NAME=iOS \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
+              -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="$diagnostics" \
+              -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=none \
+              -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="$tile"
+            local project="$build/Gothic2Notr.xcodeproj/project.pbxproj"
+            test -f "$project"
+            python3 - "$project" "$tile" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          project = Path(sys.argv[1]).read_text()
+          tile = sys.argv[2]
+          targets = re.findall(
+              r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
+              r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+              project,
+              re.S,
+          )
+          gothic = [
+              body for _, body in targets
+              if re.search(r"^\s*name = Gothic2Notr;$", body, re.M)
+          ]
+          if len(gothic) != 1:
+              raise SystemExit("could not identify exact Gothic2Notr target")
+          source_phase = re.search(
+              r"([A-F0-9]{24}) /\* Sources \*/", gothic[0]
+          )
+          if source_phase is None:
+              raise SystemExit("Gothic2Notr target has no Sources phase")
+          phase = re.search(
+              rf"\b{source_phase.group(1)} /\* Sources \*/ = \{{\n"
+              r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+              project,
+              re.S,
+          )
+          if phase is None:
+              raise SystemExit("could not read Gothic2Notr Sources phase")
+          build_files = project.split(
+              "/* Begin PBXBuildFile section */", 1
+          )[1].split("/* End PBXBuildFile section */", 1)[0]
+          sources = (
+              "iosshadingprototypepipeline.cpp",
+              "iosshadingprototypepipeline.mm",
+              "iosshadingprototypetileprobe.cpp",
+              "iosshadingprototypetileprobe.mm",
+              "iosmetalcapturesession.mm",
+          )
+          for source in sources:
+              if phase.group(1).count(source) != 1:
+                  raise SystemExit(
+                      f"{source} is not exactly once in Gothic2Notr Sources"
+                  )
+              if build_files.count(source) != 2:
+                  raise SystemExit(
+                      f"{source} does not have one exact PBXBuildFile entry"
+                  )
+          plan = "iosshadingprototypeplan.cpp"
+          expected_plan = 1 if tile == "ON" else 0
+          if phase.group(1).count(plan) != expected_plan:
+              raise SystemExit("Tile plan Gothic2Notr Sources gate is not exact")
+          if build_files.count(plan) != expected_plan * 2:
+              raise SystemExit("Tile plan PBXBuildFile gate is not exact")
+          PY
+          }
+          configure_profile off OFF OFF
+          configure_profile on ON OFF
+          configure_profile tile ON ON
+          TILE_BUILD="$RUNNER_TEMP/renderer-ios-tile-pbx-tile"
+          cmake --build "$TILE_BUILD" --config Release -- \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+          TILE_APP="$TILE_BUILD/opengothic/Release/Gothic2Notr.app"
+          TILE_BINARY="$TILE_APP/Gothic2Notr"
+          test -f "$TILE_BINARY"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+            "$TILE_APP/Info.plist")" = true
+          TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
+          strings "$TILE_BINARY" >"$TILE_STRINGS"
+          for marker in \
+              'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1' \
+              'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
+              'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
+              'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
+              'RendererIOS shading prototype tile self-test: PASS case=tile-prototype-v1 terminal=completed created=1 live=0 released=1 wait-idle=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
+              'RendererIOS shading prototype tile self-test: UNSUPPORTED case=tile-prototype-v1 reason=apple4-required side-effects=0' \
+              'RendererIOS shading prototype tile capture: ACQUIRED'; do
+            test "$(grep -Fxc "$marker" "$TILE_STRINGS" || true)" -eq 1
+          done
+
+          expect_configure_failure() {
+            local name="$1"
+            shift
+            local build="$RUNNER_TEMP/renderer-ios-tile-invalid-$name"
+            rm -rf "$build"
+            if cmake -S . -B "$build" -G Xcode \
+                -DCMAKE_SYSTEM_NAME=iOS \
+                -DCMAKE_OSX_ARCHITECTURES=arm64 \
+                -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
+                -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON \
+                "$@" >/dev/null 2>&1; then
+              echo "invalid shading prototype Tile CMake profile survived: $name"
+              exit 1
+            fi
+          }
+          expect_configure_failure diagnostics-off \
+            -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=OFF
+          expect_configure_failure fault \
+            -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
+            -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=post-submit-suboptimal
+          expect_configure_failure bink \
+            -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
+            -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=ON
+          expect_configure_failure allocator \
+            -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
+            -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=ON
+          expect_configure_failure clear \
+            -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
+            -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=ON
+
       - name: Verify physical-device smoke cleanup contract
         run: |
           set -euo pipefail
@@ -2652,6 +3058,7 @@ jobs:
             -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}" \
+            -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="${GITHUB_SHA}"
 
       - name: Assert legacy renderer is not in the target
@@ -3232,6 +3639,7 @@ jobs:
           DIAGNOSTICS: ${{ matrix.diagnostics }}
           RESOURCE_ALLOCATOR_SELF_TEST: ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
           CLEAR_ONLY_PASS_SELF_TEST: ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}
+          SHADING_PROTOTYPE_TILE_SELF_TEST: ${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'ON' || 'OFF' }}
         run: |
           set -euo pipefail
           cmake --build build-renderer-ios --config Release -- \
@@ -3311,6 +3719,33 @@ jobs:
               "$APP_STRINGS"
             ! grep -Fq 'RendererIOS clear-only capture:' \
               "$APP_STRINGS"
+          fi
+          if [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ]; then
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: PASS case=tile-prototype-v1 terminal=completed created=1 live=0 released=1 wait-idle=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: UNSUPPORTED case=tile-prototype-v1 reason=apple4-required side-effects=0' \
+              "$APP_STRINGS" || true)" -eq 1
+            test "$(grep -Fxc -- 'RendererIOS shading prototype tile capture: ACQUIRED' \
+              "$APP_STRINGS" || true)" -eq 1
+          else
+            ! grep -Fq 'RendererIOS shading prototype tile self-test:' \
+              "$APP_STRINGS"
+            ! grep -Fq 'RendererIOS shading prototype tile capture:' \
+              "$APP_STRINGS"
+          fi
+          if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
+             [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ]; then
+            test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
+              "$APP_INFO")" = true
+          else
             ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
               "$APP_INFO" >/dev/null 2>&1
           fi
@@ -3322,6 +3757,7 @@ jobs:
           BINK_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.bink_self_test && 'ON' || 'OFF' }}
           RESOURCE_ALLOCATOR_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test && 'ON' || 'OFF' }}
           CLEAR_ONLY_PASS_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.clear_only_pass_self_test && 'ON' || 'OFF' }}
+          SHADING_PROTOTYPE_TILE_SELF_TEST: ${{ matrix.diagnostics == 'ON' && inputs.shading_prototype_tile_self_test && 'ON' || 'OFF' }}
           DIAGNOSTICS: ${{ matrix.diagnostics }}
           IOS_VERSION: 1.0.${{ github.run_number }}
           TEMPEST_PROFILE: ${{ inputs.tempest_profile }}
@@ -3371,10 +3807,11 @@ jobs:
             echo "unexpected minimum iOS version: $MINIMUM_OS (expected 16.4)"
             exit 1
           fi
-          if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ]; then
+          if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
+             [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ]; then
             if [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
                 "$INFO_PLIST")" != true ]; then
-              echo 'clear-only pass package does not enable Metal capture'
+              echo 'capture self-test package does not enable Metal capture'
               exit 1
             fi
           elif /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
@@ -3401,7 +3838,7 @@ jobs:
           fi
 
           SHORT_SHA="${GITHUB_SHA:0:12}"
-          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}-resource-allocator-self-test-${RESOURCE_ALLOCATOR_SELF_TEST}-clear-only-pass-self-test-${CLEAR_ONLY_PASS_SELF_TEST}"
+          BASENAME="OpenGothic-RendererIOS-${SHORT_SHA}-run${GITHUB_RUN_ID}-attempt${GITHUB_RUN_ATTEMPT}-${TEMPEST_PROFILE}-${DIAGNOSTICS}-${ACTIVE_FAULT_MODE}-bink-self-test-${BINK_SELF_TEST}-resource-allocator-self-test-${RESOURCE_ALLOCATOR_SELF_TEST}-clear-only-pass-self-test-${CLEAR_ONLY_PASS_SELF_TEST}-shading-prototype-tile-self-test-${SHADING_PROTOTYPE_TILE_SELF_TEST}"
           ARTIFACT_DIR="$GITHUB_WORKSPACE/device-artifact"
           PACKAGE_ROOT="$RUNNER_TEMP/renderer-ios-device-package"
           rm -rf "$ARTIFACT_DIR" "$PACKAGE_ROOT"
@@ -3431,6 +3868,7 @@ jobs:
           bink_self_test=$BINK_SELF_TEST
           resource_allocator_self_test=$RESOURCE_ALLOCATOR_SELF_TEST
           clear_only_pass_self_test=$CLEAR_ONLY_PASS_SELF_TEST
+          shading_prototype_tile_self_test=$SHADING_PROTOTYPE_TILE_SELF_TEST
           save_preview_route=$SAVE_PREVIEW_ROUTE
           bundle_id=$BUNDLE_ID
           bundle_version=$BUNDLE_VERSION
@@ -3444,7 +3882,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         uses: actions/upload-artifact@v4
         with:
-          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}-resource-allocator-self-test-${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test || false }}-clear-only-pass-self-test-${{ matrix.diagnostics == 'ON' && inputs.clear_only_pass_self_test || false }}
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-${{ matrix.diagnostics }}-${{ matrix.diagnostics == 'ON' && inputs.fault_mode || 'none' }}-bink-self-test-${{ matrix.diagnostics == 'ON' && inputs.bink_self_test || false }}-resource-allocator-self-test-${{ matrix.diagnostics == 'ON' && inputs.resource_allocator_self_test || false }}-clear-only-pass-self-test-${{ matrix.diagnostics == 'ON' && inputs.clear_only_pass_self_test || false }}-shading-prototype-tile-self-test-${{ matrix.diagnostics == 'ON' && inputs.shading_prototype_tile_self_test || false }}
           path: device-artifact/
           if-no-files-found: error
           retention-days: 14

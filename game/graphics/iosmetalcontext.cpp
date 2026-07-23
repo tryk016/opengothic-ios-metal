@@ -16,7 +16,8 @@
 #include <algorithm>
 #include <array>
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 #include <atomic>
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -34,11 +35,19 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+#include "iosmetalcapturesession.h"
+#endif
 #include "iosmetalresourceallocator.h"
 #include "iosmetalresourceclearpassprobe.h"
 #include "iospipelinearchivepolicy.h"
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+#include "iosshadingprototypepipeline.h"
+#include "iosshadingprototypeplan.h"
+#include "iosshadingprototypetileprobe.h"
+#endif
 #include "resources.h"
 #include "rendereriosplatform.h"
 #include "shaders.h"
@@ -121,6 +130,28 @@ constexpr char RendererIOSConfiguredFaultModeEvidence[] =
     (defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
      defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST))
 #error "RendererIOS clear-only pass, resource allocator and Bink self-tests are mutually exclusive"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
+    !defined(__IOS__)
+#error "RendererIOS shading prototype Tile self-test requires iOS"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS shading prototype Tile self-test requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
+#error "RendererIOS shading prototype Tile self-test requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
+    (defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST))
+#error "RendererIOS shading prototype Tile and other self-tests are mutually exclusive"
 #endif
 
 namespace {
@@ -534,6 +565,92 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
   }
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1";
+constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
+  "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
+constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
+  "\x01RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0";
+constexpr char RendererIOSShadingPrototypeTileSelfTestSubmitted[] =
+  "\x01RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1";
+constexpr char RendererIOSShadingPrototypeTileSelfTestPassed[] =
+  "\x01RendererIOS shading prototype tile self-test: PASS case=tile-prototype-v1 terminal=completed created=1 live=0 released=1 wait-idle=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
+constexpr char RendererIOSShadingPrototypeTileSelfTestUnsupported[] =
+  "\x01RendererIOS shading prototype tile self-test: UNSUPPORTED case=tile-prototype-v1 reason=apple4-required side-effects=0";
+constexpr char RendererIOSShadingPrototypeTileCaptureAcquired[] =
+  "\x01RendererIOS shading prototype tile capture: ACQUIRED";
+constexpr char RendererIOSShadingPrototypeTileCaptureName[] =
+  "RendererIOS-tile-prototype-v1.gputrace";
+
+static_assert(sizeof(RendererIOSShadingPrototypeTileSelfTestEncoded)-2u==245u);
+
+const char* rendererIOSShadingPrototypeTileMarkerText(
+    const char* storage) noexcept {
+  const volatile char* const observableStorage = storage;
+  (void)*observableStorage;
+  return storage+1u;
+  }
+
+struct RendererIOSShadingPrototypeTileIsolationSnapshot final {
+  MetalRuntimeCompilationSnapshot runtime;
+  MetalBuiltinRuntimeSnapshot builtin;
+  MetalPipelineArchiveSnapshot archive;
+  };
+
+bool rendererIOSShadingPrototypeTileArchiveEqual(
+    const MetalPipelineArchiveSnapshot& lhs,
+    const MetalPipelineArchiveSnapshot& rhs) noexcept {
+  return lhs.abiVersion==rhs.abiVersion &&
+         lhs.structSize==rhs.structSize &&
+         lhs.flags==rhs.flags &&
+         lhs.reserved==rhs.reserved &&
+         lhs.loadFailures==rhs.loadFailures &&
+         lhs.rebuilds==rhs.rebuilds &&
+         lhs.renderHits==rhs.renderHits &&
+         lhs.renderMisses==rhs.renderMisses &&
+         lhs.renderAdds==rhs.renderAdds &&
+         lhs.renderFallbacks==rhs.renderFallbacks &&
+         lhs.computeHits==rhs.computeHits &&
+         lhs.computeMisses==rhs.computeMisses &&
+         lhs.computeAdds==rhs.computeAdds &&
+         lhs.computeFallbacks==rhs.computeFallbacks &&
+         lhs.flushAttempts==rhs.flushAttempts &&
+         lhs.flushSuccesses==rhs.flushSuccesses &&
+         lhs.flushFailures==rhs.flushFailures;
+  }
+
+bool rendererIOSShadingPrototypeTileIsolationSnapshotAvailable(
+    const RendererIOSShadingPrototypeTileIsolationSnapshot& snapshot)
+    noexcept {
+  return snapshot.runtime.available && snapshot.builtin.available &&
+         snapshot.archive.abiVersion==
+             MetalPipelineArchiveSnapshot::AbiVersion &&
+         snapshot.archive.structSize==
+             MetalPipelineArchiveSnapshot::StructSize;
+  }
+
+bool rendererIOSShadingPrototypeTileIsolationSnapshotEqual(
+    const RendererIOSShadingPrototypeTileIsolationSnapshot& lhs,
+    const RendererIOSShadingPrototypeTileIsolationSnapshot& rhs)
+    noexcept {
+  return lhs.runtime.available==rhs.runtime.available &&
+         lhs.runtime.sourceLibraryRequests==
+             rhs.runtime.sourceLibraryRequests &&
+         lhs.runtime.computePsoRequests==
+             rhs.runtime.computePsoRequests &&
+         lhs.runtime.renderPsoRequests==
+             rhs.runtime.renderPsoRequests &&
+         lhs.builtin.available==rhs.builtin.available &&
+         lhs.builtin.sourceLibraryRequests==
+             rhs.builtin.sourceLibraryRequests &&
+         lhs.builtin.renderPsoRequests==
+             rhs.builtin.renderPsoRequests &&
+         rendererIOSShadingPrototypeTileArchiveEqual(
+             lhs.archive,rhs.archive);
+  }
+#endif
+
 }
 
 struct IOSMetalContext::Impl final {
@@ -569,6 +686,20 @@ struct IOSMetalContext::Impl final {
     Submitted,
     SubmittedFailed,
     Ambiguous,
+    Passed,
+    Failed,
+    };
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+  enum class ShadingPrototypeTileSelfTestState : uint8_t {
+    Armed,
+    FactoryReady,
+    Encoded,
+    Submitted,
+    Acquired,
+    Ambiguous,
+    Unsupported,
     Passed,
     Failed,
     };
@@ -1005,6 +1136,452 @@ struct IOSMetalContext::Impl final {
       logClearOnlyPassFailure("terminal-fence-error-after-wait-idle");
       fail("RendererIOS clear-only pass self-test failed",
            "terminal-fence-error-after-wait-idle");
+      }
+    }
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+  RendererIOSShadingPrototypeTileIsolationSnapshot
+      shadingPrototypeTileIsolationSnapshot() const noexcept {
+    RendererIOSShadingPrototypeTileIsolationSnapshot snapshot;
+    snapshot.runtime = MetalApi::runtimeCompilationSnapshot(device);
+    snapshot.builtin = MetalApi::builtinRuntimeSnapshot(device);
+    snapshot.archive = MetalApi::pipelineArchiveSnapshot(device);
+    return snapshot;
+    }
+
+  bool shadingPrototypeTileIsolationUnchanged() const noexcept {
+    return rendererIOSShadingPrototypeTileIsolationSnapshotEqual(
+        shadingPrototypeTileIsolationBefore,
+        shadingPrototypeTileIsolationSnapshot());
+    }
+
+  bool shadingPrototypeTileLifetimeUnchanged() const noexcept {
+    return iosMetalResourceLifetimeSnapshot()==
+           shadingPrototypeTileLifetimeBefore;
+    }
+
+  bool shadingPrototypeTileLifetimeLive() const noexcept {
+    const IOSMetalResourceLifetimeSnapshot current =
+        iosMetalResourceLifetimeSnapshot();
+    return current.created>=shadingPrototypeTileLifetimeBefore.created &&
+           current.live>=shadingPrototypeTileLifetimeBefore.live &&
+           current.released>=shadingPrototypeTileLifetimeBefore.released &&
+           current.created-shadingPrototypeTileLifetimeBefore.created==1u &&
+           current.live-shadingPrototypeTileLifetimeBefore.live==1u &&
+           current.released-
+               shadingPrototypeTileLifetimeBefore.released==0u;
+    }
+
+  bool shadingPrototypeTileLifetimeReleased() const noexcept {
+    const IOSMetalResourceLifetimeSnapshot current =
+        iosMetalResourceLifetimeSnapshot();
+    return current.created>=shadingPrototypeTileLifetimeBefore.created &&
+           current.live==shadingPrototypeTileLifetimeBefore.live &&
+           current.released>=shadingPrototypeTileLifetimeBefore.released &&
+           current.created-shadingPrototypeTileLifetimeBefore.created==1u &&
+           current.released-
+               shadingPrototypeTileLifetimeBefore.released==1u;
+    }
+
+  void logShadingPrototypeTileFailure(const char* reason) noexcept {
+    try {
+      Log::e("RendererIOS shading prototype tile self-test: FAIL case=tile-prototype-v1 reason=",
+             reason);
+      }
+    catch(...) {
+      }
+    }
+
+  void releaseShadingPrototypeTileOwnersAfterCommand() noexcept {
+    shadingPrototypeTileCommand = CommandBuffer();
+    shadingPrototypeTileCommandActive = false;
+    shadingPrototypeTileOutput = IOSMetalResourceTexture();
+    shadingPrototypeTilePipeline = IOSShadingPrototypePipeline();
+    shadingPrototypeTileCapture.reset();
+    }
+
+  void failShadingPrototypeTileBeforeSubmit(
+      const char* reason, const char* detail = nullptr) noexcept {
+    releaseShadingPrototypeTileOwnersAfterCommand();
+    shadingPrototypeTileFence = Fence();
+    shadingPrototypeTileFenceActive = false;
+    shadingPrototypeTileState =
+        ShadingPrototypeTileSelfTestState::Failed;
+    logShadingPrototypeTileFailure(reason);
+    fail("RendererIOS shading prototype tile self-test failed",
+         detail!=nullptr ? detail : reason);
+    }
+
+  void failShadingPrototypeTileAmbiguous(
+      const char* reason, const char* detail = nullptr) noexcept {
+    // A throwing submit or capture boundary may already have enqueued GPU work
+    // or left capture active. Keep every retainedReferences=false owner and
+    // the capture session until the common fail-stop path confirms device idle.
+    shadingPrototypeTileState =
+        ShadingPrototypeTileSelfTestState::Ambiguous;
+    logShadingPrototypeTileFailure(reason);
+    fail("RendererIOS shading prototype tile self-test failed",
+         detail!=nullptr ? detail : reason);
+    }
+
+  void releaseShadingPrototypeTileAfterTerminal() noexcept {
+    shadingPrototypeTileFence = Fence();
+    shadingPrototypeTileFenceActive = false;
+    releaseShadingPrototypeTileOwnersAfterCommand();
+    }
+
+  bool finishShadingPrototypeTileAfterTerminal(
+      bool polledWithoutWaitIdle) noexcept {
+    const bool preReleasePassed =
+        polledWithoutWaitIdle &&
+        shadingPrototypeTileState==
+            ShadingPrototypeTileSelfTestState::Acquired &&
+        shadingPrototypeTileFenceActive &&
+        shadingPrototypeTileCommandActive &&
+        bool(shadingPrototypeTileOutput) &&
+        bool(shadingPrototypeTilePipeline) &&
+        !shadingPrototypeTileCapture.active() &&
+        shadingPrototypeTileCaptureArtifact.bytes>0u &&
+        iosShadingPrototypeTileProbeReportMatches(
+            shadingPrototypeTileNativeReport) &&
+        shadingPrototypeTileLifetimeLive() &&
+        shadingPrototypeTileIsolationUnchanged();
+
+    // The terminal fence is the retainedReferences=false boundary. Drop it
+    // first, then the command and its output/pipeline/capture keep-alives.
+    releaseShadingPrototypeTileAfterTerminal();
+
+    const bool postReleasePassed =
+        !shadingPrototypeTileFenceActive &&
+        !shadingPrototypeTileCommandActive &&
+        !shadingPrototypeTileOutput &&
+        !shadingPrototypeTilePipeline &&
+        !shadingPrototypeTileCapture.active() &&
+        shadingPrototypeTileLifetimeReleased() &&
+        shadingPrototypeTileIsolationUnchanged();
+    if(!preReleasePassed || !postReleasePassed) {
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Failed;
+      const char* const reason = !polledWithoutWaitIdle
+                               ? "wait-idle-used"
+                               : "terminal-lifetime-or-counter-mismatch";
+      logShadingPrototypeTileFailure(reason);
+      fail("RendererIOS shading prototype tile self-test failed",reason);
+      return false;
+      }
+
+    shadingPrototypeTileState =
+        ShadingPrototypeTileSelfTestState::Passed;
+    try {
+      Log::i(rendererIOSShadingPrototypeTileMarkerText(
+          RendererIOSShadingPrototypeTileSelfTestPassed));
+      }
+    catch(...) {
+      }
+    return true;
+    }
+
+  void startShadingPrototypeTileSelfTest() noexcept {
+    if(shadingPrototypeTileStarted)
+      return;
+    shadingPrototypeTileStarted = true;
+    static_assert(IOSShadingPrototypePlanABIVersion==1u);
+    static_assert(
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==5u);
+    try {
+      Log::i(rendererIOSShadingPrototypeTileMarkerText(
+          RendererIOSShadingPrototypeTileSelfTestArmed));
+      }
+    catch(...) {
+      }
+
+    IOSShadingPrototypePlan plan;
+    try {
+      plan = iosShadingPrototypePlan(
+          IOSShadingPrototypeKind::TileDeferred);
+      }
+    catch(...) {
+      failShadingPrototypeTileBeforeSubmit(
+          "plan-contract-mismatch");
+      return;
+      }
+    const IOSShadingPrototypePlanSelection selection =
+        iosShadingPrototypeSelectPlan(plan);
+    const bool planMatches =
+        bool(selection) &&
+        selection.kind==IOSShadingPrototypeKind::TileDeferred &&
+        selection.outputResource<plan.framePlan.resources.size() &&
+        selection.workingResource<plan.framePlan.resources.size() &&
+        selection.computePass==IOSShadingPrototypeNoPass &&
+        selection.renderPass==0u && selection.presentPass==1u &&
+        !plan.framePlan.resources[selection.outputResource].memoryless &&
+        plan.framePlan.resources[selection.workingResource].memoryless &&
+        plan.topology.commandBuffers==1u &&
+        plan.topology.submits==1u &&
+        plan.topology.renderEncoders==1u &&
+        plan.topology.draws==2u &&
+        plan.topology.tileDispatches==1u &&
+        plan.topology.computeEncoders==0u &&
+        plan.topology.drawableAcquisitions==0u &&
+        plan.topology.presents==0u;
+    if(!planMatches) {
+      failShadingPrototypeTileBeforeSubmit(
+          "plan-contract-mismatch");
+      return;
+      }
+
+    shadingPrototypeTileIsolationBefore =
+        shadingPrototypeTileIsolationSnapshot();
+    shadingPrototypeTileLifetimeBefore =
+        iosMetalResourceLifetimeSnapshot();
+    if(!rendererIOSShadingPrototypeTileIsolationSnapshotAvailable(
+           shadingPrototypeTileIsolationBefore)) {
+      failShadingPrototypeTileBeforeSubmit("snapshot-unavailable");
+      return;
+      }
+
+    shadingPrototypeTilePipeline =
+        iosCreateShadingPrototypePipeline(device);
+    if(shadingPrototypeTilePipeline.status()==
+       IOSShadingPrototypePipelineStatus::UnsupportedCapability) {
+      const auto& report = shadingPrototypeTilePipeline.report();
+      const bool zeroSideEffects =
+          !shadingPrototypeTilePipeline &&
+          !report.supportsApple4 &&
+          !report.libraryAvailable &&
+          report.resolvedTileFunctionCount==0u &&
+          report.createdTilePipelineCount==0u &&
+          !shadingPrototypeTileOutput &&
+          !shadingPrototypeTileCommandActive &&
+          !shadingPrototypeTileFenceActive &&
+          !shadingPrototypeTileCapture.active() &&
+          shadingPrototypeTileCaptureArtifact.bytes==0u &&
+          shadingPrototypeTileLifetimeUnchanged() &&
+          shadingPrototypeTileIsolationUnchanged();
+      if(!zeroSideEffects) {
+        failShadingPrototypeTileBeforeSubmit(
+            "unsupported-side-effect-mismatch");
+        return;
+        }
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Unsupported;
+      try {
+        Log::i(rendererIOSShadingPrototypeTileMarkerText(
+            RendererIOSShadingPrototypeTileSelfTestUnsupported));
+        }
+      catch(...) {
+        }
+      return;
+      }
+    if(!shadingPrototypeTilePipeline ||
+       shadingPrototypeTilePipeline.status()!=
+           IOSShadingPrototypePipelineStatus::Ready ||
+       iosValidateShadingPrototypePipelineReport(
+           shadingPrototypeTilePipeline.report())!=
+           IOSShadingPrototypePipelineStatus::Ready) {
+      failShadingPrototypeTileBeforeSubmit(
+          "factory-contract-mismatch");
+      return;
+      }
+    if(!shadingPrototypeTileIsolationUnchanged()) {
+      failShadingPrototypeTileBeforeSubmit(
+          "factory-counter-mismatch");
+      return;
+      }
+    shadingPrototypeTileState =
+        ShadingPrototypeTileSelfTestState::FactoryReady;
+    try {
+      Log::i(rendererIOSShadingPrototypeTileMarkerText(
+          RendererIOSShadingPrototypeTileSelfTestFactoryReady));
+      }
+    catch(...) {
+      }
+
+    const IOSResourceDesc& outputResource =
+        plan.framePlan.resources[selection.outputResource];
+    shadingPrototypeTileOutput =
+        resourceAllocator.allocate(outputResource);
+    if(!shadingPrototypeTileOutput ||
+       !iosMetalTextureMatches(
+           shadingPrototypeTileOutput.snapshot(),outputResource,
+           IOSMetalResourceStorage::Private) ||
+       !shadingPrototypeTileLifetimeLive() ||
+       !shadingPrototypeTileIsolationUnchanged()) {
+      failShadingPrototypeTileBeforeSubmit(
+          "output-allocation-or-lifetime-mismatch");
+      return;
+      }
+
+    const char* captureReason = nullptr;
+    if(!shadingPrototypeTileCapture.start(
+           device,RendererIOSShadingPrototypeTileCaptureName,
+           captureReason)) {
+      if(shadingPrototypeTileCapture.active()) {
+        failShadingPrototypeTileAmbiguous(
+            "capture-start-ambiguous",captureReason);
+        }
+      else {
+        failShadingPrototypeTileBeforeSubmit(
+            "capture-start-failed",captureReason);
+        }
+      return;
+      }
+
+    try {
+      shadingPrototypeTileCommand = device.commandBuffer();
+      shadingPrototypeTileCommandActive = true;
+      bool encodeAccepted = false;
+      {
+        auto encoder =
+            shadingPrototypeTileCommand.startEncoding(device);
+        encodeAccepted = iosEncodeShadingPrototypeTileProbe(
+            device,encoder,shadingPrototypeTilePipeline,
+            shadingPrototypeTileOutput,
+            shadingPrototypeTileNativeReport);
+        }
+      if(!encodeAccepted) {
+        failShadingPrototypeTileBeforeSubmit(
+            "native-encode-rejected");
+        return;
+        }
+      if(!iosShadingPrototypeTileProbeReportMatches(
+             shadingPrototypeTileNativeReport) ||
+         !shadingPrototypeTileLifetimeLive() ||
+         !shadingPrototypeTileIsolationUnchanged()) {
+        failShadingPrototypeTileBeforeSubmit(
+            "encoded-contract-mismatch");
+        return;
+        }
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Encoded;
+      Log::i(rendererIOSShadingPrototypeTileMarkerText(
+          RendererIOSShadingPrototypeTileSelfTestEncoded));
+      }
+    catch(const std::exception& e) {
+      failShadingPrototypeTileBeforeSubmit(
+          shadingPrototypeTileCommandActive
+              ? "native-encode-rejected"
+              : "command-buffer-creation-failed",
+          e.what());
+      return;
+      }
+    catch(...) {
+      failShadingPrototypeTileBeforeSubmit(
+          shadingPrototypeTileCommandActive
+              ? "native-encode-rejected"
+              : "command-buffer-creation-failed");
+      return;
+      }
+
+    try {
+      Fence submitted =
+          device.submit(shadingPrototypeTileCommand);
+      shadingPrototypeTileFence = std::move(submitted);
+      shadingPrototypeTileFenceActive = true;
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Submitted;
+      Log::i(rendererIOSShadingPrototypeTileMarkerText(
+          RendererIOSShadingPrototypeTileSelfTestSubmitted));
+      }
+    catch(const std::exception& e) {
+      failShadingPrototypeTileAmbiguous(
+          "submit-exception-ambiguous",e.what());
+      return;
+      }
+    catch(...) {
+      failShadingPrototypeTileAmbiguous(
+          "submit-exception-ambiguous");
+      return;
+      }
+
+    if(!shadingPrototypeTileCapture.stopAndInspect(
+           shadingPrototypeTileCaptureArtifact,captureReason)) {
+      failShadingPrototypeTileAmbiguous(
+          "capture-acquisition-failed",captureReason);
+      return;
+      }
+    shadingPrototypeTileState =
+        ShadingPrototypeTileSelfTestState::Acquired;
+    try {
+      Log::i(rendererIOSShadingPrototypeTileMarkerText(
+               RendererIOSShadingPrototypeTileCaptureAcquired),
+             " case=tile-prototype-v1 file=",
+             RendererIOSShadingPrototypeTileCaptureName,
+             " kind=",
+             iosMetalCaptureArtifactKindName(
+                 shadingPrototypeTileCaptureArtifact.kind),
+             " bytes=",shadingPrototypeTileCaptureArtifact.bytes);
+      }
+    catch(...) {
+      }
+    }
+
+  void pollShadingPrototypeTileSelfTest() noexcept {
+    if(!shadingPrototypeTileStarted) {
+      startShadingPrototypeTileSelfTest();
+      return;
+      }
+    if(shadingPrototypeTileState!=
+       ShadingPrototypeTileSelfTestState::Acquired)
+      return;
+    try {
+      if(!shadingPrototypeTileFence.wait(0u))
+        return;
+      (void)finishShadingPrototypeTileAfterTerminal(true);
+      }
+    catch(const std::exception& e) {
+      releaseShadingPrototypeTileAfterTerminal();
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Failed;
+      logShadingPrototypeTileFailure("terminal-fence-error");
+      fail("RendererIOS shading prototype tile self-test failed",e.what());
+      }
+    catch(...) {
+      releaseShadingPrototypeTileAfterTerminal();
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Failed;
+      logShadingPrototypeTileFailure("terminal-fence-error");
+      fail("RendererIOS shading prototype tile self-test failed",
+           "terminal-fence-error");
+      }
+    }
+
+  void settleShadingPrototypeTileAfterConfirmedIdle() noexcept {
+    if(shadingPrototypeTileState==
+           ShadingPrototypeTileSelfTestState::Ambiguous) {
+      releaseShadingPrototypeTileAfterTerminal();
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Failed;
+      return;
+      }
+    if(shadingPrototypeTileState!=
+       ShadingPrototypeTileSelfTestState::Acquired)
+      return;
+    try {
+      if(!shadingPrototypeTileFence.wait(0u)) {
+        logShadingPrototypeTileFailure(
+            "fence-nonterminal-after-wait-idle");
+        fail("RendererIOS shading prototype tile self-test failed",
+             "fence-nonterminal-after-wait-idle");
+        return;
+        }
+      (void)finishShadingPrototypeTileAfterTerminal(false);
+      }
+    catch(const std::exception& e) {
+      releaseShadingPrototypeTileAfterTerminal();
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Failed;
+      logShadingPrototypeTileFailure("terminal-fence-error");
+      fail("RendererIOS shading prototype tile self-test failed",e.what());
+      }
+    catch(...) {
+      releaseShadingPrototypeTileAfterTerminal();
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Failed;
+      logShadingPrototypeTileFailure("terminal-fence-error");
+      fail("RendererIOS shading prototype tile self-test failed",
+           "terminal-fence-error");
       }
     }
 #endif
@@ -1951,6 +2528,9 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
     settleClearOnlyPassAfterConfirmedIdle();
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+    settleShadingPrototypeTileAfterConfirmedIdle();
+#endif
 
     // An exception from Metal commit has ambiguous disposition. Only after
     // waitIdle succeeds may the encoded command be destroyed; do that before
@@ -2061,6 +2641,38 @@ struct IOSMetalContext::Impl final {
   bool                                         clearOnlyCommandActive = false;
   bool                                         clearOnlyFenceActive = false;
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+  // Explicit terminal release is authoritative. Reverse destruction is still
+  // fail-safe: capture, fence and command drop before the pipeline/output
+  // handles borrowed by the retainedReferences=false command.
+  IOSMetalResourceTexture
+      shadingPrototypeTileOutput;
+  IOSShadingPrototypePipeline
+      shadingPrototypeTilePipeline;
+  CommandBuffer
+      shadingPrototypeTileCommand;
+  Fence
+      shadingPrototypeTileFence;
+  IOSMetalCaptureSession
+      shadingPrototypeTileCapture;
+  IOSMetalCaptureArtifact
+      shadingPrototypeTileCaptureArtifact;
+  RendererIOSShadingPrototypeTileIsolationSnapshot
+      shadingPrototypeTileIsolationBefore;
+  IOSMetalResourceLifetimeSnapshot
+      shadingPrototypeTileLifetimeBefore;
+  IOSShadingPrototypeTileProbeReport
+      shadingPrototypeTileNativeReport;
+  ShadingPrototypeTileSelfTestState
+      shadingPrototypeTileState =
+          ShadingPrototypeTileSelfTestState::Armed;
+  bool
+      shadingPrototypeTileStarted = false;
+  bool
+      shadingPrototypeTileCommandActive = false;
+  bool
+      shadingPrototypeTileFenceActive = false;
+#endif
   Swapchain                                    swapchain;
 
   // The P2.1a public frame ABI is neutral. VectorImage, InventoryRenderer and
@@ -2142,6 +2754,12 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
   // The diagnostic profile owns admission: it submits only its isolated
   // clear-only probe and never reaches the production frame/present path.
   impl->pollClearOnlyPassSelfTest();
+  return std::nullopt;
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+  // The opt-in profile owns admission. It executes one isolated Tile probe
+  // and never acquires a drawable or reaches the ordinary frame/present path.
+  impl->pollShadingPrototypeTileSelfTest();
   return std::nullopt;
 #endif
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))

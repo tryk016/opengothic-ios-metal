@@ -8,7 +8,8 @@
 #import <TargetConditionals.h>
 
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 #include <atomic>
 #endif
 #include <cstdint>
@@ -28,10 +29,16 @@
 #error "The RendererIOS clear-only pass self-test is available only for iOS"
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
+    !TARGET_OS_IOS
+#error "The RendererIOS shading prototype Tile self-test is available only for iOS"
+#endif
+
 namespace {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 struct ResourceLifetimeCounters final {
   std::atomic<uint64_t> created{0u};
   std::atomic<uint64_t> live{0u};
@@ -136,7 +143,8 @@ struct IOSMetalResourceTexture::Impl final {
   explicit Impl(id<MTLTexture> texture) noexcept
     : texture(texture) {
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
     ResourceLifetime.created.fetch_add(1u,std::memory_order_relaxed);
     ResourceLifetime.live.fetch_add(1u,std::memory_order_relaxed);
 #endif
@@ -145,7 +153,8 @@ struct IOSMetalResourceTexture::Impl final {
   ~Impl() {
     [texture release];
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
     ResourceLifetime.live.fetch_sub(1u,std::memory_order_relaxed);
     ResourceLifetime.released.fetch_add(1u,std::memory_order_relaxed);
 #endif
@@ -158,7 +167,8 @@ struct IOSMetalResourceTexture::Impl final {
   };
 
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 IOSMetalResourceLifetimeSnapshot iosMetalResourceLifetimeSnapshot() noexcept {
   IOSMetalResourceLifetimeSnapshot result;
   result.created = ResourceLifetime.created.load(std::memory_order_relaxed);

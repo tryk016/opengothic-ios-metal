@@ -9,12 +9,6 @@
 #import <Metal/Metal.h>
 #import <TargetConditionals.h>
 
-#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
-#include <cerrno>
-#include <new>
-#include <sys/stat.h>
-#endif
-
 #if __has_feature(objc_arc)
 #error "RendererIOS clear-only pass probe requires non-ARC Objective-C++"
 #endif
@@ -24,32 +18,6 @@
 #endif
 
 namespace {
-
-template<class T>
-class OwnedObjectiveC final {
-  public:
-    explicit OwnedObjectiveC(T value) noexcept
-      : value(value) {
-      }
-
-    ~OwnedObjectiveC() noexcept {
-      @try {
-        [value release];
-        }
-      @catch(NSException*) {
-        }
-      }
-
-    OwnedObjectiveC(const OwnedObjectiveC&) = delete;
-    OwnedObjectiveC& operator=(const OwnedObjectiveC&) = delete;
-
-    T get() const noexcept {
-      return value;
-      }
-
-  private:
-    T value = nil;
-  };
 
 class OwnedDescriptor final {
   public:
@@ -219,213 +187,31 @@ void encodeNativeClearPasses(void* rawContext,
     }
   }
 
-#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
-constexpr char CaptureArtifactName[] =
-    "RendererIOS-pm-clear-v1.gputrace";
-#endif
-
 }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
-struct IOSMetalResourceClearPassCapture::Impl final {
-  MTLCaptureManager* manager = nil;
-  NSURL* outputURL = nil;
-  bool captureActive = false;
-
-  ~Impl() {
-    if(captureActive && manager!=nil) {
-      @try {
-        [manager stopCapture];
-        }
-      @catch(NSException*) {
-        }
-      }
-    @try {
-      [outputURL release];
-      }
-    @catch(NSException*) {
-      }
-    @try {
-      [manager release];
-      }
-    @catch(NSException*) {
-      }
-    }
-  };
-
-IOSMetalResourceClearPassCapture::~IOSMetalResourceClearPassCapture() {
-  cancel();
-  delete impl;
-  }
+IOSMetalResourceClearPassCapture::~IOSMetalResourceClearPassCapture() =
+    default;
 
 bool IOSMetalResourceClearPassCapture::start(
     Tempest::Device& device,
     const char*& reason) noexcept {
-  reason = "capture-start-failed";
-  if(impl!=nullptr)
-    return false;
-  impl = new(std::nothrow) Impl();
-  if(impl==nullptr) {
-    reason = "capture-state-allocation-failed";
-    return false;
-    }
-
-  @autoreleasepool {
-    @try {
-      const auto borrowed = Tempest::MetalApi::borrowDevice(device);
-      id<MTLDevice> nativeDevice =
-          reinterpret_cast<id<MTLDevice>>((void*)borrowed.get());
-      if(nativeDevice==nil) {
-        reason = "capture-device-unavailable";
-        return false;
-        }
-
-      OwnedObjectiveC<NSFileManager*> files(
-          [[NSFileManager alloc] init]);
-      if(files.get()==nil) {
-        reason = "capture-file-manager-unavailable";
-        return false;
-        }
-      NSArray<NSURL*>* documents =
-          [files.get() URLsForDirectory:NSDocumentDirectory
-                              inDomains:NSUserDomainMask];
-      NSURL* documentsURL = [documents lastObject];
-      NSString* captureName = [NSString stringWithUTF8String:CaptureArtifactName];
-      NSURL* outputURL = [documentsURL
-          URLByAppendingPathComponent:captureName
-                           isDirectory:NO];
-      const bool exactPath = captureName!=nil && documentsURL!=nil &&
-          outputURL!=nil &&
-          [[outputURL lastPathComponent]
-            isEqualToString:captureName] &&
-          [[[outputURL URLByDeletingLastPathComponent] standardizedURL]
-            isEqual:[documentsURL standardizedURL]];
-      if(!exactPath) {
-        reason = "capture-output-path-invalid";
-        return false;
-        }
-
-      const char* outputPath = [outputURL fileSystemRepresentation];
-      if(outputPath==nullptr) {
-        reason = "capture-output-path-unavailable";
-        return false;
-        }
-      struct stat existing = {};
-      if(::lstat(outputPath,&existing)==0) {
-        NSError* removeError = nil;
-        if(![files.get() removeItemAtURL:outputURL error:&removeError]) {
-          (void)removeError;
-          reason = "capture-stale-artifact-removal-failed";
-          return false;
-          }
-        }
-      else if(errno!=ENOENT) {
-        reason = "capture-stale-artifact-inspection-failed";
-        return false;
-        }
-      if(::lstat(outputPath,&existing)==0 || errno!=ENOENT) {
-        reason = "capture-output-not-empty";
-        return false;
-        }
-
-      MTLCaptureManager* manager = [MTLCaptureManager sharedCaptureManager];
-      if(manager==nil ||
-         ![manager supportsDestination:MTLCaptureDestinationGPUTraceDocument]) {
-        reason = "capture-gputrace-destination-unsupported";
-        return false;
-        }
-      OwnedObjectiveC<MTLCaptureDescriptor*> descriptor(
-          [[MTLCaptureDescriptor alloc] init]);
-      if(descriptor.get()==nil) {
-        reason = "capture-descriptor-allocation-failed";
-        return false;
-        }
-      descriptor.get().captureObject = nativeDevice;
-      descriptor.get().destination = MTLCaptureDestinationGPUTraceDocument;
-      descriptor.get().outputURL = outputURL;
-      impl->manager = [manager retain];
-      impl->outputURL = [outputURL retain];
-      // Treat an Objective-C exception from start as ambiguous. The caller's
-      // failure path will invoke cancel(), and Impl teardown retries if that
-      // stop also throws.
-      impl->captureActive = true;
-      NSError* captureError = nil;
-      const BOOL started = [manager startCaptureWithDescriptor:descriptor.get()
-                                                         error:&captureError];
-      (void)captureError;
-      if(!started) {
-        impl->captureActive = false;
-        reason = "capture-manager-start-rejected";
-        return false;
-        }
-
-      reason = nullptr;
-      return true;
-      }
-    @catch(NSException*) {
-      reason = "capture-start-objective-c-exception";
-      return false;
-      }
-    }
+  return session.start(
+      device,"RendererIOS-pm-clear-v1.gputrace",reason);
   }
 
 bool IOSMetalResourceClearPassCapture::stopAndInspect(
     IOSMetalCaptureArtifact& artifact,
     const char*& reason) noexcept {
-  artifact = {};
-  reason = "capture-stop-failed";
-  if(impl==nullptr || !impl->captureActive || impl->manager==nil ||
-     impl->outputURL==nil) {
-    reason = "capture-not-active";
-    return false;
-    }
-  @autoreleasepool {
-    @try {
-      [impl->manager stopCapture];
-      impl->captureActive = false;
-      const char* rawPath = [impl->outputURL fileSystemRepresentation];
-      if(rawPath==nullptr) {
-        reason = "capture-output-path-unavailable-after-stop";
-        return false;
-        }
-      if(!iosMetalNormalizeAndInspectCaptureArtifact(
-           rawPath,artifact,reason)) {
-        if(reason==nullptr)
-          reason = "capture-artifact-invalid";
-        return false;
-        }
-      reason = nullptr;
-      return true;
-      }
-    @catch(NSException*) {
-      reason = "capture-stop-objective-c-exception";
-      return false;
-      }
-    }
+  return session.stopAndInspect(artifact,reason);
   }
 
 void IOSMetalResourceClearPassCapture::cancel() noexcept {
-  if(impl==nullptr || !impl->captureActive || impl->manager==nil)
-    return;
-  @try {
-    [impl->manager stopCapture];
-    impl->captureActive = false;
-    }
-  @catch(NSException*) {
-    }
+  session.cancel();
   }
 
 bool IOSMetalResourceClearPassCapture::active() const noexcept {
-  return impl!=nullptr && impl->captureActive;
-  }
-
-const char* iosMetalCaptureArtifactKindName(
-    IOSMetalCaptureArtifactKind kind) noexcept {
-  switch(kind) {
-    case IOSMetalCaptureArtifactKind::File:      return "file";
-    case IOSMetalCaptureArtifactKind::Directory: return "directory";
-    }
-  return "invalid";
+  return session.active();
   }
 #endif
 

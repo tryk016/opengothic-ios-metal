@@ -1,6 +1,7 @@
 #include "iosmetalresourceclearpassprobe.h"
 
-#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -81,7 +82,8 @@ bool exactSingleUsePass(const IOSPassDesc& pass,
          exactUse(pass.uses[0],use);
   }
 
-#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr uint64_t MaxCaptureArtifactBytes = 512u*1024u*1024u;
 constexpr uint64_t MaxCaptureArtifactEntries = 65536u;
 constexpr std::size_t MaxCaptureLinkTargetLength = 4096u;
@@ -778,7 +780,8 @@ bool inspectNormalizedDirectory(int rootDescriptor,
 
 }
 
-#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 bool iosMetalNormalizeAndInspectCaptureArtifact(
     const char* rootPath,
     IOSMetalCaptureArtifact& artifact,

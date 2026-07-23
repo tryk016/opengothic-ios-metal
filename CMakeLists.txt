@@ -37,6 +37,11 @@ if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
     "RendererIOS clear-only pass self-test is available only for iOS")
 endif()
 
+if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+  message(FATAL_ERROR
+    "RendererIOS shading prototype Tile self-test is available only for iOS")
+endif()
+
 if(MSVC)
   add_definitions(-D_USE_MATH_DEFINES)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -86,8 +91,11 @@ elseif(IOS)
          "Allocate and release deterministic Private/Memoryless RendererIOS textures" OFF)
   option(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST
          "Encode and submit deterministic Private/Memoryless clear-only passes" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST
+         "Encode, submit and capture one deterministic shading prototype Tile pass" OFF)
   set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")
-  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
+  if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR
+     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
     set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY
         "  <key>MetalCaptureEnabled</key>\n  <true/>")
   endif()
@@ -203,6 +211,23 @@ elseif(IOS)
     message(FATAL_ERROR
       "RendererIOS clear-only pass, resource allocator and Bink self-tests are mutually exclusive")
   endif()
+  if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST AND
+     NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    message(FATAL_ERROR
+      "RendererIOS shading prototype Tile self-test requires OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST AND
+     NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
+    message(FATAL_ERROR
+      "RendererIOS shading prototype Tile self-test requires OPENGOTHIC_RENDERER_IOS_FAULT_MODE=none")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST AND
+     (OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST))
+    message(FATAL_ERROR
+      "RendererIOS shading prototype Tile, Bink, resource allocator and clear-only pass self-tests are mutually exclusive")
+  endif()
   if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=1)
@@ -214,6 +239,10 @@ elseif(IOS)
   if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=1)
   endif()
 
   if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
@@ -395,6 +424,10 @@ list(REMOVE_ITEM OPENGOTHIC_SOURCES
      "${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/iosshadingprototypeplan.cpp")
 
 target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES} icon.rc)
+if(IOS AND OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+  target_sources(${PROJECT_NAME} PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/iosshadingprototypeplan.cpp")
+endif()
 
 # Bundle the CC0 controller glyphs (Xelu prompts) into the iOS app.
 if(IOS)

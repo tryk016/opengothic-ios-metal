@@ -5,6 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 
+#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+#include "iosmetalcapturesession.h"
+#endif
+
 namespace Tempest {
 class CommandBuffer;
 class Device;
@@ -62,37 +67,7 @@ struct IOSMetalResourceClearPassNativeReport final {
   };
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
-enum class IOSMetalCaptureArtifactKind : uint8_t {
-  File,
-  Directory,
-  };
-
-struct IOSMetalCaptureArtifact final {
-  IOSMetalCaptureArtifactKind kind = IOSMetalCaptureArtifactKind::File;
-  uint64_t bytes = 0u;
-  };
-
-// Apple GPU trace packages may use relative in-package symlinks for shared
-// resource payloads. Descriptor-anchor the complete walk, prepare every copy
-// before commit, roll back partial commits, require a zero-symlink/special-node
-// rescan, and revalidate the root name through its retained parent descriptor.
-// Kept host-neutral for mutation tests.
-[[nodiscard]] bool iosMetalNormalizeAndInspectCaptureArtifact(
-    const char* rootPath,
-    IOSMetalCaptureArtifact& artifact,
-    const char*& reason) noexcept;
-
-#if defined(OPENGOTHIC_IOS_CAPTURE_NORMALIZER_TEST_FAULTS)
-// Host-only deterministic fault hook; never compiled into the iOS target.
-void iosMetalCaptureNormalizerFailCommitForTesting(
-    std::size_t index) noexcept;
-void iosMetalCaptureNormalizerSetBeforeRootCheckHookForTesting(
-    void (*hook)(const char*) noexcept) noexcept;
-#endif
-
-// MRC-safe, fail-closed programmatic capture around only the clear-only probe.
-// The implementation borrows the existing Tempest Metal device and never
-// creates a device, queue, command buffer or drawable.
+// Compatibility adapter over the shared isolated-probe capture session.
 class IOSMetalResourceClearPassCapture final {
   public:
     IOSMetalResourceClearPassCapture() noexcept = default;
@@ -111,12 +86,8 @@ class IOSMetalResourceClearPassCapture final {
     [[nodiscard]] bool active() const noexcept;
 
   private:
-    struct Impl;
-    Impl* impl = nullptr;
+    IOSMetalCaptureSession session;
   };
-
-const char* iosMetalCaptureArtifactKindName(
-    IOSMetalCaptureArtifactKind kind) noexcept;
 #endif
 
 [[nodiscard]] bool iosMetalResourceClearPassNativeReportMatches(

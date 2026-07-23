@@ -11,6 +11,7 @@
 #   ... --require-bink-self-test APP
 #   ... --require-resource-allocator-self-test APP
 #   ... --require-clear-only-pass-self-test APP
+#   ... --require-shading-prototype-tile-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
 #   ... --expected-fault preview-fence-error-after-terminal APP
@@ -32,6 +33,7 @@ NEW_GAME=0
 REQUIRE_BINK_SELF_TEST=0
 REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
 REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
+REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
 EVIDENCE_PATH_FILE=""
@@ -52,6 +54,16 @@ readonly CLEAR_ONLY_PASS_SELF_TEST_PASS='RendererIOS clear-only pass self-test: 
 readonly CLEAR_ONLY_CAPTURE_PREFIX='RendererIOS clear-only capture:'
 readonly CLEAR_ONLY_CAPTURE_ACQUIRED='RendererIOS clear-only capture: ACQUIRED'
 readonly CLEAR_ONLY_CAPTURE_NAME='RendererIOS-pm-clear-v1.gputrace'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_PREFIX='RendererIOS shading prototype tile self-test:'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_ARMED='RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_FACTORY_READY='RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_ENCODED='RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_SUBMITTED='RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_PASS='RendererIOS shading prototype tile self-test: PASS case=tile-prototype-v1 terminal=completed created=1 live=0 released=1 wait-idle=0 runtime-delta=0 builtin-delta=0 archive-delta=0'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED='RendererIOS shading prototype tile self-test: UNSUPPORTED case=tile-prototype-v1 reason=apple4-required side-effects=0'
+readonly SHADING_PROTOTYPE_TILE_CAPTURE_PREFIX='RendererIOS shading prototype tile capture:'
+readonly SHADING_PROTOTYPE_TILE_CAPTURE_ACQUIRED='RendererIOS shading prototype tile capture: ACQUIRED'
+readonly SHADING_PROTOTYPE_TILE_CAPTURE_NAME='RendererIOS-tile-prototype-v1.gputrace'
 
 fail() {
   echo "FAIL: $*" >&2
@@ -68,6 +80,11 @@ smoke_evidence_path() {
   local evidence_root
 
   [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
+  if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/shading-prototype-tile/%s-%s-%s\n' \
+      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
+    return 0
+  fi
   if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
     printf '%s/build/device-self-test/%s/clear-only-pass/%s-%s-%s\n' \
       "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
@@ -166,6 +183,31 @@ validate_clear_only_pass_binary_profile() {
     ! grep -Fq "$CLEAR_ONLY_CAPTURE_PREFIX" "$strings_file"
 }
 
+validate_shading_prototype_tile_binary_profile() {
+  local strings_file="$1"
+
+  [[ -f "$strings_file" ]] || return 1
+  if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_SELF_TEST_ARMED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_SELF_TEST_FACTORY_READY" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_SELF_TEST_ENCODED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_SELF_TEST_SUBMITTED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_SELF_TEST_PASS" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    [[ "$(grep -Fxc "$SHADING_PROTOTYPE_TILE_CAPTURE_ACQUIRED" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    return 0
+  fi
+  ! grep -Fq "$SHADING_PROTOTYPE_TILE_SELF_TEST_PREFIX" "$strings_file" &&
+    ! grep -Fq "$SHADING_PROTOTYPE_TILE_CAPTURE_PREFIX" "$strings_file"
+}
+
 run_host_contract_self_test() {
   local expected_sha="${OPENGOTHIC_IOS_EXPECTED_SHA:-0123456789abcdef0123456789abcdef01234567}"
   local expected_build="${OPENGOTHIC_IOS_EXPECTED_BUILD:-${expected_sha}-local}"
@@ -174,10 +216,14 @@ run_host_contract_self_test() {
   local process_id="${OPENGOTHIC_IOS_EVIDENCE_PID:-4242}"
   local self_test_work evidence_file actual expected expected_plain expected_resource
   local expected_clear clear_path clear_failure_path clear_committed_path
+  local expected_tile tile_path tile_failure_path tile_committed_path
   local plain_path resource_path resource_failure_path resource_committed_path
   local plain_binary self_test_binary duplicate_binary clear_binary duplicate_clear_binary
+  local tile_binary duplicate_tile_binary missing_tile_unsupported_binary
+  local duplicate_tile_unsupported_binary
   local requested_resource_allocator_self_test="$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST"
   local requested_clear_only_pass_self_test="$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST"
+  local requested_shading_prototype_tile_self_test="$REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST"
 
   [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
     fail "self-test expected SHA is invalid"
@@ -197,6 +243,8 @@ run_host_contract_self_test() {
     fail "resource allocator host contract self-test requires expected fault none"
   ((requested_clear_only_pass_self_test == 0)) || [[ "$expected_fault" == none ]] ||
     fail "clear-only pass host contract self-test requires expected fault none"
+  ((requested_shading_prototype_tile_self_test == 0)) || [[ "$expected_fault" == none ]] ||
+    fail "shading prototype Tile host contract self-test requires expected fault none"
 
   self_test_work="$(mktemp -d -t opengothic-smoke-contract)"
   evidence_file="$EVIDENCE_PATH_FILE"
@@ -204,6 +252,7 @@ run_host_contract_self_test() {
   EVIDENCE_PATH_FILE="$evidence_file"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
   plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
@@ -254,8 +303,31 @@ run_host_contract_self_test() {
     fail "committed clear-only pass evidence path self-test failed"
   [[ "$clear_committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
     fail "committed clear-only pass evidence overlaps plain committed smoke"
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=1
+  tile_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  expected_tile="$ROOT/build/device-self-test/$expected_build/shading-prototype-tile/pass-$timestamp-$process_id"
+  [[ "$tile_path" == "$expected_tile" ]] ||
+    fail "shading prototype Tile smoke evidence path self-test failed"
+  [[ "$tile_path" != "$plain_path" && "$tile_path" != "$resource_path" &&
+     "$tile_path" != "$clear_path" ]] ||
+    fail "shading prototype Tile smoke evidence path overlaps another profile"
+  tile_failure_path="$(smoke_evidence_path failure "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  [[ "$tile_failure_path" == \
+     "$ROOT/build/device-self-test/$expected_build/shading-prototype-tile/failure-$timestamp-$process_id" ]] ||
+    fail "shading prototype Tile failure evidence path self-test failed"
+  tile_committed_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  [[ "$tile_committed_path" == \
+     "$ROOT/build/device-self-test/$expected_sha/shading-prototype-tile/pass-$timestamp-$process_id" ]] ||
+    fail "committed shading prototype Tile evidence path self-test failed"
+  [[ "$tile_committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
+    fail "committed shading prototype Tile evidence overlaps plain committed smoke"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
   actual="$plain_path"
   expected="$expected_plain"
   if ((requested_resource_allocator_self_test != 0)); then
@@ -264,6 +336,9 @@ run_host_contract_self_test() {
   elif ((requested_clear_only_pass_self_test != 0)); then
     actual="$clear_path"
     expected="$expected_clear"
+  elif ((requested_shading_prototype_tile_self_test != 0)); then
+    actual="$tile_path"
+    expected="$expected_tile"
   fi
   publish_evidence_path "$actual"
   [[ "$(cat "$evidence_file")" == "$expected" ]] ||
@@ -274,6 +349,10 @@ run_host_contract_self_test() {
   duplicate_binary="$self_test_work/resource-allocator-duplicate-binary.txt"
   clear_binary="$self_test_work/clear-only-pass-binary.txt"
   duplicate_clear_binary="$self_test_work/clear-only-pass-duplicate-binary.txt"
+  tile_binary="$self_test_work/shading-prototype-tile-binary.txt"
+  duplicate_tile_binary="$self_test_work/shading-prototype-tile-duplicate-binary.txt"
+  missing_tile_unsupported_binary="$self_test_work/shading-prototype-tile-missing-unsupported.txt"
+  duplicate_tile_unsupported_binary="$self_test_work/shading-prototype-tile-duplicate-unsupported.txt"
   printf '%s\n' 'RendererIOS diagnostics: ON' >"$plain_binary"
   printf '%s\n%s\n%s\n' \
     "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
@@ -300,8 +379,34 @@ run_host_contract_self_test() {
     "$CLEAR_ONLY_CAPTURE_ACQUIRED" \
     "$CLEAR_ONLY_CAPTURE_ACQUIRED" \
     >"$duplicate_clear_binary"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_ARMED" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_FACTORY_READY" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_ENCODED" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_SUBMITTED" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_PASS" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED" \
+    "$SHADING_PROTOTYPE_TILE_CAPTURE_ACQUIRED" \
+    >"$tile_binary"
+  printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_ARMED" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_FACTORY_READY" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_ENCODED" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_SUBMITTED" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_PASS" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED" \
+    "$SHADING_PROTOTYPE_TILE_CAPTURE_ACQUIRED" \
+    "$SHADING_PROTOTYPE_TILE_CAPTURE_ACQUIRED" \
+    >"$duplicate_tile_binary"
+  grep -Fv "$SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED" \
+    "$tile_binary" >"$missing_tile_unsupported_binary"
+  {
+    cat "$tile_binary"
+    printf '%s\n' "$SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED"
+  } >"$duplicate_tile_unsupported_binary"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
   validate_resource_allocator_binary_profile "$plain_binary" ||
     fail "plain binary profile self-test failed"
   if validate_resource_allocator_binary_profile "$self_test_binary"; then
@@ -311,6 +416,11 @@ run_host_contract_self_test() {
     fail "plain clear-only pass binary profile self-test failed"
   if validate_clear_only_pass_binary_profile "$clear_binary"; then
     fail "unrequested clear-only pass binary profile survived"
+  fi
+  validate_shading_prototype_tile_binary_profile "$plain_binary" ||
+    fail "plain shading prototype Tile binary profile self-test failed"
+  if validate_shading_prototype_tile_binary_profile "$tile_binary"; then
+    fail "unrequested shading prototype Tile binary profile survived"
   fi
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
   validate_resource_allocator_binary_profile "$self_test_binary" ||
@@ -331,10 +441,29 @@ run_host_contract_self_test() {
   if validate_clear_only_pass_binary_profile "$duplicate_clear_binary"; then
     fail "duplicate clear-only pass binary marker survived"
   fi
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=1
+  validate_shading_prototype_tile_binary_profile "$tile_binary" ||
+    fail "shading prototype Tile binary profile self-test failed"
+  if validate_shading_prototype_tile_binary_profile "$plain_binary"; then
+    fail "shading prototype Tile binary profile accepted a plain artifact"
+  fi
+  if validate_shading_prototype_tile_binary_profile "$duplicate_tile_binary"; then
+    fail "duplicate shading prototype Tile binary marker survived"
+  fi
+  if validate_shading_prototype_tile_binary_profile \
+      "$missing_tile_unsupported_binary"; then
+    fail "missing shading prototype Tile UNSUPPORTED binary marker survived"
+  fi
+  if validate_shading_prototype_tile_binary_profile \
+      "$duplicate_tile_unsupported_binary"; then
+    fail "duplicate shading prototype Tile UNSUPPORTED binary marker survived"
+  fi
   python3 "$ROOT/ios/device-test/validate-metal-capture-artifact.py" \
     --self-test || fail "Metal capture artifact validator self-test failed"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
 
   printf '%s\n' '{"result":{"files":[]}}' >"$self_test_work/missing.json"
   printf '%s\n' \
@@ -352,7 +481,7 @@ run_host_contract_self_test() {
 
   find "$self_test_work" -type f -delete
   rmdir "$self_test_work"
-  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass crash-states=3"
+  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass,shading-prototype-tile crash-states=3"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -373,6 +502,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=1
       shift
       ;;
+    --require-shading-prototype-tile-self-test)
+      REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=1
+      shift
+      ;;
     --pipeline-archive-test-mode)
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
@@ -386,7 +519,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -423,6 +556,8 @@ done
   fail "resource allocator self-test requires expected fault none"
 ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
   fail "clear-only pass self-test requires expected fault none"
+((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
+  fail "shading prototype Tile self-test requires expected fault none"
 ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
   fail "resource allocator and Bink self-tests are mutually exclusive"
 ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
@@ -431,6 +566,17 @@ done
   fail "clear-only pass and resource allocator self-tests are mutually exclusive"
 ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)) || [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
   fail "clear-only pass self-test requires an empty pipeline archive profile"
+((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
+  fail "shading prototype Tile and Bink self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0 ||
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)) ||
+  fail "shading prototype Tile and resource allocator self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0 ||
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)) ||
+  fail "shading prototype Tile and clear-only pass self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0)) ||
+  [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
+  fail "shading prototype Tile self-test requires an empty pipeline archive profile"
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -490,6 +636,15 @@ CLEAR_ONLY_CAPTURE_STATUS="not-required"
 CLEAR_ONLY_CAPTURE_KIND="missing"
 CLEAR_ONLY_CAPTURE_BYTES=0
 CLEAR_ONLY_CAPTURE_MANIFEST_SHA256="missing"
+SHADING_PROTOTYPE_TILE_SELF_TEST_VALIDATION="not-required"
+SHADING_PROTOTYPE_TILE_SELF_TEST_PID="none"
+SHADING_PROTOTYPE_TILE_SELF_TEST_PID_DISCOVERY_ATTEMPTS=0
+SHADING_PROTOTYPE_TILE_SELF_TEST_PROCESS_SURVIVED=0
+SHADING_PROTOTYPE_TILE_CAPTURE_ATTEMPTED=0
+SHADING_PROTOTYPE_TILE_CAPTURE_STATUS="not-required"
+SHADING_PROTOTYPE_TILE_CAPTURE_KIND="missing"
+SHADING_PROTOTYPE_TILE_CAPTURE_BYTES=0
+SHADING_PROTOTYPE_TILE_CAPTURE_MANIFEST_SHA256="missing"
 PROCESS_SURVIVED_FAULT_WINDOW=0
 ID3_SEMANTIC_NONCE="none"
 ID3_SAVE_PREFLIGHT_CAPTURED=0
@@ -1010,6 +1165,104 @@ PY
   CLEAR_ONLY_CAPTURE_STATUS="acquired"
 }
 
+capture_shading_prototype_tile_artifact() {
+  local listing="$WORK/shading-prototype-tile-capture-listing.json"
+  local destination="$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
+  local summary="$WORK/shading-prototype-tile-capture-summary.txt"
+  local listed_kind values
+
+  ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)) || return 0
+  if ((SHADING_PROTOTYPE_TILE_CAPTURE_ATTEMPTED != 0)); then
+    [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_STATUS" == acquired ]]
+    return
+  fi
+  SHADING_PROTOTYPE_TILE_CAPTURE_ATTEMPTED=1
+  SHADING_PROTOTYPE_TILE_CAPTURE_STATUS="failed"
+  [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
+  [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$listing" >/dev/null || return 1
+  listed_kind="$(python3 - "$listing" "$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" <<'PY'
+import json
+import sys
+
+files = json.load(open(sys.argv[1], encoding="utf-8")).get("result", {}).get("files")
+if not isinstance(files, list):
+    raise SystemExit("capture listing provider returned no files array")
+matches = [entry for entry in files if entry.get("name") == sys.argv[2]]
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one flat Tile capture artifact, found {len(matches)}")
+resources = matches[0].get("resources", {})
+if resources.get("isSymbolicLink") is not False:
+    raise SystemExit("Tile capture listing is a symlink or has unknown link state")
+is_directory = resources.get("isDirectory")
+if is_directory is True:
+    print("directory")
+elif is_directory is False:
+    print("file")
+else:
+    raise SystemExit("Tile capture listing has unknown file kind")
+PY
+  )" || return 1
+  [[ "$listed_kind" == file || "$listed_kind" == directory ]] || return 1
+
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "Documents/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
+    --destination "$destination" >/dev/null || return 1
+  [[ -e "$destination" && ! -L "$destination" ]] || return 1
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-tile-self-test-log.py" \
+      --capture-only --artifact "$destination" --summary "$summary" || return 1
+  values="$(python3 - "$summary" "$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" <<'PY'
+import pathlib
+import re
+import sys
+
+values = {}
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.count("=") != 1:
+        raise SystemExit("invalid Tile capture summary line")
+    key, value = line.split("=", 1)
+    if key in values:
+        raise SystemExit("duplicate Tile capture summary key")
+    values[key] = value
+expected = {
+    "capture_name",
+    "capture_kind",
+    "capture_bytes",
+    "capture_manifest_sha256",
+}
+if set(values) != expected:
+    raise SystemExit("Tile capture summary key set is not exact")
+if values["capture_name"] != sys.argv[2]:
+    raise SystemExit("Tile capture summary name mismatch")
+if values["capture_kind"] not in ("file", "directory"):
+    raise SystemExit("Tile capture summary kind mismatch")
+if re.fullmatch(r"[1-9][0-9]*", values["capture_bytes"]) is None:
+    raise SystemExit("Tile capture summary byte count mismatch")
+if re.fullmatch(r"[0-9a-f]{64}", values["capture_manifest_sha256"]) is None:
+    raise SystemExit("Tile capture summary digest mismatch")
+print("\t".join((
+    values["capture_kind"],
+    values["capture_bytes"],
+    values["capture_manifest_sha256"],
+)))
+PY
+  )" || return 1
+  IFS=$'\t' read -r SHADING_PROTOTYPE_TILE_CAPTURE_KIND \
+    SHADING_PROTOTYPE_TILE_CAPTURE_BYTES \
+    SHADING_PROTOTYPE_TILE_CAPTURE_MANIFEST_SHA256 <<<"$values"
+  [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_KIND" == "$listed_kind" ]] || return 1
+  [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_BYTES" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+    return 1
+  SHADING_PROTOTYPE_TILE_CAPTURE_STATUS="acquired"
+}
+
 create_id3_recovery_path() {
   local recovery_root timestamp
 
@@ -1339,6 +1592,40 @@ discover_clear_only_pass_self_test_pid() {
   return 1
 }
 
+write_shading_prototype_tile_self_test_result_fields() {
+  ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)) || return 0
+  echo "self_test_profile=shading-prototype-tile"
+  echo "shading_prototype_tile_self_test_required=1"
+  echo "shading_prototype_tile_self_test_validation=$SHADING_PROTOTYPE_TILE_SELF_TEST_VALIDATION"
+  echo "shading_prototype_tile_self_test_pid=$SHADING_PROTOTYPE_TILE_SELF_TEST_PID"
+  echo "shading_prototype_tile_self_test_pid_discovery_attempts=$SHADING_PROTOTYPE_TILE_SELF_TEST_PID_DISCOVERY_ATTEMPTS"
+  echo "shading_prototype_tile_self_test_process_survived=$SHADING_PROTOTYPE_TILE_SELF_TEST_PROCESS_SURVIVED"
+  echo "shading_prototype_tile_capture_attempted=$SHADING_PROTOTYPE_TILE_CAPTURE_ATTEMPTED"
+  echo "shading_prototype_tile_capture_status=$SHADING_PROTOTYPE_TILE_CAPTURE_STATUS"
+  echo "shading_prototype_tile_capture_name=$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
+  echo "shading_prototype_tile_capture_kind=$SHADING_PROTOTYPE_TILE_CAPTURE_KIND"
+  echo "shading_prototype_tile_capture_bytes=$SHADING_PROTOTYPE_TILE_CAPTURE_BYTES"
+  echo "shading_prototype_tile_capture_manifest_sha256=$SHADING_PROTOTYPE_TILE_CAPTURE_MANIFEST_SHA256"
+}
+
+discover_shading_prototype_tile_self_test_pid() {
+  local attempt output pids
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    output="$WORK/processes-shading-prototype-tile-window-start-attempt-$attempt.json"
+    if pids="$(list_game_pids "$output")" && [[ "$pids" =~ ^[0-9]+$ ]]; then
+      SHADING_PROTOTYPE_TILE_SELF_TEST_PID="$pids"
+      SHADING_PROTOTYPE_TILE_SELF_TEST_PID_DISCOVERY_ATTEMPTS="$attempt"
+      ditto "$output" \
+        "$WORK/processes-shading-prototype-tile-window-start.json" || return 1
+      return 0
+    fi
+    ((attempt == 10)) || sleep 1
+  done
+  SHADING_PROTOTYPE_TILE_SELF_TEST_PID_DISCOVERY_ATTEMPTS=10
+  return 1
+}
+
 wait_for_id3_completion() {
   local attempt log="$WORK/log-id3-completion-check.txt"
 
@@ -1399,11 +1686,15 @@ preserve_failure_evidence() {
       resource-allocator-self-test-summary.txt \
       clear-only-pass-self-test-summary.txt \
       clear-only-capture-summary.txt clear-only-capture-listing.json \
+      shading-prototype-tile-self-test-summary.txt \
+      shading-prototype-tile-capture-summary.txt \
+      shading-prototype-tile-capture-listing.json \
       id3-protected-before.sha256 id3-protected-after.sha256 \
       id3-saves-before.json id3-saves-after.json save_slot_20.sav \
       processes-id3-window-start.json \
       processes-resource-allocator-window-start.json \
       processes-clear-only-pass-window-start.json \
+      processes-shading-prototype-tile-window-start.json \
       processes.json \
       log-id3-completion-check.txt \
       log.txt stderr.log crash.log crash-before.log \
@@ -1417,10 +1708,16 @@ preserve_failure_evidence() {
     ditto "$WORK/$CLEAR_ONLY_CAPTURE_NAME" \
       "$failure_dir/$CLEAR_ONLY_CAPTURE_NAME"
   fi
+  if [[ -e "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" &&
+        ! -L "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" ]]; then
+    ditto "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
+      "$failure_dir/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
+  fi
   for candidate in "$WORK"/processes-durable-zero-*.json \
       "$WORK"/processes-id3-window-start-attempt-*.json \
       "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
       "$WORK"/processes-clear-only-pass-window-start-attempt-*.json \
+      "$WORK"/processes-shading-prototype-tile-window-start-attempt-*.json \
       "$WORK"/durable-zero-*.json \
       "$WORK"/crash-listing-*.json; do
     [[ -f "$candidate" ]] || continue
@@ -1436,6 +1733,7 @@ preserve_failure_evidence() {
     echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
     write_resource_allocator_self_test_result_fields
     write_clear_only_pass_self_test_result_fields
+    write_shading_prototype_tile_self_test_result_fields
     echo "scenario=$SCENARIO"
     echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
@@ -1450,6 +1748,8 @@ preserve_failure_evidence() {
       cat "$WORK/resource-allocator-self-test-summary.txt"
     [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
       cat "$WORK/clear-only-pass-self-test-summary.txt"
+    [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
+      cat "$WORK/shading-prototype-tile-self-test-summary.txt"
   } >"$failure_dir/result.txt"
   echo "failure evidence: $failure_dir" >&2
 }
@@ -1480,6 +1780,14 @@ cleanup() {
          CLEAR_ONLY_CAPTURE_ATTEMPTED == 0)); then
       if ! capture_clear_only_capture_artifact; then
         echo "phase=trap-cleanup clear-only-capture=failed" >>"$WORK/cleanup.log"
+        cleanup_status=1
+      fi
+    fi
+    if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0 &&
+         SHADING_PROTOTYPE_TILE_CAPTURE_ATTEMPTED == 0)); then
+      if ! capture_shading_prototype_tile_artifact; then
+        echo "phase=trap-cleanup shading-prototype-tile-capture=failed" \
+          >>"$WORK/cleanup.log"
         cleanup_status=1
       fi
     fi
@@ -1537,6 +1845,7 @@ cleanup() {
       echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
       write_resource_allocator_self_test_result_fields
       write_clear_only_pass_self_test_result_fields
+      write_shading_prototype_tile_self_test_result_fields
       echo "failure_reason=exit-cleanup-invalidated-provisional-pass"
       echo "cleanup_status=$cleanup_status"
       echo "pre_crash_sha256=$PRE_CRASH_SHA"
@@ -1549,6 +1858,8 @@ cleanup() {
         cat "$WORK/resource-allocator-self-test-summary.txt"
       [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
         cat "$WORK/clear-only-pass-self-test-summary.txt"
+      [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
+        cat "$WORK/shading-prototype-tile-self-test-summary.txt"
     } >"$PASS_EVIDENCE_DIR/result.txt"
     echo "FAIL: final cleanup invalidated provisional PASS: $PASS_EVIDENCE_DIR" >&2
   fi
@@ -1556,7 +1867,9 @@ cleanup() {
     final_status=1
   fi
   if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
-    if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+    if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+      echo "PASS — shading prototype Tile execution and capture acquired; app stopped"
+    elif ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
       echo "PASS — clear-only capture acquired for later GPU semantic inspection; app stopped"
     elif [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
       echo "PASS — ID3 terminal preview-fence placeholder save gate proven; app stopped"
@@ -1594,10 +1907,13 @@ validate_resource_allocator_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary resource allocator self-test profile does not match the request"
 validate_clear_only_pass_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary clear-only pass self-test profile does not match the request"
-if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+validate_shading_prototype_tile_binary_profile "$WORK/app-strings.txt" ||
+  fail "app binary shading prototype Tile self-test profile does not match the request"
+if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0 ||
+     REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
       "$APP_INPUT/Info.plist" 2>/dev/null || true)" == true ]] ||
-    fail "clear-only pass app does not enable programmatic Metal capture"
+    fail "capture self-test app does not enable programmatic Metal capture"
 else
   if /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
       "$APP_INPUT/Info.plist" >/dev/null 2>&1; then
@@ -1930,6 +2246,10 @@ if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
   discover_clear_only_pass_self_test_pid ||
     fail "clear-only pass self-test did not establish exactly one bounded process within 10 seconds"
 fi
+if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+  discover_shading_prototype_tile_self_test_pid ||
+    fail "shading prototype Tile self-test did not establish exactly one bounded process within 10 seconds"
+fi
 sleep "$DURATION"
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   wait_for_id3_completion ||
@@ -1944,7 +2264,9 @@ python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" \
     "$ID3_FAULT_WINDOW_PID" "$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST" \
     "$RESOURCE_ALLOCATOR_SELF_TEST_PID" \
     "$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST" \
-    "$CLEAR_ONLY_PASS_SELF_TEST_PID" <<'PY' ||
+    "$CLEAR_ONLY_PASS_SELF_TEST_PID" \
+    "$REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST" \
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_PID" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
@@ -1954,6 +2276,8 @@ require_resource_allocator_self_test = sys.argv[5] == "1"
 expected_resource_allocator_pid = sys.argv[6]
 require_clear_only_pass_self_test = sys.argv[7] == "1"
 expected_clear_only_pass_pid = sys.argv[8]
+require_shading_prototype_tile_self_test = sys.argv[9] == "1"
+expected_shading_prototype_tile_pid = sys.argv[10]
 matches = [
     p for p in processes
     if pathlib.PurePosixPath(p.get("executable", "")).name == expected
@@ -1977,6 +2301,12 @@ if require_clear_only_pass_self_test and (
     or str(matches[0].get("processIdentifier")) != expected_clear_only_pass_pid
 ):
     raise SystemExit(1)
+if require_shading_prototype_tile_self_test and (
+    len(matches) != 1
+    or str(matches[0].get("processIdentifier"))
+    != expected_shading_prototype_tile_pid
+):
+    raise SystemExit(1)
 if expected_fault not in (
     "preview-fence-error-after-terminal",
     "frame-fence-error-after-terminal",
@@ -1989,6 +2319,9 @@ if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
 fi
 if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
   CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED=1
+fi
+if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+  SHADING_PROTOTYPE_TILE_SELF_TEST_PROCESS_SURVIVED=1
 fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ||
       "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
@@ -2008,6 +2341,10 @@ done
 if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
   capture_clear_only_capture_artifact ||
     fail "clear-only pass programmatic Metal capture was not copied and validated"
+fi
+if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+  capture_shading_prototype_tile_artifact ||
+    fail "shading prototype Tile Metal capture was not copied and validated"
 fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   capture_id3_save_postflight_raw ||
@@ -2082,9 +2419,93 @@ if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)); then
     --log "$WORK/log.txt" --expect-absent ||
     fail "unrequested clear-only pass self-test marker appeared at runtime"
 fi
+if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0)); then
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-tile-self-test-log.py" \
+      --log "$WORK/log.txt" --expect-absent ||
+    fail "unrequested shading prototype Tile marker appeared at runtime"
+fi
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
-if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+  ((SHADING_PROTOTYPE_TILE_SELF_TEST_PROCESS_SURVIVED == 1)) ||
+    fail "shading prototype Tile process did not survive its exact same-PID observation window"
+  [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_STATUS" == acquired ]] ||
+    fail "shading prototype Tile capture was not acquired"
+  SHADING_PROTOTYPE_TILE_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --artifact "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
+    --summary "$WORK/shading-prototype-tile-self-test-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    SHADING_PROTOTYPE_TILE_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  SHADING_PROTOTYPE_TILE_SELF_TEST_VALIDATION="failed"
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-tile-self-test-log.py" \
+      "${SHADING_PROTOTYPE_TILE_VALIDATOR_ARGS[@]}" ||
+    fail "shading prototype Tile self-test log validation failed"
+  python3 - "$WORK/shading-prototype-tile-self-test-summary.txt" \
+      "$EXPECTED_BUILD" "$SHADING_PROTOTYPE_TILE_CAPTURE_KIND" \
+      "$SHADING_PROTOTYPE_TILE_CAPTURE_BYTES" \
+      "$SHADING_PROTOTYPE_TILE_CAPTURE_MANIFEST_SHA256" <<'PY' ||
+import pathlib
+import sys
+
+summary = {}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.count("=") != 1:
+        raise SystemExit(f"invalid shading prototype Tile summary line: {line!r}")
+    key, value = line.split("=", 1)
+    if key in summary:
+        raise SystemExit(f"duplicate shading prototype Tile summary key: {key}")
+    summary[key] = value
+expected = {
+    "shading_prototype_tile_expected_build": sys.argv[2],
+    "shading_prototype_tile_armed_count": "1",
+    "shading_prototype_tile_factory_ready_count": "1",
+    "shading_prototype_tile_encoded_count": "1",
+    "shading_prototype_tile_submitted_count": "1",
+    "shading_prototype_tile_capture_acquired_count": "1",
+    "shading_prototype_tile_pass_count": "1",
+    "shading_prototype_tile_unsupported_count": "0",
+    "shading_prototype_tile_fail_count": "0",
+    "shading_prototype_tile_contract": "1",
+    "shading_prototype_tile_metallib_abi": "5",
+    "shading_prototype_tile_pipelines": "3",
+    "shading_prototype_tile_forward": "0",
+    "shading_prototype_tile_passes": "1",
+    "shading_prototype_tile_encoders": "1",
+    "shading_prototype_tile_draws": "2",
+    "shading_prototype_tile_tile_dispatches": "1",
+    "shading_prototype_tile_vertex_bytes": "168",
+    "shading_prototype_tile_created": "1",
+    "shading_prototype_tile_live": "0",
+    "shading_prototype_tile_released": "1",
+    "shading_prototype_tile_wait_idle": "0",
+    "shading_prototype_tile_runtime_delta": "0",
+    "shading_prototype_tile_builtin_delta": "0",
+    "shading_prototype_tile_archive_delta": "0",
+    "capture_name": "RendererIOS-tile-prototype-v1.gputrace",
+    "capture_kind": sys.argv[3],
+    "capture_bytes": sys.argv[4],
+    "capture_manifest_sha256": sys.argv[5],
+}
+if summary != expected:
+    missing = sorted(expected.keys() - summary.keys())
+    extra = sorted(summary.keys() - expected.keys())
+    wrong = sorted(
+        key for key in expected.keys() & summary.keys()
+        if summary[key] != expected[key]
+    )
+    raise SystemExit(
+        f"shading prototype Tile summary mismatch: missing={missing} "
+        f"extra={extra} wrong={wrong}"
+    )
+PY
+    fail "shading prototype Tile self-test summary validation failed"
+  SHADING_PROTOTYPE_TILE_SELF_TEST_VALIDATION="passed"
+elif ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
   ((CLEAR_ONLY_PASS_SELF_TEST_PROCESS_SURVIVED == 1)) ||
     fail "clear-only pass process did not survive its exact same-PID observation window"
   CLEAR_ONLY_PASS_VALIDATOR_ARGS=(
@@ -2882,9 +3303,23 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
 [[ ! -f "$WORK/clear-only-capture-listing.json" ]] ||
   ditto "$WORK/clear-only-capture-listing.json" \
     "$OUT/clear-only-capture-listing.json"
+[[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
+  ditto "$WORK/shading-prototype-tile-self-test-summary.txt" \
+    "$OUT/shading-prototype-tile-self-test-summary.txt"
+[[ ! -f "$WORK/shading-prototype-tile-capture-summary.txt" ]] ||
+  ditto "$WORK/shading-prototype-tile-capture-summary.txt" \
+    "$OUT/shading-prototype-tile-capture-summary.txt"
+[[ ! -f "$WORK/shading-prototype-tile-capture-listing.json" ]] ||
+  ditto "$WORK/shading-prototype-tile-capture-listing.json" \
+    "$OUT/shading-prototype-tile-capture-listing.json"
 if [[ -e "$WORK/$CLEAR_ONLY_CAPTURE_NAME" &&
       ! -L "$WORK/$CLEAR_ONLY_CAPTURE_NAME" ]]; then
   ditto "$WORK/$CLEAR_ONLY_CAPTURE_NAME" "$OUT/$CLEAR_ONLY_CAPTURE_NAME"
+fi
+if [[ -e "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" &&
+      ! -L "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" ]]; then
+  ditto "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
+    "$OUT/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
 fi
 if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
   [[ "$CLEAR_ONLY_CAPTURE_STATUS" == acquired ]] ||
@@ -2897,11 +3332,24 @@ if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
     "$WORK/clear-only-capture-evidence-summary.txt" ||
     fail "preserved clear-only capture fingerprint changed"
 fi
+if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+  [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_STATUS" == acquired ]] ||
+    fail "shading prototype Tile capture was not acquired at the PASS evidence boundary"
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-tile-self-test-log.py" \
+      --capture-only --artifact "$OUT/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
+      --summary "$WORK/shading-prototype-tile-capture-evidence-summary.txt" ||
+    fail "preserved shading prototype Tile capture is invalid"
+  cmp -s "$WORK/shading-prototype-tile-capture-summary.txt" \
+    "$WORK/shading-prototype-tile-capture-evidence-summary.txt" ||
+    fail "preserved shading prototype Tile capture fingerprint changed"
+fi
 for candidate in id3-protected-before.sha256 id3-protected-after.sha256 \
     id3-saves-before.json id3-saves-after.json save_slot_20.sav \
     processes.json processes-id3-window-start.json \
     processes-resource-allocator-window-start.json \
     processes-clear-only-pass-window-start.json \
+    processes-shading-prototype-tile-window-start.json \
     log-id3-completion-check.txt; do
   [[ -f "$WORK/$candidate" ]] || continue
   ditto "$WORK/$candidate" "$OUT/$candidate"
@@ -2915,6 +3363,7 @@ rm -f "$OUT"/processes-durable-zero-*.json "$OUT"/durable-zero-*.json
 for candidate in "$WORK"/processes-durable-zero-*.json \
     "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
     "$WORK"/processes-clear-only-pass-window-start-attempt-*.json \
+    "$WORK"/processes-shading-prototype-tile-window-start-attempt-*.json \
     "$WORK"/durable-zero-*.json; do
   [[ -f "$candidate" ]] || continue
   ditto "$candidate" "$OUT/$(basename "$candidate")"
@@ -2929,6 +3378,7 @@ done
   echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
   write_resource_allocator_self_test_result_fields
   write_clear_only_pass_self_test_result_fields
+  write_shading_prototype_tile_self_test_result_fields
   echo "pre_crash_sha256=$PRE_CRASH_SHA"
   echo "post_crash_sha256=$POST_CRASH_SHA"
   echo "bundle_id=$BUNDLE_ID"
@@ -2954,4 +3404,6 @@ done
     cat "$WORK/resource-allocator-self-test-summary.txt"
   [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
     cat "$WORK/clear-only-pass-self-test-summary.txt"
+  [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
+    cat "$WORK/shading-prototype-tile-self-test-summary.txt"
 } >"$OUT/result.txt"
