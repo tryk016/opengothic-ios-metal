@@ -380,7 +380,8 @@ file(GLOB_RECURSE OPENGOTHIC_SOURCES
     "game/*.cpp")
 
 list(REMOVE_ITEM OPENGOTHIC_SOURCES
-     "${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/renderer.cpp")
+     "${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/renderer.cpp"
+     "${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/iosshadingprototypeplan.cpp")
 
 target_sources(${PROJECT_NAME} PRIVATE ${OPENGOTHIC_SOURCES} ${ObjCSOURCES} icon.rc)
 

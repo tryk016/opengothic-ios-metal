@@ -224,6 +224,293 @@ jobs:
             -o "$RUNNER_TEMP/iosframeplan"
           "$RUNNER_TEMP/iosframeplan"
 
+      - name: Verify P2.5a shading prototype plan contract
+        run: |
+          set -euo pipefail
+
+          prototype_files=(
+            game/graphics/iosshadingprototypeplan.h
+            game/graphics/iosshadingprototypeplan.cpp
+            ios/tests/iosshadingprototypeplan.cpp
+          )
+          for file in "${prototype_files[@]}"; do
+            test -f "$file"
+          done
+
+          if grep -nEi \
+              '#import|<Metal/|Objective-C|Tempest|IOSMetalContext|RendererIOS|MTL[A-Z]|CAMetalLayer|newCommandQueue|newCommandBuffer|nextDrawable|presentDrawable|waitIdle|MetalFX|runtime[ -]shader|supportsFamily|supportsTextureSampleCount|MTLHeap|newHeap|sizeAndAlign|makeAliasable|NativeHandle|void[[:space:]]*\*' \
+              "${prototype_files[@]}"; then
+            echo 'P2.5a host-neutral contract leaks runtime or native policy'
+            exit 1
+          fi
+          if grep -nE \
+              '(^|[^[:alnum:]_])((char|short|int|long|float|double|bool|auto|uint(8|16|32|64)_t|IOS[A-Za-z0-9_:<>]+)[[:space:]]*\*|nullptr|reinterpret_cast)' \
+              "${prototype_files[@]}"; then
+            echo 'P2.5a host-neutral contract contains a pointer'
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          frame = Path("game/graphics/iosframeplan.h").read_text()
+          header = Path(
+              "game/graphics/iosshadingprototypeplan.h"
+          ).read_text()
+          source = Path(
+              "game/graphics/iosshadingprototypeplan.cpp"
+          ).read_text()
+          test = Path(
+              "ios/tests/iosshadingprototypeplan.cpp"
+          ).read_text()
+          cmake = Path("CMakeLists.txt").read_text()
+
+          frozen = (
+              (frame, r"\bIOSFramePlanABIVersion\s*=\s*4u\s*;", 1),
+              (header, r"\bIOSShadingPrototypePlanABIVersion\s*=\s*1u\s*;", 1),
+              (header, r"\bIOSShadingPrototypeNoPass\s*=\s*0xffffffffu\s*;", 1),
+              (header, r"\bTileDeferred\s*=\s*0\s*,", 1),
+              (header, r"\bForwardPlus\s*=\s*1\s*,", 1),
+              (header, r"\bBuildLightList\s*=\s*0\s*,", 1),
+              (header, r"\bDrawOpaque\s*=\s*1\s*,", 1),
+              (header, r"\bDrawAlphaTest\s*=\s*2\s*,", 1),
+              (header, r"\bDispatchTileLighting\s*=\s*3\s*,", 1),
+              (header, r"\bUnsupportedKind\s*=\s*1\s*,", 1),
+              (header, r"\bInvalidFramePlan\s*=\s*2\s*,", 1),
+              (header, r"\bCommonContractMismatch\s*=\s*3\s*,", 1),
+              (header, r"\bRuntimeContractMismatch\s*=\s*4\s*,", 1),
+              (header, r"\bTopologyMismatch\s*=\s*5\s*,", 1),
+              (header, r"\bFramePlanMismatch\s*=\s*6\s*,", 1),
+              (header, r"\bSupported\s*=\s*0\s*,", 1),
+              (header, r"\bInvalid\s*=\s*1\s*,", 1),
+              (header, r"\bUnsupported\s*=\s*2\s*,", 1),
+              (source, r"\b256u\s*,", 1),
+              (test, r"\bmutationCount\s*!=\s*214u", 1),
+          )
+          for contents, pattern, expected in frozen:
+              count = len(re.findall(pattern, contents))
+              if count != expected:
+                  raise SystemExit(
+                      f"P2.5a frozen numeric oracle mismatch: {pattern}: {count}"
+                  )
+
+          exclusion = (
+              '"${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/'
+              'iosshadingprototypeplan.cpp"'
+          )
+          remove_block = cmake.split(
+              "list(REMOVE_ITEM OPENGOTHIC_SOURCES", 1
+          )[1].split(")", 1)[0]
+          if remove_block.count(exclusion) != 1:
+              raise SystemExit(
+                  "P2.5a source is not excluded exactly once from the target"
+              )
+          if remove_block.index(
+              '"${CMAKE_CURRENT_SOURCE_DIR}/game/graphics/renderer.cpp"'
+          ) > remove_block.index(exclusion):
+              raise SystemExit("P2.5a source exclusion moved before renderer.cpp")
+
+          common_defaults = (
+              "opaqueGeometryInputs = 1u;",
+              "alphaTestGeometryInputs = 1u;",
+              "lightInputs = 1u;",
+              "presentFormat = IOSPixelFormat::Bgra8Unorm;",
+              "outputFormat = IOSPixelFormat::Rgba8Unorm;",
+              "outputExtent = {4u,4u};",
+              "outputMipLevels = 1u;",
+              "outputSampleCount = 1u;",
+          )
+          for declaration in common_defaults:
+              if header.count(declaration) != 1:
+                  raise SystemExit(
+                      f"P2.5a common IO oracle is missing: {declaration}"
+                  )
+
+          runtime_defaults = (
+              "borrowedExistingDevice = 1u;",
+              "borrowedExistingQueue = 1u;",
+              "borrowedVirginCommandBuffer = 1u;",
+              "contextOwnsFence = 1u;",
+              "createsDevice = 0u;",
+              "createsQueue = 0u;",
+              "createsCommandBuffer = 0u;",
+              "commits = 0u;",
+              "waits = 0u;",
+              "drawableAcquisitions = 0u;",
+              "presents = 0u;",
+          )
+          runtime_header = header.split(
+              "struct IOSShadingPrototypeRuntimeContract final {", 1
+          )[1].split("enum class IOSShadingPrototypeOperation", 1)[0]
+          for declaration in runtime_defaults:
+              if runtime_header.count(declaration) != 1:
+                  raise SystemExit(
+                      f"P2.5a runtime ownership oracle is missing: {declaration}"
+                  )
+
+          def topology_numbers(function, following):
+              body = source.split(function, 1)[1].split(following, 1)[0]
+              return [int(value) for value in re.findall(r"\b(\d+)u\b", body)]
+
+          if topology_numbers(
+              "IOSShadingPrototypeTopology tileTopology() noexcept {",
+              "IOSShadingPrototypeTopology forwardTopology() noexcept {",
+          ) != [1, 1, 1, 2, 1, 0, 0, 0, 3]:
+              raise SystemExit("P2.5a TileDeferred topology changed")
+          if topology_numbers(
+              "IOSShadingPrototypeTopology forwardTopology() noexcept {",
+              "IOSFramePlan tileFramePlan() {",
+          ) != [1, 1, 1, 2, 0, 1, 0, 0, 3]:
+              raise SystemExit("P2.5a ForwardPlus topology changed")
+
+          schedules = (
+              (
+                  source.split(
+                      "IOSShadingPrototypeTopology tileTopology() noexcept {",
+                      1,
+                  )[1].split(
+                      "IOSShadingPrototypeTopology forwardTopology() noexcept {",
+                      1,
+                  )[0],
+                  (
+                      "IOSShadingPrototypeOperation::DrawOpaque",
+                      "IOSShadingPrototypeOperation::DrawAlphaTest",
+                      "IOSShadingPrototypeOperation::DispatchTileLighting",
+                  ),
+              ),
+              (
+                  source.split(
+                      "IOSShadingPrototypeTopology forwardTopology() noexcept {",
+                      1,
+                  )[1].split("IOSFramePlan tileFramePlan() {", 1)[0],
+                  (
+                      "IOSShadingPrototypeOperation::BuildLightList",
+                      "IOSShadingPrototypeOperation::DrawOpaque",
+                      "IOSShadingPrototypeOperation::DrawAlphaTest",
+                  ),
+              ),
+          )
+          for body, expected in schedules:
+              positions = [body.index(operation) for operation in expected]
+              if positions != sorted(positions):
+                  raise SystemExit("P2.5a operation schedule changed order")
+              if any(body.count(operation) != 1 for operation in expected):
+                  raise SystemExit("P2.5a operation schedule is not exact")
+
+          layout_asserts = (
+              "sizeof(IOSShadingPrototypeOperation)==1u",
+              "sizeof(IOSShadingPrototypeCommonContract)==32u",
+              "sizeof(IOSShadingPrototypeRuntimeContract)==44u",
+              "sizeof(IOSShadingPrototypeTopology)==40u",
+              "sizeof(IOSShadingPrototypePlanValidation)==16u",
+              "sizeof(IOSShadingPrototypePlanSelection)==28u",
+          )
+          for assertion in layout_asserts:
+              if test.count(assertion) != 1:
+                  raise SystemExit(
+                      f"P2.5a frozen layout oracle is missing: {assertion}"
+                  )
+
+          compact_test = re.sub(r"\s+", "", test)
+          runtime_offsets = (
+              ("borrowedExistingDevice", 0),
+              ("borrowedExistingQueue", 4),
+              ("borrowedVirginCommandBuffer", 8),
+              ("contextOwnsFence", 12),
+              ("createsDevice", 16),
+              ("createsQueue", 20),
+              ("createsCommandBuffer", 24),
+              ("commits", 28),
+              ("waits", 32),
+              ("drawableAcquisitions", 36),
+              ("presents", 40),
+          )
+          for field, offset in runtime_offsets:
+              assertion = (
+                  "offsetof(IOSShadingPrototypeRuntimeContract,"
+                  f"{field})=={offset}u"
+              )
+              if compact_test.count(assertion) != 1:
+                  raise SystemExit(
+                      f"P2.5a runtime layout oracle is missing: {assertion}"
+                  )
+
+          topology_oracles = (
+              "topology.commandBuffers==1u",
+              "topology.submits==1u",
+              "topology.renderEncoders==1u",
+              "topology.draws==2u",
+              "topology.tileDispatches==tileDispatches",
+              "topology.computeEncoders==computeEncoders",
+              "topology.drawableAcquisitions==0u",
+              "topology.presents==0u",
+              "topology.operationCount==3u",
+              "topology.operations==operations",
+          )
+          for oracle in topology_oracles:
+              if test.count(oracle) != 1:
+                  raise SystemExit(
+                      f"P2.5a topology oracle is missing: {oracle}"
+                  )
+          PY
+
+          printf '#include "graphics/iosshadingprototypeplan.h"\nint main() { return 0; }\n' |
+            clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          clang++ -x c++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -fsyntax-only game/graphics/iosshadingprototypeplan.cpp
+          clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosshadingprototypeplan.cpp \
+            game/graphics/iosshadingprototypeplan.cpp \
+            game/graphics/iosframeplan.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeplan-sanitized"
+          "$RUNNER_TEMP/iosshadingprototypeplan-sanitized"
+
+          MACOS_SDK="$(xcrun --sdk macosx --show-sdk-path)"
+          xcrun --sdk macosx clang++ -std=c++20 \
+            -isysroot "$MACOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosshadingprototypeplan.cpp \
+            game/graphics/iosshadingprototypeplan.cpp \
+            game/graphics/iosframeplan.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeplan-appleclang"
+          "$RUNNER_TEMP/iosshadingprototypeplan-appleclang"
+
+          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          printf '#include "graphics/iosshadingprototypeplan.h"\nint main() { return 0; }\n' |
+            xcrun --sdk iphoneos clang++ -x c++ -std=c++20 \
+              -target arm64-apple-ios16.4 \
+              -isysroot "$IOS_SDK" \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun --sdk iphoneos clang++ -x c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -fsyntax-only \
+            game/graphics/iosshadingprototypeplan.cpp \
+            ios/tests/iosshadingprototypeplan.cpp
+
+          P25A_CMAKE_BUILD="$RUNNER_TEMP/iosshadingprototypeplan-cmake"
+          rm -rf "$P25A_CMAKE_BUILD"
+          cmake -S . -B "$P25A_CMAKE_BUILD" -G Xcode \
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4
+          P25A_PROJECT="$P25A_CMAKE_BUILD/Gothic2Notr.xcodeproj/project.pbxproj"
+          test -f "$P25A_PROJECT"
+          if grep -Fq 'iosshadingprototypeplan.cpp' "$P25A_PROJECT"; then
+            echo 'P2.5a diagnostic-only source entered the Xcode target'
+            exit 1
+          fi
+
       - name: Verify P2.3b resource allocator contract
         run: |
           set -euo pipefail
