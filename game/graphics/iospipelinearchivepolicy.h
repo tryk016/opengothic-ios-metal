@@ -202,9 +202,17 @@ inline bool provenanceMatches(
   return !expected.empty() && record==expected;
   }
 
+enum class FlushPhase : uint8_t {
+  InitialWindow,
+  Clean,
+  DirtyActive,
+  DirtyExhausted,
+  };
+
 struct FlushState final {
-  uint8_t attempts = 0u;
-  bool    settled  = false;
+  uint8_t    attempts = 0u;
+  bool       settled  = false;
+  FlushPhase phase    = FlushPhase::InitialWindow;
   };
 
 inline constexpr uint64_t FirstFlushPresent = 300u;
@@ -218,36 +226,84 @@ enum class FlushDecision : uint8_t {
   FlushDirty,
   };
 
-constexpr FlushDecision flushDecisionAfterPresent(
-    const FlushState& state, uint64_t successfulPresents,
+constexpr FlushDecision advanceFlushStateAfterPresent(
+    FlushState& state, uint64_t successfulPresents,
     bool dirty) noexcept {
-  if(state.settled ||
-     state.attempts>=MaxFlushAttempts ||
-     successfulPresents<FirstFlushPresent ||
-     successfulPresents>LastFlushPresent)
-    return FlushDecision::None;
-  return dirty ? FlushDecision::FlushDirty
-               : FlushDecision::SettleClean;
-  }
-
-constexpr bool shouldFlushAfterPresent(
-    const FlushState& state, uint64_t successfulPresents,
-    bool dirty) noexcept {
-  return flushDecisionAfterPresent(
-           state,successfulPresents,dirty)==
-         FlushDecision::FlushDirty;
+  switch(state.phase) {
+    case FlushPhase::InitialWindow:
+      if(successfulPresents<FirstFlushPresent)
+        return FlushDecision::None;
+      if(successfulPresents>LastFlushPresent) {
+        if(!dirty) {
+          state.settled = true;
+          state.phase = FlushPhase::Clean;
+          }
+        else {
+          // A caller that missed the bootstrap window has no clean baseline.
+          // Keep this dirty episode blocked until a clean snapshot is observed.
+          state.settled = true;
+          state.phase = FlushPhase::DirtyExhausted;
+          }
+        return FlushDecision::None;
+        }
+      return dirty ? FlushDecision::FlushDirty
+                   : FlushDecision::SettleClean;
+    case FlushPhase::Clean:
+      if(successfulPresents<=LastFlushPresent || !dirty)
+        return FlushDecision::None;
+      state.attempts = 0u;
+      state.settled = false;
+      state.phase = FlushPhase::DirtyActive;
+      return FlushDecision::FlushDirty;
+    case FlushPhase::DirtyActive:
+      if(!dirty) {
+        state.settled = true;
+        state.phase = FlushPhase::Clean;
+        return FlushDecision::None;
+        }
+      if(state.attempts>=MaxFlushAttempts) {
+        state.settled = true;
+        state.phase = FlushPhase::DirtyExhausted;
+        return FlushDecision::None;
+        }
+      return FlushDecision::FlushDirty;
+    case FlushPhase::DirtyExhausted:
+      if(!dirty) {
+        state.settled = true;
+        state.phase = FlushPhase::Clean;
+        }
+      return FlushDecision::None;
+    }
+  return FlushDecision::None;
   }
 
 constexpr void settleCleanArchive(FlushState& state) noexcept {
   state.settled = true;
+  state.phase = FlushPhase::Clean;
   }
 
 constexpr void recordFlushResult(
-    FlushState& state, bool succeeded) noexcept {
-  if(state.settled || state.attempts>=MaxFlushAttempts)
+    FlushState& state, bool succeeded, bool dirtyAfter) noexcept {
+  if((state.phase!=FlushPhase::InitialWindow &&
+      state.phase!=FlushPhase::DirtyActive) ||
+     state.attempts>=MaxFlushAttempts)
     return;
   state.attempts = static_cast<uint8_t>(state.attempts+1u);
-  state.settled = succeeded || state.attempts>=MaxFlushAttempts;
+  (void)succeeded;
+  if(!dirtyAfter) {
+    state.settled = true;
+    state.phase = FlushPhase::Clean;
+    }
+  else if(state.attempts>=MaxFlushAttempts) {
+    state.settled = true;
+    state.phase = FlushPhase::DirtyExhausted;
+    }
+  else {
+    // The post-flush snapshot is authoritative. Even a successful API result
+    // remains an active dirty episode and may consume the bounded retries.
+    state.settled = false;
+    state.phase = FlushPhase::DirtyActive;
+    }
   }
 
 }

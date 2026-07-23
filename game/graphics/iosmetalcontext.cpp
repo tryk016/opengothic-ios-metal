@@ -1245,7 +1245,7 @@ struct IOSMetalContext::Impl final {
       MetalApi::pipelineArchiveSnapshot(device);
     const bool dirty =
       (before.flags&MetalPipelineArchiveSnapshot::Dirty)!=0u;
-    const auto decision = Archive::flushDecisionAfterPresent(
+    const auto decision = Archive::advanceFlushStateAfterPresent(
       pipelineArchiveFlush,presents,dirty);
     if(decision==Archive::FlushDecision::None)
       return;
@@ -1261,11 +1261,15 @@ struct IOSMetalContext::Impl final {
       flushInvoked = true;
       flushSucceeded =
         MetalApi::flushPipelineArchive(device);
-      Archive::recordFlushResult(
-        pipelineArchiveFlush,flushSucceeded);
       }
     const auto after =
       MetalApi::pipelineArchiveSnapshot(device);
+    if(flushInvoked) {
+      const bool dirtyAfter =
+        (after.flags&MetalPipelineArchiveSnapshot::Dirty)!=0u;
+      Archive::recordFlushResult(
+        pipelineArchiveFlush,flushSucceeded,dirtyAfter);
+      }
     logPipelineArchiveSnapshot(
       "post",presents,after,flushInvoked,flushSucceeded);
     }

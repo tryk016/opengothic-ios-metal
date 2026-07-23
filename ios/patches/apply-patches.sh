@@ -10,8 +10,8 @@ TEMPEST_ROOT="${TEMPEST_ROOT:-$ROOT/lib/Tempest}"
 
 EXPECTED_URL="https://github.com/tryk016/Tempest.git"
 BASE_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
-EXPECTED_COMMIT="d8163240ca1075bc4edd30ab340246c91f5c00ac"
-EXPECTED_TAG="opengothic-ios-patch-stack-v12"
+EXPECTED_COMMIT="a51154bea168f1e96862dbc5dfb962e0b872d2a5"
+EXPECTED_TAG="opengothic-ios-patch-stack-v13"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -222,6 +222,7 @@ require_literal "$METAL_BUILTIN_RUNTIME_TEST" "ValidatesAndConfiguresOfflineRefl
 require_literal "$METAL_BUILTIN_RUNTIME_TEST" "ClassifiesExactInventoryManifestSources" "exact inventory source test"
 require_literal "$METAL_BUILTIN_RUNTIME_TEST" "ValidatesInventoryOfflineReflection" "offline inventory reflection test"
 require_literal "$METAL_BUILTIN_RUNTIME_TEST" "HardCodesOnlySelectedRenderRoles" "pipeline archive role allowlist test"
+require_literal "$METAL_BUILTIN_RUNTIME_TEST" "RecognizesOnlyProductionInventoryPipeline" "inventory pipeline archive eligibility test"
 require_literal "$METAL_TEST" "BorrowedNativeHandles" "borrowed Metal runtime test"
 require_literal "$METAL_TEST" "nativeIbo" "borrowed Metal index-buffer coverage"
 require_literal "$METAL_TEST" "ActiveRenderEncoderScope" "active Metal encoder runtime test"
@@ -232,8 +233,9 @@ require_literal "$METAL_TEST" "RuntimeCompilationCounters" "runtime counter Meta
 require_literal "$METAL_TEST" "BuiltinRuntimeCounters" "Builtin attribution Metal test"
 require_literal "$METAL_TEST" "OfflineBuiltinMetallib" "offline Builtin metallib runtime test"
 require_literal "$METAL_TEST" "OfflineBuiltinPipelineArchiveColdWarmAndRecovery" "pipeline archive Metal runtime test"
+require_literal "$METAL_TEST" "OfflineInventoryPipelineArchiveColdWarm" "inventory pipeline archive Metal runtime test"
 require_literal "$METAL_TEST" "OfflineBuiltinManifestFailsClosed" "offline Builtin fail-closed runtime test"
 require_literal "$METAL_TEST" "OfflineInventoryMetallib" "offline inventory Metal runtime test"
 require_literal "$METAL_TEST" "OfflineInventoryManifestFailsClosed" "offline inventory fail-closed runtime test"
 
-echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource/encoder bridges + one-shot command-buffer bridge + runtime compilation counters + exact Builtin role attribution + fail-closed offline Builtin/inventory manifests + device-wide binary pipeline archive)"
+echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource/encoder bridges + one-shot command-buffer bridge + runtime compilation counters + exact Builtin role attribution + fail-closed offline Builtin/inventory manifests + device-wide Builtin/inventory binary pipeline archive)"

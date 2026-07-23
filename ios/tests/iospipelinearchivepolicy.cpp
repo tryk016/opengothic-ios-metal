@@ -160,55 +160,167 @@ int main() {
   assert(Archive::provenanceRecord("not-a-sha256").empty());
 
   Archive::FlushState warmClean;
-  assert(Archive::flushDecisionAfterPresent(warmClean,299u,false)==
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,299u,false)==
          Archive::FlushDecision::None);
-  assert(Archive::flushDecisionAfterPresent(warmClean,300u,false)==
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,300u,false)==
          Archive::FlushDecision::SettleClean);
-  assert(!Archive::shouldFlushAfterPresent(warmClean,300u,false));
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,300u,false)!=
+         Archive::FlushDecision::FlushDirty);
   Archive::settleCleanArchive(warmClean);
   assert(warmClean.attempts==0u);
   assert(warmClean.settled);
-  assert(Archive::flushDecisionAfterPresent(warmClean,301u,true)==
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,301u,true)==
+         Archive::FlushDecision::None);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,302u,true)==
          Archive::FlushDecision::None);
 
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,900u,true)==
+         Archive::FlushDecision::FlushDirty);
+  assert(warmClean.attempts==0u);
+  assert(!warmClean.settled);
+  assert(warmClean.phase==Archive::FlushPhase::DirtyActive);
+  Archive::recordFlushResult(warmClean,true,true);
+  assert(warmClean.attempts==1u);
+  assert(!warmClean.settled);
+  assert(warmClean.phase==Archive::FlushPhase::DirtyActive);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,901u,true)==
+         Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(warmClean,true,true);
+  assert(warmClean.attempts==2u);
+  assert(!warmClean.settled);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,902u,true)==
+         Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(warmClean,true,false);
+  assert(warmClean.attempts==Archive::MaxFlushAttempts);
+  assert(warmClean.settled);
+  assert(warmClean.phase==Archive::FlushPhase::Clean);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,903u,true)==
+         Archive::FlushDecision::FlushDirty);
+  assert(warmClean.attempts==0u);
+  Archive::recordFlushResult(warmClean,false,true);
+  assert(warmClean.attempts==1u);
+  assert(!warmClean.settled);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,904u,true)==
+         Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(warmClean,false,true);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,905u,true)==
+         Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(warmClean,false,true);
+  assert(warmClean.attempts==Archive::MaxFlushAttempts);
+  assert(warmClean.settled);
+  assert(warmClean.phase==Archive::FlushPhase::DirtyExhausted);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,906u,true)==
+         Archive::FlushDecision::None);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,907u,false)==
+         Archive::FlushDecision::None);
+  assert(warmClean.phase==Archive::FlushPhase::Clean);
+  assert(Archive::advanceFlushStateAfterPresent(warmClean,908u,true)==
+         Archive::FlushDecision::FlushDirty);
+  assert(warmClean.attempts==0u);
+  Archive::recordFlushResult(warmClean,true,false);
+  assert(warmClean.phase==Archive::FlushPhase::Clean);
+
   Archive::FlushState coldDirty;
-  assert(!Archive::shouldFlushAfterPresent(coldDirty,299u,true));
-  assert(Archive::shouldFlushAfterPresent(coldDirty,300u,true));
-  Archive::recordFlushResult(coldDirty,true);
+  assert(Archive::advanceFlushStateAfterPresent(coldDirty,299u,true)!=
+         Archive::FlushDecision::FlushDirty);
+  assert(Archive::advanceFlushStateAfterPresent(coldDirty,300u,true)==
+         Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(coldDirty,true,false);
   assert(coldDirty.attempts==1u);
   assert(coldDirty.settled);
-  assert(!Archive::shouldFlushAfterPresent(coldDirty,301u,true));
+  assert(Archive::advanceFlushStateAfterPresent(coldDirty,301u,true)!=
+         Archive::FlushDecision::FlushDirty);
 
   Archive::FlushState retryThenSuccess;
-  assert(Archive::shouldFlushAfterPresent(retryThenSuccess,300u,true));
-  Archive::recordFlushResult(retryThenSuccess,false);
+  assert(Archive::advanceFlushStateAfterPresent(
+    retryThenSuccess,300u,true)==Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(retryThenSuccess,false,true);
   assert(!retryThenSuccess.settled);
-  assert(Archive::shouldFlushAfterPresent(retryThenSuccess,301u,true));
-  Archive::recordFlushResult(retryThenSuccess,false);
-  assert(Archive::shouldFlushAfterPresent(retryThenSuccess,302u,true));
-  Archive::recordFlushResult(retryThenSuccess,true);
+  assert(Archive::advanceFlushStateAfterPresent(
+    retryThenSuccess,301u,true)==Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(retryThenSuccess,false,true);
+  assert(Archive::advanceFlushStateAfterPresent(
+    retryThenSuccess,302u,true)==Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(retryThenSuccess,true,false);
   assert(retryThenSuccess.attempts==3u);
   assert(retryThenSuccess.settled);
 
   Archive::FlushState exhausted;
   for(uint64_t present=Archive::FirstFlushPresent;
       present<=Archive::LastFlushPresent; ++present) {
-    assert(Archive::shouldFlushAfterPresent(exhausted,present,true));
-    Archive::recordFlushResult(exhausted,false);
+    assert(Archive::advanceFlushStateAfterPresent(
+      exhausted,present,true)==Archive::FlushDecision::FlushDirty);
+    Archive::recordFlushResult(exhausted,false,true);
     }
   assert(exhausted.attempts==Archive::MaxFlushAttempts);
   assert(exhausted.settled);
-  assert(!Archive::shouldFlushAfterPresent(
-    exhausted,Archive::LastFlushPresent,true));
-  assert(!Archive::shouldFlushAfterPresent(
-    exhausted,Archive::LastFlushPresent+1u,true));
+  assert(Archive::advanceFlushStateAfterPresent(
+    exhausted,Archive::LastFlushPresent,true)!=
+         Archive::FlushDecision::FlushDirty);
+  assert(Archive::advanceFlushStateAfterPresent(
+    exhausted,Archive::LastFlushPresent+1u,true)!=
+         Archive::FlushDecision::FlushDirty);
+
+  Archive::FlushState lateExhausted;
+  assert(Archive::advanceFlushStateAfterPresent(
+    lateExhausted,300u,false)==
+         Archive::FlushDecision::SettleClean);
+  Archive::settleCleanArchive(lateExhausted);
+  for(uint64_t present=800u; present<803u; ++present) {
+    assert(Archive::advanceFlushStateAfterPresent(
+      lateExhausted,present,true)==Archive::FlushDecision::FlushDirty);
+    Archive::recordFlushResult(lateExhausted,false,true);
+    }
+  assert(lateExhausted.attempts==Archive::MaxFlushAttempts);
+  assert(lateExhausted.settled);
+  assert(lateExhausted.phase==Archive::FlushPhase::DirtyExhausted);
+  for(uint64_t present=803u; present<900u; ++present)
+    assert(Archive::advanceFlushStateAfterPresent(
+      lateExhausted,present,true)!=Archive::FlushDecision::FlushDirty);
+  assert(lateExhausted.attempts==Archive::MaxFlushAttempts);
+  assert(lateExhausted.phase==Archive::FlushPhase::DirtyExhausted);
+
+  assert(Archive::advanceFlushStateAfterPresent(
+    lateExhausted,900u,false)==Archive::FlushDecision::None);
+  assert(lateExhausted.attempts==Archive::MaxFlushAttempts);
+  assert(lateExhausted.settled);
+  assert(lateExhausted.phase==Archive::FlushPhase::Clean);
+  assert(Archive::advanceFlushStateAfterPresent(
+    lateExhausted,901u,true)==Archive::FlushDecision::FlushDirty);
+  assert(lateExhausted.attempts==0u);
+  assert(!lateExhausted.settled);
+  assert(lateExhausted.phase==Archive::FlushPhase::DirtyActive);
+  Archive::recordFlushResult(lateExhausted,false,true);
+  assert(lateExhausted.attempts==1u);
 
   Archive::FlushState outsideWindow;
-  assert(Archive::flushDecisionAfterPresent(outsideWindow,0u,true)==
+  assert(Archive::advanceFlushStateAfterPresent(outsideWindow,0u,true)==
          Archive::FlushDecision::None);
-  assert(Archive::flushDecisionAfterPresent(outsideWindow,299u,true)==
+  assert(Archive::advanceFlushStateAfterPresent(outsideWindow,299u,true)==
          Archive::FlushDecision::None);
-  assert(Archive::flushDecisionAfterPresent(outsideWindow,303u,true)==
+  assert(Archive::advanceFlushStateAfterPresent(outsideWindow,303u,true)==
          Archive::FlushDecision::None);
+  assert(outsideWindow.settled);
+  assert(outsideWindow.phase==Archive::FlushPhase::DirtyExhausted);
+  assert(Archive::advanceFlushStateAfterPresent(outsideWindow,304u,false)==
+         Archive::FlushDecision::None);
+  assert(outsideWindow.phase==Archive::FlushPhase::Clean);
+  assert(Archive::advanceFlushStateAfterPresent(outsideWindow,305u,true)==
+         Archive::FlushDecision::FlushDirty);
+
+  Archive::FlushState confirmedAfterSuccess;
+  assert(Archive::advanceFlushStateAfterPresent(
+    confirmedAfterSuccess,300u,false)==Archive::FlushDecision::SettleClean);
+  Archive::settleCleanArchive(confirmedAfterSuccess);
+  assert(Archive::advanceFlushStateAfterPresent(
+    confirmedAfterSuccess,700u,true)==Archive::FlushDecision::FlushDirty);
+  Archive::recordFlushResult(confirmedAfterSuccess,true,false);
+  assert(confirmedAfterSuccess.attempts==1u);
+  assert(confirmedAfterSuccess.settled);
+  assert(confirmedAfterSuccess.phase==Archive::FlushPhase::Clean);
+  assert(Archive::advanceFlushStateAfterPresent(
+    confirmedAfterSuccess,701u,true)==Archive::FlushDecision::FlushDirty);
+  assert(confirmedAfterSuccess.attempts==0u);
+  assert(confirmedAfterSuccess.phase==Archive::FlushPhase::DirtyActive);
   return 0;
   }

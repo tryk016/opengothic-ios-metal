@@ -1105,6 +1105,28 @@ jobs:
             game/graphics/iospipelinearchivepolicy.h
           grep -Fq 'successfulPresents>LastFlushPresent' \
             game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'constexpr FlushDecision advanceFlushStateAfterPresent(' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'bool succeeded, bool dirtyAfter' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'Archive::advanceFlushStateAfterPresent(' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'const bool dirtyAfter =' \
+            game/graphics/iosmetalcontext.cpp
+          grep -Fq 'len(marker_lines) % 8 == 0' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'validate_late_snapshot_pair(pre, post)' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'incomplete late snapshot pair self-test unexpectedly passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'reordered late snapshot pair self-test unexpectedly passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'late archive summary does not use the final POST snapshot' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'last archive snapshot present exceeds the runtime frame range' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'changed late snapshot metadata self-test unexpectedly passed' \
+            ios/device-test/validate-pipeline-archive-log.py
           grep -Fq -- '--scenario "$SCENARIO"' \
             ios/device-test/run-pipeline-archive-test.sh
           grep -Fq 'parser.add_argument("--scenario", choices=("save", "new-game"))' \
@@ -1131,7 +1153,7 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
             ios/patches/apply-patches.sh
-          grep -Fq 'opengothic-ios-patch-stack-v12' \
+          grep -Fq 'opengothic-ios-patch-stack-v13' \
             ios/patches/apply-patches.sh
 
           grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-4.binaryarchive' \

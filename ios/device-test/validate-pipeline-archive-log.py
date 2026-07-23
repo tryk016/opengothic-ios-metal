@@ -166,35 +166,38 @@ def marker_group(
 
 
 def snapshot_lines(log: str) -> list[dict[str, int | str]]:
-    states = marker_group(log, STATE_PREFIX, STATE_KEYS)
-    renders = marker_group(log, RENDER_PREFIX, RENDER_KEYS)
-    computes = marker_group(log, COMPUTE_PREFIX, COMPUTE_KEYS)
-    flushes = marker_group(log, FLUSH_PREFIX, FLUSH_KEYS)
+    marker_specs = (
+        (STATE_PREFIX, STATE_KEYS),
+        (RENDER_PREFIX, RENDER_KEYS),
+        (COMPUTE_PREFIX, COMPUTE_KEYS),
+        (FLUSH_PREFIX, FLUSH_KEYS),
+    )
+    marker_lines = [
+        line
+        for line in log.splitlines()
+        if any(prefix in line for prefix, _ in marker_specs)
+    ]
     require(
-        len(states) == 2,
-        f"expected two snapshot-state markers, found {len(states)}",
+        len(marker_lines) >= 8,
+        "expected at least one complete PRE/POST archive snapshot pair",
     )
     require(
-        len(renders) == 2,
-        f"expected two snapshot-render markers, found {len(renders)}",
-    )
-    require(
-        len(computes) == 2,
-        f"expected two snapshot-compute markers, found {len(computes)}",
-    )
-    require(
-        len(flushes) == 2,
-        f"expected two snapshot-flush markers, found {len(flushes)}",
+        len(marker_lines) % 8 == 0,
+        "archive snapshot markers do not form complete PRE/POST pairs: "
+        f"found {len(marker_lines)} split markers",
     )
 
     parsed: list[dict[str, int | str]] = []
-    for index in range(2):
-        groups = (
-            states[index],
-            renders[index],
-            computes[index],
-            flushes[index],
-        )
+    for marker_offset in range(0, len(marker_lines), len(marker_specs)):
+        groups: list[dict[str, str]] = []
+        for group_index, (prefix, keys) in enumerate(marker_specs):
+            line = marker_lines[marker_offset + group_index]
+            require(
+                prefix in line,
+                "split snapshot marker order must be "
+                "state/render/compute/flush",
+            )
+            groups.append(parse_key_values(line, prefix, keys))
         point = groups[0]["point"]
         presents = groups[0]["presents"]
         require(
@@ -277,17 +280,181 @@ def expected_snapshot(
     return values
 
 
-def validate_snapshot_contract(log: str, phase: str, scenario: str) -> None:
+def validate_snapshot_flags(actual: dict[str, int | str]) -> None:
+    flags = int(actual["flags"])
+    flag_fields = (
+        ("cfg", 1),
+        ("available", 2),
+        ("loaded", 4),
+        ("empty", 8),
+        ("dirty", 16),
+        ("disabled", 32),
+    )
+    for field, bit in flag_fields:
+        require(
+            int(actual[field]) == (1 if flags & bit else 0),
+            f"snapshot flag {field} is inconsistent with flags={flags}",
+        )
+
+
+def validate_late_snapshot_pair(
+    pre: dict[str, int | str], post: dict[str, int | str]
+) -> None:
+    stable_keys = (
+        "abi",
+        "size",
+        "schema",
+        "key",
+        "metallib",
+        "cfg",
+        "available",
+        "loaded",
+        "empty",
+        "load-fail",
+        "rebuild",
+        "render-hit",
+        "render-miss",
+        "render-add",
+        "render-fallback",
+        "compute-hit",
+        "compute-miss",
+        "compute-add",
+        "compute-fallback",
+    )
+    for key in stable_keys:
+        require(
+            post[key] == pre[key],
+            f"late snapshot pair changed {key} during archive flush",
+        )
+
+    require(int(pre["dirty"]) == 1, "late PRE snapshot must be dirty")
+    require(
+        int(pre["flush-invoked"]) == 0
+        and int(pre["flush-result"]) == 0,
+        "late PRE snapshot must precede the flush invocation",
+    )
+    require(
+        int(post["flush-invoked"]) == 1,
+        "late POST snapshot must follow a flush invocation",
+    )
+    result = int(post["flush-result"])
+    require(result in (0, 1), "late POST flush result must be boolean")
+    disabled_before = int(pre["disabled"])
+    disabled_after = int(post["disabled"])
+    if result == 0:
+        require(
+            int(post["dirty"]) == 1 and disabled_after == 1,
+            "late failed flush must remain dirty and disable the archive",
+        )
+    else:
+        require(
+            disabled_before == 0 and disabled_after == 0,
+            "late successful flush cannot use a disabled archive",
+        )
+    require(
+        int(post["flush-attempt"]) == int(pre["flush-attempt"]) + 1,
+        "late snapshot flush-attempt counter must advance exactly once",
+    )
+    require(
+        int(post["flush-success"]) ==
+        int(pre["flush-success"]) + result,
+        "late snapshot flush-success counter disagrees with result",
+    )
+    require(
+        int(post["flush-fail"]) ==
+        int(pre["flush-fail"]) + (1 - result),
+        "late snapshot flush-fail counter disagrees with result",
+    )
+    bounded_before = int(pre["flush-bounded"])
+    bounded_after = int(post["flush-bounded"])
+    require(
+        0 <= bounded_before < 3 and bounded_after == bounded_before + 1,
+        "late snapshot bounded attempt must advance within 1..3",
+    )
+    require(
+        int(pre["flush-settled"]) == 0,
+        "late PRE snapshot must have an active unsettled episode",
+    )
+    dirty_after = int(post["dirty"])
+    require(dirty_after in (0, 1), "late POST dirty field must be boolean")
+    expected_settled = 1 if dirty_after == 0 or bounded_after == 3 else 0
+    require(
+        int(post["flush-settled"]) == expected_settled,
+        "late POST settled state disagrees with dirty/bounded state",
+    )
+
+
+def validate_snapshot_contract(
+    log: str, phase: str, scenario: str
+) -> dict[str, int | str]:
     snapshots = snapshot_lines(log)
     require(
-        len(snapshots) == 2,
-        f"expected exactly PRE and POST archive snapshots, found {len(snapshots)}",
+        len(snapshots) >= 2 and len(snapshots) % 2 == 0,
+        "archive snapshots must form complete PRE/POST pairs",
     )
-    require(
-        [entry["point"] for entry in snapshots] == ["pre", "post"],
-        "archive snapshots must be ordered PRE then POST",
+    previous_present = -1
+    monotonic_keys = (
+        "load-fail",
+        "rebuild",
+        "render-hit",
+        "render-miss",
+        "render-add",
+        "render-fallback",
+        "compute-hit",
+        "compute-miss",
+        "compute-add",
+        "compute-fallback",
+        "flush-attempt",
+        "flush-success",
+        "flush-fail",
     )
-    for actual in snapshots:
+    stable_metadata_keys = (
+        "abi",
+        "size",
+        "schema",
+        "key",
+        "metallib",
+        "cfg",
+        "available",
+        "loaded",
+        "empty",
+    )
+    for pair_offset in range(0, len(snapshots), 2):
+        pre = snapshots[pair_offset]
+        post = snapshots[pair_offset + 1]
+        require(
+            [pre["point"], post["point"]] == ["pre", "post"],
+            "archive snapshot attempts must be ordered PRE then POST",
+        )
+        present = int(pre["presents"])
+        require(
+            int(post["presents"]) == present,
+            "archive PRE/POST snapshots must share a present",
+        )
+        require(
+            present > previous_present,
+            "archive snapshot attempt presents must increase strictly",
+        )
+        previous_present = present
+        if pair_offset > 0:
+            validate_late_snapshot_pair(pre, post)
+
+    for index, actual in enumerate(snapshots):
+        validate_snapshot_flags(actual)
+        for key in stable_metadata_keys:
+            require(
+                actual[key] == snapshots[0][key],
+                f"archive snapshot stable metadata changed: {key}",
+            )
+        if index > 0:
+            previous = snapshots[index - 1]
+            for key in monotonic_keys:
+                require(
+                    int(actual[key]) >= int(previous[key]),
+                    f"archive snapshot counter regressed: {key}",
+                )
+
+    for actual in snapshots[:2]:
         point = str(actual["point"])
         expected = expected_snapshot(phase, scenario, point)
         for key, expected_value in expected.items():
@@ -296,21 +463,7 @@ def validate_snapshot_contract(log: str, phase: str, scenario: str) -> None:
                 f"{phase} {point} field {key}: "
                 f"expected {expected_value}, found {actual[key]}",
             )
-
-        flags = int(actual["flags"])
-        flag_fields = (
-            ("cfg", 1),
-            ("available", 2),
-            ("loaded", 4),
-            ("empty", 8),
-            ("dirty", 16),
-            ("disabled", 32),
-        )
-        for field, bit in flag_fields:
-            require(
-                int(actual[field]) == (1 if flags & bit else 0),
-                f"snapshot flag {field} is inconsistent with flags={flags}",
-            )
+    return snapshots[-1]
 
 
 def validate_provenance(log: str, metallib_sha256: str) -> None:
@@ -527,11 +680,14 @@ def validate_log(
 
     validate_test_mode(log, phase)
     validate_provenance(log, metallib_sha256)
-    validate_snapshot_contract(log, phase, scenario)
+    final_snapshot = validate_snapshot_contract(log, phase, scenario)
     source, compute, render, last_present, transition_present = validate_runtime(
         log, scenario
     )
-    final_snapshot = expected_snapshot(phase, scenario, "post")
+    require(
+        int(final_snapshot["presents"]) <= last_present,
+        "last archive snapshot present exceeds the runtime frame range",
+    )
     return {
         "phase": phase,
         "scenario": scenario,
@@ -552,10 +708,7 @@ def validate_log(
     }
 
 
-def synthetic_snapshot_lines(
-    phase: str, scenario: str, point: str
-) -> list[str]:
-    values = expected_snapshot(phase, scenario, point)
+def snapshot_marker_lines(values: dict[str, int | str]) -> list[str]:
     state_keys = [
         "point",
         "presents",
@@ -574,7 +727,7 @@ def synthetic_snapshot_lines(
         "load-fail",
         "rebuild",
     ]
-    common = f"point={point} presents={FIRST_FLUSH_PRESENT}"
+    common = f"point={values['point']} presents={values['presents']}"
     state_line = STATE_PREFIX + " ".join(
         f"{key}={values[key]}" for key in state_keys
     )
@@ -616,6 +769,61 @@ def synthetic_snapshot_lines(
     return [state_line, render_line, compute_line, flush_line]
 
 
+def synthetic_snapshot_lines(
+    phase: str, scenario: str, point: str
+) -> list[str]:
+    return snapshot_marker_lines(expected_snapshot(phase, scenario, point))
+
+
+def synthetic_late_attempt_lines(
+    phase: str,
+    scenario: str,
+    present: int,
+    *,
+    attempt_before: int,
+    success_before: int,
+    fail_before: int,
+    bounded_before: int,
+    succeeded: bool,
+    dirty_after: bool,
+) -> list[str]:
+    pre = expected_snapshot(phase, scenario, "post")
+    pre.update(
+        {
+            "point": "pre",
+            "presents": present,
+            "flags": int(pre["flags"]) | 16,
+            "dirty": 1,
+            "render-miss": int(pre["render-miss"]) + 1,
+            "render-add": int(pre["render-add"]) + 1,
+            "flush-attempt": attempt_before,
+            "flush-success": success_before,
+            "flush-fail": fail_before,
+            "flush-invoked": 0,
+            "flush-result": 0,
+            "flush-bounded": bounded_before,
+            "flush-settled": 0,
+        }
+    )
+    post = dict(pre)
+    post.update(
+        {
+            "point": "post",
+            "flags": int(pre["flags"]) if dirty_after else int(pre["flags"]) & ~16,
+            "dirty": 1 if dirty_after else 0,
+            "flush-attempt": attempt_before + 1,
+            "flush-success": success_before + (1 if succeeded else 0),
+            "flush-fail": fail_before + (0 if succeeded else 1),
+            "flush-invoked": 1,
+            "flush-result": 1 if succeeded else 0,
+            "flush-bounded": bounded_before + 1,
+            "flush-settled":
+                1 if not dirty_after or bounded_before + 1 == 3 else 0,
+        }
+    )
+    return snapshot_marker_lines(pre) + snapshot_marker_lines(post)
+
+
 def synthetic_log(
     phase: str,
     scenario: str,
@@ -624,6 +832,7 @@ def synthetic_log(
     *,
     transition_present: int | None = 150,
     last_present: int = FIRST_FLUSH_PRESENT,
+    extra_snapshot_lines: list[str] | None = None,
 ) -> str:
     lines = [
         "RendererIOS shell: version=1 profile=Safe features=synthetic "
@@ -654,6 +863,8 @@ def synthetic_log(
         )
     lines.extend(synthetic_snapshot_lines(phase, scenario, "pre"))
     lines.extend(synthetic_snapshot_lines(phase, scenario, "post"))
+    if extra_snapshot_lines is not None:
+        lines.extend(extra_snapshot_lines)
     for present in range(1, last_present + 1):
         render = 2
         if (
@@ -702,6 +913,138 @@ def self_test() -> None:
         1,
     )
     validate_log(plain_sha_log, "warm", "save", source_sha, metallib_sha256)
+
+    late_markers = synthetic_late_attempt_lines(
+        "warm",
+        "save",
+        600,
+        attempt_before=0,
+        success_before=0,
+        fail_before=0,
+        bounded_before=0,
+        succeeded=True,
+        dirty_after=True,
+    ) + synthetic_late_attempt_lines(
+        "warm",
+        "save",
+        601,
+        attempt_before=1,
+        success_before=1,
+        fail_before=0,
+        bounded_before=1,
+        succeeded=True,
+        dirty_after=False,
+    )
+    late_log = synthetic_log(
+        "warm",
+        "save",
+        source_sha,
+        metallib_sha256,
+        last_present=601,
+        extra_snapshot_lines=late_markers,
+    )
+    late_result = validate_log(
+        late_log, "warm", "save", source_sha, metallib_sha256
+    )
+    require(
+        late_result["archive_render_misses"] == 1
+        and late_result["archive_render_adds"] == 1
+        and late_result["archive_flush_attempts"] == 2
+        and late_result["archive_flush_successes"] == 2
+        and late_result["archive_flush_failures"] == 0,
+        "late archive summary does not use the final POST snapshot",
+    )
+
+    incomplete_late_log = late_log.replace(late_markers[-2] + "\n", "", 1)
+    try:
+        validate_log(
+            incomplete_late_log,
+            "warm",
+            "save",
+            source_sha,
+            metallib_sha256,
+        )
+    except ValidationError:
+        pass
+    else:
+        raise ValidationError(
+            "incomplete late snapshot pair self-test unexpectedly passed"
+        )
+
+    reordered_late_log = synthetic_log(
+        "warm",
+        "save",
+        source_sha,
+        metallib_sha256,
+        last_present=601,
+        extra_snapshot_lines=late_markers[8:] + late_markers[:8],
+    )
+    try:
+        validate_log(
+            reordered_late_log,
+            "warm",
+            "save",
+            source_sha,
+            metallib_sha256,
+        )
+    except ValidationError:
+        pass
+    else:
+        raise ValidationError(
+            "reordered late snapshot pair self-test unexpectedly passed"
+        )
+
+    future_late_log = synthetic_log(
+        "warm",
+        "save",
+        source_sha,
+        metallib_sha256,
+        last_present=600,
+        extra_snapshot_lines=late_markers,
+    )
+    try:
+        validate_log(
+            future_late_log,
+            "warm",
+            "save",
+            source_sha,
+            metallib_sha256,
+        )
+    except ValidationError:
+        pass
+    else:
+        raise ValidationError(
+            "future late snapshot present self-test unexpectedly passed"
+        )
+
+    changed_metadata_markers = [
+        line.replace("schema=1", "schema=2", 1)
+        if "snapshot-state:" in line and "presents=600" in line
+        else line
+        for line in late_markers
+    ]
+    changed_metadata_log = synthetic_log(
+        "warm",
+        "save",
+        source_sha,
+        metallib_sha256,
+        last_present=601,
+        extra_snapshot_lines=changed_metadata_markers,
+    )
+    try:
+        validate_log(
+            changed_metadata_log,
+            "warm",
+            "save",
+            source_sha,
+            metallib_sha256,
+        )
+    except ValidationError:
+        pass
+    else:
+        raise ValidationError(
+            "changed late snapshot metadata self-test unexpectedly passed"
+        )
 
     bad_warm = synthetic_log(
         "warm", "save", source_sha, metallib_sha256
