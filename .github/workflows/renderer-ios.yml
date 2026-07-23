@@ -2565,8 +2565,8 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypepipeline\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           for source in iosshadingprototypepipeline.cpp \
               iosshadingprototypepipeline.mm; do
-            test "$(grep -Ec \
-              \"game/graphics/${source} \\\\*/ = \\\\{isa = PBXBuildFile; fileRef =\" \
+            test "$(grep -Fc \
+              "game/graphics/${source} */ = {isa = PBXBuildFile; fileRef =" \
               build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj)" -eq 1
           done
           python3 - <<'PY'
