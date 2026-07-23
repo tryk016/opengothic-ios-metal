@@ -58,9 +58,9 @@ def expected_provenance(metallib_sha256: str) -> bytes:
         "provenance-schema=1\n"
         "cache-schema=1\n"
         "pipeline-key-abi=1\n"
-        "metallib-abi=4\n"
+        "metallib-abi=5\n"
         f"metallib-sha256={metallib_sha256}\n"
-        "archive-file=RendererIOS-abi-4.binaryarchive\n"
+        "archive-file=RendererIOS-abi-5.binaryarchive\n"
     ).encode()
 
 
@@ -137,8 +137,8 @@ def require_summary(path: pathlib.Path, phase: str) -> None:
 def require_cache_bundle(
     directory: pathlib.Path, metallib_sha256: str, label: str
 ) -> tuple[bytes, bytes]:
-    archive = directory / "RendererIOS-abi-4.binaryarchive"
-    provenance = directory / "RendererIOS-abi-4.provenance"
+    archive = directory / "RendererIOS-abi-5.binaryarchive"
+    provenance = directory / "RendererIOS-abi-5.provenance"
     cache = key_values(directory / "cache-after.txt")
     require(
         set(cache) == {"archive_sha256", "archive_bytes", "provenance_sha256"},
@@ -281,8 +281,8 @@ def write_result(
 
 
 def write_cache_fixture(directory: pathlib.Path) -> None:
-    archive = directory / "RendererIOS-abi-4.binaryarchive"
-    provenance = directory / "RendererIOS-abi-4.provenance"
+    archive = directory / "RendererIOS-abi-5.binaryarchive"
+    provenance = directory / "RendererIOS-abi-5.provenance"
     (directory / "cache-after.txt").write_text(
         f"archive_sha256={sha256(archive)}\n"
         f"archive_bytes={archive.stat().st_size}\n"
@@ -351,8 +351,8 @@ def self_test() -> None:
         )
         write_summary_fixture(cold / "archive-summary.txt", "inventory-cold")
         write_summary_fixture(warm / "archive-summary.txt", "inventory-warm")
-        archive_name = "RendererIOS-abi-4.binaryarchive"
-        provenance_name = "RendererIOS-abi-4.provenance"
+        archive_name = "RendererIOS-abi-5.binaryarchive"
+        provenance_name = "RendererIOS-abi-5.provenance"
         (baseline / "cold" / archive_name).write_bytes(b"baseline")
         (cold / archive_name).write_bytes(b"inventory")
         (warm / archive_name).write_bytes(b"inventory")

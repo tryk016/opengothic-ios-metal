@@ -10,16 +10,20 @@ namespace RendererIOSPipelineArchive {
 
 inline constexpr uint32_t CacheSchemaVersion    = 1u;
 inline constexpr uint32_t PipelineKeyAbiVersion = 1u;
-inline constexpr uint32_t MetallibAbiVersion    = 4u;
+inline constexpr uint32_t MetallibAbiVersion    = 5u;
 inline constexpr uint32_t ProvenanceSchemaVersion = 1u;
 
 inline constexpr std::string_view RelativeDirectory =
     "RendererIOS/PipelineArchives/schema-1";
 inline constexpr std::string_view ArchiveFileName =
-    "RendererIOS-abi-4.binaryarchive";
+    "RendererIOS-abi-5.binaryarchive";
 inline constexpr std::string_view RelativeArchivePath =
-    "RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-4.binaryarchive";
+    "RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-5.binaryarchive";
 inline constexpr std::string_view ProvenanceFileName =
+    "RendererIOS-abi-5.provenance";
+inline constexpr std::string_view PreviousArchiveFileName =
+    "RendererIOS-abi-4.binaryarchive";
+inline constexpr std::string_view PreviousProvenanceFileName =
     "RendererIOS-abi-4.provenance";
 
 // Tempest::Log uses a 256-byte Context buffer including its terminator. Keep
@@ -40,7 +44,7 @@ inline constexpr std::string_view SnapshotFlushLogPrefix =
 inline constexpr std::string_view SnapshotStateWorstCase =
     "RendererIOS pipeline archive snapshot-state: point=post "
     "presents=18446744073709551615 abi=1 size=120 flags=63 schema=1 key=1 "
-    "metallib=4 cfg=1 available=1 loaded=1 empty=1 dirty=1 disabled=1 "
+    "metallib=5 cfg=1 available=1 loaded=1 empty=1 dirty=1 disabled=1 "
     "load-fail=18446744073709551615 rebuild=18446744073709551615";
 inline constexpr std::string_view SnapshotRenderWorstCase =
     "RendererIOS pipeline archive snapshot-render: point=post "
@@ -59,7 +63,7 @@ inline constexpr std::string_view SnapshotFlushWorstCase =
     "invoked=1 result=1 bounded=255 settled=1";
 inline constexpr std::string_view ProvenancePolicyWorstCase =
     "RendererIOS pipeline archive provenance-policy: configured=1 schema=1 "
-    "key=1 metallib=4 "
+    "key=1 metallib=5 "
     "digest=ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff "
     "stale-reset=1";
 
@@ -100,7 +104,7 @@ inline constexpr std::string_view TestModeColdArgument =
 inline constexpr std::string_view TestModeCorruptArgument =
     "-renderer-ios-pipeline-archive-corrupt";
 inline constexpr std::string_view TestModeTemporaryFileName =
-    "RendererIOS-abi-4.binaryarchive.test-mode.tmp";
+    "RendererIOS-abi-5.binaryarchive.test-mode.tmp";
 inline constexpr std::string_view TestModeLogPrefix =
     "RendererIOS pipeline archive test-mode: mode=";
 
@@ -192,7 +196,7 @@ inline std::string provenanceRecord(std::string_view metallibSha256) {
   record += "\n";
   record += "metallib-sha256=";
   record += metallibSha256;
-  record += "\narchive-file=RendererIOS-abi-4.binaryarchive\n";
+  record += "\narchive-file=RendererIOS-abi-5.binaryarchive\n";
   return record;
   }
 

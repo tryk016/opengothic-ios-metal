@@ -1549,7 +1549,13 @@ jobs:
           grep -Fq 'opengothic-ios-patch-stack-v13' \
             ios/patches/apply-patches.sh
 
-          grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-4.binaryarchive' \
+          grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-5.binaryarchive' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq 'PreviousArchiveFileName' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq '"RendererIOS-abi-4.binaryarchive"' \
+            game/graphics/iospipelinearchivepolicy.h
+          grep -Fq '"RendererIOS-abi-4.provenance"' \
             game/graphics/iospipelinearchivepolicy.h
           grep -Fq 'NSSearchPathForDirectoriesInDomains(' \
             game/graphics/rendereriosplatform.mm
@@ -1716,6 +1722,7 @@ jobs:
           test -f game/graphics/iosgpuscene.h
           test -f game/graphics/iosgpuscene.mm
           test -f game/graphics/ioslandscapeshaderabi.h
+          test -f game/graphics/iosshadingprototypeshaderabi.h
           test -f game/graphics/iosbuiltinshaderabi.h
           test -f game/graphics/iosinventoryshaderabi.h
           test -f game/graphics/iosbinkshaderabi.h
@@ -1726,10 +1733,12 @@ jobs:
           test -f shader/ios-metal/bink.metal
           test -f shader/ios-metal/ui.metal
           test -f shader/ios-metal/inventory.metal
+          test -f shader/ios-metal/shading-prototypes.metal
           test -f ios/tests/iosgpusceneplan.cpp
           test -f ios/tests/ioslandscapeshader.cpp
           test -f ios/tests/iosbuiltinshader.cpp
           test -f ios/tests/iosinventoryshader.cpp
+          test -f ios/tests/iosshadingprototypeshader.cpp
           test -f ios/tests/iosbinkshader.cpp
           test -f ios/tests/iosbinkselftest.cpp
 
@@ -1812,6 +1821,21 @@ jobs:
           xcrun clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame \
+            ios/tests/iosshadingprototypeshader.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeshader"
+          "$RUNNER_TEMP/iosshadingprototypeshader" \
+            shader/ios-metal/shading-prototypes.metal
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosshadingprototypeshader.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeshader-sanitized"
+          "$RUNNER_TEMP/iosshadingprototypeshader-sanitized" \
+            shader/ios-metal/shading-prototypes.metal
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
             ios/tests/iosbinkselftest.cpp \
             -o "$RUNNER_TEMP/iosbinkselftest"
           "$RUNNER_TEMP/iosbinkselftest"
@@ -1831,6 +1855,11 @@ jobs:
             -target air64-apple-ios16.4 \
             -c shader/ios-metal/inventory.metal \
             -o "$RUNNER_TEMP/ios-inventory.air"
+          xcrun --sdk iphoneos metal \
+            -target air64-apple-ios16.4 \
+            -Wall -Wextra -Werror \
+            -c shader/ios-metal/shading-prototypes.metal \
+            -o "$RUNNER_TEMP/ios-shading-prototypes.air"
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-landscape.air"
@@ -1843,21 +1872,61 @@ jobs:
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-inventory.air"
+          LC_ALL=C grep -aFq \
+            'apple-ios16.4.0' \
+            "$RUNNER_TEMP/ios-shading-prototypes.air"
           xcrun --sdk iphoneos metallib \
             "$RUNNER_TEMP/ios-landscape.air" \
             "$RUNNER_TEMP/ios-bink.air" \
             "$RUNNER_TEMP/ios-ui.air" \
             "$RUNNER_TEMP/ios-inventory.air" \
+            "$RUNNER_TEMP/ios-shading-prototypes.air" \
             -o "$RUNNER_TEMP/RendererIOS.metallib"
           for function in \
               riosLandscapeVertex riosLandscapeFragment \
               riosBinkVertex riosBinkFragment \
               riosUiColorVertex riosUiColorFragment \
               riosUiTextureVertex riosUiTextureFragment \
-              riosInventoryVertex riosInventoryFragment; do
+              riosInventoryVertex riosInventoryFragment \
+              riosShadingPrototypeVertex \
+              riosTileDeferredMaterialFragment \
+              riosTileDeferredLighting \
+              riosForwardPlusBuildLightList \
+              riosForwardPlusFragment; do
             LC_ALL=C grep -aFq "$function" \
               "$RUNNER_TEMP/RendererIOS.metallib"
           done
+          RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
+            "$RUNNER_TEMP/RendererIOS.metallib" |
+            awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
+          EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
+            riosLandscapeVertex riosLandscapeFragment \
+            riosBinkVertex riosBinkFragment \
+            riosUiColorVertex riosUiColorFragment \
+            riosUiTextureVertex riosUiTextureFragment \
+            riosInventoryVertex riosInventoryFragment \
+            riosShadingPrototypeVertex \
+            riosTileDeferredMaterialFragment \
+            riosTileDeferredLighting \
+            riosForwardPlusBuildLightList \
+            riosForwardPlusFragment | LC_ALL=C sort)"
+          test "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"
+          test "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 15
+
+          if grep -Eq \
+              'newLibraryWithSource|compileSource|MTLCompileOptions|newCommandQueue|commandBufferWith|presentDrawable' \
+              shader/ios-metal/shading-prototypes.metal \
+              game/graphics/iosshadingprototypeshaderabi.h; then
+            echo 'P2.5b0 prototype ABI contains runtime compilation or ownership'
+            exit 1
+          fi
+          if rg -n \
+              'riosShadingPrototypeVertex|riosTileDeferredMaterialFragment|riosTileDeferredLighting|riosForwardPlusBuildLightList|riosForwardPlusFragment' \
+              game \
+              --glob '!iosshadingprototypeshaderabi.h'; then
+            echo 'P2.5b0 compile-only exports are wired into production runtime'
+            exit 1
+          fi
 
           if grep -Eq \
               'newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|MTLCommandBuffer|gapi/metal/mt' \

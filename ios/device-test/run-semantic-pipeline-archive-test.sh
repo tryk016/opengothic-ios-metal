@@ -7,8 +7,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PIPELINE_HARNESS="$ROOT/ios/device-test/run-pipeline-archive-test.sh"
 SEMANTIC_HARNESS="$ROOT/ios/device-test/run-semantic-ui-lifecycle-test.sh"
 EVIDENCE_VALIDATOR="$ROOT/ios/device-test/validate-semantic-pipeline-archive-evidence.py"
-ARCHIVE_NAME="RendererIOS-abi-4.binaryarchive"
-PROVENANCE_NAME="RendererIOS-abi-4.provenance"
+ARCHIVE_NAME="RendererIOS-abi-5.binaryarchive"
+PROVENANCE_NAME="RendererIOS-abi-5.provenance"
 
 BASELINE_DURATION=45
 APP_INPUT=""

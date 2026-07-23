@@ -2154,15 +2154,15 @@ PY
     fail "clear-only pass self-test summary validation failed"
   CLEAR_ONLY_PASS_SELF_TEST_VALIDATION="passed"
 else
-rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=4' \
+rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=5' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
-rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=4 manifest=1 fail-closed=1' \
+rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=5 manifest=1 fail-closed=1' \
   "$WORK/log.txt" >/dev/null || fail "offline Builtin manifest marker is missing"
-rg -F 'RendererIOS inventory shader manifest: resource=RendererIOS.metallib abi=4 manifest=1 exact-spirv=1 configured=1 fail-closed=1' \
+rg -F 'RendererIOS inventory shader manifest: resource=RendererIOS.metallib abi=5 manifest=1 exact-spirv=1 configured=1 fail-closed=1' \
   "$WORK/log.txt" >/dev/null || fail "offline inventory manifest marker is missing"
-rg -F 'RendererIOS inventory shader pipeline: source=offline-metallib resource=RendererIOS.metallib abi=4 manifest=1 exact-spirv=1 functions-resolved=2 pipeline-wrapper-created=1' \
+rg -F 'RendererIOS inventory shader pipeline: source=offline-metallib resource=RendererIOS.metallib abi=5 manifest=1 exact-spirv=1 functions-resolved=2 pipeline-wrapper-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline inventory pipeline marker is missing"
-rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=4 color=rgba8 sample-count=1 pipeline-created=1' \
+rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=5 color=rgba8 sample-count=1 pipeline-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline native Bink pipeline marker is missing"
 if ((REQUIRE_BINK_SELF_TEST != 0)); then
   BINK_ARMED_COUNT="$(grep -Fc \

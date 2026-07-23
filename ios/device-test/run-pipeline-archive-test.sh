@@ -15,8 +15,8 @@ VALIDATOR="$ROOT/ios/device-test/validate-pipeline-archive-log.py"
 BASE_BUNDLE_ID="opengothic.gothic2"
 
 ARCHIVE_DIR="Library/Caches/RendererIOS/PipelineArchives/schema-1"
-ARCHIVE_NAME="RendererIOS-abi-4.binaryarchive"
-PROVENANCE_NAME="RendererIOS-abi-4.provenance"
+ARCHIVE_NAME="RendererIOS-abi-5.binaryarchive"
+PROVENANCE_NAME="RendererIOS-abi-5.provenance"
 ARCHIVE_PATH="$ARCHIVE_DIR/$ARCHIVE_NAME"
 PROVENANCE_PATH="$ARCHIVE_DIR/$PROVENANCE_NAME"
 
