@@ -1077,6 +1077,8 @@ jobs:
           test -f ios/tests/iospipelinearchivepolicy.cpp
           test -x ios/device-test/run-pipeline-archive-test.sh
           test -x ios/device-test/validate-pipeline-archive-log.py
+          test -x ios/device-test/run-semantic-pipeline-archive-test.sh
+          test -x ios/device-test/validate-semantic-pipeline-archive-evidence.py
           xcrun clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame \
@@ -1086,6 +1088,8 @@ jobs:
           bash -n ios/device-test/run-pipeline-archive-test.sh
           python3 ios/device-test/validate-pipeline-archive-log.py --self-test
           ios/device-test/run-pipeline-archive-test.sh --self-test
+          bash -n ios/device-test/run-semantic-pipeline-archive-test.sh
+          ios/device-test/run-semantic-pipeline-archive-test.sh --self-test
           grep -Fq 'OPENGOTHIC_IOS_EXPECTED_BUILD="$EXPECTED_BUILD"' \
             ios/device-test/run-pipeline-archive-test.sh
           grep -Fq -- '--evidence-path-file "$BASE_EVIDENCE_PATH_FILE"' \
@@ -1127,6 +1131,48 @@ jobs:
             ios/device-test/validate-pipeline-archive-log.py
           grep -Fq 'changed late snapshot metadata self-test unexpectedly passed' \
             ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'phase in ("inventory-cold", "inventory-warm")' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'inventory runtime must transition exactly 2-to-3-to-4' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'skipped inventory render transition self-test unexpectedly passed' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq -- '--baseline-only --evidence-path-file "$WORK/baseline-path.txt"' \
+            ios/device-test/run-semantic-pipeline-archive-test.sh
+          grep -Fq -- '--pipeline-archive-phase inventory-cold' \
+            ios/device-test/run-semantic-pipeline-archive-test.sh
+          grep -Fq -- '--pipeline-archive-phase inventory-warm' \
+            ios/device-test/run-semantic-pipeline-archive-test.sh
+          grep -Fq -- '--source-sha "$EXPECTED_SHA"' \
+            ios/device-test/run-semantic-pipeline-archive-test.sh
+          grep -Fq -- '--metallib-sha256 "$METALLIB_SHA256"' \
+            ios/device-test/run-semantic-pipeline-archive-test.sh
+          grep -Fq 'provenance_bytes == expected_provenance(metallib_sha256)' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'cache["archive_sha256"] == sha256(archive)' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'recorded_bytes == len(archive_bytes)' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'cache["provenance_sha256"] == sha256(provenance)' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'baseline_archive != cold_archive' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'cold_archive == warm_archive' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'baseline_provenance == cold_provenance == warm_provenance' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'mixed source self-test unexpectedly passed' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'wrong metallib provenance self-test unexpectedly passed' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'stale cache archive SHA-256 self-test unexpectedly passed' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'stale cache archive size self-test unexpectedly passed' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'exact $PIPELINE_ARCHIVE_PHASE archive POST at present 300' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
+          grep -Fq 'copy_pipeline_cache_evidence || fail' \
+            ios/device-test/run-semantic-ui-lifecycle-test.sh
           grep -Fq -- '--scenario "$SCENARIO"' \
             ios/device-test/run-pipeline-archive-test.sh
           grep -Fq 'parser.add_argument("--scenario", choices=("save", "new-game"))' \
@@ -2445,6 +2491,40 @@ jobs:
           positions = [main_flow.index(literal) for literal in ordered]
           if positions != sorted(positions):
               raise SystemExit("semantic cleanup/validation/PASS contract is out of order")
+          pipeline_main_start = 'RUNTIME_ARMED=1'
+          pipeline_main_end = (
+              'echo "SEMANTIC FALLBACK PASS — '
+              'Inventory/QuickRings/lifecycle; app stopped"'
+          )
+          if harness.count(pipeline_main_start) != 1 or harness.count(pipeline_main_end) != 1:
+              raise SystemExit("semantic pipeline main execution region is not exact")
+          pipeline_main = harness[
+              harness.index(pipeline_main_start):harness.index(pipeline_main_end)
+          ]
+          pipeline_main_order = (
+              'wait_for_marker archive-post "$ARCHIVE_POST" 180 ||',
+              'finalize_runtime 1 || fail "battery-safe final cleanup/evidence pull failed"',
+              'RUNTIME_ARMED=0',
+              'copy_pipeline_cache_evidence || fail "could not preserve pipeline archive cache evidence"',
+              '[[ -s "$WORK/log-final.txt" ]] || fail "device produced no final log.txt"',
+              'python3 - "$WORK/log-final.txt" "$EXPECTED_SHA" <<\'PY\' ||',
+              '"$VALIDATOR" "${VALIDATOR_ARGS[@]}" || fail "semantic evidence validation failed"',
+              'python3 "$PIPELINE_VALIDATOR" \\',
+              'preserve_evidence PASS',
+          )
+          for literal in pipeline_main_order:
+              if pipeline_main.count(literal) != 1:
+                  raise SystemExit(
+                      f"semantic pipeline main execution contract is not exact: {literal}"
+                  )
+          pipeline_main_positions = [
+              pipeline_main.index(literal) for literal in pipeline_main_order
+          ]
+          if pipeline_main_positions != sorted(pipeline_main_positions):
+              raise SystemExit(
+                  "semantic pipeline POST/finalize/durable-zero/cache/validation/PASS "
+                  "contract is out of order"
+              )
           PY
           xcodebuild \
             -project ios/device-test/ui-automation/RendererIOSUITests.xcodeproj \

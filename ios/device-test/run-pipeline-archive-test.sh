@@ -26,10 +26,18 @@ SAVE_SLOT_EXPLICIT=0
 NEW_GAME=0
 APP_INPUT=""
 SELF_TEST=0
+BASELINE_ONLY=0
+EVIDENCE_PATH_FILE=""
 
 fail() {
   echo "FAIL: $*" >&2
   exit 1
+}
+
+publish_evidence_path() {
+  local path="$1"
+  [[ -n "$EVIDENCE_PATH_FILE" ]] || return 0
+  printf '%s\n' "$path" >"$EVIDENCE_PATH_FILE"
 }
 
 read_base_smoke_evidence() {
@@ -63,7 +71,7 @@ PY
 }
 
 usage() {
-  echo "usage: $0 [--duration seconds] [--save-slot number|--new-game] path/to/Gothic2Notr.app"
+  echo "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--baseline-only] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
   echo "       $0 --self-test"
 }
 
@@ -81,6 +89,15 @@ while [[ $# -gt 0 ]]; do
     --new-game)
       NEW_GAME=1
       shift
+      ;;
+    --baseline-only)
+      BASELINE_ONLY=1
+      shift
+      ;;
+    --evidence-path-file)
+      [[ -z "$EVIDENCE_PATH_FILE" ]] || fail "--evidence-path-file was specified twice"
+      EVIDENCE_PATH_FILE="${2:?missing evidence path file}"
+      shift 2
       ;;
     --self-test)
       SELF_TEST=1
@@ -134,6 +151,11 @@ fi
   fail "save slot must be a non-negative integer"
 ((NEW_GAME == 0 || SAVE_SLOT_EXPLICIT == 0)) ||
   fail "--new-game and --save-slot are mutually exclusive"
+if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
+  [[ "$EVIDENCE_PATH_FILE" == /* ]] || fail "evidence path file must be absolute"
+  [[ -d "$(dirname "$EVIDENCE_PATH_FILE")" ]] ||
+    fail "evidence path file parent does not exist"
+fi
 [[ -n "$APP_INPUT" && -d "$APP_INPUT" ]] ||
   fail "pass an existing .app directory"
 [[ -x "$BASE_SMOKE" ]] || fail "base smoke harness is not executable"
@@ -700,6 +722,32 @@ copy_cache_evidence "$OUT/cold" cold
   echo "log_sha256=$(shasum -a 256 "$OUT/cold/log.txt" | awk '{print $1}')"
 } >"$OUT/cold/phase-result.txt"
 
+if ((BASELINE_ONLY != 0)); then
+  CURRENT_PHASE="baseline-final-scan"
+  stop_running_app 1 || fail "baseline final application cleanup failed"
+  record_zero_scan baseline-final "$OUT/final-process-state.txt"
+  verify_existing_game_data after "$OUT/final-game-data-preflight.txt"
+  ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
+  {
+    echo "result=PASS"
+    echo "source_sha=$EXPECTED_SHA"
+    echo "bundle_id=$BUNDLE_ID"
+    echo "scenario=$SCENARIO"
+    echo "save_slot=$SCENARIO_SAVE_SLOT"
+    echo "baseline=PASS"
+    echo "install_count=1"
+    echo "uninstall_count=0"
+    echo "remote_mutating_copy_count=0"
+    echo "device_process_stopped=1"
+    echo "timing_used_as_pass_criterion=0"
+  } >"$OUT/result.txt"
+  PROTOCOL_PASSED=1
+  publish_evidence_path "$OUT"
+  echo "PASS — D-041 save baseline archive; app stopped"
+  echo "evidence: $OUT"
+  exit 0
+fi
+
 run_direct_phase() {
   local phase="$1"
   local test_mode="${2:-}"
@@ -808,5 +856,6 @@ ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
 } >"$OUT/result.txt"
 
 PROTOCOL_PASSED=1
+publish_evidence_path "$OUT"
 echo "PASS — D-041 cold/warm/corrupt/recovery-warm; app stopped"
 echo "evidence: $OUT"

@@ -240,16 +240,37 @@ def expected_snapshot(
     phase: str, scenario: str, point: str
 ) -> dict[str, int | str]:
     cold_like = phase in ("cold", "corrupt")
+    inventory_cold = phase == "inventory-cold"
+    inventory_warm = phase == "inventory-warm"
     corrupt = phase == "corrupt"
     pre = point == "pre"
     render_count = 2 if scenario == "save" else 3
+    if inventory_cold:
+        render_hits = 2
+        render_misses = 2
+        render_adds = 2
+    elif inventory_warm:
+        render_hits = 4
+        render_misses = 0
+        render_adds = 0
+    else:
+        render_hits = 0 if cold_like else render_count
+        render_misses = render_count if cold_like else 0
+        render_adds = render_count if cold_like else 0
+    flushes_dirty = (cold_like or inventory_cold) and pre
+    flushed_dirty = (cold_like or inventory_cold) and not pre
 
     values: dict[str, int | str] = {
         "point": point,
         "presents": FIRST_FLUSH_PRESENT,
         "abi": 1,
         "size": 120,
-        "flags": 27 if cold_like and pre else 11 if cold_like else 7,
+        "flags": (
+            23 if inventory_cold and pre
+            else 27 if cold_like and pre
+            else 11 if cold_like
+            else 7
+        ),
         "schema": 1,
         "key": 1,
         "metallib": 4,
@@ -257,24 +278,24 @@ def expected_snapshot(
         "available": 1,
         "loaded": 0 if cold_like else 1,
         "empty": 1 if cold_like else 0,
-        "dirty": 1 if cold_like and pre else 0,
+        "dirty": 1 if flushes_dirty else 0,
         "disabled": 0,
         "load-fail": 1 if corrupt else 0,
         "rebuild": 1 if corrupt else 0,
-        "render-hit": 0 if cold_like else render_count,
-        "render-miss": render_count if cold_like else 0,
-        "render-add": render_count if cold_like else 0,
+        "render-hit": render_hits,
+        "render-miss": render_misses,
+        "render-add": render_adds,
         "render-fallback": 0,
         "compute-hit": 0,
         "compute-miss": 0,
         "compute-add": 0,
         "compute-fallback": 0,
-        "flush-attempt": 1 if cold_like and not pre else 0,
-        "flush-success": 1 if cold_like and not pre else 0,
+        "flush-attempt": 1 if flushed_dirty else 0,
+        "flush-success": 1 if flushed_dirty else 0,
         "flush-fail": 0,
-        "flush-invoked": 1 if cold_like and not pre else 0,
-        "flush-result": 1 if cold_like and not pre else 0,
-        "flush-bounded": 1 if cold_like and not pre else 0,
+        "flush-invoked": 1 if flushed_dirty else 0,
+        "flush-result": 1 if flushed_dirty else 0,
+        "flush-bounded": 1 if flushed_dirty else 0,
         "flush-settled": 0 if pre else 1,
     }
     return values
@@ -494,7 +515,7 @@ def validate_provenance(log: str, metallib_sha256: str) -> None:
 
 def validate_test_mode(log: str, phase: str) -> None:
     markers = marker_group(log, TEST_MODE_PREFIX, TEST_MODE_KEYS)
-    if phase in ("warm", "recovery-warm"):
+    if phase in ("warm", "recovery-warm", "inventory-cold", "inventory-warm"):
         require(
             not markers,
             f"{phase} must not apply a pipeline archive test mode",
@@ -541,7 +562,7 @@ def csv_integers(value: str) -> tuple[int, ...]:
 
 
 def validate_runtime(
-    log: str, scenario: str
+    log: str, scenario: str, phase: str
 ) -> tuple[int, int, int, int, int]:
     bridges = [tuple(int(value) for value in match.groups()) for match in BRIDGE_RE.finditer(log)]
     require(
@@ -556,6 +577,8 @@ def validate_runtime(
     frames = [tuple(int(value) for value in match.groups()) for match in FRAME_RE.finditer(log)]
     require(len(frames) >= 300, "runtime frame markers do not reach present 300")
     transition_present = 0
+    inventory_transitions: list[int] = []
+    inventory_phase = phase in ("inventory-cold", "inventory-warm")
     previous_render = 2
     for expected_present, frame in enumerate(frames, 1):
         present, available, source, compute, render = frame
@@ -566,7 +589,26 @@ def validate_runtime(
         require(available == 1, f"runtime counters unavailable at present {present}")
         require(source == 0, f"runtime source changed at present {present}: {source}")
         require(compute == 0, f"runtime compute changed at present {present}: {compute}")
-        if scenario == "save":
+        if inventory_phase:
+            require(
+                render in (2, 3, 4),
+                "inventory runtime render total must be exact 2, 3, or 4 at "
+                f"present {present}, found {render}",
+            )
+            if present == 1:
+                require(render == 2, "inventory runtime must start at exact render=2")
+            require(
+                render >= previous_render,
+                f"inventory runtime render total regressed at present {present}",
+            )
+            if render != previous_render:
+                require(
+                    render == previous_render + 1,
+                    "inventory runtime must transition exactly 2-to-3-to-4",
+                )
+                inventory_transitions.append(present)
+            previous_render = render
+        elif scenario == "save":
             require(
                 render == 2,
                 "save runtime render total must remain exact 2 at "
@@ -592,7 +634,21 @@ def validate_runtime(
                 transition_present = present
             previous_render = render
 
-    if scenario == "new-game":
+    if inventory_phase:
+        require(
+            len(inventory_transitions) == 2,
+            "inventory runtime must contain exactly two render transitions",
+        )
+        require(
+            inventory_transitions[-1] <= FIRST_FLUSH_PRESENT,
+            "inventory runtime did not reach exact render=4 by present 300",
+        )
+        require(
+            frames[FIRST_FLUSH_PRESENT - 1][4] == 4 and previous_render == 4,
+            "inventory runtime render total did not plateau at exact 4",
+        )
+        transition_present = inventory_transitions[-1]
+    elif scenario == "new-game":
         require(
             transition_present != 0,
             "new-game runtime never transitioned from exact render=2 to exact render=3",
@@ -635,7 +691,7 @@ def validate_runtime(
             f"present {present}: {render}",
         )
 
-    final_render = 2 if scenario == "save" else 3
+    final_render = 4 if inventory_phase else 2 if scenario == "save" else 3
     return 0, 0, final_render, last_present, transition_present
 
 
@@ -646,8 +702,22 @@ def validate_log(
     source_sha: str,
     metallib_sha256: str,
 ) -> dict[str, int | str]:
-    require(phase in ("cold", "warm", "corrupt", "recovery-warm"), "unknown phase")
+    require(
+        phase in (
+            "cold",
+            "warm",
+            "corrupt",
+            "recovery-warm",
+            "inventory-cold",
+            "inventory-warm",
+        ),
+        "unknown phase",
+    )
     require(scenario in ("save", "new-game"), "unknown scenario")
+    require(
+        phase not in ("inventory-cold", "inventory-warm") or scenario == "save",
+        "inventory archive phases require the save scenario",
+    )
     require(
         re.fullmatch(r"[0-9a-f]{40}", source_sha) is not None,
         "source SHA must be 40 lowercase hexadecimal characters",
@@ -682,7 +752,7 @@ def validate_log(
     validate_provenance(log, metallib_sha256)
     final_snapshot = validate_snapshot_contract(log, phase, scenario)
     source, compute, render, last_present, transition_present = validate_runtime(
-        log, scenario
+        log, scenario, phase
     )
     require(
         int(final_snapshot["presents"]) <= last_present,
@@ -831,6 +901,7 @@ def synthetic_log(
     metallib_sha256: str,
     *,
     transition_present: int | None = 150,
+    inventory_final_transition_present: int = 200,
     last_present: int = FIRST_FLUSH_PRESENT,
     extra_snapshot_lines: list[str] | None = None,
 ) -> str:
@@ -867,7 +938,12 @@ def synthetic_log(
         lines.extend(extra_snapshot_lines)
     for present in range(1, last_present + 1):
         render = 2
-        if (
+        if phase in ("inventory-cold", "inventory-warm"):
+            if transition_present is not None and present >= transition_present:
+                render = 3
+            if present >= inventory_final_transition_present:
+                render = 4
+        elif (
             scenario == "new-game"
             and transition_present is not None
             and present >= transition_present
@@ -904,6 +980,49 @@ def self_test() -> None:
                         f"{len(line)}",
                     )
             validate_log(log, phase, scenario, source_sha, metallib_sha256)
+
+    for phase in ("inventory-cold", "inventory-warm"):
+        inventory_log = synthetic_log(
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+            last_present=600,
+        )
+        inventory_result = validate_log(
+            inventory_log,
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+        )
+        require(
+            inventory_result["runtime_render"] == 4,
+            f"{phase} synthetic runtime did not finish at render=4",
+        )
+
+    skipped_inventory_transition = synthetic_log(
+        "inventory-cold",
+        "save",
+        source_sha,
+        metallib_sha256,
+        transition_present=200,
+        inventory_final_transition_present=200,
+    )
+    try:
+        validate_log(
+            skipped_inventory_transition,
+            "inventory-cold",
+            "save",
+            source_sha,
+            metallib_sha256,
+        )
+    except ValidationError:
+        pass
+    else:
+        raise ValidationError(
+            "skipped inventory render transition self-test unexpectedly passed"
+        )
 
     plain_sha_log = synthetic_log(
         "warm", "save", source_sha, metallib_sha256
@@ -1256,7 +1375,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--phase",
-        choices=("cold", "warm", "corrupt", "recovery-warm"),
+        choices=(
+            "cold",
+            "warm",
+            "corrupt",
+            "recovery-warm",
+            "inventory-cold",
+            "inventory-warm",
+        ),
     )
     parser.add_argument("--scenario", choices=("save", "new-game"))
     parser.add_argument("--log", type=pathlib.Path)

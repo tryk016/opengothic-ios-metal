@@ -6,11 +6,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VALIDATOR="$ROOT/ios/device-test/validate-semantic-ui-lifecycle-log.py"
+PIPELINE_VALIDATOR="$ROOT/ios/device-test/validate-pipeline-archive-log.py"
 CONSOLE_SUPERVISOR="$ROOT/ios/device-test/semantic-console-supervisor.py"
 BASE_BUNDLE_ID="opengothic.gothic2"
 APP_EXECUTABLE="Gothic2Notr"
 SAVE_SLOT=""
 SCRIPT_MODE="save-ui-lifecycle-v1"
+PIPELINE_ARCHIVE_PHASE=""
+METALLIB_SHA256=""
+EVIDENCE_PATH_FILE=""
+ARCHIVE_DIR="Library/Caches/RendererIOS/PipelineArchives/schema-1"
+ARCHIVE_NAME="RendererIOS-abi-4.binaryarchive"
+PROVENANCE_NAME="RendererIOS-abi-4.provenance"
 readonly DOCUMENT_COPY_MAX_ATTEMPTS=3
 readonly CONSOLE_REAP_GRACE_SECONDS=10
 readonly GAME_PID_DISCOVERY_SECONDS=30
@@ -31,6 +38,12 @@ fail() {
   exit 1
 }
 
+publish_evidence_path() {
+  local path="$1"
+  [[ -n "$EVIDENCE_PATH_FILE" ]] || return 0
+  printf '%s\n' "$path" >"$EVIDENCE_PATH_FILE"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --save-slot)
@@ -38,12 +51,46 @@ while [[ $# -gt 0 ]]; do
       SAVE_SLOT="${2:?missing save slot}"
       shift 2
       ;;
-    -*) fail "usage: $0 --save-slot number" ;;
+    --pipeline-archive-phase)
+      [[ -z "$PIPELINE_ARCHIVE_PHASE" ]] ||
+        fail "--pipeline-archive-phase was specified twice"
+      PIPELINE_ARCHIVE_PHASE="${2:?missing pipeline archive phase}"
+      shift 2
+      ;;
+    --metallib-sha256)
+      [[ -z "$METALLIB_SHA256" ]] || fail "--metallib-sha256 was specified twice"
+      METALLIB_SHA256="${2:?missing metallib SHA-256}"
+      shift 2
+      ;;
+    --evidence-path-file)
+      [[ -z "$EVIDENCE_PATH_FILE" ]] || fail "--evidence-path-file was specified twice"
+      EVIDENCE_PATH_FILE="${2:?missing evidence path file}"
+      shift 2
+      ;;
+    -*) fail "usage: $0 --save-slot number [--pipeline-archive-phase inventory-cold|inventory-warm --metallib-sha256 hex] [--evidence-path-file absolute-path]" ;;
     *) fail "unexpected positional argument: $1" ;;
   esac
 done
 [[ "$SAVE_SLOT" =~ ^[1-9][0-9]*$ ]] || fail "one positive numeric --save-slot is required"
+[[ -z "$PIPELINE_ARCHIVE_PHASE" ||
+   "$PIPELINE_ARCHIVE_PHASE" == inventory-cold ||
+   "$PIPELINE_ARCHIVE_PHASE" == inventory-warm ]] ||
+  fail "pipeline archive phase must be inventory-cold or inventory-warm"
+if [[ -n "$PIPELINE_ARCHIVE_PHASE" ]]; then
+  [[ "$SAVE_SLOT" == 1 ]] || fail "inventory archive phases require --save-slot 1"
+  [[ "$METALLIB_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+    fail "inventory archive phases require exact metallib SHA-256"
+else
+  [[ -z "$METALLIB_SHA256" ]] ||
+    fail "--metallib-sha256 requires --pipeline-archive-phase"
+fi
+if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
+  [[ "$EVIDENCE_PATH_FILE" == /* ]] || fail "evidence path file must be absolute"
+  [[ -d "$(dirname "$EVIDENCE_PATH_FILE")" ]] ||
+    fail "evidence path file parent does not exist"
+fi
 [[ -x "$VALIDATOR" ]] || fail "semantic log validator is not executable"
+[[ -x "$PIPELINE_VALIDATOR" ]] || fail "pipeline archive log validator is not executable"
 [[ -x "$CONSOLE_SUPERVISOR" ]] || fail "semantic console supervisor is not executable"
 command -v xcrun >/dev/null || fail "xcrun is not available"
 xcrun --find devicectl >/dev/null || fail "DEVELOPER_DIR has no devicectl"
@@ -565,6 +612,38 @@ copy_document_file() {
   return 2
 }
 
+copy_container_file() {
+  local remote="$1" destination="$2" tag="$3" attempt
+  for ((attempt=1; attempt<=DOCUMENT_COPY_MAX_ATTEMPTS; ++attempt)); do
+    rm -f "$destination"
+    if xcrun devicectl device copy from --device "$DEVICE" \
+        --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+        --user mobile --source "$remote" --destination "$destination" \
+        >"$WORK/copy-container-$tag-$attempt.log" 2>&1; then
+      return 0
+    fi
+    ((attempt == DOCUMENT_COPY_MAX_ATTEMPTS)) || sleep 1
+  done
+  rm -f "$destination"
+  return 1
+}
+
+copy_pipeline_cache_evidence() {
+  [[ -n "$PIPELINE_ARCHIVE_PHASE" ]] || return 0
+  copy_container_file "$ARCHIVE_DIR/$ARCHIVE_NAME" \
+    "$WORK/$ARCHIVE_NAME" "$PIPELINE_ARCHIVE_PHASE-archive" || return 1
+  copy_container_file "$ARCHIVE_DIR/$PROVENANCE_NAME" \
+    "$WORK/$PROVENANCE_NAME" "$PIPELINE_ARCHIVE_PHASE-provenance" || return 1
+  [[ -s "$WORK/$ARCHIVE_NAME" && -s "$WORK/$PROVENANCE_NAME" ]] || return 1
+  rg -Fx "metallib-sha256=$METALLIB_SHA256" \
+    "$WORK/$PROVENANCE_NAME" >/dev/null || return 1
+  {
+    echo "archive_sha256=$(shasum -a 256 "$WORK/$ARCHIVE_NAME" | awk '{print $1}')"
+    echo "archive_bytes=$(stat -f '%z' "$WORK/$ARCHIVE_NAME")"
+    echo "provenance_sha256=$(shasum -a 256 "$WORK/$PROVENANCE_NAME" | awk '{print $1}')"
+  } >"$WORK/cache-after.txt"
+}
+
 snapshot_logs() {
   local suffix="$1" name stem extension status
   for name in log.txt stderr.log crash.log; do
@@ -658,7 +737,8 @@ preserve_evidence() {
       processes-launched.json processes-background-proof.json \
       processes-foreground-proof.json processes-final-zero.json \
       processes-cleanup-final-zero.json log-final.txt \
-      stderr-final.log stderr-final.missing crash-final.log crash-final.missing; do
+      stderr-final.log stderr-final.missing crash-final.log crash-final.missing \
+      "$ARCHIVE_NAME" "$PROVENANCE_NAME" cache-after.txt archive-summary.txt; do
     [[ -f "$WORK/$candidate" ]] || continue
     ditto "$WORK/$candidate" "$out/$candidate"
   done
@@ -680,6 +760,7 @@ preserve_evidence() {
     echo "bundle_id=$BUNDLE_ID"
     echo "save_slot=$SAVE_SLOT"
     echo "script_mode=$SCRIPT_MODE"
+    echo "pipeline_archive_phase=${PIPELINE_ARCHIVE_PHASE:-none}"
     echo "nonce=$NONCE"
     echo "pre_crash_state=$PRE_CRASH_STATE"
     echo "post_crash_state=$POST_CRASH_STATE"
@@ -731,6 +812,7 @@ preserve_evidence() {
     echo "durable_zero_finished_at_utc=$DURABLE_ZERO_FINISHED_AT_UTC"
     echo "durable_zero_elapsed_seconds=$DURABLE_ZERO_ELAPSED_SECONDS"
   } >"$out/result.txt"
+  publish_evidence_path "$out"
   echo "evidence: $out"
 }
 
@@ -975,9 +1057,19 @@ require_same_game_pid foreground-activation || fail "game PID changed on foregro
 PID_AFTER_FOREGROUND="$(list_game_pids "$WORK/processes-foreground-proof.json")"
 [[ "$PID_AFTER_FOREGROUND" == "$GAME_PID" ]] || fail "game PID changed in foreground"
 wait_for_marker pass "$PASS_MARKER" 45 || fail "terminal resume evidence did not reach SCRIPT PASS"
+if [[ -n "$PIPELINE_ARCHIVE_PHASE" ]]; then
+  if [[ "$PIPELINE_ARCHIVE_PHASE" == inventory-cold ]]; then
+    ARCHIVE_POST="RendererIOS pipeline archive snapshot-flush: point=post presents=300 attempt=1 success=1 fail=0 invoked=1 result=1 bounded=1 settled=1"
+  else
+    ARCHIVE_POST="RendererIOS pipeline archive snapshot-flush: point=post presents=300 attempt=0 success=0 fail=0 invoked=0 result=0 bounded=0 settled=1"
+  fi
+  wait_for_marker archive-post "$ARCHIVE_POST" 180 ||
+    fail "exact $PIPELINE_ARCHIVE_PHASE archive POST at present 300 was not observed"
+fi
 
 finalize_runtime 1 || fail "battery-safe final cleanup/evidence pull failed"
 RUNTIME_ARMED=0
+copy_pipeline_cache_evidence || fail "could not preserve pipeline archive cache evidence"
 if [[ -f "$WORK/crash-final.log" ]]; then
   POST_CRASH_STATE="sha256:$(shasum -a 256 "$WORK/crash-final.log" | awk '{print $1}')"
 elif [[ ! -f "$WORK/crash-final.missing" ]]; then
@@ -998,6 +1090,16 @@ VALIDATOR_ARGS=("$WORK/log-final.txt" --nonce "$NONCE")
 [[ ! -f "$WORK/stderr-final.log" ]] ||
   VALIDATOR_ARGS+=(--stderr "$WORK/stderr-final.log")
 "$VALIDATOR" "${VALIDATOR_ARGS[@]}" || fail "semantic evidence validation failed"
+if [[ -n "$PIPELINE_ARCHIVE_PHASE" ]]; then
+  python3 "$PIPELINE_VALIDATOR" \
+    --phase "$PIPELINE_ARCHIVE_PHASE" \
+    --scenario save \
+    --log "$WORK/log-final.txt" \
+    --source-sha "$EXPECTED_SHA" \
+    --metallib-sha256 "$METALLIB_SHA256" \
+    --summary "$WORK/archive-summary.txt" ||
+    fail "$PIPELINE_ARCHIVE_PHASE pipeline archive evidence validation failed"
+fi
 
 preserve_evidence PASS
 echo "SEMANTIC FALLBACK PASS — Inventory/QuickRings/lifecycle; app stopped"
