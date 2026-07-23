@@ -103,7 +103,7 @@ def require_summary(path: pathlib.Path, phase: str) -> None:
         "scenario": "save",
         "runtime_source": "0",
         "runtime_compute": "0",
-        "runtime_render": "4",
+        "runtime_render": "6" if phase == "inventory-cold" else "4",
         "archive_load_failures": "0",
         "archive_rebuilds": "0",
         "archive_render_hits": "2" if phase == "inventory-cold" else "4",
@@ -130,7 +130,7 @@ def require_summary(path: pathlib.Path, phase: str) -> None:
     require(last_present >= 300, f"{phase} runtime did not reach present 300")
     require(
         1 <= transition_present <= 300,
-        f"{phase} runtime did not reach render=4 by present 300",
+        f"{phase} runtime did not reach final render by present 300",
     )
 
 
@@ -296,7 +296,7 @@ def write_summary_fixture(path: pathlib.Path, phase: str) -> None:
         "scenario": "save",
         "runtime_source": "0",
         "runtime_compute": "0",
-        "runtime_render": "4",
+        "runtime_render": "6" if phase == "inventory-cold" else "4",
         "runtime_last_present": "600",
         "runtime_render_transition_present": "200",
         "archive_load_failures": "0",
@@ -365,6 +365,29 @@ def self_test() -> None:
         for path in (baseline / "cold", cold, warm):
             write_cache_fixture(path)
         validate(baseline, cold, warm, source_sha, metallib_sha256)
+
+        cold_summary = (cold / "archive-summary.txt").read_text()
+        warm_summary = (warm / "archive-summary.txt").read_text()
+        (cold / "archive-summary.txt").write_text(
+            cold_summary.replace("runtime_render=6\n", "runtime_render=4\n")
+        )
+        (warm / "archive-summary.txt").write_text(
+            warm_summary.replace("runtime_render=4\n", "runtime_render=6\n")
+        )
+        expect_validation_failure(
+            lambda: require_summary(
+                cold / "archive-summary.txt", "inventory-cold"
+            ),
+            "swapped inventory-cold runtime render summary self-test unexpectedly passed",
+        )
+        expect_validation_failure(
+            lambda: require_summary(
+                warm / "archive-summary.txt", "inventory-warm"
+            ),
+            "swapped inventory-warm runtime render summary self-test unexpectedly passed",
+        )
+        write_summary_fixture(cold / "archive-summary.txt", "inventory-cold")
+        write_summary_fixture(warm / "archive-summary.txt", "inventory-warm")
 
         write_result(
             warm / "result.txt",

@@ -1136,9 +1136,60 @@ jobs:
             ios/device-test/validate-pipeline-archive-log.py
           grep -Fq 'phase in ("inventory-cold", "inventory-warm")' \
             ios/device-test/validate-pipeline-archive-log.py
-          grep -Fq 'inventory runtime must transition exactly 2-to-3-to-4' \
+          grep -Fq '"inventory-cold": (2, 4, 6),' \
             ios/device-test/validate-pipeline-archive-log.py
-          grep -Fq 'skipped inventory render transition self-test unexpectedly passed' \
+          grep -Fq '"inventory-warm": (2, 3, 4),' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} runtime must transition exactly "' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} skipped render transition self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} jumped render transition self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} wrong render step self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} late render transition self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} broken render plateau self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'INVENTORY_POST_UI_BUILTIN_RENDER = (' \
+            ios/device-test/validate-pipeline-archive-log.py
+          python3 - <<'PY'
+          import ast
+          from pathlib import Path
+
+          tree = ast.parse(
+              Path("ios/device-test/validate-pipeline-archive-log.py").read_text()
+          )
+          expected = {
+              "SAVE_BUILTIN_RENDER": (0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0),
+              "INVENTORY_POST_UI_BUILTIN_RENDER": (
+                  0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0
+              ),
+          }
+          actual = {}
+          for node in tree.body:
+              if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                  continue
+              target = node.targets[0]
+              if isinstance(target, ast.Name) and target.id in expected:
+                  actual[target.id] = ast.literal_eval(node.value)
+          if actual != expected:
+              raise SystemExit(
+                  f"Builtin inventory role-vector ABI drift: {actual}"
+              )
+          PY
+          grep -Fq 'ColorTrianglesAlpha (index 3)' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'if inventory_phase and present >= FIRST_FLUSH_PRESENT:' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} missing ColorTrianglesAlpha role self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} extra ColorTrianglesOpaque role self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} wrong builtin render role self-test unexpectedly passed"' \
+            ios/device-test/validate-pipeline-archive-log.py
+          grep -Fq 'f"{phase} wrong builtin role phase timing self-test unexpectedly passed"' \
             ios/device-test/validate-pipeline-archive-log.py
           grep -Fq -- '--baseline-only --evidence-path-file "$WORK/baseline-path.txt"' \
             ios/device-test/run-semantic-pipeline-archive-test.sh
@@ -1163,6 +1214,12 @@ jobs:
           grep -Fq 'cold_archive == warm_archive' \
             ios/device-test/validate-semantic-pipeline-archive-evidence.py
           grep -Fq 'baseline_provenance == cold_provenance == warm_provenance' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          test "$(grep -Fc '"runtime_render": "6" if phase == "inventory-cold" else "4"' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py)" -eq 2
+          grep -Fq 'swapped inventory-cold runtime render summary self-test unexpectedly passed' \
+            ios/device-test/validate-semantic-pipeline-archive-evidence.py
+          grep -Fq 'swapped inventory-warm runtime render summary self-test unexpectedly passed' \
             ios/device-test/validate-semantic-pipeline-archive-evidence.py
           grep -Fq 'mixed source self-test unexpectedly passed' \
             ios/device-test/validate-semantic-pipeline-archive-evidence.py

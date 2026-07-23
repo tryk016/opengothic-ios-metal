@@ -114,6 +114,13 @@ BUILTIN_FRAME_RE = re.compile(
 
 SAVE_BUILTIN_RENDER = (0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0)
 NEW_GAME_BUILTIN_RENDER = (0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0)
+# The semantic script reaches p1 before opening UI, then exercises Inventory,
+# Items and Weapons.  By p300 both archive phases have requested the exact
+# ColorTrianglesAlpha (index 3) role in addition to the two baseline texture
+# roles, TextureTrianglesOpaque (7) and TextureTrianglesAlpha (9).
+INVENTORY_POST_UI_BUILTIN_RENDER = (
+    0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0
+)
 EXPECTED_BUILTIN_SOURCE = (0, 0, 0, 0)
 FIRST_FLUSH_PRESENT = 300
 
@@ -579,6 +586,10 @@ def validate_runtime(
     transition_present = 0
     inventory_transitions: list[int] = []
     inventory_phase = phase in ("inventory-cold", "inventory-warm")
+    inventory_render_sequence = {
+        "inventory-cold": (2, 4, 6),
+        "inventory-warm": (2, 3, 4),
+    }.get(phase, ())
     previous_render = 2
     for expected_present, frame in enumerate(frames, 1):
         present, available, source, compute, render = frame
@@ -591,20 +602,30 @@ def validate_runtime(
         require(compute == 0, f"runtime compute changed at present {present}: {compute}")
         if inventory_phase:
             require(
-                render in (2, 3, 4),
-                "inventory runtime render total must be exact 2, 3, or 4 at "
-                f"present {present}, found {render}",
+                render in inventory_render_sequence,
+                f"{phase} runtime render total must be one of exact "
+                f"{inventory_render_sequence} at present {present}, "
+                f"found {render}",
             )
             if present == 1:
-                require(render == 2, "inventory runtime must start at exact render=2")
+                require(
+                    render == inventory_render_sequence[0],
+                    f"{phase} runtime must start at exact render=2",
+                )
             require(
                 render >= previous_render,
-                f"inventory runtime render total regressed at present {present}",
+                f"{phase} runtime render total regressed at present {present}",
             )
             if render != previous_render:
+                transition_index = len(inventory_transitions)
                 require(
-                    render == previous_render + 1,
-                    "inventory runtime must transition exactly 2-to-3-to-4",
+                    transition_index < len(inventory_render_sequence) - 1
+                    and previous_render
+                    == inventory_render_sequence[transition_index]
+                    and render
+                    == inventory_render_sequence[transition_index + 1],
+                    f"{phase} runtime must transition exactly "
+                    + "-to-".join(map(str, inventory_render_sequence)),
                 )
                 inventory_transitions.append(present)
             previous_render = render
@@ -635,17 +656,21 @@ def validate_runtime(
             previous_render = render
 
     if inventory_phase:
+        final_inventory_render = inventory_render_sequence[-1]
         require(
             len(inventory_transitions) == 2,
-            "inventory runtime must contain exactly two render transitions",
+            f"{phase} runtime must contain exactly two render transitions",
         )
         require(
             inventory_transitions[-1] <= FIRST_FLUSH_PRESENT,
-            "inventory runtime did not reach exact render=4 by present 300",
+            f"{phase} runtime did not reach exact "
+            f"render={final_inventory_render} by present 300",
         )
         require(
-            frames[FIRST_FLUSH_PRESENT - 1][4] == 4 and previous_render == 4,
-            "inventory runtime render total did not plateau at exact 4",
+            frames[FIRST_FLUSH_PRESENT - 1][4] == final_inventory_render
+            and previous_render == final_inventory_render,
+            f"{phase} runtime render total did not plateau at exact "
+            f"{final_inventory_render}",
         )
         transition_present = inventory_transitions[-1]
     elif scenario == "new-game":
@@ -683,7 +708,9 @@ def validate_runtime(
             f"Builtin source counters changed at present {present}: {source}",
         )
         expected_render = SAVE_BUILTIN_RENDER
-        if scenario == "new-game" and present >= FIRST_FLUSH_PRESENT:
+        if inventory_phase and present >= FIRST_FLUSH_PRESENT:
+            expected_render = INVENTORY_POST_UI_BUILTIN_RENDER
+        elif scenario == "new-game" and present >= FIRST_FLUSH_PRESENT:
             expected_render = NEW_GAME_BUILTIN_RENDER
         require(
             render == expected_render,
@@ -691,7 +718,11 @@ def validate_runtime(
             f"present {present}: {render}",
         )
 
-    final_render = 4 if inventory_phase else 2 if scenario == "save" else 3
+    final_render = (
+        inventory_render_sequence[-1]
+        if inventory_phase
+        else 2 if scenario == "save" else 3
+    )
     return 0, 0, final_render, last_present, transition_present
 
 
@@ -940,9 +971,9 @@ def synthetic_log(
         render = 2
         if phase in ("inventory-cold", "inventory-warm"):
             if transition_present is not None and present >= transition_present:
-                render = 3
+                render = 4 if phase == "inventory-cold" else 3
             if present >= inventory_final_transition_present:
-                render = 4
+                render = 6 if phase == "inventory-cold" else 4
         elif (
             scenario == "new-game"
             and transition_present is not None
@@ -955,7 +986,12 @@ def synthetic_log(
         )
         if present == 1 or present % 300 == 0:
             builtin_render = SAVE_BUILTIN_RENDER
-            if scenario == "new-game" and render == 3:
+            if (
+                phase in ("inventory-cold", "inventory-warm")
+                and present >= FIRST_FLUSH_PRESENT
+            ):
+                builtin_render = INVENTORY_POST_UI_BUILTIN_RENDER
+            elif scenario == "new-game" and render == 3:
                 builtin_render = NEW_GAME_BUILTIN_RENDER
             lines.append(
                 "RendererIOS builtin runtime attribution: point=frame "
@@ -981,7 +1017,10 @@ def self_test() -> None:
                     )
             validate_log(log, phase, scenario, source_sha, metallib_sha256)
 
-    for phase in ("inventory-cold", "inventory-warm"):
+    for phase, final_render in (
+        ("inventory-cold", 6),
+        ("inventory-warm", 4),
+    ):
         inventory_log = synthetic_log(
             phase,
             "save",
@@ -997,31 +1036,182 @@ def self_test() -> None:
             metallib_sha256,
         )
         require(
-            inventory_result["runtime_render"] == 4,
-            f"{phase} synthetic runtime did not finish at render=4",
+            inventory_result["runtime_render"] == final_render,
+            f"{phase} synthetic runtime did not finish at "
+            f"render={final_render}",
         )
 
-    skipped_inventory_transition = synthetic_log(
-        "inventory-cold",
-        "save",
-        source_sha,
-        metallib_sha256,
-        transition_present=200,
-        inventory_final_transition_present=200,
-    )
-    try:
-        validate_log(
-            skipped_inventory_transition,
-            "inventory-cold",
+    def expect_inventory_runtime_failure(
+        log: str, phase: str, message: str
+    ) -> None:
+        try:
+            validate_log(
+                log,
+                phase,
+                "save",
+                source_sha,
+                metallib_sha256,
+            )
+        except ValidationError:
+            return
+        raise ValidationError(message)
+
+    def builtin_frame_marker(
+        present: int, render: tuple[int, ...]
+    ) -> str:
+        return (
+            "RendererIOS builtin runtime attribution: point=frame "
+            f"presents={present} role-abi=1 available=1 "
+            "source=0,0,0,0 render="
+            + ",".join(map(str, render))
+        )
+
+    for phase, intermediate_render, final_render in (
+        ("inventory-cold", 4, 6),
+        ("inventory-warm", 3, 4),
+    ):
+        skipped_transition = synthetic_log(
+            phase,
             "save",
             source_sha,
             metallib_sha256,
+            inventory_final_transition_present=301,
         )
-    except ValidationError:
-        pass
-    else:
-        raise ValidationError(
-            "skipped inventory render transition self-test unexpectedly passed"
+        expect_inventory_runtime_failure(
+            skipped_transition,
+            phase,
+            f"{phase} skipped render transition self-test unexpectedly passed",
+        )
+
+        jumped_transition = synthetic_log(
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+            transition_present=200,
+            inventory_final_transition_present=200,
+        )
+        expect_inventory_runtime_failure(
+            jumped_transition,
+            phase,
+            f"{phase} jumped render transition self-test unexpectedly passed",
+        )
+
+        wrong_step_render = 3 if phase == "inventory-cold" else 4
+        wrong_step = synthetic_log(
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+        ).replace(
+            "presents=150 available=1 source=0 compute=0 "
+            f"render={intermediate_render}",
+            "presents=150 available=1 source=0 compute=0 "
+            f"render={wrong_step_render}",
+            1,
+        )
+        expect_inventory_runtime_failure(
+            wrong_step,
+            phase,
+            f"{phase} wrong render step self-test unexpectedly passed",
+        )
+
+        late_transition = synthetic_log(
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+            inventory_final_transition_present=301,
+            last_present=600,
+        )
+        expect_inventory_runtime_failure(
+            late_transition,
+            phase,
+            f"{phase} late render transition self-test unexpectedly passed",
+        )
+
+        broken_plateau = synthetic_log(
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+            last_present=600,
+        ).replace(
+            "presents=301 available=1 source=0 compute=0 "
+            f"render={final_render}",
+            "presents=301 available=1 source=0 compute=0 "
+            f"render={intermediate_render}",
+            1,
+        )
+        expect_inventory_runtime_failure(
+            broken_plateau,
+            phase,
+            f"{phase} broken render plateau self-test unexpectedly passed",
+        )
+
+        role_log = synthetic_log(
+            phase,
+            "save",
+            source_sha,
+            metallib_sha256,
+            last_present=600,
+        )
+        p1_baseline = builtin_frame_marker(1, SAVE_BUILTIN_RENDER)
+        p300_inventory = builtin_frame_marker(
+            FIRST_FLUSH_PRESENT, INVENTORY_POST_UI_BUILTIN_RENDER
+        )
+        missing_role = role_log.replace(
+            p300_inventory,
+            builtin_frame_marker(
+                FIRST_FLUSH_PRESENT, SAVE_BUILTIN_RENDER
+            ),
+            1,
+        )
+        expect_inventory_runtime_failure(
+            missing_role,
+            phase,
+            f"{phase} missing ColorTrianglesAlpha role self-test unexpectedly passed",
+        )
+
+        extra_render = list(INVENTORY_POST_UI_BUILTIN_RENDER)
+        extra_render[1] = 1
+        extra_role = role_log.replace(
+            p300_inventory,
+            builtin_frame_marker(
+                FIRST_FLUSH_PRESENT, tuple(extra_render)
+            ),
+            1,
+        )
+        expect_inventory_runtime_failure(
+            extra_role,
+            phase,
+            f"{phase} extra ColorTrianglesOpaque role self-test unexpectedly passed",
+        )
+
+        wrong_render = list(SAVE_BUILTIN_RENDER)
+        wrong_render[1] = 1
+        wrong_role = role_log.replace(
+            p300_inventory,
+            builtin_frame_marker(
+                FIRST_FLUSH_PRESENT, tuple(wrong_render)
+            ),
+            1,
+        )
+        expect_inventory_runtime_failure(
+            wrong_role,
+            phase,
+            f"{phase} wrong builtin render role self-test unexpectedly passed",
+        )
+
+        early_inventory_role = role_log.replace(
+            p1_baseline,
+            builtin_frame_marker(1, INVENTORY_POST_UI_BUILTIN_RENDER),
+            1,
+        )
+        expect_inventory_runtime_failure(
+            early_inventory_role,
+            phase,
+            f"{phase} wrong builtin role phase timing self-test unexpectedly passed",
         )
 
     plain_sha_log = synthetic_log(
