@@ -70,6 +70,33 @@ print(actual)
 PY
 }
 
+resolve_expected_build() {
+  local app_strings="$1"
+  local expected_sha="$2"
+
+  if [[ -n "${OPENGOTHIC_IOS_EXPECTED_BUILD:-}" ]]; then
+    EXPECTED_BUILD="$OPENGOTHIC_IOS_EXPECTED_BUILD"
+  else
+    EXPECTED_BUILD="$(
+      python3 - "$app_strings" "$expected_sha" <<'PY'
+import pathlib
+import sys
+
+lines = set(pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines())
+source_sha = sys.argv[2]
+allowed = {source_sha, source_sha + "-local"}
+matches = sorted(lines & allowed)
+if len(matches) != 1:
+    raise SystemExit(
+        "app must contain exactly one source-bound RendererIOS build, found "
+        + repr(matches)
+    )
+print(matches[0])
+PY
+    )" || return 1
+  fi
+}
+
 usage() {
   echo "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--baseline-only] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
   echo "       $0 --self-test"
@@ -123,8 +150,21 @@ if ((SELF_TEST != 0)); then
   self_test_sha="0123456789abcdef0123456789abcdef01234567"
   self_test_build="$self_test_sha-local"
   self_test_path_file="$self_test_work/base-smoke-evidence-path.txt"
+  self_test_strings="$self_test_work/app-strings.txt"
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   python3 "$VALIDATOR" --self-test
+  printf '%s\n' "$self_test_build" >"$self_test_strings"
+  unset OPENGOTHIC_IOS_EXPECTED_BUILD
+  resolve_expected_build "$self_test_strings" "$self_test_sha" ||
+    fail "Bash build inference contract self-test failed"
+  [[ "$EXPECTED_BUILD" == "$self_test_build" ]] ||
+    fail "Bash build inference did not preserve SHA-local semantics"
+  printf '%s\n' "$self_test_sha" >"$self_test_strings"
+  OPENGOTHIC_IOS_EXPECTED_BUILD="$self_test_sha"
+  resolve_expected_build "$self_test_strings" "$self_test_sha" ||
+    fail "Bash explicit build contract self-test failed"
+  [[ "$EXPECTED_BUILD" == "$self_test_sha" ]] ||
+    fail "Bash explicit build did not preserve clean SHA semantics"
   OPENGOTHIC_IOS_EXPECTED_SHA="$self_test_sha" \
   OPENGOTHIC_IOS_EXPECTED_BUILD="$self_test_build" \
   OPENGOTHIC_IOS_EXPECTED_FAULT=none \
@@ -140,6 +180,7 @@ if ((SELF_TEST != 0)); then
     fail "wrapper/smoke SHA-local evidence contract self-test failed"
   find "$self_test_work" -type f -delete
   rmdir "$self_test_work"
+  echo "pipeline archive Bash build resolution contract self-test passed"
   echo "pipeline archive wrapper/smoke SHA-local contract self-test passed"
   exit 0
 fi
@@ -181,23 +222,8 @@ EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
   fail "expected source SHA must be exactly 40 lowercase hexadecimal characters"
 APP_STRINGS="$(mktemp -t opengothic-pipeline-app-strings)"
 strings "$APP_INPUT/$APP_EXECUTABLE" >"$APP_STRINGS"
-EXPECTED_BUILD="${OPENGOTHIC_IOS_EXPECTED_BUILD:-$(
-  python3 - "$APP_STRINGS" "$EXPECTED_SHA" <<'PY'
-import pathlib
-import sys
-
-lines = set(pathlib.Path(sys.argv[1]).read_text(errors="replace").splitlines())
-source_sha = sys.argv[2]
-allowed = {source_sha, source_sha + "-local"}
-matches = sorted(lines & allowed)
-if len(matches) != 1:
-    raise SystemExit(
-        "app must contain exactly one source-bound RendererIOS build, found "
-        + repr(matches)
-    )
-print(matches[0])
-PY
-)}"
+resolve_expected_build "$APP_STRINGS" "$EXPECTED_SHA" ||
+  fail "app does not identify one exact source-bound RendererIOS build"
 [[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||
    "$EXPECTED_BUILD" == "$EXPECTED_SHA-local" ]] ||
   fail "expected build must identify the expected source SHA"
