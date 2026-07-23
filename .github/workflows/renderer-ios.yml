@@ -1723,6 +1723,9 @@ jobs:
           test -f game/graphics/iosgpuscene.mm
           test -f game/graphics/ioslandscapeshaderabi.h
           test -f game/graphics/iosshadingprototypeshaderabi.h
+          test -f game/graphics/iosshadingprototypepipeline.h
+          test -f game/graphics/iosshadingprototypepipeline.cpp
+          test -f game/graphics/iosshadingprototypepipeline.mm
           test -f game/graphics/iosbuiltinshaderabi.h
           test -f game/graphics/iosinventoryshaderabi.h
           test -f game/graphics/iosbinkshaderabi.h
@@ -1739,6 +1742,7 @@ jobs:
           test -f ios/tests/iosbuiltinshader.cpp
           test -f ios/tests/iosinventoryshader.cpp
           test -f ios/tests/iosshadingprototypeshader.cpp
+          test -f ios/tests/iosshadingprototypepipeline.cpp
           test -f ios/tests/iosbinkshader.cpp
           test -f ios/tests/iosbinkselftest.cpp
 
@@ -1758,6 +1762,46 @@ jobs:
           "$RUNNER_TEMP/iosgpusceneplan"
 
           IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          printf '#include "graphics/iosshadingprototypepipeline.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosshadingprototypepipeline.cpp \
+            game/graphics/iosshadingprototypepipeline.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypepipeline"
+          "$RUNNER_TEMP/iosshadingprototypepipeline"
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosshadingprototypepipeline.cpp \
+            game/graphics/iosshadingprototypepipeline.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypepipeline-sanitized"
+          "$RUNNER_TEMP/iosshadingprototypepipeline-sanitized"
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only game/graphics/iosshadingprototypepipeline.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -c game/graphics/iosshadingprototypepipeline.mm \
+            -o "$RUNNER_TEMP/iosshadingprototypepipeline.o"
+          xcrun clang++ -x c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -fsyntax-only ios/tests/iosshadingprototypepipeline.cpp
           xcrun clang++ -x objective-c++ -std=c++20 \
             -target arm64-apple-ios16.4 \
             -isysroot "$IOS_SDK" \
@@ -1921,10 +1965,69 @@ jobs:
             exit 1
           fi
           if rg -n \
-              'riosShadingPrototypeVertex|riosTileDeferredMaterialFragment|riosTileDeferredLighting|riosForwardPlusBuildLightList|riosForwardPlusFragment' \
+              'riosForwardPlusBuildLightList|riosForwardPlusFragment' \
               game \
               --glob '!iosshadingprototypeshaderabi.h'; then
-            echo 'P2.5b0 compile-only exports are wired into production runtime'
+            echo 'P2.5b1 wires a compile-only Forward+ export into production'
+            exit 1
+          fi
+          if grep -Eq \
+              'ForwardLightListFunction|ForwardFragmentFunction|riosForwardPlus|FunctionNames\\[' \
+              game/graphics/iosshadingprototypepipeline.h \
+              game/graphics/iosshadingprototypepipeline.cpp \
+              game/graphics/iosshadingprototypepipeline.mm; then
+            echo 'P2.5b1 Tile-only factory references a reserved Forward+ ABI'
+            exit 1
+          fi
+          if rg -n 'iosCreateShadingPrototypePipeline' game \
+              --glob '!iosshadingprototypepipeline.h' \
+              --glob '!iosshadingprototypepipeline.mm'; then
+            echo 'P2.5b1 factory is instantiated before its P2.5b2 gate'
+            exit 1
+          fi
+          if grep -Eq \
+              '#import|<Metal/|@interface|id<MTL|MTL[A-Z]|__OBJC__' \
+              game/graphics/iosshadingprototypepipeline.h \
+              game/graphics/iosshadingprototypepipeline.cpp; then
+            echo 'P2.5b1 host-neutral contract leaks Objective-C or Metal'
+            exit 1
+          fi
+          if grep -Eq \
+              'MTLCreateSystemDefaultDevice|newCommandQueue|MTLCommandQueue|MTLCommandBuffer|newCommandBuffer|commandBufferWith|commandBuffer\\]|CommandEncoder|setRenderPipelineState|drawPrimitives|drawIndexedPrimitives|dispatchThreadgroups|dispatchThreads|presentDrawable|commit\\]|enqueue\\]|waitUntilCompleted|newLibraryWithSource|newDefaultLibrary|MTLCompileOptions|newComputePipelineState|MTLComputePipeline|newBufferWith|newTextureWith|newHeap|makeAliasable|MTLBinaryArchive|addRenderPipelineFunctions|serializeToURL|MetalFX' \
+              game/graphics/iosshadingprototypepipeline.mm; then
+            echo 'P2.5b1 factory owns runtime work, resources, or source compilation'
+            exit 1
+          fi
+          grep -Fq 'Tempest::MetalApi::borrowDevice(owner)' \
+            game/graphics/iosshadingprototypepipeline.mm
+          grep -Fq 'supportsFamily:MTLGPUFamilyApple4' \
+            game/graphics/iosshadingprototypepipeline.mm
+          grep -Fq 'newLibraryWithURL:libraryUrl error:&libraryError' \
+            game/graphics/iosshadingprototypepipeline.mm
+          grep -Fq 'newFunctionWithName:(NSString*)materialName.get()' \
+            game/graphics/iosshadingprototypepipeline.mm
+          test "$(grep -Fc 'setConstantValue:&alphaTest' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 2
+          test "$(grep -Fc 'alphaTest = false;' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 1
+          test "$(grep -Fc 'alphaTest = true;' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 1
+          test "$(grep -Fc 'constantValues:' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 2
+          grep -Fq 'MTLPipelineOptionBindingInfo' \
+            game/graphics/iosshadingprototypepipeline.mm
+          test "$(grep -Fc \
+              'newRenderPipelineStateWithDescriptor:descriptor' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 1
+          test "$(grep -Fc \
+              'newRenderPipelineStateWithTileDescriptor:descriptor' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 1
+          test "$(grep -Fc 'descriptor.binaryArchives = nil;' \
+              game/graphics/iosshadingprototypepipeline.mm)" -eq 2
+          if rg -n 'descriptor\\.binaryArchives[[:space:]]+=[[:space:]]+' \
+              game/graphics/iosshadingprototypepipeline.mm |
+              grep -Fv 'descriptor.binaryArchives = nil;'; then
+            echo 'P2.5b1 factory attaches a mutable pipeline archive'
             exit 1
           fi
 
@@ -2458,6 +2561,55 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosgpubink\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceallocator\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosshadingprototypepipeline\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosshadingprototypepipeline\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          for source in iosshadingprototypepipeline.cpp \
+              iosshadingprototypepipeline.mm; do
+            test "$(grep -Ec \
+              \"game/graphics/${source} \\\\*/ = \\\\{isa = PBXBuildFile; fileRef =\" \
+              build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj)" -eq 1
+          done
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          project = Path(
+              "build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj"
+          ).read_text()
+          targets = re.findall(
+              r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
+              r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+              project,
+              re.S,
+          )
+          gothic = [
+              body for _, body in targets
+              if re.search(r"^\s*name = Gothic2Notr;$", body, re.M)
+          ]
+          if len(gothic) != 1:
+              raise SystemExit("could not identify exact Gothic2Notr target")
+          source_phase = re.search(
+              r"([A-F0-9]{24}) /\* Sources \*/", gothic[0]
+          )
+          if source_phase is None:
+              raise SystemExit("Gothic2Notr target has no Sources phase")
+          phase = re.search(
+              rf"\b{source_phase.group(1)} /\* Sources \*/ = \{{\n"
+              r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+              project,
+              re.S,
+          )
+          if phase is None:
+              raise SystemExit("could not read Gothic2Notr Sources phase")
+          for source in (
+              "iosshadingprototypepipeline.cpp",
+              "iosshadingprototypepipeline.mm",
+          ):
+              if phase.group(1).count(source) != 1:
+                  raise SystemExit(
+                      f"{source} is not exactly once in Gothic2Notr Sources"
+                  )
+          PY
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceclearpassprobe\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosmetalresourceclearpassprobe\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           for source in iosmetalresourceclearpassprobe.cpp \
