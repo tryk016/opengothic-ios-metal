@@ -93,12 +93,13 @@ bool validMaterialPipeline(
 bool validMaterialReflection(
     const IOSShadingPrototypeMaterialPipelineReport& pipeline) noexcept {
   return pipeline.reflectionAvailable &&
-         pipeline.imageblockBytesPerSample==ImageblockBytesPerSample &&
-         validBindingList(pipeline.vertexBindings,emptyBindings()) &&
+         pipeline.imageblockBytesPerSample==
+             PipelineImageblockBytesPerSample &&
          validBindingList(
-             pipeline.fragmentBindings,
+             pipeline.vertexBindings,
              singleBinding(
-                 IOSShadingPrototypeBindingType::ImageblockData)) &&
+                 IOSShadingPrototypeBindingType::VertexBuffer)) &&
+         validBindingList(pipeline.fragmentBindings,emptyBindings()) &&
          validBindingList(pipeline.tileBindings,emptyBindings());
   }
 
@@ -116,7 +117,8 @@ bool validTilePipeline(
 bool validTileReflection(
     const IOSShadingPrototypeTilePipelineReport& pipeline) noexcept {
   return pipeline.reflectionAvailable &&
-         pipeline.imageblockBytesPerSample==ImageblockBytesPerSample &&
+         pipeline.imageblockBytesPerSample==
+             PipelineImageblockBytesPerSample &&
          validBindingList(pipeline.vertexBindings,emptyBindings()) &&
          validBindingList(pipeline.fragmentBindings,emptyBindings()) &&
          validBindingList(
@@ -189,11 +191,11 @@ IOSShadingPrototypePipelineReport
     pipeline.alphaTestEnabled = i==1u;
     pipeline.sampleCount = 1u;
     pipeline.imageblockBytesPerSample =
-        ImageblockBytesPerSample;
-    pipeline.vertexBindings = emptyBindings();
-    pipeline.fragmentBindings =
+        PipelineImageblockBytesPerSample;
+    pipeline.vertexBindings =
         singleBinding(
-            IOSShadingPrototypeBindingType::ImageblockData);
+            IOSShadingPrototypeBindingType::VertexBuffer);
+    pipeline.fragmentBindings = emptyBindings();
     pipeline.tileBindings = emptyBindings();
     }
 
@@ -206,7 +208,7 @@ IOSShadingPrototypePipelineReport
   report.lightingPipeline.threadgroupSizeMatchesTileSize = true;
   report.lightingPipeline.sampleCount = 1u;
   report.lightingPipeline.imageblockBytesPerSample =
-      ImageblockBytesPerSample;
+      PipelineImageblockBytesPerSample;
   report.lightingPipeline.vertexBindings = emptyBindings();
   report.lightingPipeline.fragmentBindings = emptyBindings();
   report.lightingPipeline.tileBindings = imageblockBindings();

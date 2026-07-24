@@ -77,7 +77,8 @@ bool validSource(std::string_view source) noexcept {
      countToken(source,"imageblock_layout_explicit")!=1u ||
      countToken(source,"imageblock_layout_implicit")!=1u ||
      countToken(source,"[[imageblock_data]]")!=1u ||
-     countToken(source,"[[color(0)]]")!=2u)
+     countToken(source,"[[color(0)]]")!=2u ||
+     countToken(source,"[[buffer(")!=2u)
     return false;
   for(const auto function:Prototype::FunctionNames)
     if(countToken(source,function)!=1u)
@@ -116,6 +117,12 @@ void runMutationTests(const std::string& source) {
     std::string injected = source;
     injected += "\n";
     injected += token;
+    assert(!validSource(injected));
+  }
+  {
+    std::string injected = source;
+    injected +=
+        "\nconstant uint& unexpectedBuffer [[buffer(7)]];\n";
     assert(!validSource(injected));
   }
   {

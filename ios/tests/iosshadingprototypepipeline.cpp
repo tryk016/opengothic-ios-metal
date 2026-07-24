@@ -177,24 +177,28 @@ void renderReflection(Report& report) noexcept {
 void renderBytes(Report& report) noexcept {
   ++report.materialPipelines[0].imageblockBytesPerSample;
   }
-void renderVertexBinding(Report& report) noexcept {
-  report.materialPipelines[0].vertexBindings.count = 1u;
+void renderVertexBindingType(Report& report) noexcept {
   report.materialPipelines[0].vertexBindings.bindings[0].type =
       IOSShadingPrototypeBindingType::Imageblock;
-  report.materialPipelines[0].vertexBindings.bindings[0].used = true;
+  }
+void renderVertexBindingUsed(Report& report) noexcept {
+  report.materialPipelines[0].vertexBindings.bindings[0].used = false;
+  }
+void renderVertexBindingCount(Report& report) noexcept {
+  report.materialPipelines[0].vertexBindings.count = 0u;
   }
 void renderVertexBindingsUnavailable(Report& report) noexcept {
   report.materialPipelines[0].vertexBindings.available = false;
   }
 void renderFragmentCount(Report& report) noexcept {
-  report.materialPipelines[0].fragmentBindings.count = 2u;
+  report.materialPipelines[0].fragmentBindings.count = 1u;
   }
 void renderFragmentType(Report& report) noexcept {
   report.materialPipelines[0].fragmentBindings.bindings[0].type =
       IOSShadingPrototypeBindingType::Imageblock;
   }
 void renderFragmentUsed(Report& report) noexcept {
-  report.materialPipelines[0].fragmentBindings.bindings[0].used = false;
+  report.materialPipelines[0].fragmentBindings.bindings[0].used = true;
   }
 void renderFragmentOverflow(Report& report) noexcept {
   report.materialPipelines[0].fragmentBindings.overflow = true;
@@ -234,8 +238,9 @@ void tileBindingOverflow(Report& report) noexcept {
   report.lightingPipeline.tileBindings.overflow = true;
   }
 
-constexpr std::array<Mutator,18u> ReflectionMutators = {
-  renderReflection,renderBytes,renderVertexBinding,
+constexpr std::array<Mutator,20u> ReflectionMutators = {
+  renderReflection,renderBytes,renderVertexBindingType,
+  renderVertexBindingUsed,renderVertexBindingCount,
   renderVertexBindingsUnavailable,renderFragmentCount,
   renderFragmentType,renderFragmentUsed,renderFragmentOverflow,
   renderTileBinding,tileReflection,tileBytes,tileVertexBinding,
@@ -331,14 +336,24 @@ bool rejectsSecondMaterialPipelineMutations() {
            value.vertexBindings.available = false;
            }) &&
          rejectsReflection([](auto& value) {
-           value.fragmentBindings.count = 2u;
+           value.vertexBindings.bindings[0].type =
+               IOSShadingPrototypeBindingType::Imageblock;
+           }) &&
+         rejectsReflection([](auto& value) {
+           value.vertexBindings.bindings[0].used = false;
+           }) &&
+         rejectsReflection([](auto& value) {
+           value.vertexBindings.count = 0u;
+           }) &&
+         rejectsReflection([](auto& value) {
+           value.fragmentBindings.count = 1u;
            }) &&
          rejectsReflection([](auto& value) {
            value.fragmentBindings.bindings[0].type =
                IOSShadingPrototypeBindingType::Imageblock;
            }) &&
          rejectsReflection([](auto& value) {
-           value.fragmentBindings.bindings[0].used = false;
+           value.fragmentBindings.bindings[0].used = true;
            }) &&
          rejectsReflection([](auto& value) {
            value.fragmentBindings.overflow = true;
@@ -381,7 +396,9 @@ int main() {
   static_assert(RendererIOSShadingPrototypeShader::TileFinalColorAttachment==
                 FinalColorAttachment);
   static_assert(RendererIOSShadingPrototypeShader::TileMaterialBytesPerSample==
-                ImageblockBytesPerSample);
+                ExplicitMaterialBytesPerSample);
+  static_assert(ExplicitMaterialBytesPerSample==4u);
+  static_assert(PipelineImageblockBytesPerSample==12u);
   static_assert(static_cast<uint8_t>(Status::Ready)==0u);
   static_assert(static_cast<uint8_t>(Status::DeviceUnavailable)==1u);
   static_assert(static_cast<uint8_t>(Status::UnsupportedCapability)==2u);
@@ -405,6 +422,8 @@ int main() {
                     IOSShadingPrototypeBindingType::ImageblockData)==1u);
   static_assert(static_cast<uint8_t>(
                     IOSShadingPrototypeBindingType::Imageblock)==2u);
+  static_assert(static_cast<uint8_t>(
+                    IOSShadingPrototypeBindingType::VertexBuffer)==3u);
   static_assert(std::is_aggregate_v<Report>);
   static_assert(std::is_trivially_copyable_v<Report>);
   static_assert(std::is_standard_layout_v<Report>);

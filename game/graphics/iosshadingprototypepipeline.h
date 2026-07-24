@@ -30,7 +30,10 @@ inline constexpr uint32_t FinalColorAttachment = 0u;
 inline constexpr uint32_t VertexStride = 28u;
 inline constexpr uint32_t PositionOffset = 0u;
 inline constexpr uint32_t ColorOffset = 12u;
-inline constexpr uint32_t ImageblockBytesPerSample = 4u;
+// The explicit MSL material payload is 4 B, while Metal reports the complete
+// mixed explicit+implicit imageblock footprint through imageblockSampleLength.
+inline constexpr uint32_t ExplicitMaterialBytesPerSample = 4u;
+inline constexpr uint32_t PipelineImageblockBytesPerSample = 12u;
 
 }
 
@@ -57,6 +60,7 @@ enum class IOSShadingPrototypeBindingType : uint8_t {
   Unknown        = 0,
   ImageblockData = 1,
   Imageblock     = 2,
+  VertexBuffer   = 3,
   };
 
 struct IOSShadingPrototypeFunctionConstantReport final {

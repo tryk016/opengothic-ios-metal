@@ -10,7 +10,6 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -38,7 +37,7 @@ static_assert(
     ColorAttribute);
 static_assert(
     RendererIOSShadingPrototypeShader::TileMaterialBytesPerSample==
-    ImageblockBytesPerSample);
+    ExplicitMaterialBytesPerSample);
 static_assert(
     RendererIOSShadingPrototypeShader::TileFinalColorAttachment==
     FinalColorAttachment);
@@ -107,8 +106,13 @@ IOSShadingPrototypeFunctionStage neutralStage(
   }
 
 IOSShadingPrototypeBindingType neutralBindingType(
-    MTLBindingType type) noexcept {
+    MTLBindingType type,
+    NSUInteger index) noexcept {
   switch(type) {
+    case MTLBindingTypeBuffer:
+      return index==static_cast<NSUInteger>(VertexBuffer)
+          ? IOSShadingPrototypeBindingType::VertexBuffer
+          : IOSShadingPrototypeBindingType::Unknown;
     case MTLBindingTypeImageblockData:
       return IOSShadingPrototypeBindingType::ImageblockData;
     case MTLBindingTypeImageblock:
@@ -125,21 +129,35 @@ IOSShadingPrototypeBindingListReport normalizeBindings(
   if(bindings==nil)
     return report;
 
-  report.count = narrow(bindings.count);
-  report.overflow =
-      bindings.count>report.bindings.size();
-  const NSUInteger count =
-      std::min(bindings.count,
-               static_cast<NSUInteger>(report.bindings.size()));
-  for(NSUInteger i=0u; i<count; ++i) {
+  NSUInteger bindingCount = 0u;
+  for(NSUInteger i=0u; i<bindings.count; ++i) {
     id<MTLBinding> binding = [bindings objectAtIndex:i];
     if(binding==nil)
       continue;
-    report.bindings[static_cast<std::size_t>(i)].type =
-        neutralBindingType(binding.type);
-    report.bindings[static_cast<std::size_t>(i)].used =
-        binding.isUsed==YES;
+    const IOSShadingPrototypeBindingType type =
+        neutralBindingType(binding.type,binding.index);
+    if(bindingCount<
+       static_cast<NSUInteger>(report.bindings.size())) {
+      auto& normalized =
+          report.bindings[static_cast<std::size_t>(bindingCount)];
+      normalized.type = type;
+      normalized.used = binding.isUsed==YES;
+      }
+    else {
+      report.overflow = true;
+      }
+    if(bindingCount==std::numeric_limits<NSUInteger>::max()) {
+      report.overflow = true;
+      }
+    else {
+      ++bindingCount;
+      }
     }
+  report.count = narrow(bindingCount);
+  report.overflow =
+      report.overflow ||
+      bindingCount>
+          static_cast<NSUInteger>(report.bindings.size());
   return report;
   }
 

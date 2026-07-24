@@ -1374,12 +1374,47 @@ struct IOSMetalContext::Impl final {
         }
       return;
       }
+    const IOSShadingPrototypePipelineStatus factoryStatus =
+        shadingPrototypeTilePipeline.status();
+    const auto& factoryReport =
+        shadingPrototypeTilePipeline.report();
+    const IOSShadingPrototypePipelineStatus validationStatus =
+        iosValidateShadingPrototypePipelineReport(factoryReport);
     if(!shadingPrototypeTilePipeline ||
-       shadingPrototypeTilePipeline.status()!=
-           IOSShadingPrototypePipelineStatus::Ready ||
-       iosValidateShadingPrototypePipelineReport(
-           shadingPrototypeTilePipeline.report())!=
-           IOSShadingPrototypePipelineStatus::Ready) {
+       factoryStatus!=IOSShadingPrototypePipelineStatus::Ready ||
+       validationStatus!=IOSShadingPrototypePipelineStatus::Ready) {
+      try {
+        Log::e("RendererIOS shading prototype tile factory report: status=",
+               iosShadingPrototypePipelineStatusName(factoryStatus),
+               " validation=",
+               iosShadingPrototypePipelineStatusName(validationStatus),
+               " functions=",factoryReport.resolvedTileFunctionCount,
+               " pipelines=",factoryReport.createdTilePipelineCount);
+        for(std::size_t i=0u;
+            i<factoryReport.materialPipelines.size(); ++i) {
+          const auto& pipeline = factoryReport.materialPipelines[i];
+          Log::e("RendererIOS shading prototype tile material report: index=",
+                 i,
+                 " available=",pipeline.available,
+                 " reflection=",pipeline.reflectionAvailable,
+                 " imageblock=",pipeline.imageblockBytesPerSample,
+                 " bindings=",
+                 pipeline.vertexBindings.count,",",
+                 pipeline.fragmentBindings.count,",",
+                 pipeline.tileBindings.count);
+          }
+        const auto& lighting = factoryReport.lightingPipeline;
+        Log::e("RendererIOS shading prototype tile lighting report: available=",
+               lighting.available,
+               " reflection=",lighting.reflectionAvailable,
+               " imageblock=",lighting.imageblockBytesPerSample,
+               " bindings=",
+               lighting.vertexBindings.count,",",
+               lighting.fragmentBindings.count,",",
+               lighting.tileBindings.count);
+        }
+      catch(...) {
+        }
       failShadingPrototypeTileBeforeSubmit(
           "factory-contract-mismatch");
       return;
