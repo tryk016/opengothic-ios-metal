@@ -10,8 +10,8 @@ TEMPEST_ROOT="${TEMPEST_ROOT:-$ROOT/lib/Tempest}"
 
 EXPECTED_URL="https://github.com/tryk016/Tempest.git"
 BASE_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
-EXPECTED_COMMIT="a51154bea168f1e96862dbc5dfb962e0b872d2a5"
-EXPECTED_TAG="opengothic-ios-patch-stack-v13"
+EXPECTED_COMMIT="5321b8d05222c17cad1646faf8ff3d53e1f00fd1"
+EXPECTED_TAG="opengothic-ios-patch-stack-v14"
 
 fail() {
   echo "ERROR: $*" >&2
