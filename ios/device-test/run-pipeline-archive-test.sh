@@ -97,6 +97,34 @@ PY
   fi
 }
 
+select_installed_game_bundle_id() {
+  local apps_json="$1"
+  local requested="${2:-}"
+
+  python3 - "$apps_json" "$BASE_BUNDLE_ID" "$requested" <<'PY'
+import json
+import sys
+
+apps = json.load(open(sys.argv[1]))["result"]["apps"]
+base = sys.argv[2] + "."
+requested = sys.argv[3]
+matches = [
+    app["bundleIdentifier"]
+    for app in apps
+    if app["bundleIdentifier"].startswith(base)
+    and not app["bundleIdentifier"].endswith(".xctrunner")
+]
+if requested:
+    matches = [bundle for bundle in matches if bundle == requested]
+if len(matches) != 1:
+    raise SystemExit(
+        f"expected exactly one installed non-xctrunner {base}* app, "
+        f"found {len(matches)}"
+    )
+print(matches[0])
+PY
+}
+
 usage() {
   echo "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--baseline-only] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
   echo "       $0 --self-test"
@@ -151,8 +179,26 @@ if ((SELF_TEST != 0)); then
   self_test_build="$self_test_sha-local"
   self_test_path_file="$self_test_work/base-smoke-evidence-path.txt"
   self_test_strings="$self_test_work/app-strings.txt"
+  self_test_apps="$self_test_work/apps.json"
+  self_test_game="$BASE_BUNDLE_ID.RMJWWPF379"
+  self_test_runner="$self_test_game.RendererIOSUITests.xctrunner"
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   python3 "$VALIDATOR" --self-test
+  printf '{"result":{"apps":[{"bundleIdentifier":"%s"},{"bundleIdentifier":"%s"}]}}\n' \
+    "$self_test_game" "$self_test_runner" >"$self_test_apps"
+  [[ "$(select_installed_game_bundle_id "$self_test_apps")" == \
+     "$self_test_game" ]] ||
+    fail "game plus XCUITest runner bundle selection self-test failed"
+  printf '{"result":{"apps":[{"bundleIdentifier":"%s"},{"bundleIdentifier":"%s"}]}}\n' \
+    "$self_test_game" "$BASE_BUNDLE_ID.ABCDEFGHIJ" >"$self_test_apps"
+  if select_installed_game_bundle_id "$self_test_apps" >/dev/null 2>&1; then
+    fail "two real game bundle identifiers survived selection"
+  fi
+  printf '{"result":{"apps":[{"bundleIdentifier":"%s"}]}}\n' \
+    "$self_test_runner" >"$self_test_apps"
+  if select_installed_game_bundle_id "$self_test_apps" >/dev/null 2>&1; then
+    fail "XCUITest runner-only bundle selection survived"
+  fi
   printf '%s\n' "$self_test_build" >"$self_test_strings"
   unset OPENGOTHIC_IOS_EXPECTED_BUILD
   resolve_expected_build "$self_test_strings" "$self_test_sha" ||
@@ -182,6 +228,7 @@ if ((SELF_TEST != 0)); then
   rmdir "$self_test_work"
   echo "pipeline archive Bash build resolution contract self-test passed"
   echo "pipeline archive wrapper/smoke SHA-local contract self-test passed"
+  echo "pipeline archive installed game bundle selection contract self-test passed"
   exit 0
 fi
 
@@ -515,27 +562,8 @@ IFS=$'\t' read -r DEVICE DEVICE_UDID DEVICE_SELECTION_METHOD <<<"$DEVICE_RECORD"
 xcrun devicectl device info apps --device "$DEVICE" \
   --json-output "$WORK/apps.json" >/dev/null
 BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"
-BUNDLE_ID="$(python3 - "$WORK/apps.json" "$BASE_BUNDLE_ID" "$BUNDLE_ID" <<'PY'
-import json
-import sys
-
-apps = json.load(open(sys.argv[1]))["result"]["apps"]
-base = sys.argv[2] + "."
-requested = sys.argv[3]
-matches = [
-    app["bundleIdentifier"]
-    for app in apps
-    if app["bundleIdentifier"].startswith(base)
-]
-if requested:
-    matches = [bundle for bundle in matches if bundle == requested]
-if len(matches) != 1:
-    raise SystemExit(
-        f"expected exactly one installed {base}* app, found {len(matches)}"
-    )
-print(matches[0])
-PY
-)" || fail "could not identify the existing OpenGothic data container"
+BUNDLE_ID="$(select_installed_game_bundle_id "$WORK/apps.json" "$BUNDLE_ID")" ||
+  fail "could not identify the existing OpenGothic data container"
 
 TEAM_ID="${OPENGOTHIC_IOS_TEAM_ID:-${BUNDLE_ID##*.}}"
 [[ "$BUNDLE_ID" == "$BASE_BUNDLE_ID.$TEAM_ID" ]] ||
