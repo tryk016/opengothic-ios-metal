@@ -61,6 +61,12 @@ class SemanticError(RuntimeError):
         self.reason = reason
 
 
+class GPUDebugCommandError(SemanticError):
+    def __init__(self, reason: str, stdout: str):
+        super().__init__("BLOCKED", reason)
+        self.stdout = stdout
+
+
 @dataclass(frozen=True)
 class TarEntry:
     member: tarfile.TarInfo
@@ -78,6 +84,7 @@ class APICall:
 
 @dataclass(frozen=True)
 class AuditTranscripts:
+    tool_version: str
     root: str
     commands: str
     command_buffer: str
@@ -408,15 +415,11 @@ def verify_manifest(
         _fail("capture manifest does not match the envelope")
 
 
-SUMMARY_COUNT_RE = re.compile(
-    r"^Summary:\s+(\d+) command buffers?,\s+(\d+) encoders?,\s+(\d+) draw calls?\s*$",
-    re.MULTILINE,
-)
-EXPECTED_SUMMARY_RE = re.compile(
-    r"^Summary:\s+1 command buffer,\s+2 encoders,\s+0 draw calls\s*$",
-    re.MULTILINE,
-)
 SESSION_RE = re.compile(r"^Session ([1-9][0-9]*) created\.\s*$", re.MULTILINE)
+SESSION_HELPER_RE = re.compile(
+    r"^gpudebug -s ([1-9][0-9]*) -c <command> to send commands\.\s*$",
+    re.MULTILINE,
+)
 FOOTER_RE = re.compile(r"^\s*\(([0-9]+) items?\)\s*$", re.MULTILINE)
 API_ROW_RE = re.compile(
     r"^\s*api([0-9]+)\s+(?:(\S+)\s+)?(\[[^\n]*\])\s+info\s*$",
@@ -424,17 +427,80 @@ API_ROW_RE = re.compile(
 )
 
 
-def _require_summary(text: str) -> None:
-    matches = SUMMARY_COUNT_RE.findall(text)
-    if not matches:
-        _semantic_block("summary_schema")
-    values = {tuple(int(field) for field in match) for match in matches}
-    if len(values) != 1:
-        _semantic_block("summary_ambiguous")
-    if values.pop() != (1, 2, 0):
-        _semantic_fail("summary_counts")
-    if len(EXPECTED_SUMMARY_RE.findall(text)) != len(matches):
-        _semantic_block("summary_exact_schema")
+def _require_root_schema(tool_version: str, text: str) -> int:
+    if tool_version != "gpudebug 1.0\n":
+        _semantic_block("gpudebug_version")
+    session_matches = SESSION_RE.findall(text)
+    if len(session_matches) != 1:
+        _semantic_block("session_schema")
+    session = session_matches[0]
+    helper_matches = SESSION_HELPER_RE.findall(text)
+    if helper_matches != [session]:
+        _semantic_block("session_helper_schema")
+    other_session_lines = re.findall(
+        r"^[^\n]*other sessions? active\.\s*$", text, re.MULTILINE
+    )
+    if len(other_session_lines) > 1:
+        _semantic_block("other_session_schema")
+    if other_session_lines and re.fullmatch(
+        r"[1-9][0-9]* other sessions? active\.",
+        other_session_lines[0].strip(),
+    ) is None:
+        _semantic_block("other_session_schema")
+    root_line_patterns = (
+        r"Session [1-9][0-9]* created\.",
+        r"[1-9][0-9]* other sessions? active\.",
+        r"gpudebug -s [1-9][0-9]* -c <command> to send commands\.",
+        r"Name\s+Summary\s+Actions",
+        r"[─\s]+",
+        r"commands\s+.*",
+        r"performance\s+.*",
+        r"api_calls\s+.*",
+        r"resources\s+.*",
+        r"\(4 items\)",
+    )
+    for line in text.splitlines():
+        if not any(re.fullmatch(pattern, line) for pattern in root_line_patterns):
+            _semantic_block("root_line_schema")
+
+    commands = re.findall(
+        r"^commands\s+([1-9][0-9]*) command buffers?\s+go\s*$",
+        text,
+        re.MULTILINE,
+    )
+    api_calls = re.findall(
+        r"^api_calls\s+([1-9][0-9]*) API calls\s+go\s*$",
+        text,
+        re.MULTILINE,
+    )
+    resources = re.findall(
+        r"^resources\s+([1-9][0-9]*) objects\s+go\s*$",
+        text,
+        re.MULTILINE,
+    )
+    performance = re.findall(
+        r"^performance\s+see 'profile \?'\s*$", text, re.MULTILINE
+    )
+    if len(commands) != 1:
+        _semantic_block("root_commands_schema")
+    if len(api_calls) != 1:
+        _semantic_block("root_api_calls_schema")
+    if len(resources) != 1:
+        _semantic_block("root_resources_schema")
+    if len(performance) != 1:
+        _semantic_block("root_performance_schema")
+    root_rows = re.findall(
+        r"^(commands|performance|api_calls|resources)\s+.*$", text, re.MULTILINE
+    )
+    expected_rows = ("commands", "performance", "api_calls", "resources")
+    if sorted(root_rows) != sorted(expected_rows):
+        _semantic_block("root_table_schema")
+    _require_complete_table(text, 4, "root_table")
+    if int(commands[0]) != 1:
+        _semantic_fail("root_command_buffer_count")
+    if int(api_calls[0]) != 14:
+        _semantic_fail("root_api_call_count")
+    return int(resources[0])
 
 
 def _table_rows(text: str, pattern: re.Pattern[str]) -> dict[str, str]:
@@ -448,6 +514,19 @@ def _table_rows(text: str, pattern: re.Pattern[str]) -> dict[str, str]:
     return rows
 
 
+def _require_table_lines(
+    text: str,
+    patterns: tuple[str, ...],
+    reason: str,
+) -> None:
+    common = (r"[─\s]+", r"\([1-9][0-9]* items?\)")
+    for line in text.splitlines():
+        if not any(
+            re.fullmatch(pattern, line) for pattern in (*patterns, *common)
+        ):
+            _semantic_block(f"{reason}_line_schema")
+
+
 def _require_complete_table(text: str, expected_count: int, reason: str) -> None:
     footer_counts = [int(value) for value in FOOTER_RE.findall(text)]
     if len(footer_counts) != 1:
@@ -456,7 +535,15 @@ def _require_complete_table(text: str, expected_count: int, reason: str) -> None
         _semantic_fail(f"{reason}_count")
 
 
-def _require_exact_structure(transcripts: AuditTranscripts) -> None:
+def _require_exact_structure(transcripts: AuditTranscripts) -> tuple[str, str]:
+    _require_table_lines(
+        transcripts.commands,
+        (
+            r"Name\s+Summary\s+Label\s+Actions",
+            r'cb[0-9]+\s+.*',
+        ),
+        "command_buffer_table",
+    )
     cb_rows = _table_rows(
         transcripts.commands,
         re.compile(r"^\s*([a-z]+[0-9]+)\s+.*$", re.MULTILINE),
@@ -466,37 +553,68 @@ def _require_exact_structure(transcripts: AuditTranscripts) -> None:
     if set(cb_rows) != {"cb0"}:
         _semantic_fail("command_buffer_count")
     _require_complete_table(transcripts.commands, 1, "command_buffer_table")
-    if '"RIOS pm-clear CB"' not in cb_rows["cb0"]:
-        _semantic_fail("command_buffer_label")
+    command_row_match = re.fullmatch(
+        r'cb0\s+([1-9][0-9]*) encoders?\s+"([^"]+)"\s+go',
+        cb_rows["cb0"],
+    )
+    if command_row_match is None:
+        _semantic_block("command_buffer_row_schema")
+    if int(command_row_match.group(1)) != 2:
+        _semantic_fail("command_buffer_encoder_count")
+    if re.fullmatch(
+        r"MTLCommandQueue [1-9][0-9]*", command_row_match.group(2)
+    ) is None:
+        _semantic_block("command_buffer_generated_label_schema")
 
     encoder_rows = _table_rows(
         transcripts.command_buffer,
         re.compile(r"^\s*([a-z]+[0-9]+)\s+.*$", re.MULTILINE),
+    )
+    _require_table_lines(
+        transcripts.command_buffer,
+        (
+            r"Name\s+Label\s+Summary\s+Actions",
+            r'[a-z]+[0-9]+\s+.*',
+        ),
+        "encoder_table",
     )
     if not encoder_rows:
         _semantic_block("encoder_table_schema")
     if set(encoder_rows) != {"re0", "re1"}:
         _semantic_fail("encoder_tree")
     _require_complete_table(transcripts.command_buffer, 2, "encoder_table")
-    if '"RIOS private clear"' not in encoder_rows["re0"]:
-        _semantic_fail("private_encoder_label")
-    if '"RIOS memoryless clear"' not in encoder_rows["re1"]:
-        _semantic_fail("memoryless_encoder_label")
+    expected_encoder_labels = {
+        "re0": "RIOS private clear",
+        "re1": "RIOS memoryless clear",
+    }
+    for name, expected_label in expected_encoder_labels.items():
+        match = re.fullmatch(rf'{name}\s+"([^"]+)"\s+go', encoder_rows[name])
+        if match is None:
+            _semantic_block(f"{name}_row_schema")
+        if match.group(1) != expected_label:
+            _semantic_fail(f"{name}_label")
 
-    for text, expected_label, expected_object, reason in (
+    attachment_objects: list[str] = []
+    for text, expected_label, reason in (
         (
             transcripts.private_encoder,
             '"RIOS private 4x4"',
-            "@tex0",
             "private_attachment_tree",
         ),
         (
             transcripts.memoryless_encoder,
             '"RIOS memoryless 4x4"',
-            "@tex1",
             "memoryless_attachment_tree",
         ),
     ):
+        _require_table_lines(
+            text,
+            (
+                r"Name\s+Label\s+Summary\s+Actions",
+                r"(?:color[0-9]+|depth|stencil)\s+.*",
+            ),
+            reason,
+        )
         attachment_rows = _table_rows(
             text,
             re.compile(r"^\s*((?:color[0-9]+)|depth|stencil)\s+.*$", re.MULTILINE),
@@ -509,11 +627,21 @@ def _require_exact_structure(transcripts: AuditTranscripts) -> None:
         if expected_label not in attachment_rows["color0"]:
             _semantic_fail(f"{reason}_label")
         object_ids = re.findall(
-            r"(?<![A-Za-z0-9_])@[A-Za-z][A-Za-z0-9_]*",
+            r"(?<![A-Za-z0-9_])@tex[0-9]+",
             attachment_rows["color0"],
         )
-        if object_ids != [expected_object]:
-            _semantic_fail(f"{reason}_object")
+        if len(object_ids) != 1:
+            _semantic_block(f"{reason}_object_schema")
+        expected_row = (
+            rf"color0\s+{re.escape(expected_label)}\s+"
+            rf"{re.escape(object_ids[0])}\s+4x4 RGBA8Unorm\s+info, fetch"
+        )
+        if re.fullmatch(expected_row, attachment_rows["color0"]) is None:
+            _semantic_block(f"{reason}_row_schema")
+        attachment_objects.append(object_ids[0])
+    if attachment_objects[0] == attachment_objects[1]:
+        _semantic_fail("attachment_object_alias")
+    return attachment_objects[0], attachment_objects[1]
 
 
 def _method_from_call(call: str) -> str:
@@ -524,7 +652,7 @@ def _method_from_call(call: str) -> str:
 
 
 def _receiver_from_call(call: str) -> str:
-    match = re.match(r"^\[(@[A-Za-z][A-Za-z0-9_]*)\s+", call)
+    match = re.match(r"^\[([@A-Za-z][A-Za-z0-9_]*)\s+", call)
     if match is None:
         _semantic_block("api_receiver_schema")
     return match.group(1)
@@ -607,15 +735,20 @@ def _require_call_object(
         _semantic_fail(f"{reason}_result")
 
 
-def _require_api_semantics(text: str) -> dict[str, int]:
+def _require_api_semantics(
+    text: str,
+    private_attachment_object: str,
+    memoryless_attachment_object: str,
+) -> dict[str, int]:
     calls = _parse_api_calls(text)
-    if len(calls) != 17:
+    if len(calls) != 14:
         _semantic_fail("api_call_count")
     forbidden = re.compile(
         r"nextDrawable|present|newLibraryWithSource|newRenderPipelineState|"
         r"newComputePipelineState|setRenderPipelineState|setComputePipelineState|"
         r"draw|dispatch|computeCommandEncoder|blitCommandEncoder|"
-        r"parallelRenderCommandEncoder|executeCommands|newCommandQueue",
+        r"parallelRenderCommandEncoder|executeCommands|newCommandQueue|"
+        r"waitUntilCompleted|waitUntilScheduled",
         re.IGNORECASE,
     )
     if any(forbidden.search(call.method) for call in calls):
@@ -653,11 +786,11 @@ def _require_api_semantics(text: str) -> dict[str, int]:
         _semantic_fail("render_encoder_count")
     if len(ends) != 2:
         _semantic_fail("end_encoding_count")
-    if len(statuses) != 2:
+    if statuses:
         _semantic_fail("status_count")
     if len(completed_handlers) != 1:
         _semantic_fail("completed_handler_count")
-    if len(errors) != 1:
+    if errors:
         _semantic_fail("error_count")
     if len(commits) != 1:
         _semantic_fail("commit_count")
@@ -674,160 +807,138 @@ def _require_api_semantics(text: str) -> dict[str, int]:
     command_buffer_call = calls[command_buffers[0]]
     render_encoder_calls = [calls[index] for index in render_encoders]
     end_calls = [calls[index] for index in ends]
-    status_calls = [calls[index] for index in statuses]
     completed_handler_call = calls[completed_handlers[0]]
-    error_calls = [calls[index] for index in errors]
     commit_call = calls[commits[0]]
-    object_schema: list[tuple[APICall, str, str | None, str, str]] = [
+    if private_texture_label.receiver != private_attachment_object:
+        _semantic_fail("private_factory_label_attachment_relation")
+    if memoryless_texture_label.receiver != memoryless_attachment_object:
+        _semantic_fail("memoryless_factory_label_attachment_relation")
+    if texture_calls[0].result != private_attachment_object:
+        _semantic_fail("private_factory_attachment_relation")
+    if texture_calls[1].result != memoryless_attachment_object:
+        _semantic_fail("memoryless_factory_attachment_relation")
+    if private_attachment_object == memoryless_attachment_object:
+        _semantic_fail("texture_object_alias")
+
+    object_schema: list[
+        tuple[APICall, str | re.Pattern[str], str | None, str, str]
+    ] = [
         (
             texture_calls[0],
-            "@dev",
-            "@tex0",
-            "[@dev newTextureWithDescriptor:<descriptor>]",
+            "MTLDevice",
+            private_attachment_object,
+            "[MTLDevice newTextureWithDescriptor:<descriptor>]",
             "private_factory",
         ),
         (
             texture_calls[1],
-            "@dev",
-            "@tex1",
-            "[@dev newTextureWithDescriptor:<descriptor>]",
+            "MTLDevice",
+            memoryless_attachment_object,
+            "[MTLDevice newTextureWithDescriptor:<descriptor>]",
             "memoryless_factory",
         ),
         (
-            command_buffer_call,
-            "@cq",
-            "@cb0",
-            "[@cq commandBufferWithDescriptor:<descriptor>]",
-            "command_buffer_factory",
-        ),
-        (
-            command_buffer_label,
-            "@cb0",
-            None,
-            '[@cb0 setLabel:"RIOS pm-clear CB"]',
-            "command_buffer_label",
-        ),
-        (
             private_texture_label,
-            "@tex0",
+            private_attachment_object,
             None,
-            '[@tex0 setLabel:"RIOS private 4x4"]',
+            f'[{private_attachment_object} setLabel:"RIOS private 4x4"]',
             "private_texture_label",
         ),
         (
             memoryless_texture_label,
-            "@tex1",
+            memoryless_attachment_object,
             None,
-            '[@tex1 setLabel:"RIOS memoryless 4x4"]',
+            f'[{memoryless_attachment_object} setLabel:"RIOS memoryless 4x4"]',
             "memoryless_texture_label",
         ),
         (
+            command_buffer_call,
+            re.compile(r"@cq[0-9]+\Z"),
+            None,
+            "",
+            "command_buffer_factory",
+        ),
+        (
+            command_buffer_label,
+            "MTLCommandBuffer",
+            None,
+            '[MTLCommandBuffer setLabel:"RIOS pm-clear CB"]',
+            "command_buffer_label",
+        ),
+        (
             render_encoder_calls[0],
-            "@cb0",
-            "@re0",
-            "[@cb0 renderCommandEncoderWithDescriptor:<descriptor>]",
+            "MTLCommandBuffer",
+            None,
+            "[MTLCommandBuffer renderCommandEncoderWithDescriptor:<descriptor>]",
             "private_encoder_factory",
         ),
         (
             private_encoder_label,
-            "@re0",
+            "MTLRenderCommandEncoder",
             None,
-            '[@re0 setLabel:"RIOS private clear"]',
+            '[MTLRenderCommandEncoder setLabel:"RIOS private clear"]',
             "private_encoder_label",
         ),
         (
             end_calls[0],
-            "@re0",
+            "MTLRenderCommandEncoder",
             None,
-            "[@re0 endEncoding]",
+            "[MTLRenderCommandEncoder endEncoding]",
             "private_end_encoding",
         ),
         (
             render_encoder_calls[1],
-            "@cb0",
-            "@re1",
-            "[@cb0 renderCommandEncoderWithDescriptor:<descriptor>]",
+            "MTLCommandBuffer",
+            None,
+            "[MTLCommandBuffer renderCommandEncoderWithDescriptor:<descriptor>]",
             "memoryless_encoder_factory",
         ),
         (
             memoryless_encoder_label,
-            "@re1",
+            "MTLRenderCommandEncoder",
             None,
-            '[@re1 setLabel:"RIOS memoryless clear"]',
+            '[MTLRenderCommandEncoder setLabel:"RIOS memoryless clear"]',
             "memoryless_encoder_label",
         ),
         (
             end_calls[1],
-            "@re1",
+            "MTLRenderCommandEncoder",
             None,
-            "[@re1 endEncoding]",
+            "[MTLRenderCommandEncoder endEncoding]",
             "memoryless_end_encoding",
         ),
         (
-            status_calls[0],
-            "@cb0",
-            None,
-            "[@cb0 status]",
-            "initial_status",
-        ),
-        (
             completed_handler_call,
-            "@cb0",
+            "MTLCommandBuffer",
             None,
-            "[@cb0 addCompletedHandler:<handler>]",
+            "[MTLCommandBuffer addCompletedHandler:]",
             "completed_handler",
         ),
-        (commit_call, "@cb0", None, "[@cb0 commit]", "commit"),
-        (
-            status_calls[1],
-            "@cb0",
-            None,
-            "[@cb0 status]",
-            "completion_status",
-        ),
-        (
-            error_calls[0],
-            "@cb0",
-            None,
-            "[@cb0 error]",
-            "completion_error",
-        ),
+        (commit_call, "MTLCommandBuffer", None, "[MTLCommandBuffer commit]", "commit"),
     ]
-    if [call.index for call, _, _, _, _ in object_schema] != list(range(17)):
+    if [call.index for call, _, _, _, _ in object_schema] != list(range(14)):
         _semantic_fail("api_object_schema_order")
     for call, receiver, result, grammar, reason in object_schema:
+        expected_receiver = (
+            receiver.fullmatch(call.receiver) is not None
+            if isinstance(receiver, re.Pattern)
+            else call.receiver == receiver
+        )
+        if not expected_receiver:
+            _semantic_fail(f"{reason}_receiver")
         _require_call_object(
             call,
-            receiver=receiver,
+            receiver=call.receiver,
             result=result,
             reason=reason,
         )
-        if call.text != grammar:
+        expected_grammar = (
+            f"[{call.receiver} commandBufferWithDescriptor:<descriptor>]"
+            if reason == "command_buffer_factory"
+            else grammar
+        )
+        if call.text != expected_grammar:
             _semantic_block(f"{reason}_grammar")
-    ordered = (
-        textures[0],
-        textures[1],
-        command_buffers[0],
-        command_buffer_label.index,
-        private_texture_label.index,
-        memoryless_texture_label.index,
-        render_encoders[0],
-        private_encoder_label.index,
-        ends[0],
-        render_encoders[1],
-        memoryless_encoder_label.index,
-        ends[1],
-        statuses[0],
-        completed_handlers[0],
-        commits[0],
-    )
-    if list(ordered) != sorted(ordered) or len(set(ordered)) != len(ordered):
-        _semantic_fail("api_partial_order")
-    if len(statuses) == 2 and statuses[1] <= commits[0]:
-        _semantic_fail("completion_status_order")
-    if errors:
-        if len(statuses) != 2 or errors[0] <= statuses[1]:
-            _semantic_fail("completion_error_order")
     return {
         "api_calls": len(calls),
         "texture_allocations": len(textures),
@@ -849,6 +960,8 @@ def _field_value(text: str, field_pattern: str, values: tuple[str, ...], reason:
     ]
     if not matching_lines:
         _semantic_block(f"{reason}_missing")
+    if len(matching_lines) != 1:
+        _semantic_block(f"{reason}_schema")
     found: set[str] = set()
     for line in matching_lines:
         if ":" in line:
@@ -872,19 +985,37 @@ def _field_value(text: str, field_pattern: str, values: tuple[str, ...], reason:
     return found.pop()
 
 
+def _literal_field_value(text: str, field_name: str, reason: str) -> str:
+    matches = re.findall(
+        rf"^{re.escape(field_name)}:\s+(\S+)\s*$",
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if len(matches) != 1:
+        _semantic_block(f"{reason}_schema")
+    return matches[0]
+
+
+def _text_field_value(text: str, field_name: str, reason: str) -> str:
+    matches = re.findall(
+        rf"^{re.escape(field_name)}:\s+(\S(?:.*\S)?)\s*$",
+        text,
+        re.MULTILINE,
+    )
+    if len(matches) != 1:
+        _semantic_block(f"{reason}_schema")
+    return matches[0]
+
+
 def _require_attachment_info(
     text: str,
     expected_label: str,
     expected_storage: str,
     expected_store: str,
+    expected_allocated_size: str,
     prefix: str,
 ) -> dict[str, str]:
-    known_labels = ("RIOS private 4x4", "RIOS memoryless 4x4")
-    present_labels = {label for label in known_labels if label in text}
-    if not present_labels:
-        _semantic_block(f"{prefix}_texture_label_missing")
-    if present_labels != {expected_label}:
-        _semantic_fail(f"{prefix}_texture_label")
+    label = _text_field_value(text, "label", f"{prefix}_texture_label")
     storage = _field_value(
         text,
         r"storage\s*mode|storageMode",
@@ -903,35 +1034,64 @@ def _require_attachment_info(
         ("StoreAndMultisampleResolve", "MultisampleResolve", "DontCare", "Store"),
         f"{prefix}_store",
     )
+    dimensions = _literal_field_value(
+        text, "dimensions", f"{prefix}_dimensions"
+    )
+    pixel_format = _literal_field_value(
+        text, "pixelFormat", f"{prefix}_pixel_format"
+    )
+    texture_type = _literal_field_value(
+        text, "textureType", f"{prefix}_texture_type"
+    )
+    allocated_size = _text_field_value(
+        text, "allocatedSize", f"{prefix}_allocated_size"
+    )
+    usage = _literal_field_value(text, "usage", f"{prefix}_usage")
+    if label != expected_label:
+        _semantic_fail(f"{prefix}_texture_label")
     if storage.lower() != expected_storage.lower():
         _semantic_fail(f"{prefix}_storage")
     if load.lower() != "clear":
         _semantic_fail(f"{prefix}_load")
     if store.lower() != expected_store.lower():
         _semantic_fail(f"{prefix}_store")
-    return {"storage": storage, "load": load, "store": store}
+    if dimensions != "4x4":
+        _semantic_fail(f"{prefix}_dimensions")
+    if pixel_format != "RGBA8Unorm":
+        _semantic_fail(f"{prefix}_pixel_format")
+    if texture_type != "2D":
+        _semantic_fail(f"{prefix}_texture_type")
+    if allocated_size != expected_allocated_size:
+        _semantic_fail(f"{prefix}_allocated_size")
+    if usage != "RenderTarget":
+        _semantic_fail(f"{prefix}_usage")
+    return {
+        "label": label,
+        "storage": storage,
+        "load": load,
+        "store": store,
+        "dimensions": dimensions,
+        "pixel_format": pixel_format,
+        "texture_type": texture_type,
+        "allocated_bytes": allocated_size.removesuffix(" bytes"),
+        "usage": usage,
+    }
 
 
 def analyze_transcripts(transcripts: AuditTranscripts) -> dict[str, str]:
-    _require_summary(transcripts.root)
-    for text in (
-        transcripts.commands,
-        transcripts.command_buffer,
-        transcripts.private_encoder,
-        transcripts.memoryless_encoder,
+    resources = _require_root_schema(transcripts.tool_version, transcripts.root)
+    private_object, memoryless_object = _require_exact_structure(transcripts)
+    counts = _require_api_semantics(
         transcripts.api_calls,
-        transcripts.private_attachment,
-        transcripts.memoryless_attachment,
-    ):
-        if re.search(r"^Summary:", text, flags=re.MULTILINE):
-            _require_summary(text)
-    _require_exact_structure(transcripts)
-    counts = _require_api_semantics(transcripts.api_calls)
+        private_object,
+        memoryless_object,
+    )
     private = _require_attachment_info(
         transcripts.private_attachment,
         "RIOS private 4x4",
         "Private",
         "Store",
+        "128 bytes",
         "private",
     )
     memoryless = _require_attachment_info(
@@ -939,16 +1099,28 @@ def analyze_transcripts(transcripts: AuditTranscripts) -> dict[str, str]:
         "RIOS memoryless 4x4",
         "Memoryless",
         "DontCare",
+        "0 bytes",
         "memoryless",
     )
     return {
         **{key: str(value) for key, value in counts.items()},
+        "resources": str(resources),
         "private_storage": private["storage"],
         "private_load": private["load"],
         "private_store": private["store"],
+        "private_dimensions": private["dimensions"],
+        "private_pixel_format": private["pixel_format"],
+        "private_texture_type": private["texture_type"],
+        "private_allocated_bytes": private["allocated_bytes"],
+        "private_usage": private["usage"],
         "memoryless_storage": memoryless["storage"],
         "memoryless_load": memoryless["load"],
         "memoryless_store": memoryless["store"],
+        "memoryless_dimensions": memoryless["dimensions"],
+        "memoryless_pixel_format": memoryless["pixel_format"],
+        "memoryless_texture_type": memoryless["texture_type"],
+        "memoryless_allocated_bytes": memoryless["allocated_bytes"],
+        "memoryless_usage": memoryless["usage"],
     }
 
 
@@ -971,6 +1143,7 @@ def _run_gpudebug(
         _semantic_block("gpudebug_global_deadline")
     effective_timeout = min(float(timeout), remaining)
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
+        failure_reason: str | None = None
         try:
             process = subprocess.Popen(
                 arguments,
@@ -982,22 +1155,34 @@ def _run_gpudebug(
             )
             try:
                 return_code = process.wait(timeout=effective_timeout)
-            except subprocess.TimeoutExpired as exc:
+            except subprocess.TimeoutExpired:
                 try:
                     os.killpg(process.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
                 process.wait()
-                raise SemanticError("BLOCKED", "gpudebug_timeout") from exc
+                return_code = process.returncode
+                failure_reason = "gpudebug_timeout"
         except OSError as exc:
             raise SemanticError("BLOCKED", "gpudebug_exec") from exc
-        if return_code != 0:
-            _semantic_block("gpudebug_command")
         stdout_file.seek(0, os.SEEK_END)
         if stdout_file.tell() > 16 * 1024 * 1024:
-            _semantic_block("gpudebug_output_limit")
+            raise GPUDebugCommandError("gpudebug_output_limit", "")
         stdout_file.seek(0)
-        return stdout_file.read().decode("utf-8", errors="replace")
+        stdout = stdout_file.read().decode("utf-8", errors="replace")
+        if failure_reason is not None:
+            raise GPUDebugCommandError(failure_reason, stdout)
+        if return_code != 0:
+            raise GPUDebugCommandError("gpudebug_command", stdout)
+        return stdout
+
+
+def _owned_session_from_output(text: str) -> str | None:
+    candidates = set(SESSION_RE.findall(text))
+    candidates.update(SESSION_HELPER_RE.findall(text))
+    if len(candidates) != 1:
+        return None
+    return candidates.pop()
 
 
 def collect_transcripts(
@@ -1025,27 +1210,46 @@ def collect_transcripts(
         _semantic_block("global_timeout_range")
     deadline = time.monotonic() + float(global_timeout)
 
-    root = _run_gpudebug(
-        [str(gpudebug), "-t", str(trace), "-c", "list"], timeout, deadline
+    tool_version = _run_gpudebug(
+        [str(gpudebug), "--version"], timeout, deadline
     )
-    session_matches = SESSION_RE.findall(root)
-    if len(session_matches) != 1:
-        _semantic_block("session_schema")
-    session = session_matches[0]
-
-    def session_command(*commands: str) -> str:
-        for command in commands:
-            if not command.startswith("go "):
-                continue
-            target = command.removeprefix("go ")
-            if target.split("/", 1)[0] not in ("commands", "api_calls"):
-                _semantic_block("non_root_qualified_go_command")
-        arguments = [str(gpudebug), "-s", session]
-        for command in commands:
-            arguments.extend(("-c", command))
-        return _run_gpudebug(arguments, timeout, deadline)
-
+    session: str | None = None
     try:
+        try:
+            root = _run_gpudebug(
+                [
+                    str(gpudebug),
+                    "-t",
+                    str(trace),
+                    "--timeout",
+                    str(min(timeout + 30, 120)),
+                    "-c",
+                    "list",
+                ],
+                timeout,
+                deadline,
+            )
+        except GPUDebugCommandError as exc:
+            session = _owned_session_from_output(exc.stdout)
+            raise
+        session = _owned_session_from_output(root)
+        session_matches = SESSION_RE.findall(root)
+        if len(session_matches) != 1 or session != session_matches[0]:
+            _semantic_block("session_schema")
+
+        def session_command(*commands: str) -> str:
+            assert session is not None
+            for command in commands:
+                if not command.startswith("go "):
+                    continue
+                target = command.removeprefix("go ")
+                if target.split("/", 1)[0] not in ("commands", "api_calls"):
+                    _semantic_block("non_root_qualified_go_command")
+            arguments = [str(gpudebug), "-s", session]
+            for command in commands:
+                arguments.extend(("-c", command))
+            return _run_gpudebug(arguments, timeout, deadline)
+
         commands = session_command("go commands")
         command_buffer = session_command("go commands/cb0")
         private_encoder = session_command("go commands/cb0/re0")
@@ -1059,6 +1263,7 @@ def collect_transcripts(
             "go commands/cb0/re1", "info color0"
         )
         transcripts = AuditTranscripts(
+            tool_version=tool_version,
             root=root,
             commands=commands,
             command_buffer=command_buffer,
@@ -1069,11 +1274,12 @@ def collect_transcripts(
             memoryless_attachment=memoryless_attachment,
         )
     finally:
-        _run_gpudebug(
-            [str(gpudebug), "--terminate", session],
-            min(timeout, 30),
-            max(deadline, time.monotonic()) + 30.0,
-        )
+        if session is not None:
+            _run_gpudebug(
+                [str(gpudebug), "--terminate", session],
+                min(timeout, 30),
+                max(deadline, time.monotonic()) + 30.0,
+            )
     return transcripts
 
 
@@ -1118,7 +1324,7 @@ def run_audit(
             "gpudebug_summary": "1cb-2encoders-0draws",
             **result,
             "gpudebug_result": "PASS",
-            "gpudebug_reason": "complete_schema_and_semantics",
+            "gpudebug_reason": "exact_trace_schema_and_submission_semantics",
         },
     )
 
@@ -1175,47 +1381,77 @@ def _expect_semantic(classification: str, callback) -> None:  # type: ignore[no-
 
 
 def _synthetic_transcripts() -> AuditTranscripts:
-    banner = "Summary:  1 command buffer, 2 encoders, 0 draw calls\n"
     api_rows = [
-        'api0  @tex0  [@dev newTextureWithDescriptor:<descriptor>]  info',
-        'api1  @tex1  [@dev newTextureWithDescriptor:<descriptor>]  info',
-        'api2  @cb0   [@cq commandBufferWithDescriptor:<descriptor>]  info',
-        'api3         [@cb0 setLabel:"RIOS pm-clear CB"]  info',
-        'api4         [@tex0 setLabel:"RIOS private 4x4"]  info',
-        'api5         [@tex1 setLabel:"RIOS memoryless 4x4"]  info',
-        'api6  @re0   [@cb0 renderCommandEncoderWithDescriptor:<descriptor>]  info',
-        'api7         [@re0 setLabel:"RIOS private clear"]  info',
-        'api8         [@re0 endEncoding]  info',
-        'api9  @re1   [@cb0 renderCommandEncoderWithDescriptor:<descriptor>]  info',
-        'api10        [@re1 setLabel:"RIOS memoryless clear"]  info',
-        'api11        [@re1 endEncoding]  info',
-        'api12        [@cb0 status]  info',
-        'api13        [@cb0 addCompletedHandler:<handler>]  info',
-        'api14        [@cb0 commit]  info',
-        'api15        [@cb0 status]  info',
-        'api16        [@cb0 error]  info',
+        'api0   @tex30  [MTLDevice newTextureWithDescriptor:<descriptor>]  info',
+        'api1   @tex31  [MTLDevice newTextureWithDescriptor:<descriptor>]  info',
+        'api2           [@tex30 setLabel:"RIOS private 4x4"]  info',
+        'api3           [@tex31 setLabel:"RIOS memoryless 4x4"]  info',
+        'api4           [@cq0 commandBufferWithDescriptor:<descriptor>]  info',
+        'api5           [MTLCommandBuffer setLabel:"RIOS pm-clear CB"]  info',
+        'api6           [MTLCommandBuffer renderCommandEncoderWithDescriptor:<descriptor>]  info',
+        'api7           [MTLRenderCommandEncoder setLabel:"RIOS private clear"]  info',
+        'api8           [MTLRenderCommandEncoder endEncoding]  info',
+        'api9           [MTLCommandBuffer renderCommandEncoderWithDescriptor:<descriptor>]  info',
+        'api10          [MTLRenderCommandEncoder setLabel:"RIOS memoryless clear"]  info',
+        'api11          [MTLRenderCommandEncoder endEncoding]  info',
+        'api12          [MTLCommandBuffer addCompletedHandler:]  info',
+        'api13          [MTLCommandBuffer commit]  info',
     ]
     private_info = (
-        banner
-        + 'Label: "RIOS private 4x4"\nStorage Mode: MTLStorageModePrivate\n'
-        + "Load Action: MTLLoadActionClear\nStore Action: MTLStoreActionStore\n"
+        "loadAction: Clear\nstoreAction: Store\nlabel: RIOS private 4x4\n"
+        "dimensions: 4x4\npixelFormat: RGBA8Unorm\ntextureType: 2D\n"
+        "storageMode: Private\nallocatedSize: 128 bytes\n"
+        "usage: RenderTarget\ncompressionType: Lossless\n"
+        "allowGPUOptimizedContents: yes\n"
+        "  Use --all for more details.\n"
     )
     memoryless_info = (
-        banner
-        + 'Label: "RIOS memoryless 4x4"\nStorage Mode: MTLStorageModeMemoryless\n'
-        + "Load Action: MTLLoadActionClear\nStore Action: MTLStoreActionDontCare\n"
+        "loadAction: Clear\nstoreAction: DontCare\nlabel: RIOS memoryless 4x4\n"
+        "dimensions: 4x4\npixelFormat: RGBA8Unorm\ntextureType: 2D\n"
+        "storageMode: Memoryless\nallocatedSize: 0 bytes\n"
+        "usage: RenderTarget\ncompressionType: Lossless\n"
+        "allowGPUOptimizedContents: yes\n"
+        "  Use --all for more details.\n"
     )
     return AuditTranscripts(
-        root="Session 7 created.\n" + banner,
-        commands=banner + 'cb0  "RIOS pm-clear CB"  2 encoders  info\n(1 item)\n',
-        command_buffer=(
-            banner
-            + 're0  "RIOS private clear"  render  info\n'
-            + 're1  "RIOS memoryless clear"  render  info\n(2 items)\n'
+        tool_version="gpudebug 1.0\n",
+        root=(
+            "Session 7 created.\n"
+            "1 other session active.\n"
+            "gpudebug -s 7 -c <command> to send commands.\n"
+            "Name         Summary           Actions\n"
+            "commands     1 command buffer       go\n"
+            "performance  see 'profile ?'\n"
+            "api_calls    14 API calls           go\n"
+            "resources    59 objects             go\n"
+            "(4 items)\n"
         ),
-        private_encoder=banner + 'color0  "RIOS private 4x4"  @tex0  info\n(1 item)\n',
-        memoryless_encoder=banner + 'color0  "RIOS memoryless 4x4"  @tex1  info\n(1 item)\n',
-        api_calls=banner + "\n".join(api_rows) + "\n(17 items)\n",
+        commands=(
+            "Name  Summary     Label                Actions\n"
+            "────  ──────────  ───────────────────  ───────\n"
+            'cb0   2 encoders  "MTLCommandQueue 1"       go\n'
+            "(1 items)\n"
+        ),
+        command_buffer=(
+            "Name  Label                    Summary  Actions\n"
+            "────  ───────────────────────  ───────  ───────\n"
+            're0   "RIOS private clear"                   go\n'
+            're1   "RIOS memoryless clear"                go\n'
+            "(2 items)\n"
+        ),
+        private_encoder=(
+            "Name    Label               Summary                Actions\n"
+            "──────  ──────────────────  ─────────────────────  ───────────\n"
+            'color0  "RIOS private 4x4"  @tex30 4x4 RGBA8Unorm  info, fetch\n'
+            "(1 items)\n"
+        ),
+        memoryless_encoder=(
+            "Name    Label                  Summary                Actions\n"
+            "──────  ─────────────────────  ─────────────────────  ───────────\n"
+            'color0  "RIOS memoryless 4x4"  @tex31 4x4 RGBA8Unorm  info, fetch\n'
+            "(1 items)\n"
+        ),
+        api_calls="\n".join(api_rows) + "\n(14 items)\n",
         private_attachment=private_info,
         memoryless_attachment=memoryless_info,
     )
@@ -1408,12 +1644,41 @@ def self_test() -> None:
         good = _synthetic_transcripts()
         analyzed = analyze_transcripts(good)
         assert analyzed["command_buffers"] == "1"
+        assert analyzed["api_calls"] == "14"
+        assert analyzed["status_calls"] == "0"
+        assert analyzed["error_calls"] == "0"
+        assert analyzed["resources"] == "59"
         assert analyzed["memoryless_store"] == "DontCare"
+        assert analyzed["private_dimensions"] == "4x4"
+        assert analyzed["memoryless_pixel_format"] == "RGBA8Unorm"
+        assert analyzed["private_texture_type"] == "2D"
+        assert analyzed["private_allocated_bytes"] == "128"
+        assert analyzed["memoryless_allocated_bytes"] == "0"
+        assert analyzed["memoryless_usage"] == "RenderTarget"
+        dynamic_ids = AuditTranscripts(
+            **{
+                **good.__dict__,
+                "root": good.root.replace(
+                    "1 other session active.", "3 other sessions active."
+                ).replace("59 objects", "73 objects"),
+                "commands": good.commands.replace(
+                    '"MTLCommandQueue 1"', '"MTLCommandQueue 12"'
+                ),
+                "private_encoder": good.private_encoder.replace("@tex30", "@tex4"),
+                "memoryless_encoder": good.memoryless_encoder.replace(
+                    "@tex31", "@tex105"
+                ),
+                "api_calls": good.api_calls.replace("@tex30", "@tex4")
+                .replace("@tex31", "@tex105")
+                .replace("@cq0", "@cq27"),
+            }
+        )
+        assert analyze_transcripts(dynamic_ids)["resources"] == "73"
         for field, original, replacement in (
-            ("private_encoder", "@tex0", "@tex1"),
-            ("private_encoder", "@tex0", "@tex9"),
-            ("memoryless_encoder", "@tex1", "@tex0"),
-            ("memoryless_encoder", "@tex1", "@tex9"),
+            ("private_encoder", "@tex30", "@tex31"),
+            ("private_encoder", "@tex30", "@tex9"),
+            ("memoryless_encoder", "@tex31", "@tex30"),
+            ("memoryless_encoder", "@tex31", "@tex9"),
         ):
             mutated_tree = good.__dict__[field].replace(original, replacement)
             _expect_semantic(
@@ -1425,33 +1690,24 @@ def self_test() -> None:
                 ),
             )
         wrong_object_replacements = (
-            ("api0  @tex0", "api0  @tex9"),
-            ("[@dev newTextureWithDescriptor", "[@dev9 newTextureWithDescriptor"),
-            ("api1  @tex1", "api1  @tex9"),
-            ("api2  @cb0", "api2  @cb9"),
-            ("[@cq commandBufferWithDescriptor", "[@cq9 commandBufferWithDescriptor"),
-            ("api3         [@cb0 setLabel", "api3         [@cb9 setLabel"),
-            ("api4         [@tex0 setLabel", "api4         [@tex9 setLabel"),
-            ("api5         [@tex1 setLabel", "api5         [@tex9 setLabel"),
-            ("api6  @re0", "api6  @re9"),
-            ("api6  @re0   [@cb0", "api6  @re0   [@cb9"),
-            ("api7         [@re0 setLabel", "api7         [@re9 setLabel"),
-            ("api8         [@re0 endEncoding", "api8         [@re9 endEncoding"),
-            ("api9  @re1", "api9  @re9"),
-            ("api9  @re1   [@cb0", "api9  @re1   [@cb9"),
-            ("api10        [@re1 setLabel", "api10        [@re9 setLabel"),
-            ("api11        [@re1 endEncoding", "api11        [@re9 endEncoding"),
-            ("api12        [@cb0 status", "api12        [@cb9 status"),
+            ("api0   @tex30", "api0   @tex9"),
+            ("api1   @tex31", "api1   @tex9"),
+            ("[@tex30 setLabel", "[@tex9 setLabel"),
+            ("[@tex31 setLabel", "[@tex9 setLabel"),
+            ("[MTLDevice newTextureWithDescriptor", "[@dev newTextureWithDescriptor"),
+            ("[@cq0 commandBufferWithDescriptor", "[@queue commandBufferWithDescriptor"),
+            ("[MTLCommandBuffer setLabel", "[@cb0 setLabel"),
             (
-                "api13        [@cb0 addCompletedHandler",
-                "api13        [@cb9 addCompletedHandler",
+                "[MTLCommandBuffer renderCommandEncoderWithDescriptor",
+                "[@cb0 renderCommandEncoderWithDescriptor",
             ),
-            ("api14        [@cb0 commit", "api14        [@cb9 commit"),
-            ("api15        [@cb0 status", "api15        [@cb9 status"),
-            ("api16        [@cb0 error", "api16        [@cb9 error"),
+            ("[MTLRenderCommandEncoder setLabel", "[@re0 setLabel"),
+            ("[MTLRenderCommandEncoder endEncoding", "[@re0 endEncoding"),
+            ("[MTLCommandBuffer addCompletedHandler:]", "[@cb0 addCompletedHandler:]"),
+            ("[MTLCommandBuffer commit]", "[@cb0 commit]"),
         )
         for original, replacement in wrong_object_replacements:
-            mutated = good.api_calls.replace(original, replacement)
+            mutated = good.api_calls.replace(original, replacement, 1)
             assert mutated != good.api_calls
             _expect_semantic(
                 "FAIL",
@@ -1463,20 +1719,26 @@ def self_test() -> None:
             )
 
         grammar_drifts = (
-            good.api_calls.replace("[@cb0 commit]", "[@cb0 commit:unexpected]"),
-            good.api_calls.replace("[@cb0 commit]", "[@cb0 commit unexpected]"),
-            good.api_calls.replace("[@cb0 status]", "[@cb0 status:unexpected]"),
-            good.api_calls.replace("[@cb0 error]", "[@cb0 error:unexpected]"),
             good.api_calls.replace(
-                "[@re0 endEncoding]", "[@re0 endEncoding:unexpected]"
+                "[MTLCommandBuffer commit]",
+                "[MTLCommandBuffer commit:unexpected]",
             ),
             good.api_calls.replace(
-                "[@cq commandBufferWithDescriptor:<descriptor>]",
-                "[@cq commandBuffer]",
+                "[MTLCommandBuffer commit]",
+                "[MTLCommandBuffer commit unexpected]",
             ),
             good.api_calls.replace(
-                "[@cq commandBufferWithDescriptor:<descriptor>]",
-                "[@cq commandBufferWithUnretainedReferences]",
+                "[MTLRenderCommandEncoder endEncoding]",
+                "[MTLRenderCommandEncoder endEncoding:unexpected]",
+                1,
+            ),
+            good.api_calls.replace(
+                "[@cq0 commandBufferWithDescriptor:<descriptor>]",
+                "[@cq0 commandBuffer]",
+            ),
+            good.api_calls.replace(
+                "[@cq0 commandBufferWithDescriptor:<descriptor>]",
+                "[@cq0 commandBufferWithUnretainedReferences]",
             ),
         )
         for grammar_drift in grammar_drifts:
@@ -1490,7 +1752,7 @@ def self_test() -> None:
                 ),
             )
 
-        factory_indices = (0, 1, 2, 6, 9)
+        factory_indices = (0, 1)
         for factory_index in factory_indices:
             missing_result = re.sub(
                 rf"(^[ \t]*api{factory_index}[ \t]+)"
@@ -1510,7 +1772,7 @@ def self_test() -> None:
                 ),
             )
 
-        nonfactory_indices = (3, 4, 5, 7, 8, 10, 11, 12, 13, 14, 15, 16)
+        nonfactory_indices = tuple(range(2, 14))
         for nonfactory_index in nonfactory_indices:
             artificial_result = re.sub(
                 rf"(^[ \t]*api{nonfactory_index}[ \t]+)(\[)",
@@ -1529,10 +1791,10 @@ def self_test() -> None:
                 ),
             )
 
-        for api_index in range(17):
+        for api_index in range(14):
             missing_receiver = re.sub(
                 rf"(^[ \t]*api{api_index}[ \t]+.*?\[)"
-                r"@[A-Za-z][A-Za-z0-9_]*[ \t]+",
+                r"[@A-Za-z][A-Za-z0-9_]*[ \t]+",
                 r"\1",
                 good.api_calls,
                 count=1,
@@ -1549,7 +1811,7 @@ def self_test() -> None:
             )
 
         api0_row = (
-            'api0  @tex0  [@dev newTextureWithDescriptor:<descriptor>]  info\n'
+            'api0   @tex30  [MTLDevice newTextureWithDescriptor:<descriptor>]  info\n'
         )
         duplicate_api_fixtures = (
             good.api_calls.replace(api0_row, api0_row + api0_row),
@@ -1557,11 +1819,11 @@ def self_test() -> None:
             good.api_calls.replace(
                 api0_row,
                 api0_row
-                + 'api0  @tex9  [@dev newTextureWithDescriptor:<other>]  info\n',
+                + 'api0   @tex9  [MTLDevice newTextureWithDescriptor:<other>]  info\n',
             ),
-            good.api_calls + "(17 items)\n",
-            good.api_calls + "(16 items)\n",
-            good.api_calls.replace("(17 items)", "(16 items)"),
+            good.api_calls + "(14 items)\n",
+            good.api_calls + "(13 items)\n",
+            good.api_calls.replace("(14 items)", "(13 items)"),
         )
         for duplicate_fixture in duplicate_api_fixtures:
             _expect_semantic(
@@ -1579,9 +1841,9 @@ def self_test() -> None:
                     **{
                         **good.__dict__,
                         "commands": good.commands.replace(
-                            'cb0  "RIOS pm-clear CB"  2 encoders  info\n',
-                            'cb0  "RIOS pm-clear CB"  2 encoders  info\n'
-                            'cb0  "RIOS pm-clear CB"  2 encoders  info\n',
+                            'cb0   2 encoders  "MTLCommandQueue 1"       go\n',
+                            'cb0   2 encoders  "MTLCommandQueue 1"       go\n'
+                            'cb0   2 encoders  "MTLCommandQueue 1"       go\n',
                         ),
                     }
                 )
@@ -1590,7 +1852,9 @@ def self_test() -> None:
         _expect_semantic(
             "BLOCKED",
             lambda: analyze_transcripts(
-                AuditTranscripts(**{**good.__dict__, "root": "schema changed\n"})
+                AuditTranscripts(
+                    **{**good.__dict__, "tool_version": "gpudebug 2.0\n"}
+                )
             ),
         )
         _expect_semantic(
@@ -1607,12 +1871,23 @@ def self_test() -> None:
             ),
         )
         _expect_semantic(
+            "FAIL",
+            lambda: analyze_transcripts(
+                AuditTranscripts(
+                    **{
+                        **good.__dict__,
+                        "root": good.root.replace("14 API calls", "15 API calls"),
+                    }
+                )
+            ),
+        )
+        _expect_semantic(
             "BLOCKED",
             lambda: analyze_transcripts(
                 AuditTranscripts(
                     **{
                         **good.__dict__,
-                        "api_calls": good.api_calls.replace("(17 items)", ""),
+                        "api_calls": good.api_calls.replace("(14 items)", ""),
                     }
                 )
             ),
@@ -1624,7 +1899,7 @@ def self_test() -> None:
                     **{
                         **good.__dict__,
                         "api_calls": good.api_calls.replace(
-                            "addCompletedHandler:<handler>",
+                            "addCompletedHandler:",
                             'setLabel:"unexpected-submit-schema"',
                         ),
                     }
@@ -1638,85 +1913,157 @@ def self_test() -> None:
                     **{
                         **good.__dict__,
                         "api_calls": good.api_calls.replace(
-                            "[@cb0 commit]", "[@cb0 presentDrawable:@drawable]"
+                            "[MTLCommandBuffer commit]",
+                            "[MTLCommandBuffer presentDrawable:@drawable]",
                         ),
                     }
                 )
             ),
         )
-        without_error = good.api_calls.replace(
-            'api16        [@cb0 error]  info\n(17 items)',
-            '(16 items)',
+        _expect_semantic(
+            "FAIL",
+            lambda: analyze_transcripts(
+                AuditTranscripts(
+                    **{
+                        **good.__dict__,
+                        "api_calls": good.api_calls.replace(
+                            "addCompletedHandler:", "waitUntilCompleted"
+                        ),
+                    }
+                )
+            ),
         )
-        without_completion = good.api_calls.replace(
-            'api15        [@cb0 status]  info\n'
-            'api16        [@cb0 error]  info\n'
-            '(17 items)',
-            '(15 items)',
+        _expect_semantic(
+            "FAIL",
+            lambda: analyze_transcripts(
+                AuditTranscripts(
+                    **{
+                        **good.__dict__,
+                        "api_calls": good.api_calls.replace(
+                            "api1   @tex31", "api99  @tex31"
+                        ).replace("api2          ", "api1          ").replace(
+                            "api99  @tex31", "api2   @tex31"
+                        ),
+                    }
+                )
+            ),
         )
-        for incomplete_callback in (without_error, without_completion):
+        _expect_semantic(
+            "BLOCKED",
+            lambda: analyze_transcripts(
+                AuditTranscripts(
+                    **{
+                        **good.__dict__,
+                        "private_attachment": good.private_attachment.replace(
+                            "storageMode: Private\n", ""
+                        ),
+                    }
+                )
+            ),
+        )
+        _expect_semantic(
+            "FAIL",
+            lambda: analyze_transcripts(
+                AuditTranscripts(
+                    **{
+                        **good.__dict__,
+                        "private_attachment": good.private_attachment.replace(
+                            "storageMode: Private", "storageMode: Shared"
+                        ),
+                    }
+                )
+            ),
+        )
+        for field, old, new in (
+            ("private_attachment", "dimensions: 4x4", "dimensions: 8x8"),
+            (
+                "memoryless_attachment",
+                "pixelFormat: RGBA8Unorm",
+                "pixelFormat: BGRA8Unorm",
+            ),
+        ):
             _expect_semantic(
                 "FAIL",
-                lambda payload=incomplete_callback: analyze_transcripts(
+                lambda name=field, before=old, after=new: analyze_transcripts(
                     AuditTranscripts(
-                        **{**good.__dict__, "api_calls": payload}
+                        **{
+                            **good.__dict__,
+                            name: good.__dict__[name].replace(before, after),
+                        }
                     )
                 ),
             )
-        _expect_semantic(
-            "BLOCKED",
-            lambda: analyze_transcripts(
-                AuditTranscripts(
-                    **{
-                        **good.__dict__,
-                        "api_calls": good.api_calls.replace(
-                            "addCompletedHandler:<handler>", "waitUntilCompleted"
-                        ),
-                    }
-                )
+
+        attachment_singletons = (
+            (
+                "private_attachment",
+                "label: RIOS private 4x4",
+                "label: wrong private label",
+            ),
+            (
+                "private_attachment",
+                "usage: RenderTarget",
+                "usage: ShaderRead",
+            ),
+            (
+                "private_attachment",
+                "allocatedSize: 128 bytes",
+                "allocatedSize: 64 bytes",
+            ),
+            (
+                "private_attachment",
+                "textureType: 2D",
+                "textureType: 2DArray",
+            ),
+            (
+                "memoryless_attachment",
+                "label: RIOS memoryless 4x4",
+                "label: wrong memoryless label",
+            ),
+            (
+                "memoryless_attachment",
+                "usage: RenderTarget",
+                "usage: ShaderRead",
+            ),
+            (
+                "memoryless_attachment",
+                "allocatedSize: 0 bytes",
+                "allocatedSize: 128 bytes",
+            ),
+            (
+                "memoryless_attachment",
+                "textureType: 2D",
+                "textureType: Cube",
             ),
         )
-        _expect_semantic(
-            "FAIL",
-            lambda: analyze_transcripts(
-                AuditTranscripts(
-                    **{
-                        **good.__dict__,
-                        "api_calls": good.api_calls.replace(
-                            "api1  @tex1", "api99 @tex1"
-                        ).replace("api2  @cb0", "api1  @cb0").replace(
-                            "api99 @tex1", "api2  @tex1"
-                        ),
-                    }
-                )
-            ),
-        )
-        _expect_semantic(
-            "BLOCKED",
-            lambda: analyze_transcripts(
-                AuditTranscripts(
-                    **{
-                        **good.__dict__,
-                        "private_attachment": good.private_attachment.replace(
-                            "Storage Mode: MTLStorageModePrivate\n", ""
-                        ),
-                    }
-                )
-            ),
-        )
-        _expect_semantic(
-            "FAIL",
-            lambda: analyze_transcripts(
-                AuditTranscripts(
-                    **{
-                        **good.__dict__,
-                        "private_attachment": good.private_attachment.replace(
-                            "MTLStorageModePrivate", "MTLStorageModeShared"
-                        ),
-                    }
-                )
-            ),
-        )
+        for field, exact_line, wrong_line in attachment_singletons:
+            source = good.__dict__[field]
+            missing = source.replace(f"{exact_line}\n", "", 1)
+            wrong = source.replace(exact_line, wrong_line, 1)
+            duplicate = source.replace(
+                f"{exact_line}\n",
+                f"{exact_line}\n{exact_line}\n",
+                1,
+            )
+            assert missing != source and wrong != source and duplicate != source
+            _expect_semantic(
+                "BLOCKED",
+                lambda name=field, payload=missing: analyze_transcripts(
+                    AuditTranscripts(**{**good.__dict__, name: payload})
+                ),
+            )
+            _expect_semantic(
+                "FAIL",
+                lambda name=field, payload=wrong: analyze_transcripts(
+                    AuditTranscripts(**{**good.__dict__, name: payload})
+                ),
+            )
+            _expect_semantic(
+                "BLOCKED",
+                lambda name=field, payload=duplicate: analyze_transcripts(
+                    AuditTranscripts(**{**good.__dict__, name: payload})
+                ),
+            )
 
         fake_tool = root / "fake-gpudebug"
         fake_trace = root / CAPTURE_NAME
@@ -1726,24 +2073,15 @@ def self_test() -> None:
         fake_audit.chmod(0o600)
         fake_state = root / "fake-gpudebug-state"
 
-        def without_banner(value: str) -> str:
-            return value.replace(
-                "Summary:  1 command buffer, 2 encoders, 0 draw calls\n", "", 1
-            )
-
         fake_outputs = {
-            "go commands": without_banner(good.commands),
-            "go commands/cb0": without_banner(good.command_buffer),
-            "go commands/cb0/re0": without_banner(good.private_encoder),
-            "go commands/cb0/re1": without_banner(good.memoryless_encoder),
-            "go api_calls": "api0  @ignored  [@ignored ignored]  info\n",
-            "list --all": without_banner(good.api_calls),
-            "go commands/cb0/re0|info color0": without_banner(
-                good.private_attachment
-            ),
-            "go commands/cb0/re1|info color0": without_banner(
-                good.memoryless_attachment
-            ),
+            "go commands": good.commands,
+            "go commands/cb0": good.command_buffer,
+            "go commands/cb0/re0": good.private_encoder,
+            "go commands/cb0/re1": good.memoryless_encoder,
+            "go api_calls": "RAW-TRACE-MUST-NOT-LEAK\n",
+            "list --all": good.api_calls,
+            "go commands/cb0/re0|info color0": good.private_attachment,
+            "go commands/cb0/re1|info color0": good.memoryless_attachment,
         }
         fake_tool.write_text(
             "#!/usr/bin/env python3\n"
@@ -1758,6 +2096,9 @@ def self_test() -> None:
             "    subprocess.Popen([sys.executable, '-c', "
             "'import time; time.sleep(30)'])\n"
             "    time.sleep(30)\n"
+            "if args == ['--version']:\n"
+            "    print('gpudebug 1.0')\n"
+            "    raise SystemExit(0)\n"
             "if '--terminate' in args:\n"
             "    state_path.unlink(missing_ok=True)\n"
             "    raise SystemExit(0)\n"
@@ -1767,9 +2108,19 @@ def self_test() -> None:
             "    if commands != ['list']:\n"
             "        raise SystemExit(46)\n"
             "    state_path.write_text('/', encoding='utf-8')\n"
-            "    print('Session 7 created.')\n"
-            "    print('Summary:  1 command buffer, 2 encoders, 0 draw calls')\n"
-            "    print('Trace: RAW-TRACE-MUST-NOT-LEAK')\n"
+            "    trace_name = pathlib.Path(args[args.index('-t') + 1]).name\n"
+            "    if trace_name == 'fail-after-create-timeout.gputrace':\n"
+            "        print('Session 7 created.')\n"
+            "        print('gpudebug -s 7 -c <command> to send commands.', flush=True)\n"
+            "        time.sleep(30)\n"
+            "    if trace_name == 'fail-after-create-nonzero.gputrace':\n"
+            "        print('Session 7 created.')\n"
+            "        print('gpudebug -s 7 -c <command> to send commands.', flush=True)\n"
+            "        raise SystemExit(52)\n"
+            "    if trace_name == 'fail-session-banner-drift.gputrace':\n"
+            f"        print({good.root.replace('Session 7 created.', 'Session seven created.')!r}, end='')\n"
+            "        raise SystemExit(0)\n"
+            f"    print({good.root!r}, end='')\n"
             "elif '-s' in args and state_path.is_file():\n"
             "    current = state_path.read_text(encoding='utf-8')\n"
             "    for command in commands:\n"
@@ -1817,6 +2168,24 @@ def self_test() -> None:
         assert "gpudebug_result=PASS\n" in audit_payload
         assert "RAW-TRACE-MUST-NOT-LEAK" not in audit_payload
         assert not fake_state.exists()
+        assert _owned_session_from_output(
+            "Session 7 created.\n"
+            "gpudebug -s 8 -c <command> to send commands.\n"
+        ) is None
+        for failure_name in (
+            "fail-after-create-timeout.gputrace",
+            "fail-after-create-nonzero.gputrace",
+            "fail-session-banner-drift.gputrace",
+        ):
+            failure_trace = root / failure_name
+            failure_trace.write_bytes(b"private raw trace failure fixture")
+            _expect_semantic(
+                "BLOCKED",
+                lambda path=failure_trace: collect_transcripts(
+                    fake_tool, path, 1, 5
+                ),
+            )
+            assert not fake_state.exists()
         _expect_semantic(
             "BLOCKED",
             lambda: _run_gpudebug(
