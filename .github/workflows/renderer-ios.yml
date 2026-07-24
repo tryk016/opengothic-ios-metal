@@ -1575,7 +1575,7 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
             ios/patches/apply-patches.sh
-          grep -Fq 'opengothic-ios-patch-stack-v13' \
+          grep -Fq 'opengothic-ios-patch-stack-v14' \
             ios/patches/apply-patches.sh
 
           grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-5.binaryarchive' \
