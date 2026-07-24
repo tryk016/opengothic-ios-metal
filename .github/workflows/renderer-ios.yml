@@ -80,7 +80,7 @@ jobs:
           submodules: recursive
 
       - name: Install build prerequisites
-        run: brew install cmake glslang
+        run: brew install cmake glslang ripgrep
 
       - name: Verify pinned Tempest fork twice
         run: |
@@ -2119,17 +2119,20 @@ jobs:
             exit 1
           fi
           if grep -Eq \
-              'ForwardLightListFunction|ForwardFragmentFunction|riosForwardPlus|FunctionNames\\[' \
+              'ForwardLightListFunction|ForwardFragmentFunction|riosForwardPlus|FunctionNames\[' \
               game/graphics/iosshadingprototypepipeline.h \
               game/graphics/iosshadingprototypepipeline.cpp \
               game/graphics/iosshadingprototypepipeline.mm; then
             echo 'P2.5b1 Tile-only factory references a reserved Forward+ ABI'
             exit 1
           fi
+          test "$(grep -Fc 'iosCreateShadingPrototypePipeline' \
+              game/graphics/iosmetalcontext.cpp)" -eq 1
           if rg -n 'iosCreateShadingPrototypePipeline' game \
               --glob '!iosshadingprototypepipeline.h' \
-              --glob '!iosshadingprototypepipeline.mm'; then
-            echo 'P2.5b1 factory is instantiated before its P2.5b2 gate'
+              --glob '!iosshadingprototypepipeline.mm' \
+              --glob '!iosmetalcontext.cpp'; then
+            echo 'P2.5b3 Tile factory caller escaped its exact iosmetalcontext.cpp allowlist'
             exit 1
           fi
           if rg -n 'iosCreateShadingPrototypeForwardPipeline' game \
@@ -2202,9 +2205,21 @@ jobs:
             game/graphics/iosshadingprototypeforwardpipeline.mm
           grep -Fq 'descriptor.rasterizationEnabled = YES;' \
             game/graphics/iosshadingprototypeforwardpipeline.mm
-          grep -Fq \
-            'static_assert(RendererIOSShadingPrototypeShader::TotalMetallibExportCount==15u);' \
-            game/graphics/iosshadingprototypeforwardpipeline.mm
+          test "$(python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path(
+              "game/graphics/iosshadingprototypeforwardpipeline.mm"
+          ).read_text()
+          normalized = "".join(source.split())
+          needle = (
+              "static_assert("
+              "RendererIOSShadingPrototypeShader::"
+              "TotalMetallibExportCount==15u);"
+          )
+          print(normalized.count(needle))
+          PY
+          )" -eq 1
           grep -Fq 'static_assert(sizeof(Report)==372u);' \
             ios/tests/iosshadingprototypeforwardpipeline.cpp
           grep -Fq 'if(mutations!=197u)' \
@@ -2226,10 +2241,13 @@ jobs:
           grep -Fq \
             'alphaBuild!=NativePipelineBuild::CreationFailed' \
             game/graphics/iosshadingprototypeforwardpipeline.mm
+          test "$(grep -Fc 'iosEncodeShadingPrototypeTileProbe' \
+              game/graphics/iosmetalcontext.cpp)" -eq 1
           if rg -n 'iosEncodeShadingPrototypeTileProbe' game \
               --glob '!iosshadingprototypetileprobe.h' \
-              --glob '!iosshadingprototypetileprobe.mm'; then
-            echo 'P2.5b2a0 compile-only Tile probe gained a production caller'
+              --glob '!iosshadingprototypetileprobe.mm' \
+              --glob '!iosmetalcontext.cpp'; then
+            echo 'P2.5b3 Tile encode caller escaped its exact iosmetalcontext.cpp allowlist'
             exit 1
           fi
           if grep -Eq \
@@ -2271,7 +2289,7 @@ jobs:
               game/graphics/iosshadingprototypepipeline.mm)" -eq 1
           test "$(grep -Fc 'descriptor.binaryArchives = nil;' \
               game/graphics/iosshadingprototypepipeline.mm)" -eq 2
-          if rg -n 'descriptor\\.binaryArchives[[:space:]]+=[[:space:]]+' \
+          if rg -n 'descriptor\.binaryArchives[[:space:]]+=[[:space:]]+' \
               game/graphics/iosshadingprototypepipeline.mm |
               grep -Fv 'descriptor.binaryArchives = nil;'; then
             echo 'P2.5b1 factory attaches a mutable pipeline archive'
