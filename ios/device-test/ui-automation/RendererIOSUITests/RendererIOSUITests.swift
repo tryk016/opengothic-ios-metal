@@ -80,7 +80,10 @@ final class RendererIOSUITests: XCTestCase {
       }
       wait(seconds: 45)
     } else {
-      wait(seconds: 25)
+      // Save 1 was not yet receptive to the inventory tap at 27 s, while the
+      // first QuickRing tap succeeded at 35 s. Keep the first UI action beyond
+      // that observed load boundary without changing the interaction sequence.
+      wait(seconds: 35)
     }
 
     let frame = app.frame

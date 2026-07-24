@@ -103,6 +103,7 @@ preserve_evidence() {
   out="$ROOT/build/device-ui-automation/$EXPECTED_SHA/$result-$timestamp-$$"
   mkdir -p "$out"
   for candidate in xcodebuild.log xcresult-summary.json cleanup.log \
+      device-selection.log \
       log-pre-test.txt stderr-pre-test.log crash-pre-test.log \
       log-final.txt stderr-final.log \
       crash-final.log log-before-cleanup.txt stderr-before-cleanup.log \
@@ -151,24 +152,70 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-xcrun xcdevice list >"$WORK/xcdevices.json"
-DEVICE="$(python3 - "$WORK/xcdevices.json" "${OPENGOTHIC_IOS_DEVICE:-}" <<'PY'
+select_device() {
+  local attempt xcjson corejson device
+
+  for attempt in 1 2 3 4 5; do
+    xcjson="$WORK/xcdevices-$attempt.json"
+    corejson="$WORK/devices-$attempt.json"
+    if xcrun xcdevice list >"$xcjson" 2>>"$WORK/device-selection.log" &&
+        xcrun devicectl list devices --json-output "$corejson" \
+          >/dev/null 2>>"$WORK/device-selection.log" &&
+        device="$(python3 - "$xcjson" "$corejson" \
+        "${OPENGOTHIC_IOS_DEVICE:-}" \
+        2>>"$WORK/device-selection.log" <<'PY'
 import json, sys
 devices = json.load(open(sys.argv[1]))
-requested = sys.argv[2]
+core_devices = json.load(open(sys.argv[2]))["result"]["devices"]
+requested = sys.argv[3]
 matches = [
     device for device in devices
     if not device.get("simulator")
     and device.get("available")
     and device.get("interface") == "usb"
     and device.get("platform") == "com.apple.platform.iphoneos"
-    and (not requested or requested == device.get("identifier"))
 ]
+if requested:
+    requested_records = [
+        device for device in core_devices
+        if device.get("hardwareProperties", {}).get("platform") == "iOS"
+        and device.get("hardwareProperties", {}).get("reality") == "physical"
+        and requested in (
+            device.get("identifier"),
+            device.get("hardwareProperties", {}).get("udid"),
+        )
+    ]
+    if len(requested_records) != 1:
+        raise SystemExit(
+            f"expected one physical CoreDevice for explicit selection, "
+            f"found {len(requested_records)}"
+        )
+    requested_udid = requested_records[0]["hardwareProperties"]["udid"]
+    matches = [
+        device for device in matches
+        if device.get("identifier") == requested_udid
+    ]
 if len(matches) != 1:
     raise SystemExit(f"expected one available USB iPhone, found {len(matches)}")
 print(matches[0]["identifier"])
 PY
-)" || fail "could not select a unique connected physical iPhone"
+    )"; then
+      printf 'attempt=%d result=selected\n' "$attempt" \
+        >>"$WORK/device-selection.log"
+      printf '%s\n' "$device"
+      return 0
+    fi
+    printf 'attempt=%d result=retry\n' "$attempt" \
+      >>"$WORK/device-selection.log"
+    ((attempt < 5)) && sleep 1
+  done
+  return 1
+}
+
+if ! DEVICE="$(select_device)"; then
+  tail -20 "$WORK/device-selection.log" >&2 || true
+  fail "could not select a unique connected physical iPhone"
+fi
 
 xcrun devicectl device info apps --device "$DEVICE" \
   --json-output "$WORK/apps.json" >/dev/null
