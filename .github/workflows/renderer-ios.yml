@@ -84,6 +84,14 @@ jobs:
           fetch-depth: 0
           submodules: recursive
 
+      - name: Verify fail-closed verification policy
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            scripts/classify_verification.py --validate-policy
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            ios/tests/test_verification_classifier.py
+
       - name: Install build prerequisites
         run: brew install cmake glslang ripgrep
 

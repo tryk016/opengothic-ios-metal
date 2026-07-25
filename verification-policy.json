@@ -1,0 +1,257 @@
+{
+  "schemaVersion": 1,
+  "description": "Single fail-closed source of truth for RendererIOS verification routing.",
+  "gateOrder": [
+    "policy-contracts",
+    "contracts",
+    "device-facts",
+    "tile-contracts",
+    "forward-contracts",
+    "strict-compile",
+    "build-off",
+    "build-on",
+    "build-tile",
+    "build-forward",
+    "full"
+  ],
+  "riskOrder": [
+    "documentation",
+    "assets",
+    "diagnostics",
+    "production",
+    "device-facts",
+    "tile",
+    "forward",
+    "shared-runtime",
+    "infrastructure",
+    "unknown"
+  ],
+  "requiredFullPaths": [
+    "verification-policy.json",
+    "scripts/classify_verification.py",
+    "ios/tests/test_verification_classifier.py",
+    "scripts/verify.command",
+    "CMakePresets.json",
+    ".github/workflows/renderer-ios.yml",
+    "CMakeLists.txt",
+    ".gitmodules",
+    "lib/Tempest",
+    "shader/ios-metal/shading-prototypes.metal"
+  ],
+  "rules": [
+    {
+      "id": "verification-infrastructure",
+      "risk": "infrastructure",
+      "paths": [
+        "verification-policy.json",
+        "scripts/classify_verification.py",
+        "ios/tests/test_verification_classifier.py",
+        "scripts/verify.command",
+        "CMakePresets.json",
+        ".github/workflows/**"
+      ],
+      "gates": [
+        "full"
+      ],
+      "reason": "changed verification infrastructure"
+    },
+    {
+      "id": "build-infrastructure",
+      "risk": "infrastructure",
+      "paths": [
+        "CMakeLists.txt",
+        "cmake/**",
+        ".gitmodules",
+        "ios/patches/**"
+      ],
+      "gates": [
+        "full"
+      ],
+      "reason": "changed build, submodule, or patch infrastructure"
+    },
+    {
+      "id": "tempest-or-shaders",
+      "risk": "infrastructure",
+      "paths": [
+        "lib/Tempest",
+        "lib/Tempest/**",
+        "shader/**"
+      ],
+      "gates": [
+        "full"
+      ],
+      "reason": "changed Tempest or shader input shared by every profile"
+    },
+    {
+      "id": "device-facts",
+      "risk": "device-facts",
+      "paths": [
+        "game/graphics/iosdevicecapabilities.*",
+        "game/graphics/iosdevicefactscollector.*",
+        "ios/tests/iosdevicecapabilities.cpp",
+        "ios/tests/iosdevicefactscollector.cpp",
+        "ios/device-test/validate-device-facts-log.py"
+      ],
+      "gates": [
+        "device-facts",
+        "strict-compile",
+        "build-off",
+        "build-on"
+      ],
+      "reason": "changed native device capability facts"
+    },
+    {
+      "id": "tile-prototype",
+      "risk": "tile",
+      "paths": [
+        "game/graphics/iosshadingprototypepipeline*",
+        "game/graphics/iosshadingprototypeplan.*",
+        "game/graphics/iosshadingprototypeshaderabi.h",
+        "game/graphics/iosshadingprototypetileprobe.*",
+        "ios/tests/iosshadingprototypepipeline.cpp",
+        "ios/tests/iosshadingprototypeplan.cpp",
+        "ios/tests/iosshadingprototypeshader.cpp",
+        "ios/tests/iosshadingprototypetileprobe.cpp",
+        "ios/device-test/validate-shading-prototype-tile-self-test-log.py"
+      ],
+      "gates": [
+        "tile-contracts",
+        "build-tile",
+        "build-off"
+      ],
+      "reason": "changed Tile shading prototype"
+    },
+    {
+      "id": "forward-prototype",
+      "risk": "forward",
+      "paths": [
+        "game/graphics/iosshadingprototypeforwardpipeline*",
+        "game/graphics/iosshadingprototypeforwardprobe.*",
+        "ios/tests/iosshadingprototypeforwardpipeline.cpp",
+        "ios/tests/iosshadingprototypeforwardprobe.cpp",
+        "ios/device-test/validate-shading-prototype-forward-self-test-log.py",
+        "ios/device-test/validate-shading-prototype-forward-gpudebug-trace.py"
+      ],
+      "gates": [
+        "forward-contracts",
+        "build-forward",
+        "build-off"
+      ],
+      "reason": "changed Forward shading prototype"
+    },
+    {
+      "id": "device-harness",
+      "risk": "diagnostics",
+      "paths": [
+        "ios/device-test/**"
+      ],
+      "excludePaths": [
+        "ios/device-test/validate-device-facts-log.py",
+        "ios/device-test/validate-shading-prototype-tile-self-test-log.py",
+        "ios/device-test/validate-shading-prototype-forward-self-test-log.py",
+        "ios/device-test/validate-shading-prototype-forward-gpudebug-trace.py"
+      ],
+      "gates": [
+        "contracts",
+        "build-on"
+      ],
+      "reason": "changed diagnostics or physical-device harness"
+    },
+    {
+      "id": "renderer-ios-runtime",
+      "risk": "shared-runtime",
+      "paths": [
+        "game/graphics/ios*"
+      ],
+      "excludePaths": [
+        "game/graphics/iosdevicecapabilities.*",
+        "game/graphics/iosdevicefactscollector.*",
+        "game/graphics/iosshadingprototypepipeline*",
+        "game/graphics/iosshadingprototypeplan.*",
+        "game/graphics/iosshadingprototypeshaderabi.h",
+        "game/graphics/iosshadingprototypetileprobe.*",
+        "game/graphics/iosshadingprototypeforwardpipeline*",
+        "game/graphics/iosshadingprototypeforwardprobe.*"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on"
+      ],
+      "reason": "changed shared RendererIOS runtime"
+    },
+    {
+      "id": "renderer-ios-contract-tests",
+      "risk": "shared-runtime",
+      "paths": [
+        "ios/tests/ios*"
+      ],
+      "excludePaths": [
+        "ios/tests/iosdevicecapabilities.cpp",
+        "ios/tests/iosdevicefactscollector.cpp",
+        "ios/tests/iosshadingprototypepipeline.cpp",
+        "ios/tests/iosshadingprototypeplan.cpp",
+        "ios/tests/iosshadingprototypeshader.cpp",
+        "ios/tests/iosshadingprototypetileprobe.cpp",
+        "ios/tests/iosshadingprototypeforwardpipeline.cpp",
+        "ios/tests/iosshadingprototypeforwardprobe.cpp"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on"
+      ],
+      "reason": "changed RendererIOS host contract coverage"
+    },
+    {
+      "id": "product-source",
+      "risk": "shared-runtime",
+      "paths": [
+        "game/**"
+      ],
+      "excludePaths": [
+        "game/graphics/ios*"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on"
+      ],
+      "reason": "changed product source shared by production and diagnostics"
+    },
+    {
+      "id": "packaged-assets",
+      "risk": "assets",
+      "paths": [
+        "assets/**",
+        "Info.plist.in"
+      ],
+      "gates": [
+        "build-off"
+      ],
+      "reason": "changed packaged asset or application metadata"
+    },
+    {
+      "id": "documentation",
+      "risk": "documentation",
+      "paths": [
+        "*.md",
+        "docs/**"
+      ],
+      "gates": [
+        "policy-contracts"
+      ],
+      "reason": "changed public documentation only"
+    }
+  ],
+  "fallback": {
+    "risk": "unknown",
+    "gates": [
+      "full"
+    ],
+    "reason": "unclassified path requires the full verification set"
+  }
+}
