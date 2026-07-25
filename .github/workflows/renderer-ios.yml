@@ -234,6 +234,551 @@ jobs:
             -o "$RUNNER_TEMP/iosframeplan"
           "$RUNNER_TEMP/iosframeplan"
 
+      - name: Verify P2.6a host-neutral device facts contract
+        run: |
+          set -euo pipefail
+
+          capability_files=(
+            game/graphics/iosdevicecapabilities.h
+            game/graphics/iosdevicecapabilities.cpp
+            ios/tests/iosdevicecapabilities.cpp
+          )
+          for file in "${capability_files[@]}"; do
+            test -f "$file"
+          done
+          test "$(find game/graphics ios/tests -maxdepth 1 -type f \
+              -name 'iosdevicecapabilities*' | LC_ALL=C sort)" = \
+            $'game/graphics/iosdevicecapabilities.cpp\ngame/graphics/iosdevicecapabilities.h\nios/tests/iosdevicecapabilities.cpp'
+
+          expected_header_directives=$'#pragma once\n#include <cstddef>\n#include <cstdint>\n#include <optional>\n#include <type_traits>'
+          expected_source_directives=$'#include "iosdevicecapabilities.h"\n#include <utility>'
+          expected_test_directives=$'#include "graphics/iosdevicecapabilities.h"\n#include <cassert>\n#include <cstddef>\n#include <cstdint>\n#include <type_traits>\n#include <utility>'
+          p26a_directives() {
+            grep -E '^[[:space:]]*(#|%:)' "$1"
+          }
+          p26a_directives_valid() {
+            test "$1" = "$2"
+          }
+          p26a_directives_valid \
+            "$(p26a_directives game/graphics/iosdevicecapabilities.h)" \
+            "$expected_header_directives"
+          p26a_directives_valid \
+            "$(p26a_directives game/graphics/iosdevicecapabilities.cpp)" \
+            "$expected_source_directives"
+          p26a_directives_valid \
+            "$(p26a_directives ios/tests/iosdevicecapabilities.cpp)" \
+            "$expected_test_directives"
+          if p26a_directives_valid \
+              "$expected_header_directives"$'\n#include <vector>' \
+              "$expected_header_directives"; then
+            echo 'P2.6a directive allowlist accepted a dynamic container include'
+            exit 1
+          fi
+
+          P26A_HOST_DENY='#import|<Metal/|@interface|@protocol|__OBJC__|id[[:space:]]*<MTL|MTL[A-Z]|Tempest|IOSMetalContext|RendererIOS|Foundation|UIKit|QuartzCore|CAMetalLayer|hw\.machine|sysctlbyname|IOSFeaturePolicy|thermal|void[[:space:]]*\*|NativeHandle|newLibrary|newCommand|malloc|calloc|realloc|operator[[:space:]]+new'
+          if grep -Eni "$P26A_HOST_DENY" "${capability_files[@]}"; then
+            echo 'P2.6a host-neutral contract leaks runtime, policy, or native transport'
+            exit 1
+          fi
+          if printf '%s\n' \
+              'MetalFxSpatial MetalFxTemporal Metal4Transport' |
+              grep -Eq "$P26A_HOST_DENY"; then
+            echo 'P2.6a host-neutral denylist rejects frozen Metal probe names'
+            exit 1
+          fi
+          P26A_NEW_DENY='(^|[^[:alnum:]_])new([[:space:]]|\[)'
+          P26A_DYNAMIC_DENY='std::(vector|deque|list|forward_list|map|multimap|unordered_map|unordered_multimap|set|multiset|unordered_set|unordered_multiset|basic_string|string|wstring|u8string|u16string|u32string|unique_ptr|shared_ptr|weak_ptr|function|any)([^[:alnum:]_]|$)'
+          if grep -En "$P26A_NEW_DENY|$P26A_DYNAMIC_DENY" \
+              "${capability_files[@]}"; then
+            echo 'P2.6a host-neutral contract uses dynamic allocation or storage'
+            exit 1
+          fi
+          if ! printf '%s\n' 'int* p = new int(7);' |
+              grep -Eq "$P26A_NEW_DENY"; then
+            echo 'P2.6a standalone new witness escaped the allocation gate'
+            exit 1
+          fi
+          if ! printf '%s\n' 'std::vector<int> values;' |
+              grep -Eq "$P26A_DYNAMIC_DENY"; then
+            echo 'P2.6a dynamic container witness escaped the storage gate'
+            exit 1
+          fi
+
+          printf '#include "graphics/iosdevicecapabilities.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosdevicecapabilities.cpp \
+            game/graphics/iosdevicecapabilities.cpp \
+            -o "$RUNNER_TEMP/iosdevicecapabilities"
+          "$RUNNER_TEMP/iosdevicecapabilities"
+
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosdevicecapabilities.cpp \
+            game/graphics/iosdevicecapabilities.cpp \
+            -o "$RUNNER_TEMP/iosdevicecapabilities-sanitized"
+          "$RUNNER_TEMP/iosdevicecapabilities-sanitized"
+
+          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun clang++ -x c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -fsyntax-only \
+            game/graphics/iosdevicecapabilities.cpp \
+            ios/tests/iosdevicecapabilities.cpp
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          header = Path(
+              "game/graphics/iosdevicecapabilities.h"
+          ).read_text()
+          source = Path(
+              "game/graphics/iosdevicecapabilities.cpp"
+          ).read_text()
+          test = Path(
+              "ios/tests/iosdevicecapabilities.cpp"
+          ).read_text()
+
+          def compact(text):
+              return "".join(text.split())
+
+          def enum_values(text, name):
+              match = re.search(
+                  rf"enum class {name}\s*:\s*uint8_t\s*\{{(.*?)\}};",
+                  text,
+                  re.S,
+              )
+              if match is None:
+                  raise ValueError(f"missing enum {name}")
+              return re.findall(r"(\w+)\s*=\s*(\d+)u", match.group(1))
+
+          def offsets(text, type_name):
+              return [
+                  (field, int(value))
+                  for field, value in re.findall(
+                      rf"static_assert\(offsetof\({type_name},"
+                      rf"(\w+)\)==(\d+)u\);",
+                      text,
+                  )
+              ]
+
+          def ordered(text, anchors, label):
+              positions = [text.index(anchor) for anchor in anchors]
+              if positions != sorted(positions):
+                  raise ValueError(f"{label} order changed")
+
+          def validate(candidate_header, candidate_source, candidate_test):
+              expected_directives = (
+                  (
+                      "#pragma once",
+                      "#include <cstddef>",
+                      "#include <cstdint>",
+                      "#include <optional>",
+                      "#include <type_traits>",
+                  ),
+                  (
+                      '#include "iosdevicecapabilities.h"',
+                      "#include <utility>",
+                  ),
+                  (
+                      '#include "graphics/iosdevicecapabilities.h"',
+                      "#include <cassert>",
+                      "#include <cstddef>",
+                      "#include <cstdint>",
+                      "#include <type_traits>",
+                      "#include <utility>",
+                  ),
+              )
+              candidates = (
+                  candidate_header,
+                  candidate_source,
+                  candidate_test,
+              )
+              for candidate, expected in zip(candidates, expected_directives):
+                  directives = tuple(
+                      line.strip()
+                      for line in re.findall(
+                          r"^[ \t]*(?:#|%:).*$",
+                          candidate,
+                          re.M,
+                      )
+                  )
+                  if directives != expected:
+                      raise ValueError("preprocessor directive set changed")
+              combined = "\n".join(candidates)
+              if re.search(
+                  r"(^|[^A-Za-z0-9_])new(?:\s|\[)",
+                  combined,
+                  re.M,
+              ):
+                  raise ValueError("standalone new entered host-neutral files")
+              if re.search(
+                  r"std::(?:vector|deque|list|forward_list|map|multimap|"
+                  r"unordered_map|unordered_multimap|set|multiset|"
+                  r"unordered_set|unordered_multiset|basic_string|string|"
+                  r"wstring|u8string|u16string|u32string|unique_ptr|"
+                  r"shared_ptr|weak_ptr|function|any)(?:[^A-Za-z0-9_]|$)",
+                  combined,
+              ):
+                  raise ValueError("dynamic storage entered host-neutral files")
+
+              if enum_values(
+                  candidate_header, "IOSDeviceProbeId"
+              ) != [
+                  ("MetalFxSpatial","0"),
+                  ("MetalFxTemporal","1"),
+                  ("MeshShading","2"),
+                  ("RayTracing","3"),
+                  ("Metal4Transport","4"),
+                  ("Count","5"),
+              ]:
+                  raise ValueError("probe ordinals changed")
+              if enum_values(
+                  candidate_header, "IOSDeviceFormatId"
+              ) != [
+                  ("Rg11B10Float","0"),
+                  ("Rgba16Float","1"),
+                  ("Rg16Float","2"),
+                  ("Depth16Unorm","3"),
+                  ("Depth32Float","4"),
+                  ("Count","5"),
+              ]:
+                  raise ValueError("format ordinals changed")
+              if enum_values(
+                  candidate_header, "IOSDeviceLimitId"
+              ) != [
+                  ("MaxTexture2DDimensionPixels","0"),
+                  ("ComputeMaxGroupsX","1"),
+                  ("ComputeMaxGroupsY","2"),
+                  ("ComputeMaxGroupsZ","3"),
+                  ("ComputeMaxGroupSizeX","4"),
+                  ("ComputeMaxGroupSizeY","5"),
+                  ("ComputeMaxGroupSizeZ","6"),
+                  ("ComputeMaxInvocations","7"),
+                  ("ComputeMaxSharedMemoryBytes","8"),
+                  ("MeshMaxGroupsX","9"),
+                  ("MeshMaxGroupsY","10"),
+                  ("MeshMaxGroupsZ","11"),
+                  ("MeshMaxGroupSizeX","12"),
+                  ("MeshMaxGroupSizeY","13"),
+                  ("MeshMaxGroupSizeZ","14"),
+                  ("Count","15"),
+              ]:
+                  raise ValueError("limit ordinals changed")
+              if enum_values(
+                  candidate_header, "IOSDeviceFactsError"
+              ) != [
+                  ("None","0"),
+                  ("AbiVersionMismatch","1"),
+                  ("StructSizeMismatch","2"),
+                  ("ProbeContractVersionMismatch","3"),
+                  ("FlagsNonZero","4"),
+                  ("ProbeCountMismatch","5"),
+                  ("FormatCountMismatch","6"),
+                  ("LimitCountMismatch","7"),
+                  ("VersionUnknownTupleNonZero","8"),
+                  ("VersionReservedNonZero","9"),
+                  ("HighestKnownAppleFamilyOutOfRange","10"),
+                  ("HighestKnownMetalFamilyOutOfRange","11"),
+                  ("ReservedNonZero","12"),
+                  ("ProbeOrder","13"),
+                  ("ProbeRequiredStagesMismatch","14"),
+                  ("ProbeKnownStagesOutsideRequired","15"),
+                  ("ProbePassedStagesOutsideKnown","16"),
+                  ("ProbeDeviceSupportWithoutAvailability","17"),
+                  ("FormatRequiredUsagesMismatch","18"),
+                  ("FormatKnownUsagesOutsideRequired","19"),
+                  ("FormatSupportedUsagesOutsideKnown","20"),
+                  ("LimitKnownMaskOutOfRange","21"),
+                  ("UnknownLimitValueNonZero","22"),
+              ]:
+                  raise ValueError("error ordinals changed")
+              if enum_values(
+                  candidate_header, "IOSDeviceFactsSection"
+              ) != [
+                  ("None","0"),
+                  ("Header","1"),
+                  ("RuntimeVersion","2"),
+                  ("SdkVersion","3"),
+                  ("Families","4"),
+                  ("ReservedHeader","5"),
+                  ("Probe","6"),
+                  ("Format","7"),
+                  ("Limit","8"),
+                  ("ReservedTail","9"),
+              ]:
+                  raise ValueError("section ordinals changed")
+
+              compact_header = compact(candidate_header)
+              required_header = (
+                  "IOSDeviceFactsABIVersion=1u;",
+                  "IOSDeviceFactsStructSize=192u;",
+                  "IOSDeviceProbeContractVersion=1u;",
+                  "enumIOSDeviceProbeStage:uint8_t{"
+                  "Availability=1u<<0u,DeviceSupport=1u<<1u,};",
+                  "structProbeFactsfinal{uint8_trequiredStages;"
+                  "uint8_tknownStages;uint8_tpassedStages;"
+                  "uint8_tprobeId;};",
+                  "enumIOSDeviceFormatUsage:uint8_t{"
+                  "Sampled=1u<<0u,ColorAttachment=1u<<1u,"
+                  "DepthAttachment=1u<<2u,ShaderWrite=1u<<3u,};",
+                  "structFormatFactsfinal{uint8_trequiredUsages;"
+                  "uint8_tknownUsages;uint8_tsupportedUsages;"
+                  "uint8_treserved;};",
+                  "structIOSVersionTripletfinal{uint16_tmajor;"
+                  "uint16_tminor;uint16_tpatch;uint16_treserved;};",
+                  "uint8_treservedHeader[3];ProbeFactsprobes[5];"
+                  "FormatFactsformats[5];uint32_tknownLimitMask;"
+                  "uint32_tlimits[15];uint32_treserved[12];",
+                  "staticIOSDeviceFactsCreateResultcreate("
+                  "constIOSDeviceFactsData&data)noexcept;",
+                  "IOSDeviceFacts()=delete;",
+                  "constIOSDeviceFactsData&facts()constnoexcept;",
+                  "IOSDeviceFactsDatadata_;",
+                  "std::optional<IOSDeviceFacts>value;"
+                  "IOSDeviceFactsFailurefailure;",
+              )
+              for literal in required_header:
+                  if compact_header.count(literal) != 1:
+                      raise ValueError(
+                          "frozen header contract changed: " + literal
+                      )
+
+              if offsets(
+                  candidate_header, "IOSDeviceFactsData"
+              ) != [
+                  ("abiVersion",0),
+                  ("structSize",4),
+                  ("probeContractVersion",8),
+                  ("flags",12),
+                  ("runtimeVersion",16),
+                  ("sdkVersion",24),
+                  ("highestKnownAppleFamily",32),
+                  ("highestKnownMetalFamily",33),
+                  ("probeCount",34),
+                  ("formatCount",35),
+                  ("limitCount",36),
+                  ("reservedHeader",37),
+                  ("probes",40),
+                  ("formats",60),
+                  ("knownLimitMask",80),
+                  ("limits",84),
+                  ("reserved",144),
+              ]:
+                  raise ValueError("data offsets changed")
+              if offsets(
+                  candidate_header, "IOSDeviceFactsFailure"
+              ) != [
+                  ("error",0),
+                  ("section",1),
+                  ("index",2),
+                  ("reserved",3),
+                  ("raw",4),
+              ]:
+                  raise ValueError("failure offsets changed")
+
+              required_traits = (
+                  "static_assert(std::is_final_v<IOSDeviceFacts>);",
+                  "static_assert(sizeof(IOSDeviceFacts)==192u);",
+                  "static_assert(alignof(IOSDeviceFacts)==4u);",
+                  "static_assert(std::is_standard_layout_v<IOSDeviceFacts>);",
+                  "static_assert(std::is_trivially_copyable_v<IOSDeviceFacts>);",
+                  "static_assert(std::is_trivially_destructible_v<IOSDeviceFacts>);",
+                  "static_assert(!std::is_copy_assignable_v<IOSDeviceFacts>);",
+                  "static_assert(!std::is_move_assignable_v<IOSDeviceFacts>);",
+                  "assert(mutations==155u);",
+              )
+              for literal in required_traits:
+                  if candidate_test.count(literal) != 1:
+                      raise ValueError(
+                          "test trait or mutation marker changed: " + literal
+                      )
+
+              outer = (
+                  "if(data.abiVersion!=IOSDeviceFactsABIVersion)",
+                  "if(data.structSize!=IOSDeviceFactsStructSize)",
+                  "if(data.probeContractVersion!="
+                  "IOSDeviceProbeContractVersion)",
+                  "if(data.flags!=0u)",
+                  "if(data.probeCount!=ProbeCount)",
+                  "if(data.formatCount!=FormatCount)",
+                  "if(data.limitCount!=LimitCount)",
+                  "data.runtimeVersion,\n"
+                  "          IOSDeviceFactsSection::RuntimeVersion",
+                  "validateVersion(data.sdkVersion,"
+                  "IOSDeviceFactsSection::SdkVersion)",
+                  "if(data.highestKnownAppleFamily>10u)",
+                  "if(data.highestKnownMetalFamily>4u)",
+                  "for(uint8_t i=0u; i<3u; ++i)",
+                  "for(uint8_t i=0u; i<ProbeCount; ++i)",
+                  "for(uint8_t i=0u; i<FormatCount; ++i)",
+                  "if((data.knownLimitMask & ~KnownLimitMask)!=0u)",
+                  "for(uint8_t i=0u; i<LimitCount; ++i)",
+                  "for(uint8_t i=0u; i<12u; ++i)",
+              )
+              ordered(candidate_source,outer,"first-error traversal")
+              ordered(
+                  candidate_source,
+                  (
+                      "IOSDeviceFactsError::ProbeOrder",
+                      "IOSDeviceFactsError::ProbeRequiredStagesMismatch",
+                      "IOSDeviceFactsError::ProbeKnownStagesOutsideRequired",
+                      "IOSDeviceFactsError::ProbePassedStagesOutsideKnown",
+                      "IOSDeviceFactsError::"
+                      "ProbeDeviceSupportWithoutAvailability",
+                  ),
+                  "probe first-error traversal",
+              )
+              ordered(
+                  candidate_source,
+                  (
+                      "IOSDeviceFactsError::FormatRequiredUsagesMismatch",
+                      "IOSDeviceFactsError::"
+                      "FormatKnownUsagesOutsideRequired",
+                      "IOSDeviceFactsError::"
+                      "FormatSupportedUsagesOutsideKnown",
+                      "IOSDeviceFactsSection::Format,i,format.reserved",
+                  ),
+                  "format first-error traversal",
+              )
+              ordered(
+                  candidate_source,
+                  (
+                      "IOSDeviceFactsError::LimitKnownMaskOutOfRange",
+                      "IOSDeviceFactsError::UnknownLimitValueNonZero",
+                  ),
+                  "limit first-error traversal",
+              )
+              if candidate_source.count(
+                  "IOSDeviceFactsCreateResult IOSDeviceFacts::create("
+              ) != 1:
+                  raise ValueError("factory definition changed")
+              if candidate_source.count(
+                  "return {std::nullopt,validation};"
+              ) != 1:
+                  raise ValueError("failure gained a partial facts value")
+
+          validate(header,source,test)
+
+          def replace_once(text, before, after):
+              if text.count(before) != 1:
+                  raise ValueError("mutation anchor is not unique: " + before)
+              return text.replace(before,after,1)
+
+          def swap_once(text, first, second):
+              token = "__P26A_IN_MEMORY_SWAP__"
+              if token in text:
+                  raise ValueError("mutation token collision")
+              text = replace_once(text,first,token)
+              text = replace_once(text,second,first)
+              return replace_once(text,token,second)
+
+          mutations = (
+              ("abi",replace_once(
+                  header,
+                  "IOSDeviceFactsABIVersion = 1u",
+                  "IOSDeviceFactsABIVersion = 2u",
+              ),source,test),
+              ("size",replace_once(
+                  header,
+                  "IOSDeviceFactsStructSize = 192u",
+                  "IOSDeviceFactsStructSize = 191u",
+              ),source,test),
+              ("probe-ordinal",replace_once(
+                  header,
+                  "Metal4Transport = 4u",
+                  "Metal4Transport = 3u",
+              ),source,test),
+              ("format-ordinal",replace_once(
+                  header,
+                  "Depth32Float = 4u",
+                  "Depth32Float = 3u",
+              ),source,test),
+              ("limit-ordinal",replace_once(
+                  header,
+                  "Count = 15u",
+                  "Count = 14u",
+              ),source,test),
+              ("layout-field",replace_once(
+                  header,
+                  "ProbeFacts probes[5];",
+                  "ProbeFacts probes[6];",
+              ),source,test),
+              ("layout-offset",replace_once(
+                  header,
+                  "offsetof(IOSDeviceFactsData,probes)==40u",
+                  "offsetof(IOSDeviceFactsData,probes)==41u",
+              ),source,test),
+              ("error-ordinal",replace_once(
+                  header,
+                  "UnknownLimitValueNonZero = 22u",
+                  "UnknownLimitValueNonZero = 23u",
+              ),source,test),
+              ("section-ordinal",replace_once(
+                  header,
+                  "ReservedTail = 9u",
+                  "ReservedTail = 8u",
+              ),source,test),
+              ("factory-noexcept",replace_once(
+                  header,
+                  "const IOSDeviceFactsData& data) noexcept;",
+                  "const IOSDeviceFactsData& data);",
+              ),source,test),
+              ("mutation-marker",header,source,replace_once(
+                  test,"assert(mutations==155u);",
+                  "assert(mutations==154u);",
+              )),
+              ("header-order",header,swap_once(
+                  source,
+                  "if(data.abiVersion!=IOSDeviceFactsABIVersion)",
+                  "if(data.structSize!=IOSDeviceFactsStructSize)",
+              ),test),
+              ("probe-order",header,swap_once(
+                  source,
+                  "IOSDeviceFactsError::ProbeOrder",
+                  "IOSDeviceFactsError::ProbeRequiredStagesMismatch",
+              ),test),
+              ("format-order",header,swap_once(
+                  source,
+                  "IOSDeviceFactsError::FormatRequiredUsagesMismatch",
+                  "IOSDeviceFactsError::"
+                  "FormatKnownUsagesOutsideRequired",
+              ),test),
+              ("limit-order",header,swap_once(
+                  source,
+                  "IOSDeviceFactsError::LimitKnownMaskOutOfRange",
+                  "IOSDeviceFactsError::UnknownLimitValueNonZero",
+              ),test),
+              ("dynamic-include",header + "\n#include <vector>\n",source,test),
+              ("standalone-new",header,source + (
+                  "\nint* p26aAllocate() { return new int(7); }\n"
+              ),test),
+          )
+          mutations_killed = 0
+          for label, candidate_header, candidate_source, candidate_test in mutations:
+              try:
+                  validate(candidate_header,candidate_source,candidate_test)
+              except (ValueError,IndexError):
+                  mutations_killed += 1
+              else:
+                  raise SystemExit(
+                      "P2.6a structural mutation survived: " + label
+                  )
+          if mutations_killed != 17:
+              raise SystemExit("P2.6a structural mutation count drifted")
+          print("P2.6a structural oracle: mutations-killed=17")
+          PY
+
       - name: Verify P2.5a shading prototype plan contract
         run: |
           set -euo pipefail
@@ -4088,6 +4633,248 @@ jobs:
             -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST="${{ matrix.diagnostics == 'ON' && github.event_name == 'workflow_dispatch' && inputs.shading_prototype_forward_self_test && 'ON' || 'OFF' }}" \
             -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="${GITHUB_SHA}"
+
+      - name: Verify P2.6a capabilities source target membership
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          source = "game/graphics/iosdevicecapabilities.cpp"
+          project = Path(
+              "build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj"
+          ).read_text()
+          escaped_source = re.escape(source)
+
+          def validate_project(candidate_project):
+              file_references = candidate_project.split(
+                  "/* Begin PBXFileReference section */", 1
+              )[1].split("/* End PBXFileReference section */", 1)[0]
+              build_files = candidate_project.split(
+                  "/* Begin PBXBuildFile section */", 1
+              )[1].split("/* End PBXBuildFile section */", 1)[0]
+              reference_matches = list(re.finditer(
+                  rf"^\s*([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped_source} \*/ = "
+                  rf"\{{isa = PBXFileReference;"
+                  rf"[^\n]*path = {escaped_source};[^\n]*\}};$",
+                  file_references,
+                  re.M,
+              ))
+              if len(reference_matches) != 1:
+                  raise ValueError(
+                      "iosdevicecapabilities.cpp does not have exactly one "
+                      "PBXFileReference"
+                  )
+              file_reference_id = reference_matches[0].group(1)
+              build_file_matches = list(re.finditer(
+                  rf"^\s*([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped_source} \*/ = "
+                  rf"\{{isa = PBXBuildFile; "
+                  rf"fileRef = ([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped_source} \*/; \}};$",
+                  build_files,
+                  re.M,
+              ))
+              if len(build_file_matches) != 1:
+                  raise ValueError(
+                      "iosdevicecapabilities.cpp does not have exactly one "
+                      "PBXBuildFile"
+                  )
+              build_file_id = build_file_matches[0].group(1)
+              build_file_reference_id = build_file_matches[0].group(2)
+              if build_file_reference_id != file_reference_id:
+                  raise ValueError(
+                      "iosdevicecapabilities.cpp PBXBuildFile does not point "
+                      "to its exact PBXFileReference"
+                  )
+              linked_build_file_ids = re.findall(
+                  rf"^\s*([A-F0-9]{{24}}) /\* [^\n]* \*/ = "
+                  rf"\{{isa = PBXBuildFile; "
+                  rf"fileRef = {file_reference_id} "
+                  r"/\* [^\n]* \*/; \};$",
+                  build_files,
+                  re.M,
+              )
+              if linked_build_file_ids != [build_file_id]:
+                  raise ValueError(
+                      "exact iosdevicecapabilities.cpp PBXFileReference is "
+                      "not linked by exactly its one PBXBuildFile"
+                  )
+
+              targets = re.findall(
+                  r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
+                  r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+                  candidate_project,
+                  re.S,
+              )
+              gothic = [
+                  body for _, body in targets
+                  if re.search(r"^\s*name = Gothic2Notr;$", body, re.M)
+              ]
+              if len(gothic) != 1:
+                  raise ValueError(
+                      "could not identify exact Gothic2Notr target"
+                  )
+              source_phase = re.search(
+                  r"([A-F0-9]{24}) /\* Sources \*/", gothic[0]
+              )
+              if source_phase is None:
+                  raise ValueError("Gothic2Notr target has no Sources phase")
+              phase = re.search(
+                  rf"\b{source_phase.group(1)} /\* Sources \*/ = \{{\n"
+                  r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+                  candidate_project,
+                  re.S,
+              )
+              if phase is None:
+                  raise ValueError(
+                      "could not read Gothic2Notr Sources phase"
+                  )
+              gothic_member_matches = list(re.finditer(
+                  rf"^\s*([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped_source} \*/,$",
+                  phase.group(1),
+                  re.M,
+              ))
+              gothic_members = [
+                  match.group(1) for match in gothic_member_matches
+              ]
+              if gothic_members != [build_file_id]:
+                  raise ValueError(
+                      "exact iosdevicecapabilities.cpp PBXBuildFile is not "
+                      "exactly once in Gothic2Notr Sources"
+                  )
+              sources_phases = re.findall(
+                  r"\b[A-F0-9]{24} /\* Sources \*/ = \{\n"
+                  r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+                  candidate_project,
+                  re.S,
+              )
+              all_source_members = sum(
+                  len(re.findall(
+                      rf"^\s*{build_file_id} "
+                      r"/\* [^\n]* \*/,$",
+                      body,
+                      re.M,
+                  ))
+                  for body in sources_phases
+              )
+              if all_source_members != 1:
+                  raise ValueError(
+                      "iosdevicecapabilities.cpp PBXBuildFile appears "
+                      "outside its one Gothic2Notr Sources membership"
+                  )
+              return (
+                  file_reference_id,
+                  build_file_id,
+                  reference_matches[0].group(0),
+                  build_file_matches[0].group(0),
+                  gothic_member_matches[0].group(0),
+              )
+
+          try:
+              (
+                  file_reference_id,
+                  build_file_id,
+                  reference_line,
+                  build_file_line,
+                  gothic_member_line,
+              ) = validate_project(project)
+          except (ValueError, IndexError) as error:
+              raise SystemExit(str(error)) from error
+
+          def replace_once(text, before, after):
+              if text.count(before) != 1:
+                  raise SystemExit(
+                      "PBX mutation anchor is not unique: " + before
+                  )
+              return text.replace(before, after, 1)
+
+          invalid_id = "F" * 24
+          alias_id = "E" * 24
+          alternate_comment_member = re.sub(
+              r"/\* [^\n]* \*/",
+              "/* unrelated.cpp */",
+              gothic_member_line,
+              count=1,
+          )
+          alias_build_file_line = (
+              f"\t\t{alias_id} /* unrelated.cpp */ = "
+              f"{{isa = PBXBuildFile; fileRef = {file_reference_id} "
+              "/* unrelated.cpp */; };"
+          )
+          mutations = (
+              (
+                  "duplicate-file-reference",
+                  replace_once(
+                      project,
+                      reference_line,
+                      reference_line + "\n" + reference_line,
+                  ),
+              ),
+              (
+                  "wrong-build-file-reference",
+                  replace_once(
+                      project,
+                      f"fileRef = {file_reference_id} /*",
+                      f"fileRef = {invalid_id} /*",
+                  ),
+              ),
+              (
+                  "wrong-gothic-membership-id",
+                  replace_once(
+                      project,
+                      gothic_member_line,
+                      gothic_member_line.replace(
+                          build_file_id, invalid_id, 1
+                      ),
+                  ),
+              ),
+              (
+                  "duplicate-gothic-membership",
+                  replace_once(
+                      project,
+                      gothic_member_line,
+                      gothic_member_line + "\n" + gothic_member_line,
+                  ),
+              ),
+              (
+                  "duplicate-membership-id-different-comment",
+                  replace_once(
+                      project,
+                      gothic_member_line,
+                      gothic_member_line + "\n"
+                      + alternate_comment_member,
+                  ),
+              ),
+              (
+                  "duplicate-file-reference-link-different-comment",
+                  replace_once(
+                      project,
+                      build_file_line,
+                      build_file_line + "\n" + alias_build_file_line,
+                  ),
+              ),
+          )
+          mutations_killed = 0
+          for label, candidate_project in mutations:
+              try:
+                  validate_project(candidate_project)
+              except (ValueError, IndexError):
+                  mutations_killed += 1
+              else:
+                  raise SystemExit(
+                      "P2.6a PBX structural mutation survived: " + label
+                  )
+          if mutations_killed != 6:
+              raise SystemExit(
+                  "P2.6a PBX structural mutation count drifted"
+              )
+          print("P2.6a PBX structural oracle: mutations-killed=6")
+          PY
 
       - name: Assert legacy renderer is not in the target
         run: |
