@@ -69,9 +69,11 @@ kernel void riosTileDeferredLighting(
 
 kernel void riosForwardPlusBuildLightList(
     device uint* lightList [[buffer(0)]],
-    uint position [[thread_position_in_grid]]) {
-  if(position==0u)
-    lightList[0] = 1u;
+    uint3 position [[thread_position_in_grid]]) {
+  if(position.x==0u && position.y==0u && position.z==0u) {
+    for(uint index=0u; index<64u; ++index)
+      lightList[index] = index==0u ? 1u : 0u;
+  }
 }
 
 fragment float4 riosForwardPlusFragment(

@@ -3,9 +3,13 @@
 
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <cstddef>
+#include <cstdint>
 #include <fstream>
 #include <iterator>
+#include <optional>
+#include <regex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -65,7 +69,243 @@ constexpr std::array<std::string_view,8> ForbiddenTokens = {
   "riosShadingPrototypeAlphaTest(",
 };
 
-bool validSource(std::string_view source) noexcept {
+bool stripComments(std::string_view source, std::string& stripped) {
+  stripped.clear();
+  stripped.reserve(source.size());
+  size_t offset = 0u;
+  while(offset<source.size()) {
+    if(offset+1u<source.size() &&
+       source[offset]=='/' && source[offset+1u]=='/') {
+      offset += 2u;
+      while(offset<source.size() && source[offset]!='\n')
+        ++offset;
+      if(offset<source.size())
+        stripped.push_back(source[offset++]);
+      continue;
+    }
+    if(offset+1u<source.size() &&
+       source[offset]=='/' && source[offset+1u]=='*') {
+      offset += 2u;
+      bool closed = false;
+      while(offset+1u<source.size()) {
+        if(source[offset]=='*' && source[offset+1u]=='/') {
+          offset += 2u;
+          closed = true;
+          break;
+        }
+        ++offset;
+      }
+      if(!closed)
+        return false;
+      stripped.push_back(' ');
+      continue;
+    }
+    stripped.push_back(source[offset++]);
+  }
+  return true;
+}
+
+std::optional<size_t> matchingDelimiter(
+    std::string_view source, size_t opening, char open, char close) {
+  if(opening>=source.size() || source[opening]!=open)
+    return std::nullopt;
+  size_t depth = 0u;
+  for(size_t offset=opening; offset<source.size(); ++offset) {
+    if(source[offset]==open)
+      ++depth;
+    else if(source[offset]==close) {
+      if(depth==0u)
+        return std::nullopt;
+      --depth;
+      if(depth==0u)
+        return offset;
+    }
+  }
+  return std::nullopt;
+}
+
+std::string compactWhitespace(std::string_view source) {
+  std::string compact;
+  compact.reserve(source.size());
+  for(const char value:source)
+    if(value!=' ' && value!='\t' && value!='\r' && value!='\n' &&
+       value!='\f' && value!='\v')
+      compact.push_back(value);
+  return compact;
+}
+
+struct ForwardKernelContract final {
+  uint32_t bufferIndex = 0u;
+  uint32_t guardX = 0u;
+  uint32_t guardY = 0u;
+  uint32_t guardZ = 0u;
+  uint32_t loopStart = 0u;
+  uint32_t loopBound = 0u;
+  uint32_t activeIndex = 0u;
+  uint32_t activeValue = 0u;
+  uint32_t inactiveValue = 0u;
+};
+
+std::optional<uint32_t> parseUint(std::string_view value) noexcept {
+  uint32_t result = 0u;
+  const auto parsed =
+      std::from_chars(value.data(),value.data()+value.size(),result);
+  if(parsed.ec!=std::errc{} || parsed.ptr!=value.data()+value.size())
+    return std::nullopt;
+  return result;
+}
+
+template<size_t MatchCount>
+std::optional<ForwardKernelContract> contractFromMatches(
+    const std::match_results<std::string::const_iterator>& signature,
+    const std::match_results<std::string::const_iterator>& body) {
+  static_assert(MatchCount==9u);
+  const auto capture =
+      [](const auto& match, size_t index) -> std::optional<uint32_t> {
+    const std::string value = match[index].str();
+    return parseUint(value);
+  };
+  const auto bufferIndex = capture(signature,1u);
+  const auto guardX = capture(body,1u);
+  const auto guardY = capture(body,2u);
+  const auto guardZ = capture(body,3u);
+  const auto loopStart = capture(body,4u);
+  const auto loopBound = capture(body,5u);
+  const auto activeIndex = capture(body,6u);
+  const auto activeValue = capture(body,7u);
+  const auto inactiveValue = capture(body,8u);
+  if(!bufferIndex || !guardX || !guardY || !guardZ || !loopStart ||
+     !loopBound || !activeIndex || !activeValue || !inactiveValue)
+    return std::nullopt;
+  return ForwardKernelContract{
+    *bufferIndex,
+    *guardX,
+    *guardY,
+    *guardZ,
+    *loopStart,
+    *loopBound,
+    *activeIndex,
+    *activeValue,
+    *inactiveValue,
+  };
+}
+
+std::optional<ForwardKernelContract> parseForwardKernel(
+    std::string_view source) {
+  std::string stripped;
+  if(!stripComments(source,stripped))
+    return std::nullopt;
+  constexpr std::string_view marker =
+      "kernel void riosForwardPlusBuildLightList";
+  if(countToken(stripped,marker)!=1u)
+    return std::nullopt;
+  const size_t markerOffset = stripped.find(marker);
+  const size_t openParenthesis = stripped.find('(',markerOffset+marker.size());
+  if(openParenthesis==std::string::npos)
+    return std::nullopt;
+  const auto closeParenthesis =
+      matchingDelimiter(stripped,openParenthesis,'(',')');
+  if(!closeParenthesis)
+    return std::nullopt;
+  const size_t openBody = stripped.find_first_not_of(
+      " \t\r\n\f\v",*closeParenthesis+1u);
+  if(openBody==std::string::npos || stripped[openBody]!='{')
+    return std::nullopt;
+  const auto closeBody = matchingDelimiter(stripped,openBody,'{','}');
+  if(!closeBody)
+    return std::nullopt;
+
+  const std::string signature = compactWhitespace(
+      std::string_view(stripped).substr(
+        markerOffset,*closeParenthesis-markerOffset+1u));
+  const std::string body = compactWhitespace(
+      std::string_view(stripped).substr(
+        openBody+1u,*closeBody-openBody-1u));
+  static const std::regex SignaturePattern(
+      R"(kernelvoidriosForwardPlusBuildLightList\(deviceuint\*lightList\[\[buffer\(([0-9]+)\)\]\],uint3position\[\[thread_position_in_grid\]\]\))");
+  static const std::regex BodyPattern(
+      R"(if\(position\.x==([0-9]+)u&&position\.y==([0-9]+)u&&position\.z==([0-9]+)u\)\{for\(uintindex=([0-9]+)u;index<([0-9]+)u;\+\+index\)lightList\[index\]=index==([0-9]+)u\?([0-9]+)u:([0-9]+)u;\})");
+  std::match_results<std::string::const_iterator> signatureMatches;
+  std::match_results<std::string::const_iterator> bodyMatches;
+  if(!std::regex_match(
+       signature.cbegin(),signature.cend(),signatureMatches,
+       SignaturePattern) ||
+     !std::regex_match(body.cbegin(),body.cend(),bodyMatches,BodyPattern))
+    return std::nullopt;
+  return contractFromMatches<9u>(signatureMatches,bodyMatches);
+}
+
+struct ForwardEvaluation final {
+  std::array<uint32_t,Prototype::ForwardLightListWordCount> values = {};
+  std::array<uint32_t,Prototype::ForwardLightListWordCount> writes = {};
+  bool outOfBounds = false;
+};
+
+ForwardEvaluation evaluate(
+    const ForwardKernelContract& contract,
+    uint32_t x, uint32_t y, uint32_t z) noexcept {
+  ForwardEvaluation result;
+  result.values.fill(Prototype::ForwardLightListSentinel);
+  if(x!=contract.guardX || y!=contract.guardY || z!=contract.guardZ)
+    return result;
+  for(uint32_t index=contract.loopStart; index<contract.loopBound; ++index) {
+    if(index>=result.values.size()) {
+      result.outOfBounds = true;
+      continue;
+    }
+    ++result.writes[index];
+    result.values[index] =
+        index==contract.activeIndex
+          ? contract.activeValue
+          : contract.inactiveValue;
+  }
+  return result;
+}
+
+bool validForwardKernel(std::string_view source) {
+  const auto contract = parseForwardKernel(source);
+  if(!contract ||
+     contract->bufferIndex!=Prototype::ForwardLightListBuffer ||
+     contract->guardX!=Prototype::ForwardLightListInactiveValue ||
+     contract->guardY!=Prototype::ForwardLightListInactiveValue ||
+     contract->guardZ!=Prototype::ForwardLightListInactiveValue ||
+     contract->loopStart!=Prototype::ForwardLightListInactiveValue ||
+     contract->loopBound!=Prototype::ForwardLightListWordCount ||
+     contract->activeIndex!=Prototype::ForwardLightListInactiveValue ||
+     contract->activeValue!=Prototype::ForwardLightListActiveValue ||
+     contract->inactiveValue!=Prototype::ForwardLightListInactiveValue)
+    return false;
+
+  const ForwardEvaluation active = evaluate(*contract,0u,0u,0u);
+  if(active.outOfBounds)
+    return false;
+  for(size_t index=0u; index<active.values.size(); ++index) {
+    const uint32_t expected =
+        index==0u
+          ? Prototype::ForwardLightListActiveValue
+          : Prototype::ForwardLightListInactiveValue;
+    if(active.writes[index]!=1u || active.values[index]!=expected)
+      return false;
+  }
+  constexpr std::array<std::array<uint32_t,3u>,3u> NonAuthorPositions = {{
+    {1u,0u,0u},
+    {0u,1u,0u},
+    {0u,0u,1u},
+  }};
+  for(const auto& position:NonAuthorPositions) {
+    const ForwardEvaluation inactive =
+        evaluate(*contract,position[0],position[1],position[2]);
+    if(inactive.outOfBounds)
+      return false;
+    for(size_t index=0u; index<inactive.values.size(); ++index)
+      if(inactive.writes[index]!=0u ||
+         inactive.values[index]!=Prototype::ForwardLightListSentinel)
+        return false;
+  }
+  return true;
+}
+
+bool validSource(std::string_view source) {
   if(source.empty() ||
      countToken(source,"#include <metal_stdlib>")!=1u ||
      countToken(source,"vertex ")!=1u ||
@@ -78,7 +318,8 @@ bool validSource(std::string_view source) noexcept {
      countToken(source,"imageblock_layout_implicit")!=1u ||
      countToken(source,"[[imageblock_data]]")!=1u ||
      countToken(source,"[[color(0)]]")!=2u ||
-     countToken(source,"[[buffer(")!=2u)
+     countToken(source,"[[buffer(")!=2u ||
+     !validForwardKernel(source))
     return false;
   for(const auto function:Prototype::FunctionNames)
     if(countToken(source,function)!=1u)
@@ -99,6 +340,100 @@ std::string mutateOnce(
   assert(source.find(from,offset+from.size())==std::string::npos);
   source.replace(offset,from.size(),to);
   return source;
+}
+
+void runForwardMutationTests() {
+  const std::string canonical =
+      "kernel void riosForwardPlusBuildLightList(\n"
+      "    device uint* lightList [[buffer(0)]],\n"
+      "    uint3 position [[thread_position_in_grid]]) {\n"
+      "  if(position.x==0u && position.y==0u && position.z==0u) {\n"
+      "    for(uint index=0u; index<64u; ++index)\n"
+      "      lightList[index] = index==0u ? 1u : 0u;\n"
+      "  }\n"
+      "}\n";
+  assert(validForwardKernel(canonical));
+  assert(validForwardKernel(mutateOnce(
+      canonical,"uint3 position","uint3 /* comment */ position")));
+
+  constexpr std::array<std::pair<std::string_view,std::string_view>,26u>
+      mutations = {{
+        {
+          "for(uint index=0u; index<64u; ++index)\n"
+          "      lightList[index] = index==0u ? 1u : 0u;",
+          "lightList[0] = 1u;",
+        },
+        {"uint index=0u","uint index=1u"},
+        {
+          "lightList[index] = index==0u ? 1u : 0u;",
+          "if(index!=0u) lightList[index] = index==0u ? 1u : 0u;",
+        },
+        {"index<64u","index<63u"},
+        {"index<64u","index<65u"},
+        {"index<64u","index<=64u"},
+        {"lightList[index]","lightList[64u]"},
+        {
+          "lightList[index] = index==0u ? 1u : 0u;",
+          "lightList[index] = index==0u ? 1u : 0u;\n"
+          "      lightList[index] = index==0u ? 1u : 0u;",
+        },
+        {
+          "  }\n}",
+          "  }\n  lightList[0] = 1u;\n}",
+        },
+        {
+          "if(position.x==0u && position.y==0u && position.z==0u)",
+          "if(true)",
+        },
+        {
+          "  if(position.x==0u && position.y==0u && position.z==0u) {\n"
+          "    for(uint index=0u; index<64u; ++index)\n"
+          "      lightList[index] = index==0u ? 1u : 0u;\n"
+          "  }",
+          "  for(uint index=0u; index<64u; ++index)\n"
+          "    lightList[index] = index==0u ? 1u : 0u;",
+        },
+        {"position.x==0u","position.x!=0u"},
+        {"position.x==0u","position.x==1u"},
+        {"position.y==0u","position.y==1u"},
+        {"position.z==0u","position.z==1u"},
+        {
+          "if(position.x==0u && position.y==0u && position.z==0u)",
+          "if(position==0u)",
+        },
+        {"uint3 position","uint position"},
+        {"index==0u ? 1u : 0u","index==0u ? 0u : 1u"},
+        {"device uint* lightList","device ushort* lightList"},
+        {"[[buffer(0)]]","[[buffer(1)]]"},
+        {
+          "lightList[index] = index==0u ? 1u : 0u;",
+          "device uint* alias = lightList;\n"
+          "      alias[index] = index==0u ? 1u : 0u;",
+        },
+        {
+          "lightList[index] = index==0u ? 1u : 0u;",
+          "if(false) lightList[index] = index==0u ? 1u : 0u;",
+        },
+        {
+          "lightList[index] = index==0u ? 1u : 0u;",
+          "if(index==0u) lightList[index] = index==0u ? 1u : 0u;",
+        },
+        {
+          "if(position.x==0u && position.y==0u && position.z==0u) {",
+          "if(position.x==0u && position.y==0u && position.z==0u) {\n"
+          "    return;",
+        },
+        {"++index","index++"},
+        {
+          "for(uint index=0u; index<64u; ++index)",
+          "uint ignored = 0u;\n"
+          "    for(uint index=0u; index<64u; ++index)",
+        },
+      }};
+  for(const auto& mutation:mutations)
+    assert(!validForwardKernel(
+      mutateOnce(canonical,mutation.first,mutation.second)));
+  assert(!validForwardKernel(canonical+"/* unterminated"));
 }
 
 void runMutationTests(const std::string& source) {
@@ -150,6 +485,7 @@ void runMutationTests(const std::string& source) {
       }};
   for(const auto& mutation:semanticMutations)
     assert(!validSource(mutateOnce(source,mutation.first,mutation.second)));
+  runForwardMutationTests();
 }
 
 }
@@ -173,6 +509,18 @@ int main(int argc, char** argv) {
   static_assert(Prototype::PositionAttribute==0u);
   static_assert(Prototype::ColorAttribute==1u);
   static_assert(Prototype::ForwardLightListBuffer==0u);
+  static_assert(Prototype::ForwardLightListWordBytes==4u);
+  static_assert(Prototype::ForwardLightListWordCount==64u);
+  static_assert(Prototype::ForwardLightListByteSize==256u);
+  static_assert(Prototype::ForwardLightListActiveValue==1u);
+  static_assert(Prototype::ForwardLightListInactiveValue==0u);
+  static_assert(Prototype::ForwardLightListSentinel==0xA5A5A5A5u);
+  static_assert(Prototype::ForwardLightListGridWidth==1u);
+  static_assert(Prototype::ForwardLightListGridHeight==1u);
+  static_assert(Prototype::ForwardLightListGridDepth==1u);
+  static_assert(Prototype::ForwardLightListThreadsPerThreadgroupWidth==1u);
+  static_assert(Prototype::ForwardLightListThreadsPerThreadgroupHeight==1u);
+  static_assert(Prototype::ForwardLightListThreadsPerThreadgroupDepth==1u);
   static_assert(Prototype::TileMaterialBytesPerSample==4u);
   static_assert(Prototype::TileFinalColorAttachment==0u);
   static_assert(Prototype::ExistingMetallibExportCount==10u);

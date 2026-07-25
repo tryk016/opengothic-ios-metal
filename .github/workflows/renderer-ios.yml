@@ -242,10 +242,49 @@ jobs:
             test -f "$file"
           done
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path(
+              "game/graphics/iosshadingprototypeplan.cpp"
+          ).read_text()
+          include = '#include "iosshadingprototypeshaderabi.h"'
+          byte_size = (
+              "RendererIOSShadingPrototypeShader::"
+              "ForwardLightListByteSize"
+          )
+          if source.count(include) != 1:
+              raise SystemExit(
+                  "P2.5c1a shader ABI include is not exact"
+              )
+          if source.count(byte_size) != 1:
+              raise SystemExit(
+                  "P2.5c1a light-list byte-size use is not exact"
+              )
+          residual = source.replace(include, "").replace(byte_size, "")
+          if (
+              "iosshadingprototypeshaderabi" in residual
+              or "RendererIOS" in residual
+          ):
+              raise SystemExit(
+                  "P2.5c1a plan escaped its exact shader ABI allowlist"
+              )
+          PY
+
           if grep -nEi \
               '#import|<Metal/|Objective-C|Tempest|IOSMetalContext|RendererIOS|MTL[A-Z]|CAMetalLayer|newCommandQueue|newCommandBuffer|nextDrawable|presentDrawable|waitIdle|MetalFX|runtime[ -]shader|supportsFamily|supportsTextureSampleCount|MTLHeap|newHeap|sizeAndAlign|makeAliasable|NativeHandle|void[[:space:]]*\*' \
-              "${prototype_files[@]}"; then
+              game/graphics/iosshadingprototypeplan.h \
+              ios/tests/iosshadingprototypeplan.cpp; then
             echo 'P2.5a host-neutral contract leaks runtime or native policy'
+            exit 1
+          fi
+          if sed \
+              -e '/^#include "iosshadingprototypeshaderabi.h"$/d' \
+              -e 's/RendererIOSShadingPrototypeShader::ForwardLightListByteSize//g' \
+              game/graphics/iosshadingprototypeplan.cpp |
+              grep -nEi \
+                '#import|<Metal/|Objective-C|Tempest|IOSMetalContext|RendererIOS|MTL[A-Z]|CAMetalLayer|newCommandQueue|newCommandBuffer|nextDrawable|presentDrawable|waitIdle|MetalFX|runtime[ -]shader|supportsFamily|supportsTextureSampleCount|MTLHeap|newHeap|sizeAndAlign|makeAliasable|NativeHandle|void[[:space:]]*\*'; then
+            echo 'P2.5c1a plan escaped its exact neutral ABI allowlist'
             exit 1
           fi
           if grep -nE \
@@ -266,6 +305,9 @@ jobs:
           ).read_text()
           source = Path(
               "game/graphics/iosshadingprototypeplan.cpp"
+          ).read_text()
+          shader_abi = Path(
+              "game/graphics/iosshadingprototypeshaderabi.h"
           ).read_text()
           test = Path(
               "ios/tests/iosshadingprototypeplan.cpp"
@@ -291,7 +333,27 @@ jobs:
               (header, r"\bSupported\s*=\s*0\s*,", 1),
               (header, r"\bInvalid\s*=\s*1\s*,", 1),
               (header, r"\bUnsupported\s*=\s*2\s*,", 1),
-              (source, r"\b256u\s*,", 1),
+              (
+                  source,
+                  r"\bRendererIOSShadingPrototypeShader::"
+                  r"ForwardLightListByteSize\b",
+                  1,
+              ),
+              (
+                  shader_abi,
+                  r"\bForwardLightListWordBytes\s*=\s*4u\s*;",
+                  1,
+              ),
+              (
+                  shader_abi,
+                  r"\bForwardLightListWordCount\s*=\s*64u\s*;",
+                  1,
+              ),
+              (
+                  shader_abi,
+                  r"\bForwardLightListSentinel\s*=\s*0xA5A5A5A5u\s*;",
+                  1,
+              ),
               (test, r"\bmutationCount\s*!=\s*214u", 1),
           )
           for contents, pattern, expected in frozen:
@@ -468,6 +530,14 @@ jobs:
           clang++ -x c++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -Igame -fsyntax-only game/graphics/iosshadingprototypeplan.cpp
+          clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosshadingprototypeplan.cpp \
+            game/graphics/iosshadingprototypeplan.cpp \
+            game/graphics/iosframeplan.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeplan"
+          "$RUNNER_TEMP/iosshadingprototypeplan"
           clang++ -std=c++20 \
             -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
             -fsanitize=address,undefined -fno-omit-frame-pointer \
@@ -2029,25 +2099,20 @@ jobs:
           "$RUNNER_TEMP/iosbinkselftest"
           xcrun --sdk iphoneos metal \
             -target air64-apple-ios16.4 \
-            -c shader/ios-metal/landscape.metal \
+            -c "$PWD/shader/ios-metal/landscape.metal" \
             -o "$RUNNER_TEMP/ios-landscape.air"
           xcrun --sdk iphoneos metal \
             -target air64-apple-ios16.4 \
-            -c shader/ios-metal/bink.metal \
+            -c "$PWD/shader/ios-metal/bink.metal" \
             -o "$RUNNER_TEMP/ios-bink.air"
           xcrun --sdk iphoneos metal \
             -target air64-apple-ios16.4 \
-            -c shader/ios-metal/ui.metal \
+            -c "$PWD/shader/ios-metal/ui.metal" \
             -o "$RUNNER_TEMP/ios-ui.air"
           xcrun --sdk iphoneos metal \
             -target air64-apple-ios16.4 \
-            -c shader/ios-metal/inventory.metal \
+            -c "$PWD/shader/ios-metal/inventory.metal" \
             -o "$RUNNER_TEMP/ios-inventory.air"
-          xcrun --sdk iphoneos metal \
-            -target air64-apple-ios16.4 \
-            -Wall -Wextra -Werror \
-            -c shader/ios-metal/shading-prototypes.metal \
-            -o "$RUNNER_TEMP/ios-shading-prototypes.air"
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-landscape.air"
@@ -2060,33 +2125,90 @@ jobs:
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
             "$RUNNER_TEMP/ios-inventory.air"
+
+          P25C1A_BASELINE_SHA=d30ff428f237bbc8d1c25e5954d4df3381740339
+          P25C1A_TRACKED_SOURCE="$PWD/shader/ios-metal/shading-prototypes.metal"
+          P25C1A_BASELINE_SOURCE="$RUNNER_TEMP/RendererIOS-ShadingPrototypes.baseline.metal"
+          P25C1A_CANDIDATE_SOURCE="$RUNNER_TEMP/RendererIOS-ShadingPrototypes.candidate.metal"
+          P25C1A_STRICT_AIR="$RUNNER_TEMP/ios-shading-prototypes-strict.air"
+          P25C1A_BASELINE_AIR="$RUNNER_TEMP/ios-shading-prototypes-baseline.air"
+          P25C1A_CANDIDATE_AIR="$RUNNER_TEMP/ios-shading-prototypes-candidate.air"
+          P25C1A_BASELINE_METALLIB="$RUNNER_TEMP/RendererIOS.baseline.metallib"
+          P25C1A_CANDIDATE_METALLIB="$RUNNER_TEMP/RendererIOS.candidate.metallib"
+
+          git cat-file -e "${P25C1A_BASELINE_SHA}^{commit}"
+          git merge-base --is-ancestor "$P25C1A_BASELINE_SHA" HEAD
+          for source in \
+              shader/ios-metal/landscape.metal \
+              shader/ios-metal/bink.metal \
+              shader/ios-metal/ui.metal \
+              shader/ios-metal/inventory.metal; do
+            if ! git diff --quiet "$P25C1A_BASELINE_SHA" -- "$source"; then
+              echo "P2.5c1a fixed metallib input changed since c0: $source"
+              exit 1
+            fi
+          done
+
+          xcrun --sdk iphoneos metal \
+            -target air64-apple-ios16.4 \
+            -Wall -Wextra -Werror \
+            -c "$P25C1A_TRACKED_SOURCE" \
+            -o "$P25C1A_STRICT_AIR"
           LC_ALL=C grep -aFq \
             'apple-ios16.4.0' \
-            "$RUNNER_TEMP/ios-shading-prototypes.air"
-          xcrun --sdk iphoneos metallib \
-            "$RUNNER_TEMP/ios-landscape.air" \
-            "$RUNNER_TEMP/ios-bink.air" \
-            "$RUNNER_TEMP/ios-ui.air" \
-            "$RUNNER_TEMP/ios-inventory.air" \
-            "$RUNNER_TEMP/ios-shading-prototypes.air" \
-            -o "$RUNNER_TEMP/RendererIOS.metallib"
-          for function in \
-              riosLandscapeVertex riosLandscapeFragment \
-              riosBinkVertex riosBinkFragment \
-              riosUiColorVertex riosUiColorFragment \
-              riosUiTextureVertex riosUiTextureFragment \
-              riosInventoryVertex riosInventoryFragment \
-              riosShadingPrototypeVertex \
-              riosTileDeferredMaterialFragment \
-              riosTileDeferredLighting \
-              riosForwardPlusBuildLightList \
-              riosForwardPlusFragment; do
-            LC_ALL=C grep -aFq "$function" \
-              "$RUNNER_TEMP/RendererIOS.metallib"
-          done
-          RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
-            "$RUNNER_TEMP/RendererIOS.metallib" |
-            awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
+            "$P25C1A_STRICT_AIR"
+
+          compile_production_shading_prototype() {
+            local output="$1"
+            xcrun --sdk iphoneos metal \
+              -target air64-apple-ios16.4 \
+              -c "$P25C1A_TRACKED_SOURCE" \
+              -o "$output"
+          }
+          link_rendererios_metallib() {
+            local prototype_air="$1"
+            local output="$2"
+            xcrun --sdk iphoneos metallib \
+              "$RUNNER_TEMP/ios-landscape.air" \
+              "$RUNNER_TEMP/ios-bink.air" \
+              "$RUNNER_TEMP/ios-ui.air" \
+              "$RUNNER_TEMP/ios-inventory.air" \
+              "$prototype_air" \
+              -o "$output"
+          }
+
+          cp "$P25C1A_TRACKED_SOURCE" "$P25C1A_CANDIDATE_SOURCE"
+          git show \
+            "$P25C1A_BASELINE_SHA:shader/ios-metal/shading-prototypes.metal" \
+            >"$P25C1A_BASELINE_SOURCE"
+          if cmp -s "$P25C1A_BASELINE_SOURCE" "$P25C1A_CANDIDATE_SOURCE"; then
+            echo 'P2.5c1a candidate source is identical to the c0 baseline'
+            exit 1
+          fi
+          restore_p25c1a_candidate() {
+            cp "$P25C1A_CANDIDATE_SOURCE" "$P25C1A_TRACKED_SOURCE"
+          }
+          trap restore_p25c1a_candidate EXIT
+          trap 'restore_p25c1a_candidate; exit 130' HUP INT TERM
+          cp "$P25C1A_BASELINE_SOURCE" "$P25C1A_TRACKED_SOURCE"
+          cmp -s "$P25C1A_BASELINE_SOURCE" "$P25C1A_TRACKED_SOURCE"
+          compile_production_shading_prototype "$P25C1A_BASELINE_AIR"
+          restore_p25c1a_candidate
+          cmp -s "$P25C1A_CANDIDATE_SOURCE" "$P25C1A_TRACKED_SOURCE"
+          compile_production_shading_prototype "$P25C1A_CANDIDATE_AIR"
+          trap - EXIT HUP INT TERM
+          LC_ALL=C grep -aFq \
+            'apple-ios16.4.0' \
+            "$P25C1A_BASELINE_AIR"
+          LC_ALL=C grep -aFq \
+            'apple-ios16.4.0' \
+            "$P25C1A_CANDIDATE_AIR"
+
+          link_rendererios_metallib \
+            "$P25C1A_BASELINE_AIR" "$P25C1A_BASELINE_METALLIB"
+          link_rendererios_metallib \
+            "$P25C1A_CANDIDATE_AIR" "$P25C1A_CANDIDATE_METALLIB"
+
           EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
             riosLandscapeVertex riosLandscapeFragment \
             riosBinkVertex riosBinkFragment \
@@ -2098,8 +2220,96 @@ jobs:
             riosTileDeferredLighting \
             riosForwardPlusBuildLightList \
             riosForwardPlusFragment | LC_ALL=C sort)"
-          test "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"
-          test "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 15
+          require_exact_rendererios_exports() {
+            local metallib="$1"
+            local exports
+            local function
+            for function in \
+                riosLandscapeVertex riosLandscapeFragment \
+                riosBinkVertex riosBinkFragment \
+                riosUiColorVertex riosUiColorFragment \
+                riosUiTextureVertex riosUiTextureFragment \
+                riosInventoryVertex riosInventoryFragment \
+                riosShadingPrototypeVertex \
+                riosTileDeferredMaterialFragment \
+                riosTileDeferredLighting \
+                riosForwardPlusBuildLightList \
+                riosForwardPlusFragment; do
+              LC_ALL=C grep -aFq "$function" "$metallib"
+            done
+            exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
+              awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
+            test "$exports" = "$EXPECTED_RIOS_EXPORTS"
+            test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 15
+          }
+          require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
+          require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
+
+          P25C1A_BASELINE_DIGEST="$(
+            shasum -a 256 "$P25C1A_BASELINE_METALLIB" | awk '{print $1}'
+          )"
+          P25C1A_CANDIDATE_DIGEST="$(
+            shasum -a 256 "$P25C1A_CANDIDATE_METALLIB" | awk '{print $1}'
+          )"
+          test "$P25C1A_BASELINE_DIGEST" != "$P25C1A_CANDIDATE_DIGEST"
+          printf '%s\n' "$P25C1A_BASELINE_DIGEST" \
+            >"$RUNNER_TEMP/RendererIOS.baseline.sha256"
+          printf '%s\n' "$P25C1A_CANDIDATE_DIGEST" \
+            >"$RUNNER_TEMP/RendererIOS.candidate.sha256"
+
+          cat >"$RUNNER_TEMP/iosshadingprototypeprovenance.cpp" <<'CPP'
+          #define OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS 1
+          #include "graphics/iospipelinearchivepolicy.h"
+
+          #include <string>
+          #include <string_view>
+
+          namespace Archive = RendererIOSPipelineArchive;
+
+          int main(int argc, char** argv) {
+            static_assert(Archive::ProvenanceSchemaVersion==1u);
+            static_assert(Archive::CacheSchemaVersion==1u);
+            static_assert(Archive::PipelineKeyAbiVersion==1u);
+            static_assert(Archive::MetallibAbiVersion==5u);
+            static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
+            static_assert(
+              Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
+            static_assert(Archive::TestModeDirectoryComponents[2]=="schema-1");
+            static_assert(
+              Archive::RelativeArchivePath==
+              "RendererIOS/PipelineArchives/schema-1/"
+              "RendererIOS-abi-5.binaryarchive");
+            if(argc!=3)
+              return 1;
+            const std::string_view candidate = argv[1];
+            const std::string_view baseline = argv[2];
+            if(!Archive::isLowercaseSha256(candidate) ||
+               !Archive::isLowercaseSha256(baseline) ||
+               candidate==baseline)
+              return 2;
+            const std::string record = Archive::provenanceRecord(candidate);
+            if(record.empty() ||
+               !Archive::provenanceMatches(record,candidate) ||
+               Archive::provenanceMatches(record,baseline))
+              return 3;
+            const std::string expected =
+              "renderer=RendererIOS\n"
+              "provenance-schema=1\n"
+              "cache-schema=1\n"
+              "pipeline-key-abi=1\n"
+              "metallib-abi=5\n"
+              "metallib-sha256="+std::string(candidate)+"\n"
+              "archive-file=RendererIOS-abi-5.binaryarchive\n";
+            return record==expected ? 0 : 4;
+          }
+          CPP
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            "$RUNNER_TEMP/iosshadingprototypeprovenance.cpp" \
+            -o "$RUNNER_TEMP/iosshadingprototypeprovenance"
+          "$RUNNER_TEMP/iosshadingprototypeprovenance" \
+            "$P25C1A_CANDIDATE_DIGEST" "$P25C1A_BASELINE_DIGEST"
 
           if grep -Eq \
               'newLibraryWithSource|compileSource|MTLCompileOptions|newCommandQueue|commandBufferWith|presentDrawable' \
@@ -3840,9 +4050,25 @@ jobs:
             CODE_SIGN_IDENTITY=""
           APP_BINARY='build-renderer-ios/opengothic/Release/Gothic2Notr.app/Gothic2Notr'
           APP_INFO='build-renderer-ios/opengothic/Release/Gothic2Notr.app/Info.plist'
+          APP_METALLIB='build-renderer-ios/opengothic/Release/Gothic2Notr.app/RendererIOS.metallib'
           APP_STRINGS="$RUNNER_TEMP/Gothic2Notr-$DIAGNOSTICS.strings"
           test -f "$APP_BINARY"
           test -f "$APP_INFO"
+          test -f "$APP_METALLIB"
+          test -f "$RUNNER_TEMP/RendererIOS.candidate.sha256"
+          test "$(wc -l <"$RUNNER_TEMP/RendererIOS.candidate.sha256" |
+            tr -d ' ')" -eq 1
+          P25C1A_CANDIDATE_DIGEST="$(
+            sed -n '1p' "$RUNNER_TEMP/RendererIOS.candidate.sha256"
+          )"
+          printf '%s\n' "$P25C1A_CANDIDATE_DIGEST" |
+            grep -Eq '^[0-9a-f]{64}$'
+          APP_METALLIB_DIGEST="$(
+            shasum -a 256 "$APP_METALLIB" | awk '{print $1}'
+          )"
+          test "$APP_METALLIB_DIGEST" = "$P25C1A_CANDIDATE_DIGEST"
+          printf 'RendererIOS %s app metallib matches P2.5c1a candidate: %s\n' \
+            "$DIAGNOSTICS" "$APP_METALLIB_DIGEST"
           strings "$APP_BINARY" >"$APP_STRINGS"
           if [ "$DIAGNOSTICS" = ON ]; then
             grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \

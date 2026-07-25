@@ -1,4 +1,5 @@
 #include "iosshadingprototypeplan.h"
+#include "iosshadingprototypeshaderabi.h"
 
 namespace {
 
@@ -72,7 +73,7 @@ IOSResourceDesc lightListResource() noexcept {
       {0u,0u},
       0u,
       0u,
-      256u,
+      RendererIOSShadingPrototypeShader::ForwardLightListByteSize,
     },
     IOSResourceUsage::ShaderRead|IOSResourceUsage::ShaderWrite,
     };
