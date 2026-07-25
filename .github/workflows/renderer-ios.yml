@@ -1725,13 +1725,13 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'remote_mutating_copy_count=0' \
             ios/device-test/run-pipeline-archive-test.sh
-          grep -Fq 'has missing/invalid directories' \
+          grep -Fq 'OpenGothic container has missing/invalid resources:' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'resources.get("isDirectory") is not True' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'resources.get("isSymbolicLink") is True' \
+          grep -Fq 'or resources.get("isSymbolicLink") is not False' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'existing game data preflight failed before install' \
+          grep -Fq 'game Data/_work/system or Gothic.dat/Gothic.ini preflight failed before install' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'Gothic.dat' ios/device-test/run-smoke-test.sh
           grep -Fq 'Gothic.ini' ios/device-test/run-smoke-test.sh
@@ -3746,19 +3746,17 @@ jobs:
             ios/device-test/run-smoke-test.sh
           grep -Fq 'device_selection_method=' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'ditto "$WORK/device-selection.log" "$OUT/device-selection.log"' \
+          grep -Fq 'copy_private_evidence_path "$WORK/device-selection.log"' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'd.get("interface") == "usb"' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'has missing/invalid directories' \
+          grep -Fq 'OpenGothic container has missing/invalid resources:' \
             ios/device-test/run-smoke-test.sh
           grep -Fq 'phase=trap-cleanup game_processes=0' \
             ios/device-test/run-smoke-test.sh
-          grep -Fq 'existing game data preflight failed before install' \
-            ios/device-test/run-smoke-test.sh
-          grep -Fq 'compiled scripts/system preflight failed before install' \
+          grep -Fq 'game Data/_work/system or Gothic.dat/Gothic.ini preflight failed before install' \
             ios/device-test/run-smoke-test.sh
 
           python3 - <<'PY'
@@ -3799,11 +3797,10 @@ jobs:
           selection = source.index('DEVICE_RECORD="$(select_device_record)"')
           bundle = source.index('BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"')
           selection_evidence = source.index(
-              'ditto "$WORK/device-selection.log" "$OUT/device-selection.log"')
-          data_preflight = source.index(
-              'existing game data preflight failed before install')
-          scripts_preflight = source.index(
-              'compiled scripts/system preflight failed before install')
+              'copy_private_evidence_path "$WORK/device-selection.log"')
+          game_data_preflight = source.index(
+              'game Data/_work/system or Gothic.dat/Gothic.ini '
+              'preflight failed before install')
           install = source.index('echo "== installing $BUNDLE_ID =="')
           stopped = source.index('stop_running_app 1 || fail "application cleanup failed"')
           runtime_shell_oracle = source.index('shell_count = sum(')
@@ -3834,7 +3831,7 @@ jobs:
           result = source.index('echo "result=PASS"')
           if not expected_build_binding < expected_build_preflight < expected_fault_preflight < selection < bundle:
               raise SystemExit("bounded device selection retry runs after app inspection")
-          if not bundle < data_preflight < scripts_preflight < install:
+          if not bundle < game_data_preflight < install:
               raise SystemExit("game-data preflight does not fail before install")
           if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < preview_fence_parser < preview_fence_summary < frame_fence_parser < frame_fence_summary < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
               raise SystemExit("device PASS is emitted before cleanup proof")
