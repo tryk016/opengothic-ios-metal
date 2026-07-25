@@ -1829,6 +1829,10 @@ jobs:
           test -f game/graphics/iosshadingprototypeforwardpipeline.h
           test -f game/graphics/iosshadingprototypeforwardpipeline.cpp
           test -f game/graphics/iosshadingprototypeforwardpipeline.mm
+          test -f game/graphics/iosshadingprototypeforwardpipelinenative.h
+          test -f game/graphics/iosshadingprototypeforwardprobe.h
+          test -f game/graphics/iosshadingprototypeforwardprobe.cpp
+          test -f game/graphics/iosshadingprototypeforwardprobe.mm
           test -f game/graphics/iosshadingprototypetileprobe.h
           test -f game/graphics/iosshadingprototypetileprobe.cpp
           test -f game/graphics/iosshadingprototypetileprobe.mm
@@ -1850,6 +1854,7 @@ jobs:
           test -f ios/tests/iosshadingprototypeshader.cpp
           test -f ios/tests/iosshadingprototypepipeline.cpp
           test -f ios/tests/iosshadingprototypeforwardpipeline.cpp
+          test -f ios/tests/iosshadingprototypeforwardprobe.cpp
           test -f ios/tests/iosshadingprototypetileprobe.cpp
           test -f ios/tests/iosbinkshader.cpp
           test -f ios/tests/iosbinkselftest.cpp
@@ -1976,6 +1981,81 @@ jobs:
             -isystem lib/Tempest/Engine/include \
             -c game/graphics/iosshadingprototypeforwardpipeline.mm \
             -o "$RUNNER_TEMP/iosshadingprototypeforwardpipeline-mm.o"
+          printf '#include "graphics/iosshadingprototypeforwardprobe.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          printf '#include "graphics/iosshadingprototypeforwardpipelinenative.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosshadingprototypeforwardprobe.cpp \
+            game/graphics/iosshadingprototypeforwardprobe.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeforwardprobe"
+          "$RUNNER_TEMP/iosshadingprototypeforwardprobe"
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosshadingprototypeforwardprobe.cpp \
+            game/graphics/iosshadingprototypeforwardprobe.cpp \
+            -o "$RUNNER_TEMP/iosshadingprototypeforwardprobe-sanitized"
+          "$RUNNER_TEMP/iosshadingprototypeforwardprobe-sanitized"
+          xcrun clang++ -x c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -fsyntax-only \
+            game/graphics/iosshadingprototypeforwardprobe.cpp \
+            ios/tests/iosshadingprototypeforwardprobe.cpp
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1 \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -c game/graphics/iosshadingprototypeforwardprobe.mm \
+            -o "$RUNNER_TEMP/iosshadingprototypeforwardprobe-macos.o"
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1 \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -c game/graphics/iosshadingprototypeforwardprobe.mm \
+            -o "$RUNNER_TEMP/iosshadingprototypeforwardprobe-ios.o"
           printf '#include "graphics/iosshadingprototypetileprobe.h"\nint main() { return 0; }\n' |
             xcrun clang++ -x c++ -std=c++20 \
               -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
@@ -2324,7 +2404,11 @@ jobs:
               --glob '!iosshadingprototypeshaderabi.h' \
               --glob '!iosshadingprototypeforwardpipeline.h' \
               --glob '!iosshadingprototypeforwardpipeline.cpp' \
-              --glob '!iosshadingprototypeforwardpipeline.mm'; then
+              --glob '!iosshadingprototypeforwardpipeline.mm' \
+              --glob '!iosshadingprototypeforwardpipelinenative.h' \
+              --glob '!iosshadingprototypeforwardprobe.h' \
+              --glob '!iosshadingprototypeforwardprobe.cpp' \
+              --glob '!iosshadingprototypeforwardprobe.mm'; then
             echo 'P2.5c0 Forward+ ABI escaped its factory allowlist'
             exit 1
           fi
@@ -2451,6 +2535,289 @@ jobs:
           grep -Fq \
             'alphaBuild!=NativePipelineBuild::CreationFailed' \
             game/graphics/iosshadingprototypeforwardpipeline.mm
+
+          P25C1B0_HOST_FILES=(
+            game/graphics/iosshadingprototypeforwardprobe.h
+            game/graphics/iosshadingprototypeforwardprobe.cpp
+          )
+          P25C1B0_NATIVE_FILES=(
+            game/graphics/iosshadingprototypeforwardpipelinenative.h
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          )
+          if grep -Eq \
+              '#import|<Metal/|@interface|id[[:space:]]*<MTL|namespace[[:space:]]+MTL|__OBJC__|void[[:space:]]*\*|NativeHandle' \
+              "${P25C1B0_HOST_FILES[@]}"; then
+            echo 'P2.5c1b0 host-neutral Forward probe leaks Objective-C or Metal'
+            exit 1
+          fi
+          if grep -Eq '#import|<Metal/|@interface|id<MTL|__OBJC__' \
+              game/graphics/iosshadingprototypeforwardpipelinenative.h; then
+            echo 'P2.5c1b0 private native view includes Objective-C or Metal headers'
+            exit 1
+          fi
+          P25C1B0_FORBIDDEN='MTLCreateSystemDefaultDevice|newCommandQueue|newCommandBuffer|commandBufferWith|commandBuffer\]|id[[:space:]]*<MTLFence>|newFence|newEvent|newSharedEvent|updateFence|waitForFence|(^|[^[:alnum:]_])readBytes[[:space:]]*\(|(^|[^[:alnum:]_])readPixels[[:space:]]*\(|getBytes|(^|[^[:alnum:]_])submit[[:space:]]*\(|commit\]|enqueue\]|waitUntilCompleted\]|addCompletedHandler:|withActiveRenderEncoder|blitCommandEncoder|parallelRenderCommandEncoder|resourceStateCommandEncoder|accelerationStructureCommandEncoder|dispatchThreadgroups|drawIndexedPrimitives|drawMesh|executeCommandsInBuffer|useResource|useHeap|memoryBarrier|sampleCounters|resolveCounters|synchronizeResource|synchronizeTexture|startCapture|stopCapture|nextDrawable|presentDrawable|newLibraryWithSource|newDefaultLibrary|newLibraryWithURL|newFunctionWithName|newComputePipelineState|newRenderPipelineState|newTextureWith|newHeap|newSamplerState|newArgumentEncoder|newAccelerationStructure|newIndirectCommandBuffer|makeAliasable|MTLCompileOptions|MTLBinaryArchive|addRenderPipelineFunctions|addComputePipelineFunctions|serializeToURL|MetalFX'
+          for fixture in \
+              'MTLCreateSystemDefaultDevice()' \
+              '[device newCommandQueue]' \
+              '[device newCommandBuffer]' \
+              'id<MTLFence> fence' \
+              '[device newSharedEvent]' \
+              '[encoder updateFence:fence]' \
+              '[encoder waitForFence:fence]' \
+              'device.readBytes(buffer,0u,bytes)' \
+              'texture.readPixels(output)' \
+              '[texture getBytes:bytes bytesPerRow:row]' \
+              'device.submit(command)' \
+              '[command addCompletedHandler:handler]' \
+              '[command commit]' \
+              '[command enqueue]' \
+              '[command waitUntilCompleted]' \
+              '[queue commandBuffer]' \
+              'Tempest::MetalApi::withActiveRenderEncoder(' \
+              '[command blitCommandEncoder]' \
+              '[compute dispatchThreadgroups:grid threadsPerThreadgroup:size]' \
+              '[render drawIndexedPrimitives:type indexCount:count]' \
+              '[render useResource:resource usage:usage]' \
+              '[capture startCaptureWithDescriptor:descriptor error:&error]' \
+              '[capture stopCapture]' \
+              '[swapchain nextDrawable]' \
+              '[command presentDrawable:drawable]' \
+              '[device newLibraryWithSource:source options:nil error:&error]' \
+              '[device newDefaultLibrary]' \
+              '[device newLibraryWithURL:url error:&error]' \
+              '[library newFunctionWithName:name]' \
+              '[device newComputePipelineStateWithDescriptor:descriptor]' \
+              '[device newRenderPipelineStateWithDescriptor:descriptor]' \
+              '[device newTextureWithDescriptor:descriptor]' \
+              '[device newHeapWithDescriptor:descriptor]' \
+              '[device newSamplerStateWithDescriptor:descriptor]' \
+              '[device newIndirectCommandBufferWithDescriptor:descriptor]' \
+              '[resource makeAliasable]' \
+              'MTLCompileOptions* options' \
+              'id<MTLBinaryArchive> archive' \
+              '[archive addRenderPipelineFunctionsWithDescriptor:descriptor]' \
+              '[archive addComputePipelineFunctionsWithDescriptor:descriptor]' \
+              '[archive serializeToURL:url error:&error]' \
+              'MetalFX::TemporalScaler'; do
+            printf '%s\n' "$fixture" |
+              grep -Eq "$P25C1B0_FORBIDDEN"
+          done
+          if grep -Eq "$P25C1B0_FORBIDDEN" \
+              "${P25C1B0_NATIVE_FILES[@]}"; then
+            echo 'P2.5c1b0 Forward probe escaped its compile-only encode boundary'
+            exit 1
+          fi
+          test "$(grep -Fc 'Tempest::MetalApi::withActiveCommandBuffer(' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'newBufferWithLength:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'computeCommandEncoder' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'renderCommandEncoderWithDescriptor:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'setComputePipelineState:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'setBuffer:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'dispatchThreads:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'setFragmentBuffer:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'setVertexBytes:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'setRenderPipelineState:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 2
+          test "$(grep -Fc 'drawPrimitives:' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 2
+          test "$(grep -Fc 'endEncoding]' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'if(!compute.endOnce())' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'if(!render.endOnce())' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          grep -Fq 'ForwardLightListByteSize' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'ForwardLightListSentinel' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          test "$(grep -Fc 'std::fill_n(' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          test "$(grep -Fc 'std::memcpy(' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          grep -Fq 'MTLLoadActionClear' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'MTLStoreActionStore' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'MTLClearColorMake(0.0,0.0,0.0,0.0)' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'colorAttachments[OutputAttachment]' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'depthAttachment.texture==nil' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'stencilAttachment.texture==nil' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          grep -Fq 'output.sampleCount==NSUInteger(1u)' \
+            game/graphics/iosshadingprototypeforwardprobe.mm
+          test "$(grep -Fc 'MTLPrimitiveTypeTriangle' \
+              game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 2
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path(
+              "game/graphics/iosshadingprototypeforwardprobe.mm"
+          ).read_text()
+          compact = "".join(source.split())
+
+          options = (
+              "MTLResourceStorageModeShared|"
+              "MTLResourceHazardTrackingModeTracked"
+          )
+          if compact.count(options) != 1:
+              raise SystemExit(
+                  "P2.5c1b0 requires exactly Shared|Tracked buffer options"
+              )
+
+          exact_native_contract = {
+              "Tempest::MetalApi::borrowDevice(": 2,
+              "IOSShadingPrototypeForwardPipelineNativeAccess::borrow(": 1,
+              "IOSMetalResourceTextureNativeAccess::borrow(": 1,
+              "IOSShadingPrototypeForwardLightListNativeAccess::borrow(": 2,
+              "output.snapshot()": 1,
+              (
+                  "setBuffer:lightList"
+                  "offset:static_cast<NSUInteger>(LightListOffset)"
+                  "atIndex:static_cast<NSUInteger>("
+                  "Shader::ForwardLightListBuffer)"
+              ): 1,
+              (
+                  "setFragmentBuffer:lightList"
+                  "offset:static_cast<NSUInteger>(LightListOffset)"
+                  "atIndex:static_cast<NSUInteger>("
+                  "Shader::ForwardLightListBuffer)"
+              ): 1,
+              (
+                  "setVertexBytes:Vertices.data()"
+                  "length:sizeof(Vertices)"
+                  "atIndex:static_cast<NSUInteger>("
+                  "PipelineContract::VertexBufferIndex)"
+              ): 1,
+              (
+                  "drawPrimitives:MTLPrimitiveTypeTriangle"
+                  "vertexStart:static_cast<NSUInteger>("
+                  "OpaqueVertexStart)"
+                  "vertexCount:static_cast<NSUInteger>("
+                  "TriangleVertexCount)"
+              ): 1,
+              (
+                  "drawPrimitives:MTLPrimitiveTypeTriangle"
+                  "vertexStart:static_cast<NSUInteger>("
+                  "AlphaTestVertexStart)"
+                  "vertexCount:static_cast<NSUInteger>("
+                  "TriangleVertexCount)"
+              ): 1,
+              "outputSnapshot.format==IOSPixelFormat::Rgba8Unorm": 1,
+              (
+                  "outputSnapshot.storage=="
+                  "IOSMetalResourceStorage::Private"
+              ): 1,
+              (
+                  "report.outputWidth==OutputWidth&&"
+                  "report.outputHeight==OutputHeight&&"
+                  "report.outputMipLevels==OutputMipLevels&&"
+                  "report.outputSampleCount==OutputSampleCount&&"
+                  "outputSnapshot.depth==1u&&"
+                  "outputSnapshot.arrayLength==1u&&"
+                  "outputSnapshot.usageExactlyRepresented&&"
+                  "outputSnapshot.usage=="
+                  "IOSResourceUsage::RenderAttachment"
+              ): 1,
+          }
+          for needle, expected in exact_native_contract.items():
+              if compact.count(needle) != expected:
+                  raise SystemExit(
+                      "P2.5c1b0 native contract is not exact: "
+                      + needle
+                  )
+
+          compute = source.index("[command computeCommandEncoder]")
+          compute_end = source.index("if(!compute.endOnce())",compute)
+          render = source.index(
+              "renderCommandEncoderWithDescriptor:",compute_end
+          )
+          render_end = source.index("if(!render.endOnce())",render)
+          if not compute < compute_end < render < render_end:
+              raise SystemExit(
+                  "P2.5c1b0 encoder order is not compute/end/render/end"
+              )
+
+          dispatch = source.index("dispatchThreads:",compute)
+          dispatch_done = source.index("report.dispatches = 1u;",dispatch)
+          dispatch_block = source[dispatch:dispatch_done]
+          dimensions = (
+              "ForwardLightListGridWidth",
+              "ForwardLightListGridHeight",
+              "ForwardLightListGridDepth",
+              "ForwardLightListThreadsPerThreadgroupWidth",
+              "ForwardLightListThreadsPerThreadgroupHeight",
+              "ForwardLightListThreadsPerThreadgroupDepth",
+          )
+          for dimension in dimensions:
+              if dispatch_block.count(dimension) != 1:
+                  raise SystemExit(
+                      "P2.5c1b0 dispatch does not bind exact unit geometry: "
+                      + dimension
+                  )
+          PY
+          for symbol in \
+              iosCreateShadingPrototypeForwardLightList \
+              iosReadShadingPrototypeForwardLightListContents \
+              iosEncodeShadingPrototypeForwardProbe; do
+            matches="$(rg -l "$symbol" game | sort)"
+            test "$matches" = \
+              $'game/graphics/iosshadingprototypeforwardprobe.h\ngame/graphics/iosshadingprototypeforwardprobe.mm'
+          done
+          test "$(rg -l \
+              'IOSShadingPrototypeForwardPipelineNativeAccess' game |
+              sort)" = \
+            $'game/graphics/iosshadingprototypeforwardpipeline.h\ngame/graphics/iosshadingprototypeforwardpipeline.mm\ngame/graphics/iosshadingprototypeforwardpipelinenative.h\ngame/graphics/iosshadingprototypeforwardprobe.mm'
+          for label in \
+              'RendererIOS Forward BuildLightList' \
+              'RendererIOS Forward Opaque' \
+              'RendererIOS Forward AlphaTest'; do
+            grep -Fq "$label" \
+              game/graphics/iosshadingprototypeforwardpipeline.h
+            grep -Fq "$label" \
+              game/graphics/iosshadingprototypeforwardpipeline.mm
+          done
+          test "$(grep -Fc 'descriptor.label =' \
+              game/graphics/iosshadingprototypeforwardpipeline.mm)" -eq 2
+          for label in \
+              'RendererIOS Forward Compute Encoder' \
+              'RendererIOS Forward Render Encoder' \
+              'RendererIOS Forward LightList 256B'; do
+            grep -Fq "$label" \
+              game/graphics/iosshadingprototypeforwardprobe.h
+            test "$(grep -Fc "$label" \
+                game/graphics/iosshadingprototypeforwardprobe.mm)" -eq 1
+          done
+          test "$(grep -Fc 'std::array<uint32_t,8u> reserved{};' \
+              game/graphics/iosshadingprototypeforwardprobe.h)" -eq 3
+          for field in abiVersion structSize flags failureReason; do
+            test "$(grep -Ec \
+              "uint32_t[[:space:]]+${field}[[:space:]]*=[[:space:]]*0u;" \
+              game/graphics/iosshadingprototypeforwardprobe.h)" -eq 3
+          done
+          for abi in \
+              'sizeof(LightListReport)==164u' \
+              'sizeof(ProbeReport)==468u' \
+              'sizeof(TerminalReport)==268u' \
+              'alignof(LightListReport)==4u' \
+              'alignof(ProbeReport)==4u' \
+              'alignof(TerminalReport)==4u'; do
+            grep -Fq "$abi" \
+              ios/tests/iosshadingprototypeforwardprobe.cpp
+          done
+          grep -Fq 'mutations=all-report-fields' \
+            ios/tests/iosshadingprototypeforwardprobe.cpp
           test "$(grep -Fc 'iosEncodeShadingPrototypeTileProbe' \
               game/graphics/iosmetalcontext.cpp)" -eq 1
           if rg -n 'iosEncodeShadingPrototypeTileProbe' game \
@@ -2894,6 +3261,8 @@ jobs:
           sources = (
               "iosshadingprototypepipeline.cpp",
               "iosshadingprototypepipeline.mm",
+              "iosshadingprototypeforwardprobe.cpp",
+              "iosshadingprototypeforwardprobe.mm",
               "iosshadingprototypetileprobe.cpp",
               "iosshadingprototypetileprobe.mm",
               "iosmetalcapturesession.mm",
@@ -3485,12 +3854,16 @@ jobs:
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypepipeline\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypeforwardpipeline\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypeforwardpipeline\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosshadingprototypeforwardprobe\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
+          grep -Eq '(^|[^[:alnum:]_])iosshadingprototypeforwardprobe\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypetileprobe\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           grep -Eq '(^|[^[:alnum:]_])iosshadingprototypetileprobe\.mm([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj
           for source in iosshadingprototypepipeline.cpp \
               iosshadingprototypepipeline.mm \
               iosshadingprototypeforwardpipeline.cpp \
               iosshadingprototypeforwardpipeline.mm \
+              iosshadingprototypeforwardprobe.cpp \
+              iosshadingprototypeforwardprobe.mm \
               iosshadingprototypetileprobe.cpp \
               iosshadingprototypetileprobe.mm; do
             test "$(grep -Fc \
@@ -3534,6 +3907,8 @@ jobs:
               "iosshadingprototypepipeline.mm",
               "iosshadingprototypeforwardpipeline.cpp",
               "iosshadingprototypeforwardpipeline.mm",
+              "iosshadingprototypeforwardprobe.cpp",
+              "iosshadingprototypeforwardprobe.mm",
               "iosshadingprototypetileprobe.cpp",
               "iosshadingprototypetileprobe.mm",
           ):

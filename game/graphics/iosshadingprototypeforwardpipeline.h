@@ -31,6 +31,12 @@ inline constexpr uint32_t VertexStride = 28u;
 inline constexpr uint32_t PositionOffset = 0u;
 inline constexpr uint32_t ColorOffset = 12u;
 inline constexpr uint32_t PipelineImageblockBytesPerSample = 0u;
+inline constexpr std::string_view ComputePipelineLabel =
+    "RendererIOS Forward BuildLightList";
+inline constexpr std::string_view OpaquePipelineLabel =
+    "RendererIOS Forward Opaque";
+inline constexpr std::string_view AlphaTestPipelineLabel =
+    "RendererIOS Forward AlphaTest";
 
 }
 
@@ -258,6 +264,7 @@ class IOSShadingPrototypeForwardPipeline final {
   friend IOSShadingPrototypeForwardPipeline
       iosCreateShadingPrototypeForwardPipeline(
           Tempest::Device&) noexcept;
+  friend class IOSShadingPrototypeForwardPipelineNativeAccess;
   };
 
 // P2.5c0 is an isolated construction/reflection-only Forward+ control factory.

@@ -1,4 +1,5 @@
 #include "iosshadingprototypeforwardpipeline.h"
+#include "iosshadingprototypeforwardpipelinenative.h"
 
 #include "ioslandscapeshaderabi.h"
 #include "iosshadingprototypeshaderabi.h"
@@ -328,6 +329,8 @@ NativePipelineBuild buildComputePipeline(
   descriptor.linkedFunctions = nil;
   descriptor.supportAddingBinaryFunctions = NO;
   descriptor.maxCallStackDepth = NSUInteger(1u);
+  descriptor.label =
+      @"RendererIOS Forward BuildLightList";
 
   report.binaryArchivesNil = descriptor.binaryArchives==nil;
   report.functionMatches = descriptor.computeFunction==function;
@@ -423,6 +426,10 @@ NativePipelineBuild buildRenderPipeline(
   descriptor.rasterizationEnabled = YES;
   descriptor.supportIndirectCommandBuffers = NO;
   descriptor.binaryArchives = nil;
+  descriptor.label =
+      alphaTestEnabled
+          ? @"RendererIOS Forward AlphaTest"
+          : @"RendererIOS Forward Opaque";
 
   report.binaryArchivesNil = descriptor.binaryArchives==nil;
   report.vertexDescriptorMatches =
@@ -511,6 +518,59 @@ struct IOSShadingPrototypeForwardPipeline::Impl final {
   id opaquePipeline = nil;
   id alphaPipeline = nil;
   };
+
+bool IOSShadingPrototypeForwardPipelineNativeAccess::borrow(
+    const IOSShadingPrototypeForwardPipeline& pipeline,
+    IOSShadingPrototypeForwardPipelineNativeView& view) noexcept {
+  view = {};
+  if(pipeline.pipelineStatus!=
+         IOSShadingPrototypeForwardPipelineStatus::Ready ||
+     pipeline.impl==nullptr ||
+     pipeline.impl->computePipeline==nil ||
+     pipeline.impl->opaquePipeline==nil ||
+     pipeline.impl->alphaPipeline==nil)
+    return false;
+
+  @try {
+    id<MTLComputePipelineState> compute =
+        (id<MTLComputePipelineState>)
+            pipeline.impl->computePipeline;
+    id<MTLRenderPipelineState> opaque =
+        (id<MTLRenderPipelineState>)
+            pipeline.impl->opaquePipeline;
+    id<MTLRenderPipelineState> alpha =
+        (id<MTLRenderPipelineState>)
+            pipeline.impl->alphaPipeline;
+    id<MTLDevice> device = compute.device;
+    if(device==nil || opaque.device!=device ||
+       alpha.device!=device ||
+       ![compute.label
+           isEqualToString:
+               @"RendererIOS Forward BuildLightList"] ||
+       ![opaque.label
+           isEqualToString:@"RendererIOS Forward Opaque"] ||
+       ![alpha.label
+           isEqualToString:@"RendererIOS Forward AlphaTest"])
+      return false;
+
+    view.device =
+        reinterpret_cast<MTL::Device*>((void*)device);
+    view.buildLightList =
+        reinterpret_cast<MTL::ComputePipelineState*>(
+            (void*)compute);
+    view.opaque =
+        reinterpret_cast<MTL::RenderPipelineState*>(
+            (void*)opaque);
+    view.alphaTest =
+        reinterpret_cast<MTL::RenderPipelineState*>(
+            (void*)alpha);
+    return true;
+    }
+  @catch(NSException*) {
+    view = {};
+    return false;
+    }
+  }
 
 IOSShadingPrototypeForwardPipeline::
     IOSShadingPrototypeForwardPipeline() noexcept = default;
