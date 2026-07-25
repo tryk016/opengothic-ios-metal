@@ -39,6 +39,7 @@
 
 #include "iosgpuscene.h"
 #include "iosgpubink.h"
+#include "iosdevicefactscollector.h"
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
@@ -1201,7 +1202,8 @@ struct IOSMetalContext::Impl final {
     };
 
   Impl(Device& device, SystemApi::Window* window)
-    : device(device), resourceAllocator(device), swapchain(device,window),
+    : device(device), deviceFacts(iosCollectDeviceFacts(device)),
+      resourceAllocator(device), swapchain(device,window),
       runtimeBeforeLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
       builtinRuntimeBeforeLegacyShaders(
         MetalApi::builtinRuntimeSnapshot(device)),
@@ -1209,6 +1211,7 @@ struct IOSMetalContext::Impl final {
       runtimeAfterLegacyShaders(MetalApi::runtimeCompilationSnapshot(device)),
       builtinRuntimeAfterLegacyShaders(
         MetalApi::builtinRuntimeSnapshot(device)) {
+    iosLogDeviceFacts(deviceFacts);
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
     runIOSResourceAllocatorSelfTest(resourceAllocator,device);
 #endif
@@ -3931,6 +3934,7 @@ struct IOSMetalContext::Impl final {
     }
 
   Device&                                      device;
+  const IOSDeviceFactsCreateResult             deviceFacts;
   IOSMetalResourceAllocator                    resourceAllocator;
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
   // Declaration order is the retainedReferences=false ownership contract:

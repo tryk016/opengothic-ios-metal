@@ -437,7 +437,12 @@ endif()
 
 if(IOS)
   file(GLOB_RECURSE ObjCSOURCES "game/*.mm")
-  target_link_libraries(${PROJECT_NAME} "-framework UIKit" "-framework GameController" "-framework AVFoundation" "-framework Security")
+  target_link_libraries(${PROJECT_NAME}
+    "-framework UIKit"
+    "-framework GameController"
+    "-framework AVFoundation"
+    "-framework Security"
+    "-weak_framework MetalFX")
 elseif(APPLE)
   target_link_libraries(${PROJECT_NAME} "-framework AppKit")
   file(GLOB_RECURSE ObjCSOURCES "game/*.mm")

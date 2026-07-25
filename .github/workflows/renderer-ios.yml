@@ -779,6 +779,738 @@ jobs:
           print("P2.6a structural oracle: mutations-killed=17")
           PY
 
+      - name: Verify P2.6b1 native device facts collector
+        run: |
+          set -euo pipefail
+
+          collector_files=(
+            game/graphics/iosdevicefactscollector.h
+            game/graphics/iosdevicefactscollector.cpp
+            game/graphics/iosdevicefactscollector.mm
+            ios/tests/iosdevicefactscollector.cpp
+          )
+          for file in "${collector_files[@]}"; do
+            test -f "$file"
+          done
+          test "$(find game/graphics ios/tests -maxdepth 1 -type f \
+              -name 'iosdevicefactscollector*' | LC_ALL=C sort)" = \
+            $'game/graphics/iosdevicefactscollector.cpp\ngame/graphics/iosdevicefactscollector.h\ngame/graphics/iosdevicefactscollector.mm\nios/tests/iosdevicefactscollector.cpp'
+
+          printf '#include "graphics/iosdevicefactscollector.h"\nint main() { return 0; }\n' |
+            xcrun clang++ -x c++ -std=c++20 \
+              -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+              -Igame -fsyntax-only -
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            ios/tests/iosdevicefactscollector.cpp \
+            game/graphics/iosdevicefactscollector.cpp \
+            game/graphics/iosdevicecapabilities.cpp \
+            -o "$RUNNER_TEMP/iosdevicefactscollector"
+          "$RUNNER_TEMP/iosdevicefactscollector"
+          xcrun clang++ -std=c++20 \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -fsanitize=address,undefined -fno-omit-frame-pointer \
+            -Igame \
+            ios/tests/iosdevicefactscollector.cpp \
+            game/graphics/iosdevicefactscollector.cpp \
+            game/graphics/iosdevicecapabilities.cpp \
+            -o "$RUNNER_TEMP/iosdevicefactscollector-sanitized"
+          "$RUNNER_TEMP/iosdevicefactscollector-sanitized"
+
+          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun clang++ -x c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame -fsyntax-only \
+            game/graphics/iosdevicefactscollector.cpp \
+            ios/tests/iosdevicefactscollector.cpp
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -fno-objc-arc \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only game/graphics/iosdevicefactscollector.mm
+          xcrun clang++ -x objective-c++ -std=c++20 \
+            -target arm64-apple-ios16.4 \
+            -isysroot "$IOS_SDK" \
+            -fno-objc-arc \
+            -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+            -Igame \
+            -isystem lib/Tempest/Engine/include \
+            -fsyntax-only game/graphics/iosdevicefactscollector.mm
+
+          test -x ios/device-test/validate-device-facts-log.py
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            ios/device-test/validate-device-facts-log.py --self-test
+          ios/device-test/run-smoke-test.sh \
+            --require-device-facts-reference-a17 --self-test
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          header = Path(
+              "game/graphics/iosdevicefactscollector.h"
+          ).read_text()
+          mapper = Path(
+              "game/graphics/iosdevicefactscollector.cpp"
+          ).read_text()
+          native = Path(
+              "game/graphics/iosdevicefactscollector.mm"
+          ).read_text()
+          test = Path(
+              "ios/tests/iosdevicefactscollector.cpp"
+          ).read_text()
+          context = Path(
+              "game/graphics/iosmetalcontext.cpp"
+          ).read_text()
+          cmake = Path("CMakeLists.txt").read_text()
+          tempest_api = Path(
+              "lib/Tempest/Engine/gapi/metalapi.cpp"
+          ).read_text()
+          tempest_device = Path(
+              "lib/Tempest/Engine/gapi/metal/mtdevice.mm"
+          ).read_text()
+
+          def compact(text):
+              return "".join(text.split())
+
+          def without_selectors(text):
+              return re.sub(
+                  r"@selector\s*\([^)]*\)",
+                  "",
+                  text,
+                  flags=re.S,
+              )
+
+          def function_span(text, name):
+              matches = list(re.finditer(
+                  rf"(?m)^(?:void|IOSDeviceFactsCreateResult)\s+"
+                  rf"{re.escape(name)}\s*\(",
+                  text,
+              ))
+              if len(matches) != 1:
+                  raise ValueError(
+                      f"native function definition changed: {name}"
+                  )
+              opening = text.find("{", matches[0].end())
+              if opening < 0:
+                  raise ValueError(
+                      f"native function body is missing: {name}"
+                  )
+              depth = 0
+              for index in range(opening, len(text)):
+                  if text[index] == "{":
+                      depth += 1
+                  elif text[index] == "}":
+                      depth -= 1
+                      if depth == 0:
+                          return opening + 1, index
+              raise ValueError(
+                  f"native function body is unterminated: {name}"
+              )
+
+          def function_body(text, name):
+              start, end = function_span(text, name)
+              return text[start:end]
+
+          def replace_in_function(text, name, before, after):
+              start, end = function_span(text, name)
+              body = text[start:end]
+              if body.count(before) != 1:
+                  raise ValueError(
+                      f"mutation anchor is not unique in {name}: {before}"
+                  )
+              return (
+                  text[:start]
+                  + body.replace(before, after, 1)
+                  + text[end:]
+              )
+
+          def validate(
+              candidate_header,
+              candidate_mapper,
+              candidate_native,
+              candidate_context,
+              candidate_cmake,
+          ):
+              neutral = "\n".join(
+                  (candidate_header, candidate_mapper, test)
+              )
+              if re.search(
+                  r"#import|<Metal/|<MetalFX/|@(?:try|catch|selector|"
+                  r"available)|\bid\s*<\s*MTL|\bMTL[A-Z]|"
+                  r"BorrowedMetalDevice|MetalApi::borrowDevice|"
+                  r"Device::properties|\.properties\s*\(",
+                  neutral,
+              ):
+                  raise ValueError(
+                      "host-neutral snapshot/mapper leaks native collection"
+                  )
+              if re.search(
+                  r"std::(?:vector|deque|list|forward_list|map|multimap|"
+                  r"unordered_map|unordered_multimap|set|multiset|"
+                  r"unordered_set|unordered_multiset|basic_string|string|"
+                  r"wstring|u8string|u16string|u32string|unique_ptr|"
+                  r"shared_ptr|weak_ptr|function|any)(?:[^A-Za-z0-9_]|$)"
+                  r"|(^|[^A-Za-z0-9_])new(?:\s|\[)|"
+                  r"\b(?:malloc|calloc|realloc)\s*\(",
+                  neutral,
+                  re.M,
+              ):
+                  raise ValueError(
+                      "host-neutral snapshot/mapper uses dynamic storage"
+                  )
+              if re.search(
+                  r"\biPhone[0-9,]|\biPad[0-9,]|hw\.machine|sysctl|"
+                  r"thermalState|IOSFeaturePolicy|device model|"
+                  r"performance policy",
+                  neutral,
+                  re.I,
+              ):
+                  raise ValueError(
+                      "host-neutral snapshot/mapper gained model or policy"
+                  )
+              compact_header = compact(candidate_header)
+              compact_mapper = compact(candidate_mapper)
+              compact_test = compact(test)
+              if compact_header.count(
+                  "structIOSDeviceNativeSnapshotfinal{"
+              ) != 1:
+                  raise ValueError("native snapshot seam changed")
+              if compact_header.count(
+                  "IOSDeviceFactsCreateResultiosCollectDeviceFacts("
+                  "constTempest::Device&device)noexcept;"
+              ) != 1:
+                  raise ValueError("collector public API changed")
+              if compact_mapper.count(
+                  "IOSDeviceFactsCreateResultiosMapDeviceNativeSnapshot("
+                  "constIOSDeviceNativeSnapshot&snapshot)noexcept{"
+              ) != 1:
+                  raise ValueError("snapshot mapper definition changed")
+              required_test_contract = (
+                  "static_assert(std::is_standard_layout_v<"
+                  "IOSDeviceNativeSnapshot>);",
+                  "static_assert(std::is_trivially_copyable_v<"
+                  "IOSDeviceNativeSnapshot>);",
+                  "decltype(&iosCollectDeviceFacts),CollectorSignature>);",
+                  "decltype(&iosLogDeviceFacts),LoggerSignature>);",
+              )
+              for anchor in required_test_contract:
+                  if compact_test.count(anchor) != 1:
+                      raise ValueError(
+                          "collector seam test contract changed: " + anchor
+                      )
+
+              if candidate_native.count(
+                  "Tempest::MetalApi::borrowDevice(owner)"
+              ) != 1:
+                  raise ValueError(
+                      "collector does not have exactly one local device borrow"
+                  )
+              if re.search(
+                  r"MTLCreateSystemDefaultDevice|"
+                  r"MTL::CreateSystemDefaultDevice|"
+                  r"Device::properties|\.properties\s*\(",
+                  candidate_native,
+              ):
+                  raise ValueError(
+                      "collector creates or substitutes a native device"
+                  )
+              if re.search(
+                  r"BorrowedMetalDevice\s+\w+\s*[;=]",
+                  candidate_header,
+              ):
+                  raise ValueError("borrowed device escaped into stored state")
+              if re.search(
+                  r"\b(?:retain|release|autorelease)\s*\]|"
+                  r"\bCFBridgingRetain\b|\b__bridge_retained\b",
+                  candidate_native,
+              ):
+                  raise ValueError("collector changes native ownership")
+
+              exception_scopes = {
+                  "queryAppleFamily": 1,
+                  "queryMetalFamily": 1,
+                  "collectRuntimeVersion": 1,
+                  "collectSdkVersion": 0,
+                  "collectAppleFamilies": 0,
+                  "collectMetalFamilies": 0,
+                  "collectSpatialProbe": 2,
+                  "collectTemporalProbe": 2,
+                  "collectMeshProbe": 1,
+                  "collectRayTracingProbe": 2,
+                  "collectMetal4Probe": 2,
+                  "collectLimit": 0,
+                  "collectLimits": 4,
+                  "iosCollectDeviceFacts": 0,
+              }
+              if (
+                  candidate_native.count("@try") != 16
+                  or candidate_native.count("@catch") != 16
+              ):
+                  raise ValueError(
+                      "native exception-scope total changed"
+                  )
+              for function, expected in exception_scopes.items():
+                  body = function_body(candidate_native, function)
+                  actual_try = body.count("@try")
+                  actual_catch = body.count("@catch")
+                  if (
+                      actual_try != expected
+                      or actual_catch != expected
+                  ):
+                      raise ValueError(
+                          "native exception-scope distribution changed: "
+                          f"{function}={actual_try}/{actual_catch}, "
+                          f"expected={expected}/{expected}"
+                      )
+
+              selectors = [
+                  "".join(match.split())
+                  for match in re.findall(
+                      r"@selector\s*\(([^)]*)\)",
+                      candidate_native,
+                      re.S,
+                  )
+              ]
+              mesh_selector = (
+                  "newRenderPipelineStateWithMeshDescriptor:"
+                  "options:reflection:error:"
+              )
+              if selectors.count(mesh_selector) != 1:
+                  raise ValueError("exact Mesh selector changed")
+              if selectors.count("newMTL4CommandQueue") != 1:
+                  raise ValueError("exact Metal4 selector changed")
+              if selectors.count("supportsDevice:") != 2:
+                  raise ValueError("typed MetalFX availability selectors changed")
+              if selectors.count("supportsRaytracing") != 1:
+                  raise ValueError("exact compute RT selector changed")
+              if "supportsRaytracingFromRender" in candidate_native:
+                  raise ValueError("RT probe changed away from compute semantics")
+              metalfx_anchors = (
+                  "[MTLFXSpatialScalerDescriptor class]",
+                  "[MTLFXSpatialScalerDescriptor supportsDevice:device]",
+                  "[MTLFXTemporalScalerDescriptor class]",
+                  "[MTLFXTemporalScalerDescriptor supportsDevice:device]",
+              )
+              for anchor in metalfx_anchors:
+                  if candidate_native.count(anchor) != 1:
+                      raise ValueError(
+                          "typed MetalFX query changed: " + anchor
+                      )
+              if candidate_native.count(
+                  "[device supportsRaytracing]"
+              ) != 1:
+                  raise ValueError("exact compute RT device query changed")
+              for family in range(1, 11):
+                  if len(re.findall(
+                      rf"\bMTLGPUFamilyApple{family}\b",
+                      candidate_native,
+                  )) != 1:
+                      raise ValueError(
+                          f"Apple{family} family query changed"
+                      )
+              if candidate_native.count("MTLGPUFamilyMetal3") != 1:
+                  raise ValueError("Metal3 family query changed")
+              if candidate_native.count("MTLGPUFamilyMetal4") != 2:
+                  raise ValueError("Metal4 family/probe query changed")
+              if candidate_native.count(
+                  "[device maxThreadsPerThreadgroup]"
+              ) != 3:
+                  raise ValueError(
+                      "threadgroup X/Y/Z direct queries changed"
+                  )
+              if candidate_native.count(
+                  "[device maxThreadgroupMemoryLength]"
+              ) != 1:
+                  raise ValueError(
+                      "threadgroup-memory direct query changed"
+                  )
+              mesh_body = candidate_native.split(
+                  "void collectMeshProbe(", 1
+              )[1].split("void collectRayTracingProbe(", 1)[0]
+              if "setSupport(" in mesh_body:
+                  raise ValueError("Mesh gained inferred DeviceSupport")
+              if re.search(
+                  r"MTLPixelFormat|supportsTextureSampleCount|"
+                  r"minimumLinearTextureAlignment|"
+                  r"minimumTextureBufferAlignment",
+                  candidate_native,
+              ):
+                  raise ValueError("b1 collector started mapping formats")
+
+              executable_native = without_selectors(candidate_native)
+              forbidden_calls = (
+                  r"\[[^\]]*\bnew(?:RenderPipelineState|"
+                  r"ComputePipelineState|MTL4CommandQueue|CommandQueue|"
+                  r"CommandBuffer|Library|Buffer|Texture|Heap|SamplerState|"
+                  r"ArgumentEncoder|AccelerationStructure|"
+                  r"IndirectCommandBuffer)[A-Za-z0-9_]*(?:\s*:|\s*\])"
+              )
+              if re.search(forbidden_calls, executable_native, re.S):
+                  raise ValueError(
+                      "selector availability check became a native factory call"
+                  )
+              no_work_calls = (
+                  r"\[[^\]]+\s+(?:commit|enqueue|submit|presentDrawable|"
+                  r"addCompletedHandler|commandBuffer|renderCommandEncoder|"
+                  r"computeCommandEncoder|blitCommandEncoder|"
+                  r"resourceStateCommandEncoder|newSpatialScaler|"
+                  r"newTemporalScaler)[A-Za-z0-9_]*\b"
+                  r"|(?:\.|->)(?:commit|enqueue|submit|present|"
+                  r"startEncoding|commandBuffer)\s*\("
+                  r"|newLibraryWithSource|newLibraryWithURL|"
+                  r"newDefaultLibrary|MTLCompileOptions|MTLBinaryArchive"
+              )
+              if re.search(no_work_calls, executable_native, re.S):
+                  raise ValueError("collector creates or submits GPU work")
+              if re.search(
+                  r"\bMTL(?:CommandQueue|CommandBuffer|RenderCommandEncoder|"
+                  r"ComputeCommandEncoder|RenderPipelineState|"
+                  r"ComputePipelineState|Texture|Buffer|Heap|Fence|Event|"
+                  r"SharedEvent|IndirectCommandBuffer|AccelerationStructure)\b",
+                  executable_native,
+              ):
+                  raise ValueError(
+                      "collector owns GPU work or a created resource"
+                  )
+
+              compact_context = compact(candidate_context)
+              if compact_context.count(
+                  "constIOSDeviceFactsCreateResultdeviceFacts;"
+              ) != 1:
+                  raise ValueError("stored const facts result changed")
+              if compact_context.count(
+                  "deviceFacts(iosCollectDeviceFacts(device))"
+              ) != 1:
+                  raise ValueError(
+                      "collector is not constructed exactly once in the "
+                      "initializer list"
+                  )
+              if compact_context.count("iosCollectDeviceFacts(") != 1:
+                  raise ValueError("collector caller cardinality changed")
+              if compact_context.count(
+                  "iosLogDeviceFacts(deviceFacts);"
+              ) != 1:
+                  raise ValueError("stored result is not logged exactly once")
+              declarations = (
+                  compact_context.index("Device&device;"),
+                  compact_context.index(
+                      "constIOSDeviceFactsCreateResultdeviceFacts;"
+                  ),
+                  compact_context.index(
+                      "IOSMetalResourceAllocatorresourceAllocator;"
+                  ),
+              )
+              if declarations != tuple(sorted(declarations)):
+                  raise ValueError(
+                      "device/facts/allocator ownership order changed"
+                  )
+              constructor = (
+                  compact_context.index(":device(device),"),
+                  compact_context.index(
+                      "deviceFacts(iosCollectDeviceFacts(device))"
+                  ),
+                  compact_context.index("resourceAllocator(device)"),
+              )
+              if constructor != tuple(sorted(constructor)):
+                  raise ValueError(
+                      "device/facts/allocator construction order changed"
+                  )
+              residual_context = compact_context.replace(
+                  "deviceFacts(iosCollectDeviceFacts(device))", ""
+              )
+              if re.search(r"\bdeviceFacts=", residual_context):
+                  raise ValueError("stored facts gained later assignment")
+
+              weak_literal = '"-weak_frameworkMetalFX"'
+              compact_cmake = compact(candidate_cmake)
+              if compact_cmake.count(weak_literal) != 1:
+                  raise ValueError(
+                      "final iOS target does not weak-link MetalFX exactly once"
+                  )
+              if '"-frameworkMetalFX"' in compact_cmake:
+                  raise ValueError("final iOS target strongly links MetalFX")
+
+              if candidate_native.count(
+                  "RendererIOS device facts:"
+              ) != 1:
+                  raise ValueError("device-facts marker source changed")
+              if (
+                  "sizeof(MarkerPrefix)+sizeof(MaximumMarkerTail)-1u<250u"
+                  not in compact(candidate_native)
+              ):
+                  raise ValueError("device-facts marker length gate changed")
+
+              if tempest_api.count(
+                  "MTL::CreateSystemDefaultDevice()"
+              ) != 1:
+                  raise ValueError("Tempest enumeration device baseline changed")
+              if tempest_device.count(
+                  "MTL::CreateSystemDefaultDevice()"
+              ) != 2:
+                  raise ValueError("Tempest startup device branch baseline changed")
+
+          validate(header, mapper, native, context, cmake)
+
+          def replace_once(text, before, after):
+              if text.count(before) != 1:
+                  raise ValueError(
+                      "mutation anchor is not unique: " + before
+                  )
+              return text.replace(before, after, 1)
+
+          migrated_exception_scope = replace_in_function(
+              native,
+              "queryAppleFamily",
+              "@try {",
+              "{",
+          )
+          migrated_exception_scope = replace_in_function(
+              migrated_exception_scope,
+              "queryAppleFamily",
+              "@catch(NSException*) {\n  }",
+              "",
+          )
+          migrated_exception_scope = replace_in_function(
+              migrated_exception_scope,
+              "collectAppleFamilies",
+              "#if OPENGOTHIC_IOS_DEVICE_FACTS_HAS_APPLE10",
+              "@try {}\n"
+              "@catch(NSException*) {}\n"
+              "#if OPENGOTHIC_IOS_DEVICE_FACTS_HAS_APPLE10",
+          )
+
+          factory_witness = (
+              "\nvoid p26b1FactoryWitness(id<MTLDevice> device) {\n"
+              "  [device newRenderPipelineStateWithMeshDescriptor:nil "
+              "options:0 reflection:nil error:nil];\n"
+              "}\n"
+          )
+          mutations = (
+              (
+                  "duplicate-borrow",
+                  header,
+                  mapper,
+                  native.replace(
+                      "Tempest::MetalApi::borrowDevice(owner)",
+                      "Tempest::MetalApi::borrowDevice(owner); "
+                      "Tempest::MetalApi::borrowDevice(owner)",
+                      1,
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "actual-mesh-factory-call",
+                  header,
+                  mapper,
+                  native + factory_witness,
+                  context,
+                  cmake,
+              ),
+              (
+                  "create-default-device",
+                  header,
+                  mapper,
+                  native + "\nauto p26b1Device = "
+                  "MTL::CreateSystemDefaultDevice();\n",
+                  context,
+                  cmake,
+              ),
+              (
+                  "missing-metalfx-selector",
+                  header,
+                  mapper,
+                  native.replace(
+                      "@selector(supportsDevice:)",
+                      "@selector(description)",
+                      1,
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "rt-from-render",
+                  header,
+                  mapper,
+                  replace_once(
+                      native,
+                      "@selector(supportsRaytracing)",
+                      "@selector(supportsRaytracingFromRender)",
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "metalfx-scaler-factory",
+                  header,
+                  mapper,
+                  native + (
+                      "\nvoid p26b1ScalerWitness() { "
+                      "[MTLFXSpatialScalerDescriptor "
+                      "newSpatialScalerWithDevice:nil]; }\n"
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "command-commit",
+                  header,
+                  mapper,
+                  native + (
+                      "\nvoid p26b1CommitWitness(id device) { "
+                      "[device commit]; }\n"
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "actual-metal4-factory",
+                  header,
+                  mapper,
+                  native + (
+                      "\nvoid p26b1Metal4Witness(id<MTLDevice> device) { "
+                      "[device newMTL4CommandQueue]; }\n"
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "dynamic-neutral-storage",
+                  header,
+                  mapper + "\nstd::vector<int> p26b1Dynamic;\n",
+                  native,
+                  context,
+                  cmake,
+              ),
+              (
+                  "model-policy-neutral",
+                  header,
+                  mapper + "\nconst char* p26b1Model = \"iPhone16,2\";\n",
+                  native,
+                  context,
+                  cmake,
+              ),
+              (
+                  "missing-apple-family",
+                  header,
+                  mapper,
+                  replace_once(
+                      native,
+                      "MTLGPUFamilyApple7",
+                      "MTLGPUFamilyApple6",
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "missing-direct-limit",
+                  header,
+                  mapper,
+                  replace_once(
+                      native,
+                      "[device maxThreadgroupMemoryLength]",
+                      "[device description]",
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "present-drawable",
+                  header,
+                  mapper,
+                  native + (
+                      "\nvoid p26b1PresentWitness(id device) { "
+                      "[device presentDrawable:nil]; }\n"
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "create-command-queue",
+                  header,
+                  mapper,
+                  native + (
+                      "\nvoid p26b1QueueWitness(id<MTLDevice> device) { "
+                      "[device newCommandQueue]; }\n"
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "create-buffer",
+                  header,
+                  mapper,
+                  native + (
+                      "\nvoid p26b1BufferWitness(id<MTLDevice> device) { "
+                      "[device newBufferWithLength:4 options:0]; }\n"
+                  ),
+                  context,
+                  cmake,
+              ),
+              (
+                  "stored-borrow",
+                  header + "\nTempest::BorrowedMetalDevice stored;\n",
+                  mapper,
+                  native,
+                  context,
+                  cmake,
+              ),
+              (
+                  "duplicate-caller",
+                  header,
+                  mapper,
+                  native,
+                  context.replace(
+                      "deviceFacts(iosCollectDeviceFacts(device))",
+                      "deviceFacts(iosCollectDeviceFacts(device)), "
+                      "p26b1Duplicate(iosCollectDeviceFacts(device))",
+                      1,
+                  ),
+                  cmake,
+              ),
+              (
+                  "migrated-exception-scope",
+                  header,
+                  mapper,
+                  migrated_exception_scope,
+                  context,
+                  cmake,
+              ),
+              (
+                  "strong-metalfx",
+                  header,
+                  mapper,
+                  native,
+                  context,
+                  replace_once(
+                      cmake,
+                      '"-weak_framework MetalFX"',
+                      '"-framework MetalFX"',
+                  ),
+              ),
+          )
+          mutations_killed = 0
+          for label, h, m, n, c, build in mutations:
+              try:
+                  validate(h, m, n, c, build)
+              except (ValueError, IndexError):
+                  mutations_killed += 1
+              else:
+                  raise SystemExit(
+                      "P2.6b1 source mutation survived: " + label
+                  )
+          if mutations_killed != 19:
+              raise SystemExit(
+                  "P2.6b1 source mutation count drifted"
+              )
+          print("P2.6b1 source oracle: mutations-killed=19")
+          PY
+
       - name: Verify P2.5a shading prototype plan contract
         run: |
           set -euo pipefail
@@ -4876,6 +5608,254 @@ jobs:
           print("P2.6a PBX structural oracle: mutations-killed=6")
           PY
 
+      - name: Verify P2.6b1 collector source target membership
+        run: |
+          set -euo pipefail
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          project = Path(
+              "build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj"
+          ).read_text()
+          sources = (
+              "game/graphics/iosdevicefactscollector.cpp",
+              "game/graphics/iosdevicefactscollector.mm",
+          )
+
+          def sections(candidate_project):
+              file_references = candidate_project.split(
+                  "/* Begin PBXFileReference section */", 1
+              )[1].split("/* End PBXFileReference section */", 1)[0]
+              build_files = candidate_project.split(
+                  "/* Begin PBXBuildFile section */", 1
+              )[1].split("/* End PBXBuildFile section */", 1)[0]
+              targets = re.findall(
+                  r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
+                  r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+                  candidate_project,
+                  re.S,
+              )
+              gothic = [
+                  body for _, body in targets
+                  if re.search(r"^\s*name = Gothic2Notr;$", body, re.M)
+              ]
+              if len(gothic) != 1:
+                  raise ValueError("could not identify exact Gothic2Notr target")
+              source_phase = re.search(
+                  r"([A-F0-9]{24}) /\* Sources \*/", gothic[0]
+              )
+              if source_phase is None:
+                  raise ValueError("Gothic2Notr target has no Sources phase")
+              phase_matches = list(re.finditer(
+                  r"\b([A-F0-9]{24}) /\* Sources \*/ = \{\n"
+                  r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+                  candidate_project,
+                  re.S,
+              ))
+              gothic_phases = [
+                  match for match in phase_matches
+                  if match.group(1) == source_phase.group(1)
+              ]
+              if len(gothic_phases) != 1:
+                  raise ValueError("could not read exact Gothic2Notr Sources phase")
+              return (
+                  file_references,
+                  build_files,
+                  phase_matches,
+                  gothic_phases[0],
+              )
+
+          def validate_source(candidate_project, source):
+              (
+                  file_references,
+                  build_files,
+                  phase_matches,
+                  gothic_phase,
+              ) = sections(candidate_project)
+              escaped = re.escape(source)
+              reference_matches = list(re.finditer(
+                  rf"^\s*([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped} \*/ = "
+                  rf"\{{isa = PBXFileReference;"
+                  rf"[^\n]*path = {escaped};[^\n]*\}};$",
+                  file_references,
+                  re.M,
+              ))
+              if len(reference_matches) != 1:
+                  raise ValueError(
+                      source + " does not have exactly one PBXFileReference"
+                  )
+              reference_id = reference_matches[0].group(1)
+              build_matches = list(re.finditer(
+                  rf"^\s*([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped} \*/ = "
+                  rf"\{{isa = PBXBuildFile; "
+                  rf"fileRef = ([A-F0-9]{{24}}) "
+                  rf"/\* [^\n]*{escaped} \*/; \}};$",
+                  build_files,
+                  re.M,
+              ))
+              if len(build_matches) != 1:
+                  raise ValueError(
+                      source + " does not have exactly one PBXBuildFile"
+                  )
+              build_id = build_matches[0].group(1)
+              if build_matches[0].group(2) != reference_id:
+                  raise ValueError(source + " PBXBuildFile points elsewhere")
+              linked_builds = re.findall(
+                  rf"^\s*([A-F0-9]{{24}}) /\* [^\n]* \*/ = "
+                  rf"\{{isa = PBXBuildFile; fileRef = {reference_id} "
+                  r"/\* [^\n]* \*/; \};$",
+                  build_files,
+                  re.M,
+              )
+              if linked_builds != [build_id]:
+                  raise ValueError(
+                      source + " reference has non-exact PBXBuildFile linkage"
+                  )
+              member_matches = list(re.finditer(
+                  rf"^\s*{build_id} /\* [^\n]*{escaped} \*/,$",
+                  gothic_phase.group(2),
+                  re.M,
+              ))
+              if len(member_matches) != 1:
+                  raise ValueError(
+                      source + " is not exactly once in Gothic2Notr Sources"
+                  )
+              all_memberships = sum(
+                  len(re.findall(
+                      rf"^\s*{build_id} /\* [^\n]* \*/,$",
+                      phase.group(2),
+                      re.M,
+                  ))
+                  for phase in phase_matches
+              )
+              if all_memberships != 1:
+                  raise ValueError(
+                      source + " PBXBuildFile appears in another Sources phase"
+                  )
+              return {
+                  "reference_id": reference_id,
+                  "build_id": build_id,
+                  "reference_line": reference_matches[0].group(0),
+                  "build_line": build_matches[0].group(0),
+                  "member_line": member_matches[0].group(0),
+                  "gothic_phase_id": gothic_phase.group(1),
+              }
+
+          def replace_once(text, before, after):
+              if text.count(before) != 1:
+                  raise ValueError(
+                      "PBX mutation anchor is not unique: " + before
+                  )
+              return text.replace(before, after, 1)
+
+          total_mutations = 0
+          for source in sources:
+              anchors = validate_source(project, source)
+              invalid_id = "F" * 24
+              duplicate_build_id = "E" * 24
+              duplicate_build_line = re.sub(
+                  rf"^\s*{anchors['build_id']}",
+                  "\t\t" + duplicate_build_id,
+                  anchors["build_line"],
+              )
+              mutations = [
+                  (
+                      "duplicate-reference",
+                      replace_once(
+                          project,
+                          anchors["reference_line"],
+                          anchors["reference_line"] + "\n"
+                          + anchors["reference_line"],
+                      ),
+                  ),
+                  (
+                      "wrong-build-reference",
+                      replace_once(
+                          project,
+                          "fileRef = " + anchors["reference_id"] + " /*",
+                          "fileRef = " + invalid_id + " /*",
+                      ),
+                  ),
+                  (
+                      "duplicate-build-file",
+                      replace_once(
+                          project,
+                          anchors["build_line"],
+                          anchors["build_line"] + "\n"
+                          + duplicate_build_line,
+                      ),
+                  ),
+                  (
+                      "wrong-gothic-member",
+                      replace_once(
+                          project,
+                          anchors["member_line"],
+                          anchors["member_line"].replace(
+                              anchors["build_id"], invalid_id, 1
+                          ),
+                      ),
+                  ),
+                  (
+                      "duplicate-gothic-member",
+                      replace_once(
+                          project,
+                          anchors["member_line"],
+                          anchors["member_line"] + "\n"
+                          + anchors["member_line"],
+                      ),
+                  ),
+              ]
+              (
+                  _,
+                  _,
+                  phase_matches,
+                  gothic_phase,
+              ) = sections(project)
+              other_phases = [
+                  phase for phase in phase_matches
+                  if phase.group(1) != gothic_phase.group(1)
+              ]
+              if not other_phases:
+                  raise SystemExit(
+                      "PBX fixture has no second Sources phase for mutation"
+                  )
+              other_phase = other_phases[0]
+              other_body = other_phase.group(0)
+              injected_other = replace_once(
+                  other_body,
+                  "files = (\n",
+                  "files = (\n" + anchors["member_line"] + "\n",
+              )
+              mutations.append((
+                  "other-target-membership",
+                  replace_once(project, other_body, injected_other),
+              ))
+
+              killed = 0
+              for label, candidate in mutations:
+                  try:
+                      validate_source(candidate, source)
+                  except (ValueError, IndexError):
+                      killed += 1
+                  else:
+                      raise SystemExit(
+                          "P2.6b1 PBX mutation survived for "
+                          + source + ": " + label
+                      )
+              if killed != 6:
+                  raise SystemExit(
+                      "P2.6b1 PBX mutation count drifted for " + source
+                  )
+              total_mutations += killed
+          if total_mutations != 12:
+              raise SystemExit("P2.6b1 total PBX mutation count drifted")
+          print("P2.6b1 PBX oracle: sources=2 mutations-killed=12")
+          PY
+
       - name: Assert legacy renderer is not in the target
         run: |
           if grep -Eq '(^|[^[:alnum:]_])renderer\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj; then
@@ -5617,6 +6597,118 @@ jobs:
             ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
               "$APP_INFO" >/dev/null 2>&1
           fi
+
+      - name: Verify P2.6b1 final weak MetalFX dependency
+        run: |
+          set -euo pipefail
+
+          APP_BINARY='build-renderer-ios/opengothic/Release/Gothic2Notr.app/Gothic2Notr'
+          test -f "$APP_BINARY"
+          xcrun otool -l "$APP_BINARY" \
+            >"$RUNNER_TEMP/Gothic2Notr-load-commands.txt"
+          python3 - "$RUNNER_TEMP/Gothic2Notr-load-commands.txt" <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          load_commands = Path(sys.argv[1]).read_text()
+          framework_suffix = "/MetalFX.framework/MetalFX"
+
+          def parse(text):
+              result = []
+              command = None
+              name = None
+              for line in text.splitlines() + ["Load command END"]:
+                  if line.startswith("Load command "):
+                      if command is not None and name is not None:
+                          result.append((command, name))
+                      command = None
+                      name = None
+                      continue
+                  command_match = re.fullmatch(
+                      r"\s*cmd (LC_[A-Z0-9_]+)", line
+                  )
+                  if command_match is not None:
+                      command = command_match.group(1)
+                      continue
+                  name_match = re.fullmatch(
+                      r"\s*name (.+) \(offset [0-9]+\)", line
+                  )
+                  if name_match is not None:
+                      name = name_match.group(1)
+              return result
+
+          def validate(commands):
+              metalfx = [
+                  (command, name)
+                  for command, name in commands
+                  if name.endswith(framework_suffix)
+              ]
+              weak = [
+                  item for item in metalfx
+                  if item[0] == "LC_LOAD_WEAK_DYLIB"
+              ]
+              strong = [
+                  item for item in metalfx
+                  if item[0] == "LC_LOAD_DYLIB"
+              ]
+              if len(metalfx) != 1 or len(weak) != 1 or strong:
+                  raise ValueError(
+                      "final app must contain exactly one weak MetalFX "
+                      "dependency and zero strong MetalFX dependencies"
+                  )
+              return weak[0]
+
+          commands = parse(load_commands)
+          try:
+              weak = validate(commands)
+          except ValueError as error:
+              raise SystemExit(str(error)) from error
+
+          weak_index = commands.index(weak)
+          mutations = (
+              (
+                  "weakened-to-strong",
+                  commands[:weak_index]
+                  + [("LC_LOAD_DYLIB", weak[1])]
+                  + commands[weak_index + 1 :],
+              ),
+              (
+                  "missing",
+                  commands[:weak_index] + commands[weak_index + 1 :],
+              ),
+              (
+                  "duplicate-weak",
+                  commands[:weak_index + 1]
+                  + [weak]
+                  + commands[weak_index + 1 :],
+              ),
+              (
+                  "reexported",
+                  commands[:weak_index]
+                  + [("LC_REEXPORT_DYLIB", weak[1])]
+                  + commands[weak_index + 1 :],
+              ),
+          )
+          mutations_killed = 0
+          for label, candidate in mutations:
+              try:
+                  validate(candidate)
+              except ValueError:
+                  mutations_killed += 1
+              else:
+                  raise SystemExit(
+                      "P2.6b1 Mach-O mutation survived: " + label
+                  )
+          if mutations_killed != 4:
+              raise SystemExit(
+                  "P2.6b1 Mach-O mutation count drifted"
+              )
+          print(
+              "P2.6b1 Mach-O oracle: weak=1 strong=0 "
+              "mutations-killed=4 path=" + weak[1]
+          )
+          PY
 
       - name: Package unsigned device-test IPA
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa

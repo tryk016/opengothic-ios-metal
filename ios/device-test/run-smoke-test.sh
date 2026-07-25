@@ -13,6 +13,7 @@
 #   ... --require-clear-only-pass-self-test APP
 #   ... --require-shading-prototype-tile-self-test APP
 #   ... --require-shading-prototype-forward-self-test APP
+#   ... --require-device-facts-reference-a17 APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
 #   ... --expected-fault preview-fence-error-after-terminal APP
@@ -36,6 +37,7 @@ REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
 REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
 REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
 REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
+REQUIRE_DEVICE_FACTS_REFERENCE_A17=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
 EVIDENCE_PATH_FILE=""
@@ -96,6 +98,11 @@ smoke_evidence_path() {
   local evidence_root
 
   [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
+  if ((REQUIRE_DEVICE_FACTS_REFERENCE_A17 != 0)); then
+    printf '%s/build/device-facts/%s/reference-a17/%s-%s-%s\n' \
+      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
+    return 0
+  fi
   if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
     printf '%s/build/device-self-test/%s/shading-prototype-forward/%s-%s-%s\n' \
       "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
@@ -384,6 +391,7 @@ run_host_contract_self_test() {
   local expected_clear clear_path clear_failure_path clear_committed_path
   local expected_tile tile_path tile_failure_path tile_committed_path
   local expected_forward forward_path forward_failure_path forward_committed_path
+  local expected_device_facts device_facts_path device_facts_failure_path
   local plain_path resource_path resource_failure_path resource_committed_path
   local plain_binary self_test_binary duplicate_binary clear_binary duplicate_clear_binary
   local tile_binary duplicate_tile_binary missing_tile_unsupported_binary
@@ -393,6 +401,7 @@ run_host_contract_self_test() {
   local requested_clear_only_pass_self_test="$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST"
   local requested_shading_prototype_tile_self_test="$REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST"
   local requested_shading_prototype_forward_self_test="$REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST"
+  local requested_device_facts_reference_a17="$REQUIRE_DEVICE_FACTS_REFERENCE_A17"
 
   [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
     fail "self-test expected SHA is invalid"
@@ -425,6 +434,7 @@ run_host_contract_self_test() {
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
   REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
+  REQUIRE_DEVICE_FACTS_REFERENCE_A17=0
   plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
@@ -434,6 +444,20 @@ run_host_contract_self_test() {
   fi
   [[ "$plain_path" == "$expected_plain" ]] ||
     fail "SHA-local smoke evidence path self-test failed"
+  REQUIRE_DEVICE_FACTS_REFERENCE_A17=1
+  device_facts_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  expected_device_facts="$ROOT/build/device-facts/$expected_build/reference-a17/pass-$timestamp-$process_id"
+  [[ "$device_facts_path" == "$expected_device_facts" ]] ||
+    fail "device-facts A17 reference evidence path self-test failed"
+  [[ "$device_facts_path" != "$plain_path" ]] ||
+    fail "device-facts A17 reference and plain smoke evidence paths overlap"
+  device_facts_failure_path="$(smoke_evidence_path failure "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  [[ "$device_facts_failure_path" == \
+     "$ROOT/build/device-facts/$expected_build/reference-a17/failure-$timestamp-$process_id" ]] ||
+    fail "device-facts A17 failure evidence path self-test failed"
+  REQUIRE_DEVICE_FACTS_REFERENCE_A17=0
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
   resource_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" none)"
@@ -521,9 +545,13 @@ run_host_contract_self_test() {
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
   REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$requested_shading_prototype_forward_self_test"
+  REQUIRE_DEVICE_FACTS_REFERENCE_A17="$requested_device_facts_reference_a17"
   actual="$plain_path"
   expected="$expected_plain"
-  if ((requested_resource_allocator_self_test != 0)); then
+  if ((requested_device_facts_reference_a17 != 0)); then
+    actual="$device_facts_path"
+    expected="$expected_device_facts"
+  elif ((requested_resource_allocator_self_test != 0)); then
     actual="$resource_path"
     expected="$expected_resource"
   elif ((requested_clear_only_pass_self_test != 0)); then
@@ -690,12 +718,16 @@ run_host_contract_self_test() {
   if validate_shading_prototype_forward_binary_profile "$duplicate_forward_binary"; then
     fail "duplicate shading prototype Forward binary marker survived"
   fi
+  PYTHONDONTWRITEBYTECODE=1 python3 \
+    "$ROOT/ios/device-test/validate-device-facts-log.py" \
+    --self-test || fail "device-facts app marker validator self-test failed"
   python3 "$ROOT/ios/device-test/validate-metal-capture-artifact.py" \
     --self-test || fail "Metal capture artifact validator self-test failed"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
   REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$requested_shading_prototype_forward_self_test"
+  REQUIRE_DEVICE_FACTS_REFERENCE_A17="$requested_device_facts_reference_a17"
 
   printf '%s\n' '{"result":{"files":[]}}' >"$self_test_work/missing.json"
   printf '%s\n' \
@@ -781,6 +813,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1
       shift
       ;;
+    --require-device-facts-reference-a17)
+      REQUIRE_DEVICE_FACTS_REFERENCE_A17=1
+      shift
+      ;;
     --pipeline-archive-test-mode)
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
@@ -794,7 +830,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-device-facts-reference-a17] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -870,6 +906,18 @@ done
   fail "shading prototype Forward self-test requires an empty pipeline archive profile"
 ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 || DURATION >= 35)) ||
   fail "shading prototype Forward self-test duration must be 35..600 seconds"
+((REQUIRE_DEVICE_FACTS_REFERENCE_A17 == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
+  fail "device-facts A17 reference gate requires expected fault none"
+((REQUIRE_DEVICE_FACTS_REFERENCE_A17 == 0 ||
+  (REQUIRE_BINK_SELF_TEST == 0 &&
+   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0 &&
+   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0 &&
+   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0 &&
+   REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0))) ||
+  fail "device-facts A17 reference gate requires an ordinary smoke profile"
+((REQUIRE_DEVICE_FACTS_REFERENCE_A17 == 0)) ||
+  [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
+  fail "device-facts A17 reference gate requires an empty pipeline archive profile"
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -2378,6 +2426,7 @@ preserve_failure_evidence() {
   for candidate in \
       launch.log cleanup.log \
       park-settings.log \
+      device-facts-summary.txt \
       fault-log-summary.txt \
       resource-allocator-self-test-summary.txt \
       clear-only-pass-self-test-summary.txt \
@@ -2450,6 +2499,7 @@ preserve_failure_evidence() {
     echo "expected_build=$EXPECTED_BUILD"
     echo "signed_executable_sha256=$APP_EXECUTABLE_SHA256"
     echo "expected_fault=$EXPECTED_FAULT"
+    echo "device_facts_reference_a17_required=$REQUIRE_DEVICE_FACTS_REFERENCE_A17"
     echo "fault_log_validation=$FAULT_LOG_VALIDATION"
     echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
     write_resource_allocator_self_test_result_fields
@@ -2464,6 +2514,8 @@ preserve_failure_evidence() {
     echo "post_crash_sha256=$POST_CRASH_SHA"
     write_id3_result_fields
     write_durable_result_fields
+    [[ ! -f "$WORK/device-facts-summary.txt" ]] ||
+      cat "$WORK/device-facts-summary.txt"
     [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
       cat "$WORK/fault-log-summary.txt"
     [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
@@ -2598,6 +2650,7 @@ cleanup() {
       echo "expected_build=$EXPECTED_BUILD"
       echo "signed_executable_sha256=$APP_EXECUTABLE_SHA256"
       echo "expected_fault=$EXPECTED_FAULT"
+      echo "device_facts_reference_a17_required=$REQUIRE_DEVICE_FACTS_REFERENCE_A17"
       echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
       write_resource_allocator_self_test_result_fields
       write_clear_only_pass_self_test_result_fields
@@ -2609,6 +2662,8 @@ cleanup() {
       echo "post_crash_sha256=$POST_CRASH_SHA"
       write_id3_result_fields
       write_durable_result_fields
+      [[ ! -f "$WORK/device-facts-summary.txt" ]] ||
+        cat "$WORK/device-facts-summary.txt"
       [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
         cat "$WORK/fault-log-summary.txt"
       [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
@@ -3149,6 +3204,18 @@ if configured_count != 1 or configured_faults != [expected_fault]:
     )
 PY
   fail "runtime log does not identify exact build/fault configuration"
+device_facts_validator_args=(
+  --log "$WORK/log.txt"
+  --expected-build "$EXPECTED_BUILD"
+  --summary "$WORK/device-facts-summary.txt"
+)
+if ((REQUIRE_DEVICE_FACTS_REFERENCE_A17 != 0)); then
+  device_facts_validator_args+=(--require-reference-a17)
+fi
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  "$ROOT/ios/device-test/validate-device-facts-log.py" \
+  "${device_facts_validator_args[@]}" ||
+  fail "runtime device-facts gate failed"
 if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)); then
   python3 "$ROOT/ios/device-test/validate-resource-allocator-self-test-log.py" \
     --log "$WORK/log.txt" --expect-absent ||
@@ -4154,6 +4221,10 @@ copy_private_evidence_path "$WORK/device-selection.log" \
   copy_private_evidence_path "$WORK/fault-log-summary.txt" \
     "$OUT/fault-log-summary.txt" ||
   fail "could not preserve private fault summary"
+[[ ! -f "$WORK/device-facts-summary.txt" ]] ||
+  copy_private_evidence_path "$WORK/device-facts-summary.txt" \
+    "$OUT/device-facts-summary.txt" ||
+  fail "could not preserve private device-facts summary"
 [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
   copy_private_evidence_path "$WORK/resource-allocator-self-test-summary.txt" \
     "$OUT/resource-allocator-self-test-summary.txt" ||
@@ -4299,6 +4370,7 @@ done
   echo "expected_build=$EXPECTED_BUILD"
   echo "signed_executable_sha256=$APP_EXECUTABLE_SHA256"
   echo "expected_fault=$EXPECTED_FAULT"
+  echo "device_facts_reference_a17_required=$REQUIRE_DEVICE_FACTS_REFERENCE_A17"
   echo "fault_log_validation=$FAULT_LOG_VALIDATION"
   echo "process_survived_fault_window=$PROCESS_SURVIVED_FAULT_WINDOW"
   write_resource_allocator_self_test_result_fields
@@ -4322,6 +4394,8 @@ done
   # device_process_stopped=1 is emitted only after the durable stable window
   # and its independent final process query both prove zero.
   write_durable_result_fields
+  [[ ! -f "$WORK/device-facts-summary.txt" ]] ||
+    cat "$WORK/device-facts-summary.txt"
   [[ ! -f "$WORK/runtime-compilation-summary.txt" ]] ||
     cat "$WORK/runtime-compilation-summary.txt"
   [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
