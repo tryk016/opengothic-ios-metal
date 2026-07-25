@@ -1012,7 +1012,8 @@ jobs:
           for literal in (
               'set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")',
               'if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR\n'
-              '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)',
+              '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR\n'
+              '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)',
               '<key>MetalCaptureEnabled</key>',
               '<true/>',
           ):
