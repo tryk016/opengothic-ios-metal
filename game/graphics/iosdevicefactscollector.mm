@@ -320,6 +320,9 @@ void collectMetal4Probe(
       }
     }
   }
+#else
+  (void)result;
+  (void)device;
 #endif
   }
 
