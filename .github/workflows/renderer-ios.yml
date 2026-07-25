@@ -2437,12 +2437,64 @@ jobs:
             echo 'P2.5b3 Tile factory caller escaped its exact iosmetalcontext.cpp allowlist'
             exit 1
           fi
+          test "$(grep -Fc 'iosCreateShadingPrototypeForwardPipeline' \
+              game/graphics/iosmetalcontext.cpp)" -eq 1
           if rg -n 'iosCreateShadingPrototypeForwardPipeline' game \
               --glob '!iosshadingprototypeforwardpipeline.h' \
-              --glob '!iosshadingprototypeforwardpipeline.mm'; then
-            echo 'P2.5c0 Forward+ factory gained a production caller'
+              --glob '!iosshadingprototypeforwardpipeline.mm' \
+              --glob '!iosmetalcontext.cpp'; then
+            echo 'P2.5c1b1 Forward+ factory caller escaped its exact iosmetalcontext.cpp allowlist'
             exit 1
           fi
+          python3 - <<'PY'
+          from pathlib import Path
+
+          context = "game/graphics/iosmetalcontext.cpp"
+          pipeline_h = "game/graphics/iosshadingprototypeforwardpipeline.h"
+          pipeline_mm = "game/graphics/iosshadingprototypeforwardpipeline.mm"
+          probe_h = "game/graphics/iosshadingprototypeforwardprobe.h"
+          probe_mm = "game/graphics/iosshadingprototypeforwardprobe.mm"
+          contracts = {
+              "iosCreateShadingPrototypeForwardPipeline": {
+                  pipeline_h: 2, pipeline_mm: 1, context: 1,
+              },
+              "iosCreateShadingPrototypeForwardLightList": {
+                  probe_h: 2, probe_mm: 1, context: 1,
+              },
+              "iosReadShadingPrototypeForwardLightListContents": {
+                  probe_h: 2, probe_mm: 1, context: 1,
+              },
+              "iosEncodeShadingPrototypeForwardProbe": {
+                  probe_h: 1, probe_mm: 1, context: 1,
+              },
+          }
+          paths = {path for files in contracts.values() for path in files}
+          sources = {path: Path(path).read_text() for path in paths}
+
+          def accepts(candidate):
+              return all(
+                  candidate[path].count(symbol) == expected
+                  for symbol, files in contracts.items()
+                  for path, expected in files.items()
+              )
+
+          if not accepts(sources):
+              raise SystemExit("P2.5c1b1 Forward caller occurrence contract failed")
+          mutations_killed = 0
+          for symbol, files in contracts.items():
+              for path in files:
+                  mutated = dict(sources)
+                  mutated[path] += "\n" + symbol + "\n"
+                  if accepts(mutated):
+                      raise SystemExit(
+                          "P2.5c1b1 Forward caller duplicate survived: "
+                          + symbol + " in " + path
+                      )
+                  mutations_killed += 1
+          if mutations_killed != 12:
+              raise SystemExit("P2.5c1b1 Forward caller mutation count drifted")
+          print("P2.5c1b1 Forward caller oracle: mutations-killed=12")
+          PY
           if grep -Eq \
               '#import|<Metal/|@interface|id<MTL|MTL[A-Z]|__OBJC__' \
               game/graphics/iosshadingprototypeforwardpipeline.h \
@@ -2779,9 +2831,11 @@ jobs:
               iosCreateShadingPrototypeForwardLightList \
               iosReadShadingPrototypeForwardLightListContents \
               iosEncodeShadingPrototypeForwardProbe; do
+            test "$(grep -Fc "$symbol" \
+                game/graphics/iosmetalcontext.cpp)" -eq 1
             matches="$(rg -l "$symbol" game | sort)"
             test "$matches" = \
-              $'game/graphics/iosshadingprototypeforwardprobe.h\ngame/graphics/iosshadingprototypeforwardprobe.mm'
+              $'game/graphics/iosmetalcontext.cpp\ngame/graphics/iosshadingprototypeforwardprobe.h\ngame/graphics/iosshadingprototypeforwardprobe.mm'
           done
           test "$(rg -l \
               'IOSShadingPrototypeForwardPipelineNativeAccess' game |
