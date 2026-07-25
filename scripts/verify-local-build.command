@@ -3,13 +3,72 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 MODE="${1:-full}"
+if (($# > 0)); then
+  shift
+fi
+REQUESTED_PROFILES=()
+REQUESTED_PROFILE_COUNT=0
 case "$MODE" in
-  quick|full) ;;
+  quick)
+    (($# == 0)) || {
+      echo "usage: $0 [quick|full|contracts|profiles PROFILE...]" >&2
+      exit 2
+    }
+    REQUESTED_PROFILES=(on)
+    REQUESTED_PROFILE_COUNT=1
+    ;;
+  full)
+    (($# == 0)) || {
+      echo "usage: $0 [quick|full|contracts|profiles PROFILE...]" >&2
+      exit 2
+    }
+    REQUESTED_PROFILES=(off on tile forward)
+    REQUESTED_PROFILE_COUNT=4
+    ;;
+  contracts)
+    (($# == 0)) || {
+      echo "usage: $0 [quick|full|contracts|profiles PROFILE...]" >&2
+      exit 2
+    }
+    ;;
+  profiles)
+    (($# > 0)) || {
+      echo "usage: $0 profiles PROFILE..." >&2
+      exit 2
+    }
+    for profile in "$@"; do
+      case "$profile" in
+        off|on|tile|forward) ;;
+        *)
+          echo "unknown verification profile: $profile" >&2
+          exit 2
+          ;;
+      esac
+      for existing in "${REQUESTED_PROFILES[@]}"; do
+        if [[ "$existing" == "$profile" ]]; then
+          echo "duplicate verification profile: $profile" >&2
+          exit 2
+        fi
+      done
+      REQUESTED_PROFILES+=("$profile")
+      REQUESTED_PROFILE_COUNT=$((REQUESTED_PROFILE_COUNT + 1))
+    done
+    ;;
   *)
-    echo "usage: $0 [quick|full]" >&2
+    echo "usage: $0 [quick|full|contracts|profiles PROFILE...]" >&2
     exit 2
     ;;
 esac
+
+wants_profile() {
+  local expected="$1"
+  local profile
+  ((REQUESTED_PROFILE_COUNT > 0)) || return 1
+  for profile in "${REQUESTED_PROFILES[@]}"; do
+    [[ "$profile" == "$expected" ]] && return 0
+  done
+  return 1
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO="${OPENGOTHIC_REPO:-$(cd "$SCRIPT_DIR/.." && pwd -P)}"
@@ -30,8 +89,12 @@ fail() {
 [ "$(uname -s)" = "Darwin" ] || fail "ten skrypt wymaga macOS"
 [ "$(git -C "$REPO" rev-parse --is-inside-work-tree 2>/dev/null || true)" = true ] ||
   fail "brak repo: $REPO"
-[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ] ||
+INITIAL_STATUS="$TMP_GATE/initial-status"
+FINAL_STATUS="$TMP_GATE/final-status"
+git -C "$REPO" status --porcelain=v1 -z --untracked-files=all >"$INITIAL_STATUS"
+if [[ "${OPENGOTHIC_VERIFY_ALLOW_DIRTY:-0}" != 1 && -s "$INITIAL_STATUS" ]]; then
   fail "parent ma tracked lub obce untracked pliki"
+fi
 HEAD_SHA="$(git -C "$REPO" rev-parse HEAD)"
 SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 
@@ -42,6 +105,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/classify_verification.py --validate-policy
 PYTHONDONTWRITEBYTECODE=1 python3 \
   ios/tests/test_verification_classifier.py
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/tests/test_verification_router.py
 
 echo "### Tempest verifier (2x)"
 bash ios/patches/apply-patches.sh
@@ -1750,22 +1815,34 @@ expect_forward_configure_failure tile \
   -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
   -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON
 
-if [ "$MODE" = "full" ]; then
+if wants_profile off; then
   build_variant OFF OFF OFF off
 fi
-build_variant ON OFF OFF on
-if [ "$MODE" = "full" ]; then
+if wants_profile on; then
+  build_variant ON OFF OFF on
+fi
+if wants_profile tile; then
   build_variant ON ON OFF tile
+fi
+if wants_profile forward; then
   build_variant ON OFF ON forward
 fi
 
 [ "$(git -C "$REPO" rev-parse HEAD)" = "$HEAD_SHA" ] ||
   fail "parent HEAD zmienil sie podczas lokalnej weryfikacji"
-[ -z "$(git -C "$REPO" status --porcelain --untracked-files=all)" ] ||
-  fail "parent przestal byc czysty podczas lokalnej weryfikacji"
+git -C "$REPO" status --porcelain=v1 -z --untracked-files=all >"$FINAL_STATUS"
+cmp -s "$INITIAL_STATUS" "$FINAL_STATUS" ||
+  fail "parent zmienil stan working tree podczas lokalnej weryfikacji"
 
-echo "LOCAL BUILD PASSED"
+if ((REQUESTED_PROFILE_COUNT > 0)); then
+  echo "LOCAL BUILD PASSED"
+  PROFILES_CSV="$(IFS=,; echo "${REQUESTED_PROFILES[*]}")"
+else
+  echo "LOCAL VERIFICATION PASSED"
+  PROFILES_CSV=""
+fi
 echo "mode=$MODE"
+echo "profiles=$PROFILES_CSV"
 echo "parent_sha=$HEAD_SHA"
 echo "xcode=$(xcodebuild -version | tr '\n' ' ')"
 echo "ios_sdk=$(xcrun --sdk iphoneos --show-sdk-version)"

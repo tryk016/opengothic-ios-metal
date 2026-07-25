@@ -91,6 +91,8 @@ jobs:
             scripts/classify_verification.py --validate-policy
           PYTHONDONTWRITEBYTECODE=1 python3 \
             ios/tests/test_verification_classifier.py
+          PYTHONDONTWRITEBYTECODE=1 python3 \
+            ios/tests/test_verification_router.py
 
       - name: Install build prerequisites
         run: brew install cmake glslang ripgrep

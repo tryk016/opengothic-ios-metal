@@ -91,7 +91,10 @@ class VerificationClassifierTests(unittest.TestCase):
             "lib/Tempest/Engine/CMakeLists.txt",
             "shader/ios-metal/shading-prototypes.metal",
             "verification-policy.json",
+            "scripts/verify.command",
+            "scripts/execute_verification_gates.py",
             "scripts/verify-local-build.command",
+            "ios/tests/test_verification_router.py",
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.classify(path)["gates"], ["full"])
