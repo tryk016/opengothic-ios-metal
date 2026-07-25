@@ -94,6 +94,64 @@ uint32_t narrow(NSUInteger value) noexcept {
   return static_cast<uint32_t>(value);
   }
 
+bool emptyCollection(id value) noexcept {
+  return value==nil || [value count]==NSUInteger(0u);
+  }
+
+bool linkedFunctionsEmpty(MTLLinkedFunctions* linkedFunctions) noexcept {
+  return linkedFunctions==nil ||
+         (emptyCollection(linkedFunctions.functions) &&
+          emptyCollection(linkedFunctions.binaryFunctions) &&
+          emptyCollection(linkedFunctions.groups) &&
+          emptyCollection(linkedFunctions.privateFunctions));
+  }
+
+bool sameStageInputLayout(
+    MTLBufferLayoutDescriptor* actual,
+    MTLBufferLayoutDescriptor* expected) noexcept {
+  if(actual==nil || expected==nil)
+    return actual==expected;
+  return actual.stride==expected.stride &&
+         actual.stepFunction==expected.stepFunction &&
+         actual.stepRate==expected.stepRate;
+  }
+
+bool sameStageInputAttribute(
+    MTLAttributeDescriptor* actual,
+    MTLAttributeDescriptor* expected) noexcept {
+  if(actual==nil || expected==nil)
+    return actual==expected;
+  return actual.format==expected.format &&
+         actual.offset==expected.offset &&
+         actual.bufferIndex==expected.bufferIndex;
+  }
+
+bool stageInputDescriptorEmpty(
+    MTLStageInputOutputDescriptor* descriptor) noexcept {
+  if(descriptor==nil)
+    return true;
+
+  MTLStageInputOutputDescriptor* defaults =
+      [MTLStageInputOutputDescriptor stageInputOutputDescriptor];
+  if(defaults==nil)
+    return false;
+  [defaults reset];
+  if(descriptor.indexType!=defaults.indexType ||
+     descriptor.indexBufferIndex!=defaults.indexBufferIndex)
+    return false;
+
+  // Metal exposes 31 stage buffer/attribute slots (indices 0...30).
+  constexpr NSUInteger StageInputSlotCount = NSUInteger(31u);
+  for(NSUInteger i=0u; i<StageInputSlotCount; ++i) {
+    if(!sameStageInputLayout(
+           descriptor.layouts[i],defaults.layouts[i]) ||
+       !sameStageInputAttribute(
+           descriptor.attributes[i],defaults.attributes[i]))
+      return false;
+    }
+  return true;
+  }
+
 OwnedObjectiveC makeString(std::string_view value) {
   return OwnedObjectiveC(
       [[NSString alloc]
@@ -338,11 +396,12 @@ NativePipelineBuild buildComputePipeline(
       descriptor.threadGroupSizeIsMultipleOfThreadExecutionWidth==NO;
   report.maxTotalThreadsPerThreadgroupZero =
       descriptor.maxTotalThreadsPerThreadgroup==NSUInteger(0u);
-  report.stageInputDescriptorNil =
-      descriptor.stageInputDescriptor==nil;
+  report.stageInputDescriptorEmpty =
+      stageInputDescriptorEmpty(descriptor.stageInputDescriptor);
   report.indirectCommandBuffersDisabled =
       descriptor.supportIndirectCommandBuffers==NO;
-  report.linkedFunctionsNil = descriptor.linkedFunctions==nil;
+  report.linkedFunctionsEmpty =
+      linkedFunctionsEmpty(descriptor.linkedFunctions);
   report.addingBinaryFunctionsDisabled =
       descriptor.supportAddingBinaryFunctions==NO;
   report.maxCallStackDepth = narrow(descriptor.maxCallStackDepth);

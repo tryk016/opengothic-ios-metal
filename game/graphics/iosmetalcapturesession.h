@@ -1,7 +1,8 @@
 #pragma once
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 
 #include <cstddef>
 #include <cstdint>
@@ -56,6 +57,7 @@ class IOSMetalCaptureSession final {
                                       const char*& reason) noexcept;
     void cancel() noexcept;
     void reset() noexcept;
+    [[nodiscard]] bool initialized() const noexcept;
     [[nodiscard]] bool active() const noexcept;
 
   private:

@@ -68,9 +68,9 @@ bool validComputePipeline(
          pipeline.functionMatches &&
          pipeline.threadGroupSizeMultipleDisabled &&
          pipeline.maxTotalThreadsPerThreadgroupZero &&
-         pipeline.stageInputDescriptorNil &&
+         pipeline.stageInputDescriptorEmpty &&
          pipeline.indirectCommandBuffersDisabled &&
-         pipeline.linkedFunctionsNil &&
+         pipeline.linkedFunctionsEmpty &&
          pipeline.addingBinaryFunctionsDisabled &&
          pipeline.maxCallStackDepth==1u;
   }
@@ -111,8 +111,6 @@ bool validRenderPipeline(
 bool validRenderReflection(
     const IOSShadingPrototypeForwardRenderPipelineReport& pipeline) noexcept {
   return pipeline.reflectionAvailable &&
-         pipeline.imageblockBytesPerSample==
-             PipelineImageblockBytesPerSample &&
          pipeline.vertexBindings==
              singleBinding(
                  IOSShadingPrototypeForwardFunctionStage::Vertex,
@@ -191,9 +189,9 @@ IOSShadingPrototypeForwardPipelineReport
   report.computePipeline.functionMatches = true;
   report.computePipeline.threadGroupSizeMultipleDisabled = true;
   report.computePipeline.maxTotalThreadsPerThreadgroupZero = true;
-  report.computePipeline.stageInputDescriptorNil = true;
+  report.computePipeline.stageInputDescriptorEmpty = true;
   report.computePipeline.indirectCommandBuffersDisabled = true;
-  report.computePipeline.linkedFunctionsNil = true;
+  report.computePipeline.linkedFunctionsEmpty = true;
   report.computePipeline.addingBinaryFunctionsDisabled = true;
   report.computePipeline.maxCallStackDepth = 1u;
   report.computePipeline.computeBindings =

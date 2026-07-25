@@ -42,7 +42,8 @@ const char* iosMetalResourceStorageName(
 
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 // Diagnostic-only process counters. The API and native atomic accounting are
 // compiled out unless one of the allocator lifetime probes is enabled.
 struct IOSMetalResourceLifetimeSnapshot final {

@@ -23,6 +23,15 @@ bool rejects(Mutate mutate, Status expected, uint32_t& mutations) {
          expected;
   }
 
+template<class Mutate>
+bool acceptsRuntimeTelemetry(Mutate mutate, uint32_t& mutations) {
+  Report report = iosCanonicalShadingPrototypeForwardPipelineReport();
+  mutate(report);
+  ++mutations;
+  return iosValidateShadingPrototypeForwardPipelineReport(report)==
+         Status::Ready;
+  }
+
 template<class Select>
 bool rejectsFunction(
     Select select,
@@ -234,15 +243,16 @@ bool rejectsComputePipeline(uint32_t& mutations) {
                !value.maxTotalThreadsPerThreadgroupZero;
            }) &&
          rejectPipeline([](auto& value) {
-           value.stageInputDescriptorNil =
-               !value.stageInputDescriptorNil;
+           value.stageInputDescriptorEmpty =
+               !value.stageInputDescriptorEmpty;
            }) &&
          rejectPipeline([](auto& value) {
            value.indirectCommandBuffersDisabled =
                !value.indirectCommandBuffersDisabled;
            }) &&
          rejectPipeline([](auto& value) {
-           value.linkedFunctionsNil = !value.linkedFunctionsNil;
+           value.linkedFunctionsEmpty =
+               !value.linkedFunctionsEmpty;
            }) &&
          rejectPipeline([](auto& value) {
            value.addingBinaryFunctionsDisabled =
@@ -386,9 +396,12 @@ bool rejectsRenderPipeline(uint32_t& mutations) {
          rejectReflection([](auto& value) {
            value.reflectionAvailable = !value.reflectionAvailable;
            }) &&
-         rejectReflection([](auto& value) {
-           ++value.imageblockBytesPerSample;
-           }) &&
+         acceptsRuntimeTelemetry(
+             [&](Report& report) {
+               ++report.renderPipelines[Index].
+                   imageblockBytesPerSample;
+               },
+             mutations) &&
          rejectsBindingList(selectVertex,mutations) &&
          rejectsBindingList(selectFragment,mutations) &&
          rejectsBindingList(selectTile,mutations) &&
@@ -523,6 +536,12 @@ int main() {
       sizeof(IOSShadingPrototypeForwardComputePipelineReport)==36u);
   static_assert(
       alignof(IOSShadingPrototypeForwardComputePipelineReport)==4u);
+  static_assert(offsetof(
+                    IOSShadingPrototypeForwardComputePipelineReport,
+                    stageInputDescriptorEmpty)==7u);
+  static_assert(offsetof(
+                    IOSShadingPrototypeForwardComputePipelineReport,
+                    linkedFunctionsEmpty)==9u);
   static_assert(offsetof(
                     IOSShadingPrototypeForwardComputePipelineReport,
                     maxCallStackDepth)==12u);

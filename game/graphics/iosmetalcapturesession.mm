@@ -1,7 +1,8 @@
 #include "iosmetalcapturesession.h"
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 
 #include <Tempest/Device>
 #include <Tempest/MetalApi>
@@ -264,6 +265,10 @@ void IOSMetalCaptureSession::reset() noexcept {
 
 bool IOSMetalCaptureSession::active() const noexcept {
   return impl!=nullptr && impl->captureActive;
+  }
+
+bool IOSMetalCaptureSession::initialized() const noexcept {
+  return impl!=nullptr;
   }
 
 const char* iosMetalCaptureArtifactKindName(

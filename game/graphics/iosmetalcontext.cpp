@@ -17,16 +17,23 @@
 #include <array>
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 #include <atomic>
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #include <chrono>
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+#include <crt_externs.h>
+#include <CommonCrypto/CommonDigest.h>
+#endif
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 
@@ -35,7 +42,8 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
-#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 #include "iosmetalcapturesession.h"
 #endif
 #include "iosmetalresourceallocator.h"
@@ -43,9 +51,18 @@
 #include "iospipelinearchivepolicy.h"
 #include "iossavepreviewpolicy.h"
 #include "iossceneassetregistry.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+#include "iosshadingprototypeforwardpipeline.h"
+#include "iosshadingprototypeforwardprobe.h"
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 #include "iosshadingprototypepipeline.h"
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 #include "iosshadingprototypeplan.h"
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 #include "iosshadingprototypetileprobe.h"
 #endif
 #include "resources.h"
@@ -96,6 +113,29 @@ constexpr char RendererIOSConfiguredFaultModeEvidence[] =
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST) && OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
 #error "RendererIOS Bink self-test requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) && \
+    !defined(__IOS__)
+#error "RendererIOS shading prototype Forward self-test requires iOS"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS shading prototype Forward self-test requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
+#error "RendererIOS shading prototype Forward self-test requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) && \
+    (defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST))
+#error "RendererIOS shading prototype Forward and other self-tests are mutually exclusive"
 #endif
 
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) && !defined(__IOS__)
@@ -150,6 +190,7 @@ constexpr char RendererIOSConfiguredFaultModeEvidence[] =
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
     (defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
      defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
      defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST))
 #error "RendererIOS shading prototype Tile and other self-tests are mutually exclusive"
 #endif
@@ -651,6 +692,402 @@ bool rendererIOSShadingPrototypeTileIsolationSnapshotEqual(
   }
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+constexpr char RendererIOSShadingPrototypeForwardSelfTestArmed[] =
+  "\x01RendererIOS shading prototype forward self-test: ARMED case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestFactoryReady[] =
+  "\x01RendererIOS shading prototype forward self-test: FACTORY READY case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestEncoded[] =
+  "\x01RendererIOS shading prototype forward self-test: ENCODED case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestSubmitted[] =
+  "\x01RendererIOS shading prototype forward self-test: SUBMITTED case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestTerminal[] =
+  "\x01RendererIOS shading prototype forward self-test: TERMINAL case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestReadback[] =
+  "\x01RendererIOS shading prototype forward self-test: READBACK case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestPassed[] =
+  "\x01RendererIOS shading prototype forward self-test: PASS case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestUnsupported[] =
+  "\x01RendererIOS shading prototype forward self-test: UNSUPPORTED case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardSelfTestFailed[] =
+  "\x01RendererIOS shading prototype forward self-test: FAIL case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardCaptureAcquired[] =
+  "\x01RendererIOS shading prototype forward capture: ACQUIRED case=forward-prototype-v1 nonce=";
+constexpr char RendererIOSShadingPrototypeForwardCaptureName[] =
+  "RendererIOS-forward-prototype-v1.gputrace";
+constexpr char RendererIOSShadingPrototypeForwardNonceArgument[] =
+  "\x01-renderer-ios-forward-self-test-nonce=";
+static_assert(
+    sizeof(RendererIOSShadingPrototypeForwardNonceArgument)-2u==38u);
+static_assert(RendererIOSShadingPrototypeForwardNonceArgument[0]=='\x01');
+static_assert(
+    RendererIOSShadingPrototypeForwardNonceArgument[
+        sizeof(RendererIOSShadingPrototypeForwardNonceArgument)-2u]=='=');
+constexpr std::string_view
+    RendererIOSShadingPrototypeForwardExpectedReadbackSHA256 =
+        "d577b6dfa736657f93c3223b466c256c988d5eb5f02cc27ad47f92c1406f7dd2";
+
+static_assert(
+    sizeof(RendererIOSShadingPrototypeForwardSelfTestEncoded)-2u+
+        32u+sizeof(
+          " cb=1 compute=1 render=1 dispatch=1 draws=2 opaque=1 alpha=1 output=4x4 light-list=256 drawable=0 present=0")-1u <
+        250u);
+
+const char* rendererIOSShadingPrototypeForwardMarkerText(
+    const char* storage) noexcept {
+  const volatile char* const observableStorage = storage;
+  (void)*observableStorage;
+  return storage+1u;
+  }
+
+bool rendererIOSShadingPrototypeForwardReadNonce(
+    std::array<char,33u>& result,
+    const char*& reason) noexcept {
+  result.fill('\0');
+  reason = "nonce-missing";
+  const int* const argc = _NSGetArgc();
+  char*** const argv = _NSGetArgv();
+  if(argc==nullptr || argv==nullptr || *argv==nullptr)
+    return false;
+
+  const std::string_view nonceArgument(
+      rendererIOSShadingPrototypeForwardMarkerText(
+          RendererIOSShadingPrototypeForwardNonceArgument),
+      sizeof(RendererIOSShadingPrototypeForwardNonceArgument)-2u);
+  uint32_t matches = 0u;
+  for(int index=1; index<*argc; ++index) {
+    const char* const raw = (*argv)[index];
+    if(raw==nullptr)
+      continue;
+    const std::string_view argument(raw);
+    constexpr std::string_view name =
+        "-renderer-ios-forward-self-test-nonce";
+    if(!argument.starts_with(name))
+      continue;
+    ++matches;
+    if(matches!=1u ||
+       !argument.starts_with(nonceArgument)) {
+      reason = matches>1u ? "nonce-duplicate" : "nonce-malformed";
+      continue;
+      }
+    const std::string_view nonce = argument.substr(
+        nonceArgument.size());
+    const bool valid = nonce.size()==32u &&
+        std::all_of(nonce.begin(),nonce.end(),[](char value) noexcept {
+          return (value>='0' && value<='9') ||
+                 (value>='a' && value<='f');
+          });
+    if(!valid) {
+      reason = "nonce-malformed";
+      continue;
+      }
+    std::memcpy(result.data(),nonce.data(),nonce.size());
+    }
+  if(matches!=1u || result[0]=='\0') {
+    if(matches>1u)
+      reason = "nonce-duplicate";
+    return false;
+    }
+  reason = nullptr;
+  return true;
+  }
+
+std::array<char,CC_SHA256_DIGEST_LENGTH*2u+1u>
+    rendererIOSShadingPrototypeForwardReadbackSHA256(
+    const std::array<
+        uint32_t,
+        RendererIOSShadingPrototypeShader::
+            ForwardLightListWordCount>& words) noexcept {
+  std::array<unsigned char,CC_SHA256_DIGEST_LENGTH> digest{};
+  std::array<char,CC_SHA256_DIGEST_LENGTH*2u+1u> hex{};
+  (void)CC_SHA256(
+      words.data(),static_cast<CC_LONG>(sizeof(words)),digest.data());
+  constexpr char digits[] = "0123456789abcdef";
+  for(std::size_t index=0u; index<digest.size(); ++index) {
+    hex[index*2u] = digits[digest[index]>>4u];
+    hex[index*2u+1u] = digits[digest[index]&0x0fu];
+    }
+  return hex;
+  }
+
+struct RendererIOSShadingPrototypeForwardIsolationSnapshot final {
+  MetalRuntimeCompilationSnapshot runtime;
+  MetalBuiltinRuntimeSnapshot builtin;
+  MetalPipelineArchiveSnapshot archive;
+  };
+
+bool rendererIOSShadingPrototypeForwardArchiveEqual(
+    const MetalPipelineArchiveSnapshot& lhs,
+    const MetalPipelineArchiveSnapshot& rhs) noexcept {
+  return lhs.abiVersion==rhs.abiVersion &&
+         lhs.structSize==rhs.structSize &&
+         lhs.flags==rhs.flags &&
+         lhs.reserved==rhs.reserved &&
+         lhs.loadFailures==rhs.loadFailures &&
+         lhs.rebuilds==rhs.rebuilds &&
+         lhs.renderHits==rhs.renderHits &&
+         lhs.renderMisses==rhs.renderMisses &&
+         lhs.renderAdds==rhs.renderAdds &&
+         lhs.renderFallbacks==rhs.renderFallbacks &&
+         lhs.computeHits==rhs.computeHits &&
+         lhs.computeMisses==rhs.computeMisses &&
+         lhs.computeAdds==rhs.computeAdds &&
+         lhs.computeFallbacks==rhs.computeFallbacks &&
+         lhs.flushAttempts==rhs.flushAttempts &&
+         lhs.flushSuccesses==rhs.flushSuccesses &&
+         lhs.flushFailures==rhs.flushFailures;
+  }
+
+bool rendererIOSShadingPrototypeForwardIsolationSnapshotAvailable(
+    const RendererIOSShadingPrototypeForwardIsolationSnapshot& snapshot)
+    noexcept {
+  return snapshot.runtime.available && snapshot.builtin.available &&
+         snapshot.archive.abiVersion==
+             MetalPipelineArchiveSnapshot::AbiVersion &&
+         snapshot.archive.structSize==
+             MetalPipelineArchiveSnapshot::StructSize;
+  }
+
+bool rendererIOSShadingPrototypeForwardIsolationSnapshotEqual(
+    const RendererIOSShadingPrototypeForwardIsolationSnapshot& lhs,
+    const RendererIOSShadingPrototypeForwardIsolationSnapshot& rhs)
+    noexcept {
+  return lhs.runtime.available==rhs.runtime.available &&
+         lhs.runtime.sourceLibraryRequests==
+             rhs.runtime.sourceLibraryRequests &&
+         lhs.runtime.computePsoRequests==
+             rhs.runtime.computePsoRequests &&
+         lhs.runtime.renderPsoRequests==
+             rhs.runtime.renderPsoRequests &&
+         lhs.builtin.available==rhs.builtin.available &&
+         lhs.builtin.sourceLibraryRequests==
+             rhs.builtin.sourceLibraryRequests &&
+         lhs.builtin.renderPsoRequests==
+             rhs.builtin.renderPsoRequests &&
+         rendererIOSShadingPrototypeForwardArchiveEqual(
+             lhs.archive,rhs.archive);
+  }
+
+template<class T>
+uint64_t rendererIOSShadingPrototypeForwardMismatchBit(
+    const T& actual, const T& expected, uint32_t bit) noexcept {
+  return actual==expected ? 0u : uint64_t(1u)<<bit;
+  }
+
+uint64_t rendererIOSShadingPrototypeForwardFunctionMismatchMask(
+    const IOSShadingPrototypeForwardFunctionReport& actual,
+    const IOSShadingPrototypeForwardFunctionReport& expected)
+    noexcept {
+  uint64_t mask = 0u;
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.available,expected.available,0u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.nameMatches,expected.nameMatches,1u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.sameDevice,expected.sameDevice,2u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.stage,expected.stage,3u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.functionConstantCount,
+      expected.functionConstantCount,4u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTest.available,
+      expected.alphaTest.available,5u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTest.nameMatches,
+      expected.alphaTest.nameMatches,6u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTest.indexMatches,
+      expected.alphaTest.indexMatches,7u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTest.boolType,
+      expected.alphaTest.boolType,8u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTest.required,
+      expected.alphaTest.required,9u);
+  return mask;
+  }
+
+uint64_t rendererIOSShadingPrototypeForwardSpecializationMismatchMask(
+    const IOSShadingPrototypeForwardSpecializationReport& actual,
+    const IOSShadingPrototypeForwardSpecializationReport& expected)
+    noexcept {
+  uint64_t mask = 0u;
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.available,expected.available,0u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.nameMatches,expected.nameMatches,1u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.sameDevice,expected.sameDevice,2u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.stage,expected.stage,3u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTestEnabled,expected.alphaTestEnabled,4u);
+  return mask;
+  }
+
+uint64_t rendererIOSShadingPrototypeForwardBindingMismatchMask(
+    const IOSShadingPrototypeForwardBindingListReport& actual,
+    const IOSShadingPrototypeForwardBindingListReport& expected)
+    noexcept {
+  uint64_t mask = 0u;
+  const auto& lhs = actual.bindings[0];
+  const auto& rhs = expected.bindings[0];
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      lhs.stage,rhs.stage,0u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      lhs.semantic,rhs.semantic,1u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      lhs.nativeType,rhs.nativeType,2u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      lhs.access,rhs.access,3u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      lhs.used,rhs.used,4u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      lhs.index,rhs.index,5u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.count,expected.count,6u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.available,expected.available,7u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.overflow,expected.overflow,8u);
+  return mask;
+  }
+
+uint64_t rendererIOSShadingPrototypeForwardComputeMismatchMask(
+    const IOSShadingPrototypeForwardComputePipelineReport& actual,
+    const IOSShadingPrototypeForwardComputePipelineReport& expected)
+    noexcept {
+  uint64_t mask = 0u;
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.available,expected.available,0u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.sameDevice,expected.sameDevice,1u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.reflectionAvailable,expected.reflectionAvailable,2u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.binaryArchivesNil,expected.binaryArchivesNil,3u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.functionMatches,expected.functionMatches,4u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.threadGroupSizeMultipleDisabled,
+      expected.threadGroupSizeMultipleDisabled,5u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.maxTotalThreadsPerThreadgroupZero,
+      expected.maxTotalThreadsPerThreadgroupZero,6u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.stageInputDescriptorEmpty,
+      expected.stageInputDescriptorEmpty,7u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.indirectCommandBuffersDisabled,
+      expected.indirectCommandBuffersDisabled,8u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.linkedFunctionsEmpty,expected.linkedFunctionsEmpty,9u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.addingBinaryFunctionsDisabled,
+      expected.addingBinaryFunctionsDisabled,10u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.maxCallStackDepth,expected.maxCallStackDepth,11u);
+  return mask;
+  }
+
+uint64_t rendererIOSShadingPrototypeForwardRenderMismatchMask(
+    const IOSShadingPrototypeForwardRenderPipelineReport& actual,
+    const IOSShadingPrototypeForwardRenderPipelineReport& expected)
+    noexcept {
+  uint64_t mask = 0u;
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.available,expected.available,0u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.sameDevice,expected.sameDevice,1u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.reflectionAvailable,expected.reflectionAvailable,2u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.binaryArchivesNil,expected.binaryArchivesNil,3u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.vertexDescriptorMatches,
+      expected.vertexDescriptorMatches,4u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.colorAttachmentRgba8Unorm,
+      expected.colorAttachmentRgba8Unorm,5u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.unusedColorAttachmentsInvalid,
+      expected.unusedColorAttachmentsInvalid,6u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.colorWriteMaskAll,expected.colorWriteMaskAll,7u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.blendingDisabled,expected.blendingDisabled,8u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.depthStencilDisabled,
+      expected.depthStencilDisabled,9u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.triangleTopology,expected.triangleTopology,10u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaToCoverageDisabled,
+      expected.alphaToCoverageDisabled,11u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaToOneDisabled,expected.alphaToOneDisabled,12u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.rasterizationEnabled,
+      expected.rasterizationEnabled,13u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.indirectCommandBuffersDisabled,
+      expected.indirectCommandBuffersDisabled,14u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.alphaTestEnabled,expected.alphaTestEnabled,15u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.sampleCount,expected.sampleCount,16u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.imageblockBytesPerSample,
+      expected.imageblockBytesPerSample,17u);
+  return mask;
+  }
+
+uint64_t rendererIOSShadingPrototypeForwardTopMismatchMask(
+    const IOSShadingPrototypeForwardPipelineReport& actual,
+    const IOSShadingPrototypeForwardPipelineReport& expected)
+    noexcept {
+  uint64_t mask = 0u;
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.contractVersion,expected.contractVersion,0u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.offlineMetallibAbi,expected.offlineMetallibAbi,1u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.deviceAvailable,expected.deviceAvailable,2u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.supportsApple4,expected.supportsApple4,3u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.libraryAvailable,expected.libraryAvailable,4u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.librarySameDevice,expected.librarySameDevice,5u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.resolvedFunctionCount,
+      expected.resolvedFunctionCount,6u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.specializationCount,expected.specializationCount,7u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.createdComputePipelineCount,
+      expected.createdComputePipelineCount,8u);
+  mask |= rendererIOSShadingPrototypeForwardMismatchBit(
+      actual.createdRenderPipelineCount,
+      expected.createdRenderPipelineCount,9u);
+  return mask;
+  }
+
+constexpr bool rendererIOSShadingPrototypeForwardMayWaitIdle(
+    bool acquiredBeforeGate,
+    bool irreversibleFailureRecorded) noexcept {
+  return !acquiredBeforeGate || irreversibleFailureRecorded;
+  }
+
+static_assert(
+    !rendererIOSShadingPrototypeForwardMayWaitIdle(true,false));
+static_assert(
+    rendererIOSShadingPrototypeForwardMayWaitIdle(true,true));
+static_assert(
+    rendererIOSShadingPrototypeForwardMayWaitIdle(false,false));
+#endif
+
 }
 
 struct IOSMetalContext::Impl final {
@@ -693,6 +1130,20 @@ struct IOSMetalContext::Impl final {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
   enum class ShadingPrototypeTileSelfTestState : uint8_t {
+    Armed,
+    FactoryReady,
+    Encoded,
+    Submitted,
+    Acquired,
+    Ambiguous,
+    Unsupported,
+    Passed,
+    Failed,
+    };
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+  enum class ShadingPrototypeForwardSelfTestState : uint8_t {
     Armed,
     FactoryReady,
     Encoded,
@@ -1621,6 +2072,813 @@ struct IOSMetalContext::Impl final {
     }
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+  RendererIOSShadingPrototypeForwardIsolationSnapshot
+      shadingPrototypeForwardIsolationSnapshot() const noexcept {
+    RendererIOSShadingPrototypeForwardIsolationSnapshot snapshot;
+    snapshot.runtime = MetalApi::runtimeCompilationSnapshot(device);
+    snapshot.builtin = MetalApi::builtinRuntimeSnapshot(device);
+    snapshot.archive = MetalApi::pipelineArchiveSnapshot(device);
+    return snapshot;
+    }
+
+  bool shadingPrototypeForwardIsolationUnchanged() const noexcept {
+    return rendererIOSShadingPrototypeForwardIsolationSnapshotEqual(
+        shadingPrototypeForwardIsolationBefore,
+        shadingPrototypeForwardIsolationSnapshot());
+    }
+
+  bool shadingPrototypeForwardOutputLifetimeLive() const noexcept {
+    const IOSMetalResourceLifetimeSnapshot current =
+        iosMetalResourceLifetimeSnapshot();
+    return current.created>=
+               shadingPrototypeForwardOutputLifetimeBefore.created &&
+           current.live>=
+               shadingPrototypeForwardOutputLifetimeBefore.live &&
+           current.released>=
+               shadingPrototypeForwardOutputLifetimeBefore.released &&
+           current.created-
+               shadingPrototypeForwardOutputLifetimeBefore.created==1u &&
+           current.live-
+               shadingPrototypeForwardOutputLifetimeBefore.live==1u &&
+           current.released-
+               shadingPrototypeForwardOutputLifetimeBefore.released==0u;
+    }
+
+  bool shadingPrototypeForwardOutputLifetimeReleased() const noexcept {
+    const IOSMetalResourceLifetimeSnapshot current =
+        iosMetalResourceLifetimeSnapshot();
+    return current.created>=
+               shadingPrototypeForwardOutputLifetimeBefore.created &&
+           current.live==
+               shadingPrototypeForwardOutputLifetimeBefore.live &&
+           current.released>=
+               shadingPrototypeForwardOutputLifetimeBefore.released &&
+           current.created-
+               shadingPrototypeForwardOutputLifetimeBefore.created==1u &&
+           current.released-
+               shadingPrototypeForwardOutputLifetimeBefore.released==1u;
+    }
+
+  bool shadingPrototypeForwardLightListLifetimeLive() const noexcept {
+    const IOSShadingPrototypeForwardLightListLifetimeSnapshot current =
+        iosShadingPrototypeForwardLightListLifetimeSnapshot();
+    return current.created>=
+               shadingPrototypeForwardLightListLifetimeBefore.created &&
+           current.live>=
+               shadingPrototypeForwardLightListLifetimeBefore.live &&
+           current.released>=
+               shadingPrototypeForwardLightListLifetimeBefore.released &&
+           current.created-
+               shadingPrototypeForwardLightListLifetimeBefore.created==1u &&
+           current.live-
+               shadingPrototypeForwardLightListLifetimeBefore.live==1u &&
+           current.released-
+               shadingPrototypeForwardLightListLifetimeBefore.released==0u;
+    }
+
+  bool shadingPrototypeForwardLightListLifetimeReleased() const noexcept {
+    const IOSShadingPrototypeForwardLightListLifetimeSnapshot current =
+        iosShadingPrototypeForwardLightListLifetimeSnapshot();
+    return current.created>=
+               shadingPrototypeForwardLightListLifetimeBefore.created &&
+           current.live==
+               shadingPrototypeForwardLightListLifetimeBefore.live &&
+           current.released>=
+               shadingPrototypeForwardLightListLifetimeBefore.released &&
+           current.created-
+               shadingPrototypeForwardLightListLifetimeBefore.created==1u &&
+           current.released-
+               shadingPrototypeForwardLightListLifetimeBefore.released==1u;
+    }
+
+  void logShadingPrototypeForwardFailure(
+      const char* reason) noexcept {
+    try {
+      Log::e(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestFailed),
+             shadingPrototypeForwardNonce.data(),
+             " reason=",reason);
+      }
+    catch(...) {
+      }
+    }
+
+  void logShadingPrototypeForwardFactoryFailure(
+      IOSShadingPrototypeForwardPipelineStatus factoryStatus,
+      IOSShadingPrototypeForwardPipelineStatus validationStatus,
+      const IOSShadingPrototypeForwardPipelineReport& report)
+      noexcept {
+    const IOSShadingPrototypeForwardPipelineReport canonical =
+        iosCanonicalShadingPrototypeForwardPipelineReport();
+    try {
+      Log::e(
+          "RendererIOS Forward factory diag: nonce=",
+          shadingPrototypeForwardNonce.data(),
+          " part=top factory=",
+          iosShadingPrototypeForwardPipelineStatusName(factoryStatus),
+          " validation=",
+          iosShadingPrototypeForwardPipelineStatusName(validationStatus),
+          " owner=",bool(shadingPrototypeForwardPipeline) ? 1 : 0,
+          " delta=",
+          rendererIOSShadingPrototypeForwardTopMismatchMask(
+              report,canonical),
+          " fn=",
+          rendererIOSShadingPrototypeForwardFunctionMismatchMask(
+              report.functions[0],canonical.functions[0]),
+          "/",
+          rendererIOSShadingPrototypeForwardFunctionMismatchMask(
+              report.functions[1],canonical.functions[1]),
+          "/",
+          rendererIOSShadingPrototypeForwardFunctionMismatchMask(
+              report.functions[2],canonical.functions[2]),
+          " spec=",
+          rendererIOSShadingPrototypeForwardSpecializationMismatchMask(
+              report.fragmentSpecializations[0],
+              canonical.fragmentSpecializations[0]),
+          "/",
+          rendererIOSShadingPrototypeForwardSpecializationMismatchMask(
+              report.fragmentSpecializations[1],
+              canonical.fragmentSpecializations[1]));
+      Log::e(
+          "RendererIOS Forward factory diag: nonce=",
+          shadingPrototypeForwardNonce.data(),
+          " part=compute delta=",
+          rendererIOSShadingPrototypeForwardComputeMismatchMask(
+              report.computePipeline,canonical.computePipeline),
+          " bindings=",
+          rendererIOSShadingPrototypeForwardBindingMismatchMask(
+              report.computePipeline.computeBindings,
+              canonical.computePipeline.computeBindings));
+      for(std::size_t index=0u;
+          index<report.renderPipelines.size(); ++index) {
+        const auto& actual = report.renderPipelines[index];
+        const auto& expected = canonical.renderPipelines[index];
+        Log::e(
+            "RendererIOS Forward factory diag: nonce=",
+            shadingPrototypeForwardNonce.data(),
+            " part=render",index,
+            " delta=",
+            rendererIOSShadingPrototypeForwardRenderMismatchMask(
+                actual,expected),
+            " bindings=",
+            rendererIOSShadingPrototypeForwardBindingMismatchMask(
+                actual.vertexBindings,expected.vertexBindings),
+            "/",
+            rendererIOSShadingPrototypeForwardBindingMismatchMask(
+                actual.fragmentBindings,expected.fragmentBindings),
+            "/",
+            rendererIOSShadingPrototypeForwardBindingMismatchMask(
+                actual.tileBindings,expected.tileBindings),
+            "/",
+            rendererIOSShadingPrototypeForwardBindingMismatchMask(
+                actual.objectBindings,expected.objectBindings),
+            "/",
+            rendererIOSShadingPrototypeForwardBindingMismatchMask(
+                actual.meshBindings,expected.meshBindings));
+        }
+      }
+    catch(...) {
+      }
+    }
+
+  void releaseShadingPrototypeForwardOwnersBeforeSubmit() noexcept {
+    shadingPrototypeForwardCommand = CommandBuffer();
+    shadingPrototypeForwardCommandActive = false;
+    shadingPrototypeForwardCapture.reset();
+    shadingPrototypeForwardLightList =
+        IOSShadingPrototypeForwardLightList();
+    shadingPrototypeForwardOutput = IOSMetalResourceTexture();
+    shadingPrototypeForwardPipeline =
+        IOSShadingPrototypeForwardPipeline();
+    shadingPrototypeForwardFence = Fence();
+    shadingPrototypeForwardFenceActive = false;
+    }
+
+  void releaseShadingPrototypeForwardOwnersAfterTerminal() noexcept {
+    // Fence is known terminal here. Drop it first, then the command buffer,
+    // output, light list, pipeline and finally the stopped capture owner.
+    shadingPrototypeForwardReleaseOrderExact = false;
+    uint32_t releaseStep = 0u;
+    shadingPrototypeForwardFence = Fence();
+    shadingPrototypeForwardFenceActive = false;
+    releaseStep = 1u;
+    shadingPrototypeForwardCommand = CommandBuffer();
+    shadingPrototypeForwardCommandActive = false;
+    releaseStep = releaseStep==1u ? 2u : 0u;
+    shadingPrototypeForwardOutput = IOSMetalResourceTexture();
+    releaseStep = releaseStep==2u ? 3u : 0u;
+    shadingPrototypeForwardLightList =
+        IOSShadingPrototypeForwardLightList();
+    releaseStep = releaseStep==3u ? 4u : 0u;
+    shadingPrototypeForwardPipeline =
+        IOSShadingPrototypeForwardPipeline();
+    releaseStep = releaseStep==4u ? 5u : 0u;
+    shadingPrototypeForwardCapture.reset();
+    releaseStep = releaseStep==5u ? 6u : 0u;
+    shadingPrototypeForwardReleaseOrderExact = releaseStep==6u;
+    }
+
+  void failShadingPrototypeForwardBeforeSubmit(
+      const char* reason, const char* detail = nullptr) noexcept {
+    releaseShadingPrototypeForwardOwnersBeforeSubmit();
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::Failed;
+    logShadingPrototypeForwardFailure(reason);
+    fail("RendererIOS shading prototype forward self-test failed",
+         detail!=nullptr ? detail : reason);
+    }
+
+  void failShadingPrototypeForwardAmbiguous(
+      const char* reason, const char* detail = nullptr) noexcept {
+    // Submit/capture/fence timeout cannot prove ownership is releasable.
+    // Keep every owner until settleGpu has confirmed device idle.
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::Ambiguous;
+    logShadingPrototypeForwardFailure(reason);
+    fail("RendererIOS shading prototype forward self-test failed",
+         detail!=nullptr ? detail : reason);
+    }
+
+  void failShadingPrototypeForwardAfterTerminal(
+      const char* reason, const char* detail = nullptr) noexcept {
+    releaseShadingPrototypeForwardOwnersAfterTerminal();
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::Failed;
+    logShadingPrototypeForwardFailure(reason);
+    fail("RendererIOS shading prototype forward self-test failed",
+         detail!=nullptr ? detail : reason);
+    }
+
+  bool finishShadingPrototypeForwardAfterTerminal() noexcept {
+    namespace Probe = RendererIOSShadingPrototypeForwardProbe;
+    namespace Shader = RendererIOSShadingPrototypeShader;
+
+    const bool terminalOwnersLive =
+        shadingPrototypeForwardState==
+            ShadingPrototypeForwardSelfTestState::Acquired &&
+        shadingPrototypeForwardFenceActive &&
+        shadingPrototypeForwardCommandActive &&
+        bool(shadingPrototypeForwardOutput) &&
+        bool(shadingPrototypeForwardLightList) &&
+        bool(shadingPrototypeForwardPipeline) &&
+        shadingPrototypeForwardCapture.initialized() &&
+        !shadingPrototypeForwardCapture.active() &&
+        shadingPrototypeForwardCaptureArtifact.bytes>0u &&
+        iosValidateShadingPrototypeForwardProbeReportV1(
+            shadingPrototypeForwardNativeReport) &&
+        shadingPrototypeForwardOutputLifetimeLive() &&
+        shadingPrototypeForwardLightListLifetimeLive() &&
+        shadingPrototypeForwardIsolationUnchanged();
+    if(!terminalOwnersLive) {
+      failShadingPrototypeForwardAfterTerminal(
+          "terminal-lifetime-or-counter-mismatch");
+      return false;
+      }
+
+    try {
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestTerminal),
+             shadingPrototypeForwardNonce.data(),
+             " terminal=completed wait-calls=",
+             shadingPrototypeForwardFenceWaitCalls,
+             " zero-timeout=",
+             shadingPrototypeForwardFenceWaitCalls,
+             " nonterminal=",
+             shadingPrototypeForwardFenceNonterminalPolls,
+             " wait-idle=0");
+      }
+    catch(...) {
+      }
+
+    std::array<
+        uint32_t,
+        Shader::ForwardLightListWordCount> words{};
+    if(!iosReadShadingPrototypeForwardLightListContents(
+           shadingPrototypeForwardLightList,words)) {
+      failShadingPrototypeForwardAfterTerminal(
+          "readback-unavailable");
+      return false;
+      }
+
+    uint32_t activeWords = 0u;
+    uint32_t inactiveWords = 0u;
+    uint32_t sentinelWords = 0u;
+    uint32_t unexpectedWords = 0u;
+    for(const uint32_t word:words) {
+      if(word==Shader::ForwardLightListActiveValue)
+        ++activeWords;
+      else if(word==Shader::ForwardLightListInactiveValue)
+        ++inactiveWords;
+      else if(word==Shader::ForwardLightListSentinel)
+        ++sentinelWords;
+      else
+        ++unexpectedWords;
+      }
+    const auto readbackSHA256 =
+        rendererIOSShadingPrototypeForwardReadbackSHA256(words);
+    const bool readbackExact =
+        iosShadingPrototypeForwardLightListContentsMatch(words) &&
+        std::string_view(readbackSHA256.data())==
+            RendererIOSShadingPrototypeForwardExpectedReadbackSHA256;
+    if(!readbackExact) {
+      failShadingPrototypeForwardAfterTerminal(
+          "readback-mismatch");
+      return false;
+      }
+    try {
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestReadback),
+             shadingPrototypeForwardNonce.data(),
+             " bytes=",Shader::ForwardLightListByteSize,
+             " words=",Shader::ForwardLightListWordCount,
+             " exact=1 h=",readbackSHA256.data());
+      }
+    catch(...) {
+      }
+
+    IOSShadingPrototypeForwardTerminalReportV1 terminal =
+        iosCanonicalShadingPrototypeForwardTerminalReportV1();
+    terminal.terminalFenceWaitCalls =
+        shadingPrototypeForwardFenceWaitCalls;
+    terminal.terminalFenceZeroTimeoutCalls =
+        shadingPrototypeForwardFenceWaitCalls;
+    terminal.terminalFenceNonterminalPolls =
+        shadingPrototypeForwardFenceNonterminalPolls;
+    terminal.terminalFenceMonotonic =
+        shadingPrototypeForwardFenceMonotonic ? 1u : 0u;
+    terminal.terminalFenceMonotonicDeadlineUsed = 1u;
+    terminal.directContentsAvailable = 1u;
+    terminal.readbackCalls = 1u;
+    terminal.firstWord = words[0];
+    terminal.activeWords = activeWords;
+    terminal.inactiveWords = inactiveWords;
+    terminal.sentinelWords = sentinelWords;
+    terminal.unexpectedWords = unexpectedWords;
+    terminal.exactResult = readbackExact ? 1u : 0u;
+    terminal.lightListLifetimeRetained =
+        shadingPrototypeForwardLightListLifetimeLive() ? 1u : 0u;
+    terminal.outputLifetimeRetained =
+        shadingPrototypeForwardOutputLifetimeLive() ? 1u : 0u;
+    terminal.commandBufferRetainedReferencesDisabledContract =
+        shadingPrototypeForwardNativeReport.
+            commandBufferRetainedReferencesDisabled;
+    terminal.pipelineLiveAtTerminal =
+        shadingPrototypeForwardPipeline ? 1u : 0u;
+    terminal.outputLiveAtTerminal =
+        shadingPrototypeForwardOutput ? 1u : 0u;
+    terminal.lightListLiveAtTerminal =
+        shadingPrototypeForwardLightList ? 1u : 0u;
+    terminal.commandBufferLiveAtTerminal =
+        shadingPrototypeForwardCommandActive ? 1u : 0u;
+    terminal.captureOwnerInitializedAtTerminal =
+        shadingPrototypeForwardCapture.initialized() ? 1u : 0u;
+    terminal.captureActiveAtTerminal =
+        shadingPrototypeForwardCapture.active() ? 1u : 0u;
+    terminal.captureArtifactRetainedAtTerminal =
+        shadingPrototypeForwardCaptureArtifact.bytes>0u ? 1u : 0u;
+    terminal.fenceLiveAtTerminal =
+        shadingPrototypeForwardFenceActive ? 1u : 0u;
+    terminal.captureAcquisitionCalls =
+        shadingPrototypeForwardCaptureAcquisitionCalls;
+    terminal.captureAcquisitionFailures =
+        shadingPrototypeForwardCaptureAcquisitionFailures;
+    terminal.callerWaitIdleCalls =
+        shadingPrototypeForwardWaitIdleCalls;
+
+    releaseShadingPrototypeForwardOwnersAfterTerminal();
+
+    terminal.outputLiveAfterReleaseDelta =
+        shadingPrototypeForwardOutputLifetimeReleased() ? 0u : 1u;
+    terminal.outputReleasedDelta =
+        shadingPrototypeForwardOutputLifetimeReleased() ? 1u : 0u;
+    terminal.lightListLiveAfterReleaseDelta =
+        shadingPrototypeForwardLightListLifetimeReleased() ? 0u : 1u;
+    terminal.lightListReleasedDelta =
+        shadingPrototypeForwardLightListLifetimeReleased() ? 1u : 0u;
+    terminal.pipelineReleasedAfterTerminal =
+        !shadingPrototypeForwardPipeline ? 1u : 0u;
+    terminal.outputReleasedAfterTerminal =
+        !shadingPrototypeForwardOutput ? 1u : 0u;
+    terminal.lightListReleasedAfterTerminal =
+        !shadingPrototypeForwardLightList ? 1u : 0u;
+    terminal.commandBufferReleasedAfterTerminal =
+        !shadingPrototypeForwardCommandActive ? 1u : 0u;
+    terminal.captureOwnerReleasedAfterTerminal =
+        !shadingPrototypeForwardCapture.initialized() ? 1u : 0u;
+    terminal.fenceReleasedAfterTerminal =
+        !shadingPrototypeForwardFenceActive ? 1u : 0u;
+    terminal.releaseOrderExact =
+        shadingPrototypeForwardReleaseOrderExact &&
+        terminal.pipelineReleasedAfterTerminal==1u &&
+        terminal.outputReleasedAfterTerminal==1u &&
+        terminal.lightListReleasedAfterTerminal==1u &&
+        terminal.commandBufferReleasedAfterTerminal==1u &&
+        terminal.captureOwnerReleasedAfterTerminal==1u &&
+        terminal.fenceReleasedAfterTerminal==1u ? 1u : 0u;
+
+    shadingPrototypeForwardTerminalReport = terminal;
+    if(!iosValidateShadingPrototypeForwardTerminalReportV1(
+           shadingPrototypeForwardTerminalReport) ||
+       !shadingPrototypeForwardIsolationUnchanged()) {
+      shadingPrototypeForwardState =
+          ShadingPrototypeForwardSelfTestState::Failed;
+      logShadingPrototypeForwardFailure(
+          "terminal-lifetime-or-counter-mismatch");
+      fail("RendererIOS shading prototype forward self-test failed",
+           "terminal-lifetime-or-counter-mismatch");
+      return false;
+      }
+
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::Passed;
+    try {
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestPassed),
+             shadingPrototypeForwardNonce.data(),
+             " wait-idle=0 output=1/0/1 light-list=1/0/1 capture=1/0/1");
+      }
+    catch(...) {
+      }
+    return true;
+    }
+
+  void startShadingPrototypeForwardSelfTest() noexcept {
+    namespace Pipeline =
+        RendererIOSShadingPrototypeForwardPipeline;
+    if(shadingPrototypeForwardStarted)
+      return;
+    shadingPrototypeForwardStarted = true;
+
+    const char* nonceReason = nullptr;
+    if(!rendererIOSShadingPrototypeForwardReadNonce(
+           shadingPrototypeForwardNonce,nonceReason)) {
+      shadingPrototypeForwardState =
+          ShadingPrototypeForwardSelfTestState::Failed;
+      try {
+        Log::e("RendererIOS shading prototype forward preflight rejected: reason=",
+               nonceReason!=nullptr ? nonceReason : "nonce-malformed",
+               " side-effects=0");
+        }
+      catch(...) {
+        }
+      fail("RendererIOS shading prototype forward self-test failed",
+           nonceReason!=nullptr ? nonceReason : "nonce-malformed");
+      return;
+      }
+
+    static_assert(IOSShadingPrototypePlanABIVersion==1u);
+    static_assert(Pipeline::OfflineMetallibAbi==5u);
+    try {
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestArmed),
+             shadingPrototypeForwardNonce.data(),
+             " contract=1 metallib-abi=5 minimum-apple=4");
+      }
+    catch(...) {
+      }
+
+    IOSShadingPrototypePlan plan;
+    try {
+      plan = iosShadingPrototypePlan(
+          IOSShadingPrototypeKind::ForwardPlus);
+      }
+    catch(...) {
+      failShadingPrototypeForwardBeforeSubmit(
+          "plan-contract-mismatch");
+      return;
+      }
+    const IOSShadingPrototypePlanSelection selection =
+        iosShadingPrototypeSelectPlan(plan);
+    const bool planMatches =
+        bool(selection) &&
+        selection.kind==IOSShadingPrototypeKind::ForwardPlus &&
+        selection.presentResource==0u &&
+        selection.outputResource==1u &&
+        selection.workingResource==2u &&
+        selection.computePass==0u &&
+        selection.renderPass==1u &&
+        selection.presentPass==2u &&
+        plan.topology.commandBuffers==1u &&
+        plan.topology.submits==1u &&
+        plan.topology.renderEncoders==1u &&
+        plan.topology.draws==2u &&
+        plan.topology.tileDispatches==0u &&
+        plan.topology.computeEncoders==1u &&
+        plan.topology.drawableAcquisitions==0u &&
+        plan.topology.presents==0u;
+    if(!planMatches) {
+      failShadingPrototypeForwardBeforeSubmit(
+          "plan-contract-mismatch");
+      return;
+      }
+
+    shadingPrototypeForwardIsolationBefore =
+        shadingPrototypeForwardIsolationSnapshot();
+    shadingPrototypeForwardOutputLifetimeBefore =
+        iosMetalResourceLifetimeSnapshot();
+    shadingPrototypeForwardLightListLifetimeBefore =
+        iosShadingPrototypeForwardLightListLifetimeSnapshot();
+    if(!rendererIOSShadingPrototypeForwardIsolationSnapshotAvailable(
+           shadingPrototypeForwardIsolationBefore)) {
+      failShadingPrototypeForwardBeforeSubmit(
+          "snapshot-unavailable");
+      return;
+      }
+
+    shadingPrototypeForwardPipeline =
+        iosCreateShadingPrototypeForwardPipeline(device);
+    if(shadingPrototypeForwardPipeline.status()==
+       IOSShadingPrototypeForwardPipelineStatus::
+           UnsupportedCapability) {
+      const auto& report =
+          shadingPrototypeForwardPipeline.report();
+      const bool zeroSideEffects =
+          !shadingPrototypeForwardPipeline &&
+          !report.supportsApple4 &&
+          !report.libraryAvailable &&
+          report.resolvedFunctionCount==0u &&
+          report.createdComputePipelineCount==0u &&
+          report.createdRenderPipelineCount==0u &&
+          !shadingPrototypeForwardOutput &&
+          !shadingPrototypeForwardLightList &&
+          !shadingPrototypeForwardCommandActive &&
+          !shadingPrototypeForwardFenceActive &&
+          !shadingPrototypeForwardCapture.initialized() &&
+          shadingPrototypeForwardCaptureArtifact.bytes==0u &&
+          shadingPrototypeForwardIsolationUnchanged();
+      if(!zeroSideEffects) {
+        failShadingPrototypeForwardBeforeSubmit(
+            "factory-counter-mismatch");
+        return;
+        }
+      shadingPrototypeForwardState =
+          ShadingPrototypeForwardSelfTestState::Unsupported;
+      try {
+        Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                   RendererIOSShadingPrototypeForwardSelfTestUnsupported),
+               shadingPrototypeForwardNonce.data(),
+               " reason=apple4-required side-effects=0");
+        }
+      catch(...) {
+        }
+      return;
+      }
+
+    const IOSShadingPrototypeForwardPipelineStatus factoryStatus =
+        shadingPrototypeForwardPipeline.status();
+    const auto& factoryReport =
+        shadingPrototypeForwardPipeline.report();
+    const IOSShadingPrototypeForwardPipelineStatus validationStatus =
+        iosValidateShadingPrototypeForwardPipelineReport(
+            factoryReport);
+    if(!shadingPrototypeForwardPipeline ||
+       factoryStatus!=
+           IOSShadingPrototypeForwardPipelineStatus::Ready ||
+       validationStatus!=
+           IOSShadingPrototypeForwardPipelineStatus::Ready) {
+      logShadingPrototypeForwardFactoryFailure(
+          factoryStatus,validationStatus,factoryReport);
+      failShadingPrototypeForwardBeforeSubmit(
+          factoryStatus==
+                  IOSShadingPrototypeForwardPipelineStatus::
+                      ReflectionMismatch ||
+              validationStatus==
+                  IOSShadingPrototypeForwardPipelineStatus::
+                      ReflectionMismatch
+            ? "factory-reflection-mismatch"
+            : "factory-contract-mismatch");
+      return;
+      }
+    if(!shadingPrototypeForwardIsolationUnchanged()) {
+      failShadingPrototypeForwardBeforeSubmit(
+          "factory-counter-mismatch");
+      return;
+      }
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::FactoryReady;
+    try {
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestFactoryReady),
+             shadingPrototypeForwardNonce.data(),
+             " pipelines=3 reflection=1 runtime-delta=0 builtin-delta=0 archive-delta=0");
+      }
+    catch(...) {
+      }
+
+    const IOSResourceDesc& outputResource =
+        plan.framePlan.resources[selection.outputResource];
+    shadingPrototypeForwardOutput =
+        resourceAllocator.allocate(outputResource);
+    if(!shadingPrototypeForwardOutput ||
+       !iosMetalTextureMatches(
+           shadingPrototypeForwardOutput.snapshot(),outputResource,
+           IOSMetalResourceStorage::Private) ||
+       !shadingPrototypeForwardOutputLifetimeLive()) {
+      failShadingPrototypeForwardBeforeSubmit(
+          "output-allocation-or-lifetime-mismatch");
+      return;
+      }
+
+    shadingPrototypeForwardLightList =
+        iosCreateShadingPrototypeForwardLightList(device);
+    if(!shadingPrototypeForwardLightList ||
+       !iosValidateShadingPrototypeForwardLightListReportV1(
+           shadingPrototypeForwardLightList.report()) ||
+       !shadingPrototypeForwardLightListLifetimeLive() ||
+       !shadingPrototypeForwardIsolationUnchanged()) {
+      failShadingPrototypeForwardBeforeSubmit(
+          "light-list-allocation-or-contract-mismatch");
+      return;
+      }
+
+    const char* captureReason = nullptr;
+    if(!shadingPrototypeForwardCapture.start(
+           device,RendererIOSShadingPrototypeForwardCaptureName,
+           captureReason)) {
+      if(shadingPrototypeForwardCapture.active()) {
+        failShadingPrototypeForwardAmbiguous(
+            "capture-start-ambiguous",captureReason);
+        }
+      else {
+        failShadingPrototypeForwardBeforeSubmit(
+            "capture-start-failed",captureReason);
+        }
+      return;
+      }
+
+    try {
+      shadingPrototypeForwardCommand = device.commandBuffer();
+      shadingPrototypeForwardCommandActive = true;
+      bool encodeAccepted = false;
+      {
+        auto encoder =
+            shadingPrototypeForwardCommand.startEncoding(device);
+        encodeAccepted = iosEncodeShadingPrototypeForwardProbe(
+            device,encoder,shadingPrototypeForwardPipeline,
+            shadingPrototypeForwardOutput,
+            shadingPrototypeForwardLightList,
+            shadingPrototypeForwardNativeReport);
+        }
+      if(!encodeAccepted) {
+        failShadingPrototypeForwardBeforeSubmit(
+            "native-encode-rejected");
+        return;
+        }
+      if(!iosValidateShadingPrototypeForwardProbeReportV1(
+             shadingPrototypeForwardNativeReport) ||
+         !shadingPrototypeForwardOutputLifetimeLive() ||
+         !shadingPrototypeForwardLightListLifetimeLive() ||
+         !shadingPrototypeForwardIsolationUnchanged()) {
+        failShadingPrototypeForwardBeforeSubmit(
+            "encoded-contract-mismatch");
+        return;
+        }
+      shadingPrototypeForwardState =
+          ShadingPrototypeForwardSelfTestState::Encoded;
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestEncoded),
+             shadingPrototypeForwardNonce.data(),
+             " cb=1 compute=1 render=1 dispatch=1 draws=2 opaque=1 alpha=1 output=4x4 light-list=256 drawable=0 present=0");
+      }
+    catch(const std::exception& e) {
+      failShadingPrototypeForwardBeforeSubmit(
+          shadingPrototypeForwardCommandActive
+            ? "native-encode-rejected"
+            : "command-buffer-creation-failed",
+          e.what());
+      return;
+      }
+    catch(...) {
+      failShadingPrototypeForwardBeforeSubmit(
+          shadingPrototypeForwardCommandActive
+            ? "native-encode-rejected"
+            : "command-buffer-creation-failed");
+      return;
+      }
+
+    try {
+      Fence submitted =
+          device.submit(shadingPrototypeForwardCommand);
+      shadingPrototypeForwardFence = std::move(submitted);
+      shadingPrototypeForwardFenceActive = true;
+      shadingPrototypeForwardState =
+          ShadingPrototypeForwardSelfTestState::Submitted;
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardSelfTestSubmitted),
+             shadingPrototypeForwardNonce.data(),
+             " command-buffers=1 submits=1");
+      }
+    catch(const std::exception& e) {
+      failShadingPrototypeForwardAmbiguous(
+          "submit-exception-ambiguous",e.what());
+      return;
+      }
+    catch(...) {
+      failShadingPrototypeForwardAmbiguous(
+          "submit-exception-ambiguous");
+      return;
+      }
+
+    ++shadingPrototypeForwardCaptureAcquisitionCalls;
+    if(!shadingPrototypeForwardCapture.stopAndInspect(
+           shadingPrototypeForwardCaptureArtifact,captureReason)) {
+      ++shadingPrototypeForwardCaptureAcquisitionFailures;
+      failShadingPrototypeForwardAmbiguous(
+          "capture-acquisition-failed",captureReason);
+      return;
+      }
+    if(!shadingPrototypeForwardCapture.initialized() ||
+       shadingPrototypeForwardCapture.active() ||
+       shadingPrototypeForwardCaptureArtifact.bytes==0u) {
+      ++shadingPrototypeForwardCaptureAcquisitionFailures;
+      failShadingPrototypeForwardAmbiguous(
+          "capture-acquisition-failed");
+      return;
+      }
+
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::Acquired;
+    shadingPrototypeForwardFencePollStarted =
+        std::chrono::steady_clock::now();
+    shadingPrototypeForwardFenceLastPoll =
+        shadingPrototypeForwardFencePollStarted;
+    try {
+      Log::i(rendererIOSShadingPrototypeForwardMarkerText(
+                 RendererIOSShadingPrototypeForwardCaptureAcquired),
+             shadingPrototypeForwardNonce.data(),
+             " file=",RendererIOSShadingPrototypeForwardCaptureName,
+             " kind=",
+             iosMetalCaptureArtifactKindName(
+                 shadingPrototypeForwardCaptureArtifact.kind),
+             " bytes=",
+             shadingPrototypeForwardCaptureArtifact.bytes);
+      }
+    catch(...) {
+      }
+    }
+
+  void pollShadingPrototypeForwardSelfTest() noexcept {
+    namespace Probe = RendererIOSShadingPrototypeForwardProbe;
+    if(!shadingPrototypeForwardStarted) {
+      startShadingPrototypeForwardSelfTest();
+      return;
+      }
+    if(shadingPrototypeForwardState!=
+       ShadingPrototypeForwardSelfTestState::Acquired)
+      return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if(now<shadingPrototypeForwardFenceLastPoll) {
+      shadingPrototypeForwardFenceMonotonic = false;
+      failShadingPrototypeForwardAmbiguous(
+          "terminal-fence-error");
+      return;
+    }
+    shadingPrototypeForwardFenceLastPoll = now;
+    const bool deadline =
+        now-shadingPrototypeForwardFencePollStarted>=
+            std::chrono::milliseconds(
+                Probe::TerminalFenceDeadlineMilliseconds);
+    if(deadline ||
+       shadingPrototypeForwardFenceWaitCalls>=
+           Probe::TerminalFenceMaximumPolls) {
+      failShadingPrototypeForwardAmbiguous(
+          "terminal-fence-timeout");
+      return;
+      }
+    ++shadingPrototypeForwardFenceWaitCalls;
+    try {
+      if(shadingPrototypeForwardFence.wait(0u)) {
+        (void)finishShadingPrototypeForwardAfterTerminal();
+        return;
+        }
+      ++shadingPrototypeForwardFenceNonterminalPolls;
+      if(shadingPrototypeForwardFenceWaitCalls>=
+         Probe::TerminalFenceMaximumPolls)
+        failShadingPrototypeForwardAmbiguous(
+            "terminal-fence-timeout");
+      }
+    catch(const std::exception& e) {
+      failShadingPrototypeForwardAmbiguous(
+          "terminal-fence-error",e.what());
+      }
+    catch(...) {
+      failShadingPrototypeForwardAmbiguous(
+          "terminal-fence-error");
+      }
+    }
+
+  void settleShadingPrototypeForwardAfterConfirmedIdle() noexcept {
+    if(shadingPrototypeForwardState!=
+       ShadingPrototypeForwardSelfTestState::Ambiguous)
+      return;
+    releaseShadingPrototypeForwardOwnersAfterTerminal();
+    shadingPrototypeForwardState =
+        ShadingPrototypeForwardSelfTestState::Failed;
+    }
+#endif
+
   void logRuntimeCompilationBridge() noexcept {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     try {
@@ -2523,6 +3781,21 @@ struct IOSMetalContext::Impl final {
                   bool* idleConfirmed = nullptr) noexcept {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    const bool forwardAcquiredBeforeWaitIdle =
+        shadingPrototypeForwardState==
+            ShadingPrototypeForwardSelfTestState::Acquired;
+    if(forwardAcquiredBeforeWaitIdle) {
+      ++shadingPrototypeForwardWaitIdleCalls;
+      failShadingPrototypeForwardAmbiguous("wait-idle-used");
+      }
+    if(!rendererIOSShadingPrototypeForwardMayWaitIdle(
+           forwardAcquiredBeforeWaitIdle,failed)) {
+      fail("RendererIOS shading prototype forward self-test failed",
+           "wait-idle-gate-invariant");
+      return false;
+      }
+#endif
     if(fault.shutdownIdleUnconfirmedOnce(reason,counters.presentAccepted)) {
       neutralizeFences();
       forcePreviewPlaceholder();
@@ -2565,6 +3838,9 @@ struct IOSMetalContext::Impl final {
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
     settleShadingPrototypeTileAfterConfirmedIdle();
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    settleShadingPrototypeForwardAfterConfirmedIdle();
 #endif
 
     // An exception from Metal commit has ambiguous disposition. Only after
@@ -2708,6 +3984,64 @@ struct IOSMetalContext::Impl final {
   bool
       shadingPrototypeTileFenceActive = false;
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+  // Explicit terminal release is authoritative. Reverse destruction is a
+  // fail-safe that drops capture/fence/command before their unretained
+  // pipeline, buffer and texture owners.
+  IOSMetalResourceTexture
+      shadingPrototypeForwardOutput;
+  IOSShadingPrototypeForwardPipeline
+      shadingPrototypeForwardPipeline;
+  IOSShadingPrototypeForwardLightList
+      shadingPrototypeForwardLightList;
+  CommandBuffer
+      shadingPrototypeForwardCommand;
+  Fence
+      shadingPrototypeForwardFence;
+  IOSMetalCaptureSession
+      shadingPrototypeForwardCapture;
+  IOSMetalCaptureArtifact
+      shadingPrototypeForwardCaptureArtifact;
+  RendererIOSShadingPrototypeForwardIsolationSnapshot
+      shadingPrototypeForwardIsolationBefore;
+  IOSMetalResourceLifetimeSnapshot
+      shadingPrototypeForwardOutputLifetimeBefore;
+  IOSShadingPrototypeForwardLightListLifetimeSnapshot
+      shadingPrototypeForwardLightListLifetimeBefore;
+  IOSShadingPrototypeForwardProbeReportV1
+      shadingPrototypeForwardNativeReport;
+  IOSShadingPrototypeForwardTerminalReportV1
+      shadingPrototypeForwardTerminalReport;
+  ShadingPrototypeForwardSelfTestState
+      shadingPrototypeForwardState =
+          ShadingPrototypeForwardSelfTestState::Armed;
+  std::array<char,33u>
+      shadingPrototypeForwardNonce{};
+  std::chrono::steady_clock::time_point
+      shadingPrototypeForwardFencePollStarted{};
+  std::chrono::steady_clock::time_point
+      shadingPrototypeForwardFenceLastPoll{};
+  uint32_t
+      shadingPrototypeForwardFenceWaitCalls = 0u;
+  uint32_t
+      shadingPrototypeForwardFenceNonterminalPolls = 0u;
+  uint32_t
+      shadingPrototypeForwardCaptureAcquisitionCalls = 0u;
+  uint32_t
+      shadingPrototypeForwardCaptureAcquisitionFailures = 0u;
+  uint32_t
+      shadingPrototypeForwardWaitIdleCalls = 0u;
+  bool
+      shadingPrototypeForwardStarted = false;
+  bool
+      shadingPrototypeForwardCommandActive = false;
+  bool
+      shadingPrototypeForwardFenceActive = false;
+  bool
+      shadingPrototypeForwardFenceMonotonic = true;
+  bool
+      shadingPrototypeForwardReleaseOrderExact = false;
+#endif
   Swapchain                                    swapchain;
 
   // The P2.1a public frame ABI is neutral. VectorImage, InventoryRenderer and
@@ -2795,6 +4129,12 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
   // The opt-in profile owns admission. It executes one isolated Tile probe
   // and never acquires a drawable or reaches the ordinary frame/present path.
   impl->pollShadingPrototypeTileSelfTest();
+  return std::nullopt;
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+  // The opt-in profile owns admission. It executes one isolated Forward
+  // probe and never acquires a drawable or reaches ordinary frame/present.
+  impl->pollShadingPrototypeForwardSelfTest();
   return std::nullopt;
 #endif
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))

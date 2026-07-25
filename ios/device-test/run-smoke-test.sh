@@ -12,6 +12,7 @@
 #   ... --require-resource-allocator-self-test APP
 #   ... --require-clear-only-pass-self-test APP
 #   ... --require-shading-prototype-tile-self-test APP
+#   ... --require-shading-prototype-forward-self-test APP
 #   ... --pipeline-archive-test-mode cold APP
 #   ... --expected-fault post-submit-suboptimal APP
 #   ... --expected-fault preview-fence-error-after-terminal APP
@@ -34,6 +35,7 @@ REQUIRE_BINK_SELF_TEST=0
 REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
 REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
 REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
+REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
 EVIDENCE_PATH_FILE=""
@@ -64,6 +66,20 @@ readonly SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED='RendererIOS shading proto
 readonly SHADING_PROTOTYPE_TILE_CAPTURE_PREFIX='RendererIOS shading prototype tile capture:'
 readonly SHADING_PROTOTYPE_TILE_CAPTURE_ACQUIRED='RendererIOS shading prototype tile capture: ACQUIRED'
 readonly SHADING_PROTOTYPE_TILE_CAPTURE_NAME='RendererIOS-tile-prototype-v1.gputrace'
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_PREFIX='RendererIOS shading prototype forward self-test:'
+readonly SHADING_PROTOTYPE_FORWARD_CAPTURE_PREFIX='RendererIOS shading prototype forward capture:'
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_ARMED_TEMPLATE='RendererIOS shading prototype forward self-test: ARMED case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_FACTORY_READY_TEMPLATE='RendererIOS shading prototype forward self-test: FACTORY READY case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_ENCODED_TEMPLATE='RendererIOS shading prototype forward self-test: ENCODED case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_SUBMITTED_TEMPLATE='RendererIOS shading prototype forward self-test: SUBMITTED case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_TERMINAL_TEMPLATE='RendererIOS shading prototype forward self-test: TERMINAL case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_READBACK_TEMPLATE='RendererIOS shading prototype forward self-test: READBACK case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_PASS_TEMPLATE='RendererIOS shading prototype forward self-test: PASS case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_UNSUPPORTED_TEMPLATE='RendererIOS shading prototype forward self-test: UNSUPPORTED case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_FAIL_TEMPLATE='RendererIOS shading prototype forward self-test: FAIL case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_CAPTURE_ACQUIRED_TEMPLATE='RendererIOS shading prototype forward capture: ACQUIRED case=forward-prototype-v1 nonce='
+readonly SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME='RendererIOS-forward-prototype-v1.gputrace'
+readonly SHADING_PROTOTYPE_FORWARD_NONCE_ARGUMENT='-renderer-ios-forward-self-test-nonce='
 
 fail() {
   echo "FAIL: $*" >&2
@@ -80,6 +96,11 @@ smoke_evidence_path() {
   local evidence_root
 
   [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
+  if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/shading-prototype-forward/%s-%s-%s\n' \
+      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
+    return 0
+  fi
   if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
     printf '%s/build/device-self-test/%s/shading-prototype-tile/%s-%s-%s\n' \
       "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
@@ -208,6 +229,151 @@ validate_shading_prototype_tile_binary_profile() {
     ! grep -Fq "$SHADING_PROTOTYPE_TILE_CAPTURE_PREFIX" "$strings_file"
 }
 
+validate_shading_prototype_forward_binary_profile() {
+  local strings_file="$1"
+  local template
+
+  [[ -f "$strings_file" ]] || return 1
+  if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+    for template in \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_ARMED_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_FACTORY_READY_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_ENCODED_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_SUBMITTED_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_TERMINAL_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_READBACK_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PASS_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_UNSUPPORTED_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_FAIL_TEMPLATE" \
+        "$SHADING_PROTOTYPE_FORWARD_CAPTURE_ACQUIRED_TEMPLATE"; do
+      [[ "$(grep -Fxc -- "$template" "$strings_file" || true)" -eq 1 ]] ||
+        return 1
+    done
+    [[ "$(grep -Fxc -- "$SHADING_PROTOTYPE_FORWARD_NONCE_ARGUMENT" \
+      "$strings_file" || true)" -eq 1 ]] || return 1
+    return 0
+  fi
+  ! grep -Fq -- "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PREFIX" "$strings_file" &&
+    ! grep -Fq -- "$SHADING_PROTOTYPE_FORWARD_CAPTURE_PREFIX" "$strings_file" &&
+    ! grep -Fq -- "$SHADING_PROTOTYPE_FORWARD_NONCE_ARGUMENT" "$strings_file"
+}
+
+generate_shading_prototype_forward_nonce() {
+  local nonce
+
+  nonce="$(openssl rand -hex 16)" || return 1
+  [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 1
+  printf '%s\n' "$nonce"
+}
+
+select_bundle_id_from_apps() {
+  local apps_json="$1"
+  local requested="${2:-}"
+
+  python3 - "$apps_json" "$BASE_BUNDLE_ID" "$requested" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    payload = json.load(source)
+apps = payload.get("result", {}).get("apps")
+if not isinstance(apps, list):
+    raise SystemExit("installed app provider returned no apps array")
+base = sys.argv[2] + "."
+requested = sys.argv[3]
+candidates = []
+for app in apps:
+    if not isinstance(app, dict):
+        raise SystemExit("installed app entry is not an object")
+    bundle = app.get("bundleIdentifier")
+    if not isinstance(bundle, str):
+        continue
+    if not bundle.startswith(base) or bundle.endswith(".xctrunner"):
+        continue
+    if requested and bundle != requested:
+        continue
+    candidates.append(bundle)
+if len(candidates) != 1:
+    raise SystemExit(
+        f"expected exactly one installed non-xctrunner {base}* app, "
+        f"found {len(candidates)}"
+    )
+print(candidates[0])
+PY
+}
+
+verify_game_container_resources() {
+  local phase="$1"
+  local documents="$WORK/documents-$phase.json"
+  local scripts="$WORK/scripts-$phase.json"
+  local system="$WORK/system-$phase.json"
+
+  [[ "$phase" == preinstall || "$phase" == postinstall ||
+     "$phase" == postruntime ]] || return 1
+  [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$documents" >/dev/null || return 1
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile \
+    --subdirectory "Documents/_work/Data/Scripts/_compiled" --no-recurse \
+    --json-output "$scripts" >/dev/null || return 1
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory "Documents/system" --no-recurse \
+    --json-output "$system" >/dev/null || return 1
+  python3 - "$documents" "$scripts" "$system" <<'PY'
+import json
+import sys
+
+
+def files(path):
+    value = json.load(open(path, encoding="utf-8")).get("result", {}).get("files")
+    if not isinstance(value, list):
+        raise SystemExit(f"file provider returned no files array: {path}")
+    return value
+
+
+def regular_file(entries, expected):
+    matches = [
+        entry for entry in entries
+        if entry.get("name", "").lower() == expected
+    ]
+    if len(matches) != 1:
+        return False
+    resources = matches[0].get("resources", {})
+    return (
+        resources.get("isDirectory") is False
+        and resources.get("isSymbolicLink") is False
+    )
+
+
+documents = files(sys.argv[1])
+entries = {entry.get("name"): entry for entry in documents}
+invalid = []
+for name in ("Data", "_work", "system"):
+    entry = entries.get(name)
+    resources = entry.get("resources", {}) if entry else {}
+    if (
+        entry is None
+        or resources.get("isDirectory") is not True
+        or resources.get("isSymbolicLink") is not False
+    ):
+        invalid.append(name)
+if not regular_file(files(sys.argv[2]), "gothic.dat"):
+    invalid.append("_work/Data/Scripts/_compiled/Gothic.dat")
+if not regular_file(files(sys.argv[3]), "gothic.ini"):
+    invalid.append("system/Gothic.ini")
+if invalid:
+    raise SystemExit(
+        "OpenGothic container has missing/invalid resources: "
+        + ", ".join(invalid)
+    )
+PY
+}
+
 run_host_contract_self_test() {
   local expected_sha="${OPENGOTHIC_IOS_EXPECTED_SHA:-0123456789abcdef0123456789abcdef01234567}"
   local expected_build="${OPENGOTHIC_IOS_EXPECTED_BUILD:-${expected_sha}-local}"
@@ -217,13 +383,16 @@ run_host_contract_self_test() {
   local self_test_work evidence_file actual expected expected_plain expected_resource
   local expected_clear clear_path clear_failure_path clear_committed_path
   local expected_tile tile_path tile_failure_path tile_committed_path
+  local expected_forward forward_path forward_failure_path forward_committed_path
   local plain_path resource_path resource_failure_path resource_committed_path
   local plain_binary self_test_binary duplicate_binary clear_binary duplicate_clear_binary
   local tile_binary duplicate_tile_binary missing_tile_unsupported_binary
   local duplicate_tile_unsupported_binary
+  local forward_binary duplicate_forward_binary
   local requested_resource_allocator_self_test="$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST"
   local requested_clear_only_pass_self_test="$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST"
   local requested_shading_prototype_tile_self_test="$REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST"
+  local requested_shading_prototype_forward_self_test="$REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST"
 
   [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
     fail "self-test expected SHA is invalid"
@@ -245,6 +414,8 @@ run_host_contract_self_test() {
     fail "clear-only pass host contract self-test requires expected fault none"
   ((requested_shading_prototype_tile_self_test == 0)) || [[ "$expected_fault" == none ]] ||
     fail "shading prototype Tile host contract self-test requires expected fault none"
+  ((requested_shading_prototype_forward_self_test == 0)) || [[ "$expected_fault" == none ]] ||
+    fail "shading prototype Forward host contract self-test requires expected fault none"
 
   self_test_work="$(mktemp -d -t opengothic-smoke-contract)"
   evidence_file="$EVIDENCE_PATH_FILE"
@@ -253,6 +424,7 @@ run_host_contract_self_test() {
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
   plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
@@ -325,9 +497,30 @@ run_host_contract_self_test() {
     fail "committed shading prototype Tile evidence path self-test failed"
   [[ "$tile_committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
     fail "committed shading prototype Tile evidence overlaps plain committed smoke"
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1
+  forward_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  expected_forward="$ROOT/build/device-self-test/$expected_build/shading-prototype-forward/pass-$timestamp-$process_id"
+  [[ "$forward_path" == "$expected_forward" ]] ||
+    fail "shading prototype Forward smoke evidence path self-test failed"
+  [[ "$forward_path" != "$plain_path" && "$forward_path" != "$resource_path" &&
+     "$forward_path" != "$clear_path" && "$forward_path" != "$tile_path" ]] ||
+    fail "shading prototype Forward smoke evidence path overlaps another profile"
+  forward_failure_path="$(smoke_evidence_path failure "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_build" none)"
+  [[ "$forward_failure_path" == \
+     "$ROOT/build/device-self-test/$expected_build/shading-prototype-forward/failure-$timestamp-$process_id" ]] ||
+    fail "shading prototype Forward failure evidence path self-test failed"
+  forward_committed_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  [[ "$forward_committed_path" == \
+     "$ROOT/build/device-self-test/$expected_sha/shading-prototype-forward/pass-$timestamp-$process_id" ]] ||
+    fail "committed shading prototype Forward evidence path self-test failed"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
+  REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$requested_shading_prototype_forward_self_test"
   actual="$plain_path"
   expected="$expected_plain"
   if ((requested_resource_allocator_self_test != 0)); then
@@ -339,6 +532,9 @@ run_host_contract_self_test() {
   elif ((requested_shading_prototype_tile_self_test != 0)); then
     actual="$tile_path"
     expected="$expected_tile"
+  elif ((requested_shading_prototype_forward_self_test != 0)); then
+    actual="$forward_path"
+    expected="$expected_forward"
   fi
   publish_evidence_path "$actual"
   [[ "$(cat "$evidence_file")" == "$expected" ]] ||
@@ -353,6 +549,8 @@ run_host_contract_self_test() {
   duplicate_tile_binary="$self_test_work/shading-prototype-tile-duplicate-binary.txt"
   missing_tile_unsupported_binary="$self_test_work/shading-prototype-tile-missing-unsupported.txt"
   duplicate_tile_unsupported_binary="$self_test_work/shading-prototype-tile-duplicate-unsupported.txt"
+  forward_binary="$self_test_work/shading-prototype-forward-binary.txt"
+  duplicate_forward_binary="$self_test_work/shading-prototype-forward-duplicate-binary.txt"
   printf '%s\n' 'RendererIOS diagnostics: ON' >"$plain_binary"
   printf '%s\n%s\n%s\n' \
     "$RESOURCE_ALLOCATOR_SELF_TEST_ARMED" \
@@ -404,9 +602,27 @@ run_host_contract_self_test() {
     cat "$tile_binary"
     printf '%s\n' "$SHADING_PROTOTYPE_TILE_SELF_TEST_UNSUPPORTED"
   } >"$duplicate_tile_unsupported_binary"
+  printf '%s\n' \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_ARMED_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_FACTORY_READY_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_ENCODED_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_SUBMITTED_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_TERMINAL_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_READBACK_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PASS_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_UNSUPPORTED_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_FAIL_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_CAPTURE_ACQUIRED_TEMPLATE" \
+    "$SHADING_PROTOTYPE_FORWARD_NONCE_ARGUMENT" \
+    >"$forward_binary"
+  {
+    cat "$forward_binary"
+    printf '%s\n' "$SHADING_PROTOTYPE_FORWARD_CAPTURE_ACQUIRED_TEMPLATE"
+  } >"$duplicate_forward_binary"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
   validate_resource_allocator_binary_profile "$plain_binary" ||
     fail "plain binary profile self-test failed"
   if validate_resource_allocator_binary_profile "$self_test_binary"; then
@@ -421,6 +637,11 @@ run_host_contract_self_test() {
     fail "plain shading prototype Tile binary profile self-test failed"
   if validate_shading_prototype_tile_binary_profile "$tile_binary"; then
     fail "unrequested shading prototype Tile binary profile survived"
+  fi
+  validate_shading_prototype_forward_binary_profile "$plain_binary" ||
+    fail "plain shading prototype Forward binary profile self-test failed"
+  if validate_shading_prototype_forward_binary_profile "$forward_binary"; then
+    fail "unrequested shading prototype Forward binary profile survived"
   fi
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=1
   validate_resource_allocator_binary_profile "$self_test_binary" ||
@@ -459,11 +680,22 @@ run_host_contract_self_test() {
       "$duplicate_tile_unsupported_binary"; then
     fail "duplicate shading prototype Tile UNSUPPORTED binary marker survived"
   fi
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
+  REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1
+  validate_shading_prototype_forward_binary_profile "$forward_binary" ||
+    fail "shading prototype Forward binary profile self-test failed"
+  if validate_shading_prototype_forward_binary_profile "$plain_binary"; then
+    fail "shading prototype Forward binary profile accepted a plain artifact"
+  fi
+  if validate_shading_prototype_forward_binary_profile "$duplicate_forward_binary"; then
+    fail "duplicate shading prototype Forward binary marker survived"
+  fi
   python3 "$ROOT/ios/device-test/validate-metal-capture-artifact.py" \
     --self-test || fail "Metal capture artifact validator self-test failed"
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
+  REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$requested_shading_prototype_forward_self_test"
 
   printf '%s\n' '{"result":{"files":[]}}' >"$self_test_work/missing.json"
   printf '%s\n' \
@@ -479,9 +711,48 @@ run_host_contract_self_test() {
     fail "provider-error crash state self-test survived"
   fi
 
+  local game_bundle="${BASE_BUNDLE_ID}.RMJWWPF379"
+  local runner_bundle="${game_bundle}.RendererIOSUITests.xctrunner"
+  printf '%s\n' \
+    "{\"result\":{\"apps\":[{\"bundleIdentifier\":\"$game_bundle\"},{\"bundleIdentifier\":\"$runner_bundle\"}]}}" \
+    >"$self_test_work/apps-game-runner.json"
+  [[ "$(select_bundle_id_from_apps "$self_test_work/apps-game-runner.json")" == \
+     "$game_bundle" ]] ||
+    fail "bundle selector did not exclude .xctrunner"
+  [[ "$(select_bundle_id_from_apps "$self_test_work/apps-game-runner.json" \
+    "$game_bundle")" == "$game_bundle" ]] ||
+    fail "bundle selector did not preserve an exact requested game id"
+  if select_bundle_id_from_apps "$self_test_work/apps-game-runner.json" \
+      "$runner_bundle" >/dev/null 2>&1; then
+    fail "bundle selector admitted an explicitly requested .xctrunner"
+  fi
+  printf '%s\n' \
+    "{\"result\":{\"apps\":[{\"bundleIdentifier\":\"$runner_bundle\"}]}}" \
+    >"$self_test_work/apps-runner-only.json"
+  if select_bundle_id_from_apps "$self_test_work/apps-runner-only.json" \
+      >/dev/null 2>&1; then
+    fail "bundle selector admitted an .xctrunner-only fixture"
+  fi
+  printf '%s\n' \
+    "{\"result\":{\"apps\":[{\"bundleIdentifier\":\"$game_bundle\"},{\"bundleIdentifier\":\"${BASE_BUNDLE_ID}.ABCDEFGHIJ\"}]}}" \
+    >"$self_test_work/apps-ambiguous.json"
+  if select_bundle_id_from_apps "$self_test_work/apps-ambiguous.json" \
+      >/dev/null 2>&1; then
+    fail "bundle selector admitted two game candidates"
+  fi
+
+  local nonce_one nonce_two
+  nonce_one="$(generate_shading_prototype_forward_nonce)" ||
+    fail "could not generate first Forward nonce"
+  nonce_two="$(generate_shading_prototype_forward_nonce)" ||
+    fail "could not generate second Forward nonce"
+  [[ "$nonce_one" =~ ^[0-9a-f]{32}$ && "$nonce_two" =~ ^[0-9a-f]{32}$ &&
+     "$nonce_one" != "$nonce_two" ]] ||
+    fail "Forward nonce generator is not random 32 lowercase hex"
+
   find "$self_test_work" -type f -delete
   rmdir "$self_test_work"
-  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass,shading-prototype-tile crash-states=3"
+  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass,shading-prototype-tile,shading-prototype-forward bundle-selector=xctrunner-safe nonce=32hex crash-states=3"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -506,6 +777,10 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=1
       shift
       ;;
+    --require-shading-prototype-forward-self-test)
+      REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1
+      shift
+      ;;
     --pipeline-archive-test-mode)
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
@@ -519,7 +794,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -577,6 +852,24 @@ done
 ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0)) ||
   [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
   fail "shading prototype Tile self-test requires an empty pipeline archive profile"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
+  fail "shading prototype Forward self-test requires expected fault none"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 || REQUIRE_BINK_SELF_TEST == 0)) ||
+  fail "shading prototype Forward and Bink self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 ||
+  REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0)) ||
+  fail "shading prototype Forward and resource allocator self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 ||
+  REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0)) ||
+  fail "shading prototype Forward and clear-only pass self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 ||
+  REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0)) ||
+  fail "shading prototype Forward and Tile self-tests are mutually exclusive"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0)) ||
+  [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
+  fail "shading prototype Forward self-test requires an empty pipeline archive profile"
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 || DURATION >= 35)) ||
+  fail "shading prototype Forward self-test duration must be 35..600 seconds"
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -598,6 +891,8 @@ if ((NEW_GAME != 0)); then
 fi
 
 WORK="$(mktemp -d -t opengothic-device-smoke)"
+umask 077
+chmod 700 "$WORK" || fail "could not secure smoke work directory"
 DEVICE=""
 APP_EXECUTABLE=""
 APP_EXECUTABLE_SHA256="uncomputed"
@@ -645,6 +940,24 @@ SHADING_PROTOTYPE_TILE_CAPTURE_STATUS="not-required"
 SHADING_PROTOTYPE_TILE_CAPTURE_KIND="missing"
 SHADING_PROTOTYPE_TILE_CAPTURE_BYTES=0
 SHADING_PROTOTYPE_TILE_CAPTURE_MANIFEST_SHA256="missing"
+SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="not-required"
+SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE="none"
+SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID="none"
+SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID_DISCOVERY_ATTEMPTS=0
+SHADING_PROTOTYPE_FORWARD_SELF_TEST_PROCESS_SURVIVED=0
+SHADING_PROTOTYPE_FORWARD_CAPTURE_ATTEMPTED=0
+SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS="not-required"
+SHADING_PROTOTYPE_FORWARD_CAPTURE_KIND="missing"
+SHADING_PROTOTYPE_FORWARD_CAPTURE_BYTES=0
+SHADING_PROTOTYPE_FORWARD_CAPTURE_MANIFEST_SHA256="missing"
+SHADING_PROTOTYPE_FORWARD_SAVES_BEFORE_CAPTURED=0
+SHADING_PROTOTYPE_FORWARD_SAVES_AFTER_CAPTURED=0
+SHADING_PROTOTYPE_FORWARD_SAVES_MATCH=0
+SHADING_PROTOTYPE_FORWARD_SAME_PID_STABLE_SECONDS=0
+SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH="none"
+SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND="none"
+SHADING_PROTOTYPE_FORWARD_FAILURE_REASON="none"
+GAME_CONTAINER_POSTRUNTIME_VALIDATION="not-attempted"
 PROCESS_SURVIVED_FAULT_WINDOW=0
 ID3_SEMANTIC_NONCE="none"
 ID3_SAVE_PREFLIGHT_CAPTURED=0
@@ -1263,6 +1576,261 @@ PY
   SHADING_PROTOTYPE_TILE_CAPTURE_STATUS="acquired"
 }
 
+capture_shading_prototype_forward_artifact() {
+  local listing="$WORK/shading-prototype-forward-capture-listing.json"
+  local destination="$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME"
+  local summary="$WORK/shading-prototype-forward-capture-summary.txt"
+  local listed_kind values
+
+  ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
+  if ((SHADING_PROTOTYPE_FORWARD_CAPTURE_ATTEMPTED != 0)); then
+    [[ "$SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS" == acquired ]]
+    return
+  fi
+  SHADING_PROTOTYPE_FORWARD_CAPTURE_ATTEMPTED=1
+  SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS="failed"
+  [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
+  [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$listing" >/dev/null || return 1
+  listed_kind="$(python3 - "$listing" "$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" <<'PY'
+import json
+import sys
+
+files = json.load(open(sys.argv[1], encoding="utf-8")).get("result", {}).get("files")
+if not isinstance(files, list):
+    raise SystemExit("capture listing provider returned no files array")
+matches = [entry for entry in files if entry.get("name") == sys.argv[2]]
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one flat Forward capture artifact, found {len(matches)}")
+resources = matches[0].get("resources", {})
+if resources.get("isSymbolicLink") is not False:
+    raise SystemExit("Forward capture listing is a symlink or has unknown link state")
+is_directory = resources.get("isDirectory")
+if is_directory is True:
+    print("directory")
+elif is_directory is False:
+    print("file")
+else:
+    raise SystemExit("Forward capture listing has unknown file kind")
+PY
+  )" || return 1
+  [[ "$listed_kind" == file || "$listed_kind" == directory ]] || return 1
+
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "Documents/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" \
+    --destination "$destination" >/dev/null || return 1
+  [[ -e "$destination" && ! -L "$destination" ]] || return 1
+  if [[ -d "$destination" ]]; then
+    secure_private_evidence "$destination" || return 1
+  else
+    chmod 600 "$destination" || return 1
+  fi
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-forward-self-test-log.py" \
+      --capture-only --artifact "$destination" --summary "$summary" || return 1
+  values="$(python3 - "$summary" "$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" <<'PY'
+import pathlib
+import re
+import sys
+
+values = {}
+for line in pathlib.Path(sys.argv[1]).read_text(encoding="utf-8").splitlines():
+    if line.count("=") != 1:
+        raise SystemExit("invalid Forward capture summary line")
+    key, value = line.split("=", 1)
+    if key in values:
+        raise SystemExit("duplicate Forward capture summary key")
+    values[key] = value
+expected = {
+    "capture_name",
+    "capture_kind",
+    "capture_bytes",
+    "capture_manifest_sha256",
+}
+if set(values) != expected:
+    raise SystemExit("Forward capture summary key set is not exact")
+if values["capture_name"] != sys.argv[2]:
+    raise SystemExit("Forward capture summary name mismatch")
+if values["capture_kind"] not in ("file", "directory"):
+    raise SystemExit("Forward capture summary kind mismatch")
+if re.fullmatch(r"[1-9][0-9]*", values["capture_bytes"]) is None:
+    raise SystemExit("Forward capture summary byte count mismatch")
+if re.fullmatch(r"[0-9a-f]{64}", values["capture_manifest_sha256"]) is None:
+    raise SystemExit("Forward capture summary digest mismatch")
+print("\t".join((
+    values["capture_kind"],
+    values["capture_bytes"],
+    values["capture_manifest_sha256"],
+)))
+PY
+  )" || return 1
+  IFS=$'\t' read -r SHADING_PROTOTYPE_FORWARD_CAPTURE_KIND \
+    SHADING_PROTOTYPE_FORWARD_CAPTURE_BYTES \
+    SHADING_PROTOTYPE_FORWARD_CAPTURE_MANIFEST_SHA256 <<<"$values"
+  [[ "$SHADING_PROTOTYPE_FORWARD_CAPTURE_KIND" == "$listed_kind" ]] || return 1
+  [[ "$SHADING_PROTOTYPE_FORWARD_CAPTURE_BYTES" =~ ^[1-9][0-9]*$ ]] || return 1
+  [[ "$SHADING_PROTOTYPE_FORWARD_CAPTURE_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+    return 1
+  SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS="acquired"
+}
+
+capture_shading_prototype_forward_saves() {
+  local phase="$1"
+  local listing="$WORK/shading-prototype-forward-saves-$phase.json"
+  local names="$WORK/shading-prototype-forward-saves-$phase.names"
+  local manifest="$WORK/shading-prototype-forward-saves-$phase.sha256"
+  local name destination bytes sha
+
+  [[ "$phase" == before || "$phase" == after ]] || return 1
+  ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
+  [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$listing" >/dev/null || return 1
+  python3 - "$listing" "$names" <<'PY' || return 1
+import json
+import pathlib
+import re
+import sys
+
+files = json.load(open(sys.argv[1], encoding="utf-8")).get("result", {}).get("files")
+if not isinstance(files, list):
+    raise SystemExit("save listing provider returned no files array")
+names = []
+for entry in files:
+    name = entry.get("name")
+    if not isinstance(name, str) or re.fullmatch(r"save_slot_[0-9]+\.sav", name) is None:
+        continue
+    resources = entry.get("resources", {})
+    if (
+        resources.get("isDirectory") is not False
+        or resources.get("isSymbolicLink") is not False
+    ):
+        raise SystemExit(f"save is not a regular non-symlink file: {name}")
+    names.append(name)
+required = {
+    "save_slot_1.sav",
+    "save_slot_2.sav",
+    "save_slot_3.sav",
+    "save_slot_4.sav",
+    "save_slot_20.sav",
+}
+if set(names) != required or len(names) != len(required):
+    raise SystemExit(
+        "Forward save set must be exactly save slots 1,2,3,4,20; found "
+        + repr(sorted(names))
+    )
+names.sort(key=lambda value: int(value.removeprefix("save_slot_").removesuffix(".sav")))
+pathlib.Path(sys.argv[2]).write_text("".join(name + "\n" for name in names))
+PY
+  : >"$manifest"
+  while IFS= read -r name; do
+    [[ "$name" =~ ^save_slot_[0-9]+\.sav$ ]] || return 1
+    destination="$WORK/shading-prototype-forward-$phase-$name"
+    [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
+    xcrun devicectl device copy from --device "$DEVICE" \
+      --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+      --source "Documents/$name" --destination "$destination" \
+      >/dev/null || return 1
+    [[ -s "$destination" && ! -L "$destination" ]] || return 1
+    chmod 600 "$destination" || return 1
+    bytes="$(wc -c <"$destination" | tr -d '[:space:]')" || return 1
+    sha="$(shasum -a 256 "$destination" | awk '{print $1}')" || return 1
+    [[ "$bytes" =~ ^[1-9][0-9]*$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || return 1
+    printf 'bytes=%s sha256=%s name=%s\n' "$bytes" "$sha" "$name" \
+      >>"$manifest"
+  done <"$names"
+  [[ -s "$manifest" ]] || return 1
+  chmod 600 "$listing" "$names" "$manifest" \
+    "$WORK"/shading-prototype-forward-"$phase"-save_slot_*.sav || return 1
+  sync_shading_prototype_forward_recovery "$phase" || return 1
+  if [[ "$phase" == before ]]; then
+    SHADING_PROTOTYPE_FORWARD_SAVES_BEFORE_CAPTURED=1
+  else
+    SHADING_PROTOTYPE_FORWARD_SAVES_AFTER_CAPTURED=1
+  fi
+}
+
+verify_shading_prototype_forward_save_integrity() {
+  ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
+  ((SHADING_PROTOTYPE_FORWARD_SAVES_BEFORE_CAPTURED == 1)) || return 1
+  capture_shading_prototype_forward_saves after || return 1
+  cmp -s "$WORK/shading-prototype-forward-saves-before.names" \
+    "$WORK/shading-prototype-forward-saves-after.names" || return 1
+  cmp -s "$WORK/shading-prototype-forward-saves-before.sha256" \
+    "$WORK/shading-prototype-forward-saves-after.sha256" || return 1
+  SHADING_PROTOTYPE_FORWARD_SAVES_MATCH=1
+}
+
+create_shading_prototype_forward_recovery_path() {
+  local recovery_root timestamp
+
+  ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
+  [[ "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" == none ]] || return 0
+  timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+  recovery_root="$ROOT/build/private-device-recovery/shading-prototype-forward/$EXPECTED_BUILD"
+  (umask 077 && mkdir -p "$recovery_root") || return 1
+  SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH="$(
+    mktemp -d "$recovery_root/$timestamp-$$.XXXXXX"
+  )" || return 1
+  [[ "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" == "$recovery_root"/* &&
+     "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" != "$WORK"* ]] || return 1
+  chmod 700 "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" || return 1
+}
+
+sync_shading_prototype_forward_recovery() {
+  local phase="$1"
+  local candidate destination
+
+  [[ "$phase" == before || "$phase" == after ]] || return 1
+  create_shading_prototype_forward_recovery_path || return 1
+  [[ "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" != none &&
+     -d "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" ]] || return 1
+  for candidate in \
+      "shading-prototype-forward-saves-$phase.json" \
+      "shading-prototype-forward-saves-$phase.names" \
+      "shading-prototype-forward-saves-$phase.sha256" \
+      "shading-prototype-forward-$phase-save_slot_1.sav" \
+      "shading-prototype-forward-$phase-save_slot_2.sav" \
+      "shading-prototype-forward-$phase-save_slot_3.sav" \
+      "shading-prototype-forward-$phase-save_slot_4.sav" \
+      "shading-prototype-forward-$phase-save_slot_20.sav"; do
+    [[ -f "$WORK/$candidate" && ! -L "$WORK/$candidate" ]] || return 1
+    destination="$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH/$candidate"
+    ditto "$WORK/$candidate" "$destination" || return 1
+    chmod 600 "$destination" || return 1
+  done
+  chmod 700 "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" || return 1
+}
+
+secure_private_evidence() {
+  local directory="$1"
+
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  find "$directory" -type d -exec chmod 700 {} + || return 1
+  find "$directory" -type f -exec chmod 600 {} + || return 1
+}
+
+copy_private_evidence_path() {
+  local source="$1"
+  local destination="$2"
+
+  [[ -e "$source" && ! -L "$source" &&
+     ! -e "$destination" && ! -L "$destination" ]] || return 1
+  ditto "$source" "$destination" || return 1
+  if [[ -d "$destination" ]]; then
+    secure_private_evidence "$destination"
+  else
+    chmod 600 "$destination"
+  fi
+}
+
 create_id3_recovery_path() {
   local recovery_root timestamp
 
@@ -1626,6 +2194,133 @@ discover_shading_prototype_tile_self_test_pid() {
   return 1
 }
 
+write_shading_prototype_forward_self_test_result_fields() {
+  ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
+  echo "self_test_profile=shading-prototype-forward"
+  echo "shading_prototype_forward_self_test_required=1"
+  echo "shading_prototype_forward_self_test_nonce=$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE"
+  echo "shading_prototype_forward_self_test_validation=$SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION"
+  echo "shading_prototype_forward_terminal_kind=$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND"
+  echo "shading_prototype_forward_failure_reason=$SHADING_PROTOTYPE_FORWARD_FAILURE_REASON"
+  echo "shading_prototype_forward_self_test_pid=$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID"
+  echo "shading_prototype_forward_self_test_pid_discovery_attempts=$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID_DISCOVERY_ATTEMPTS"
+  echo "shading_prototype_forward_self_test_process_survived=$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PROCESS_SURVIVED"
+  echo "shading_prototype_forward_capture_attempted=$SHADING_PROTOTYPE_FORWARD_CAPTURE_ATTEMPTED"
+  echo "shading_prototype_forward_capture_status=$SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS"
+  echo "shading_prototype_forward_capture_name=$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME"
+  echo "shading_prototype_forward_capture_kind=$SHADING_PROTOTYPE_FORWARD_CAPTURE_KIND"
+  echo "shading_prototype_forward_capture_bytes=$SHADING_PROTOTYPE_FORWARD_CAPTURE_BYTES"
+  echo "shading_prototype_forward_capture_manifest_sha256=$SHADING_PROTOTYPE_FORWARD_CAPTURE_MANIFEST_SHA256"
+  echo "shading_prototype_forward_saves_before_captured=$SHADING_PROTOTYPE_FORWARD_SAVES_BEFORE_CAPTURED"
+  echo "shading_prototype_forward_saves_after_captured=$SHADING_PROTOTYPE_FORWARD_SAVES_AFTER_CAPTURED"
+  echo "shading_prototype_forward_saves_match=$SHADING_PROTOTYPE_FORWARD_SAVES_MATCH"
+  echo "shading_prototype_forward_same_pid_stable_seconds=$SHADING_PROTOTYPE_FORWARD_SAME_PID_STABLE_SECONDS"
+  echo "shading_prototype_forward_recovery_path=$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH"
+  echo "game_container_postruntime_validation=$GAME_CONTAINER_POSTRUNTIME_VALIDATION"
+}
+
+discover_shading_prototype_forward_self_test_pid() {
+  local attempt output pids
+
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    output="$WORK/processes-shading-prototype-forward-window-start-attempt-$attempt.json"
+    if pids="$(list_game_pids "$output")" && [[ "$pids" =~ ^[0-9]+$ ]]; then
+      SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID="$pids"
+      SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID_DISCOVERY_ATTEMPTS="$attempt"
+      ditto "$output" \
+        "$WORK/processes-shading-prototype-forward-window-start.json" || return 1
+      return 0
+    fi
+    ((attempt == 10)) || sleep 1
+  done
+  SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID_DISCOVERY_ATTEMPTS=10
+  return 1
+}
+
+wait_for_shading_prototype_forward_terminal() {
+  local attempt terminal_values
+  local log="$WORK/log-shading-prototype-forward-terminal-check.txt"
+
+  for ((attempt=1; attempt<=DURATION; attempt++)); do
+    rm -f "$log"
+    if xcrun devicectl device copy from --device "$DEVICE" \
+        --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+        --source Documents/log.txt --destination "$log" >/dev/null 2>&1 &&
+       terminal_values="$(python3 - "$log" \
+         "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE" <<'PY'
+import pathlib
+import re
+import sys
+
+log = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+nonce = re.escape(sys.argv[2])
+prefix = "RendererIOS shading prototype forward self-test:"
+matches = [
+    line for line in log.splitlines()
+    if re.match(
+        rf"^{re.escape(prefix)} (?:PASS|UNSUPPORTED|FAIL) "
+        rf"case=forward-prototype-v1 nonce={nonce}(?: |$)",
+        line,
+    )
+]
+if len(matches) != 1:
+    raise SystemExit(1)
+line = matches[0]
+if re.fullmatch(
+    rf"{re.escape(prefix)} PASS case=forward-prototype-v1 nonce={nonce} "
+    r"wait-idle=0 output=1/0/1 light-list=1/0/1 capture=1/0/1",
+    line,
+):
+    print("pass\tnone")
+elif re.fullmatch(
+    rf"{re.escape(prefix)} UNSUPPORTED case=forward-prototype-v1 nonce={nonce} "
+    r"reason=apple4-required side-effects=0",
+    line,
+):
+    print("unsupported\tapple4-required")
+else:
+    failed = re.fullmatch(
+        rf"{re.escape(prefix)} FAIL case=forward-prototype-v1 nonce={nonce} "
+        r"reason=([a-z0-9-]+)",
+        line,
+    )
+    if failed is None:
+        raise SystemExit(1)
+    print("fail\t" + failed.group(1))
+PY
+       )"; then
+      IFS=$'\t' read -r SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND \
+        SHADING_PROTOTYPE_FORWARD_FAILURE_REASON <<<"$terminal_values"
+      [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == pass ||
+         "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == unsupported ||
+         "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == fail ]] || return 1
+      printf 'terminal_marker_wait_attempts=%d\n' "$attempt" \
+        >"$WORK/shading-prototype-forward-terminal-wait.txt"
+      printf 'terminal_kind=%s\nterminal_reason=%s\n' \
+        "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" \
+        "$SHADING_PROTOTYPE_FORWARD_FAILURE_REASON" \
+        >>"$WORK/shading-prototype-forward-terminal-wait.txt"
+      return 0
+    fi
+    ((attempt == DURATION)) || sleep 1
+  done
+  return 1
+}
+
+verify_shading_prototype_forward_same_pid_stability() {
+  local second output pids
+
+  ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
+  [[ "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID" =~ ^[0-9]+$ ]] || return 1
+  for second in 0 1 2 3 4 5 6 7 8 9 10; do
+    output="$WORK/processes-shading-prototype-forward-stability-$second.json"
+    pids="$(list_game_pids "$output")" || return 1
+    [[ "$pids" == "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID" ]] || return 1
+    ((second == 10)) || sleep 1
+  done
+  SHADING_PROTOTYPE_FORWARD_SAME_PID_STABLE_SECONDS=10
+}
+
 wait_for_id3_completion() {
   local attempt log="$WORK/log-id3-completion-check.txt"
 
@@ -1677,7 +2372,8 @@ preserve_failure_evidence() {
     failure_dir="$(smoke_evidence_path failure "$timestamp" "$$" \
       "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" || return 0
   fi
-  mkdir -p "$failure_dir"
+  (umask 077 && mkdir -p "$failure_dir") || return 1
+  chmod 700 "$failure_dir" || return 1
   publish_evidence_path "$failure_dir"
   for candidate in \
       launch.log cleanup.log \
@@ -1689,39 +2385,64 @@ preserve_failure_evidence() {
       shading-prototype-tile-self-test-summary.txt \
       shading-prototype-tile-capture-summary.txt \
       shading-prototype-tile-capture-listing.json \
+      shading-prototype-forward-self-test-summary.txt \
+      shading-prototype-forward-capture-summary.txt \
+      shading-prototype-forward-capture-listing.json \
+      shading-prototype-forward-saves-before.json \
+      shading-prototype-forward-saves-after.json \
+      shading-prototype-forward-saves-before.names \
+      shading-prototype-forward-saves-after.names \
+      shading-prototype-forward-saves-before.sha256 \
+      shading-prototype-forward-saves-after.sha256 \
+      shading-prototype-forward-terminal-wait.txt \
+      documents-preinstall.json scripts-preinstall.json system-preinstall.json \
+      documents-postinstall.json scripts-postinstall.json system-postinstall.json \
+      documents-postruntime.json scripts-postruntime.json system-postruntime.json \
       id3-protected-before.sha256 id3-protected-after.sha256 \
       id3-saves-before.json id3-saves-after.json save_slot_20.sav \
       processes-id3-window-start.json \
       processes-resource-allocator-window-start.json \
       processes-clear-only-pass-window-start.json \
       processes-shading-prototype-tile-window-start.json \
+      processes-shading-prototype-forward-window-start.json \
       processes.json \
       log-id3-completion-check.txt \
       log.txt stderr.log crash.log crash-before.log \
       log-before-cleanup.txt stderr-before-cleanup.log crash-before-cleanup.log \
       log-after-cleanup.txt stderr-after-cleanup.log crash-after-cleanup.log; do
     [[ -f "$WORK/$candidate" ]] || continue
-    ditto "$WORK/$candidate" "$failure_dir/$candidate"
+    copy_private_evidence_path "$WORK/$candidate" \
+      "$failure_dir/$candidate" || return 1
   done
   if [[ -e "$WORK/$CLEAR_ONLY_CAPTURE_NAME" &&
         ! -L "$WORK/$CLEAR_ONLY_CAPTURE_NAME" ]]; then
-    ditto "$WORK/$CLEAR_ONLY_CAPTURE_NAME" \
-      "$failure_dir/$CLEAR_ONLY_CAPTURE_NAME"
+    copy_private_evidence_path "$WORK/$CLEAR_ONLY_CAPTURE_NAME" \
+      "$failure_dir/$CLEAR_ONLY_CAPTURE_NAME" || return 1
   fi
   if [[ -e "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" &&
         ! -L "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" ]]; then
-    ditto "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
-      "$failure_dir/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
+    copy_private_evidence_path "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
+      "$failure_dir/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" || return 1
+  fi
+  if [[ -e "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" &&
+        ! -L "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" ]]; then
+    copy_private_evidence_path "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" \
+      "$failure_dir/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" || return 1
   fi
   for candidate in "$WORK"/processes-durable-zero-*.json \
       "$WORK"/processes-id3-window-start-attempt-*.json \
       "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
       "$WORK"/processes-clear-only-pass-window-start-attempt-*.json \
       "$WORK"/processes-shading-prototype-tile-window-start-attempt-*.json \
+      "$WORK"/processes-shading-prototype-forward-window-start-attempt-*.json \
+      "$WORK"/processes-shading-prototype-forward-stability-*.json \
+      "$WORK"/shading-prototype-forward-before-save_slot_*.sav \
+      "$WORK"/shading-prototype-forward-after-save_slot_*.sav \
       "$WORK"/durable-zero-*.json \
       "$WORK"/crash-listing-*.json; do
     [[ -f "$candidate" ]] || continue
-    ditto "$candidate" "$failure_dir/$(basename "$candidate")"
+    copy_private_evidence_path "$candidate" \
+      "$failure_dir/$(basename "$candidate")" || return 1
   done
   {
     echo "result=FAIL"
@@ -1734,6 +2455,7 @@ preserve_failure_evidence() {
     write_resource_allocator_self_test_result_fields
     write_clear_only_pass_self_test_result_fields
     write_shading_prototype_tile_self_test_result_fields
+    write_shading_prototype_forward_self_test_result_fields
     echo "scenario=$SCENARIO"
     echo "save_slot=$SCENARIO_SAVE_SLOT"
     echo "original_exit_status=$original_status"
@@ -1750,7 +2472,11 @@ preserve_failure_evidence() {
       cat "$WORK/clear-only-pass-self-test-summary.txt"
     [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
       cat "$WORK/shading-prototype-tile-self-test-summary.txt"
+    [[ ! -f "$WORK/shading-prototype-forward-self-test-summary.txt" ]] ||
+      cat "$WORK/shading-prototype-forward-self-test-summary.txt"
   } >"$failure_dir/result.txt"
+  chmod 600 "$failure_dir/result.txt" || return 1
+  secure_private_evidence "$failure_dir" || return 1
   echo "failure evidence: $failure_dir" >&2
 }
 
@@ -1791,6 +2517,24 @@ cleanup() {
         cleanup_status=1
       fi
     fi
+    if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0 &&
+         SHADING_PROTOTYPE_FORWARD_CAPTURE_ATTEMPTED == 0)) &&
+       [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == pass ]]; then
+      if ! capture_shading_prototype_forward_artifact; then
+        echo "phase=trap-cleanup shading-prototype-forward-capture=failed" \
+          >>"$WORK/cleanup.log"
+        cleanup_status=1
+      fi
+    fi
+    if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0 &&
+         SHADING_PROTOTYPE_FORWARD_SAVES_BEFORE_CAPTURED == 1 &&
+         SHADING_PROTOTYPE_FORWARD_SAVES_AFTER_CAPTURED == 0)); then
+      if ! verify_shading_prototype_forward_save_integrity; then
+        echo "phase=trap-cleanup shading-prototype-forward-saves=changed-or-unavailable" \
+          >>"$WORK/cleanup.log"
+        cleanup_status=1
+      fi
+    fi
     if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] &&
        ((ID3_SAVE_PREFLIGHT_CAPTURED == 1 && ID3_SAVE_POSTFLIGHT_CAPTURED == 0)); then
       if ! capture_id3_save_postflight_raw; then
@@ -1813,6 +2557,18 @@ cleanup() {
       pull_runtime_logs after-cleanup
     fi
     if [[ -n "$BUNDLE_ID" ]]; then
+      if [[ "$GAME_CONTAINER_POSTRUNTIME_VALIDATION" != passed ]]; then
+        if verify_game_container_resources postruntime; then
+          GAME_CONTAINER_POSTRUNTIME_VALIDATION="passed"
+          echo "phase=trap-cleanup postruntime-resources=passed" \
+            >>"$WORK/cleanup.log"
+        else
+          GAME_CONTAINER_POSTRUNTIME_VALIDATION="failed"
+          echo "phase=trap-cleanup postruntime-resources=failed" \
+            >>"$WORK/cleanup.log"
+          cleanup_status=1
+        fi
+      fi
       if capture_crash_state cleanup "$WORK/crash-after-cleanup.log" \
           POST_CRASH_SHA; then
         if ((status == 0)) && [[ "$POST_CRASH_SHA" != "$PRE_CRASH_SHA" ]]; then
@@ -1846,6 +2602,7 @@ cleanup() {
       write_resource_allocator_self_test_result_fields
       write_clear_only_pass_self_test_result_fields
       write_shading_prototype_tile_self_test_result_fields
+      write_shading_prototype_forward_self_test_result_fields
       echo "failure_reason=exit-cleanup-invalidated-provisional-pass"
       echo "cleanup_status=$cleanup_status"
       echo "pre_crash_sha256=$PRE_CRASH_SHA"
@@ -1860,6 +2617,8 @@ cleanup() {
         cat "$WORK/clear-only-pass-self-test-summary.txt"
       [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
         cat "$WORK/shading-prototype-tile-self-test-summary.txt"
+      [[ ! -f "$WORK/shading-prototype-forward-self-test-summary.txt" ]] ||
+        cat "$WORK/shading-prototype-forward-self-test-summary.txt"
     } >"$PASS_EVIDENCE_DIR/result.txt"
     echo "FAIL: final cleanup invalidated provisional PASS: $PASS_EVIDENCE_DIR" >&2
   fi
@@ -1867,7 +2626,9 @@ cleanup() {
     final_status=1
   fi
   if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
-    if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+    if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+      echo "PASS — shading prototype Forward execution/readback/capture acquired; app stopped"
+    elif ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
       echo "PASS — shading prototype Tile execution and capture acquired; app stopped"
     elif ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
       echo "PASS — clear-only capture acquired for later GPU semantic inspection; app stopped"
@@ -1909,8 +2670,11 @@ validate_clear_only_pass_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary clear-only pass self-test profile does not match the request"
 validate_shading_prototype_tile_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary shading prototype Tile self-test profile does not match the request"
+validate_shading_prototype_forward_binary_profile "$WORK/app-strings.txt" ||
+  fail "app binary shading prototype Forward self-test profile does not match the request"
 if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0 ||
-     REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+     REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0 ||
+     REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
   [[ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
       "$APP_INPUT/Info.plist" 2>/dev/null || true)" == true ]] ||
     fail "capture self-test app does not enable programmatic Metal capture"
@@ -2018,19 +2782,8 @@ IFS=$'\t' read -r DEVICE DEVICE_UDID DEVICE_SELECTION_METHOD <<<"$DEVICE_RECORD"
 BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"
 xcrun devicectl device info apps --device "$DEVICE" \
   --json-output "$WORK/apps.json" >/dev/null
-BUNDLE_ID="$(python3 - "$WORK/apps.json" "$BASE_BUNDLE_ID" "$BUNDLE_ID" <<'PY'
-import json, sys
-apps = json.load(open(sys.argv[1]))["result"]["apps"]
-base = sys.argv[2] + "."
-requested = sys.argv[3]
-matches = [a["bundleIdentifier"] for a in apps if a["bundleIdentifier"].startswith(base)]
-if requested:
-    matches = [bundle for bundle in matches if bundle == requested]
-if len(matches) != 1:
-    raise SystemExit(f"expected exactly one installed {base}* app, found {len(matches)}")
-print(matches[0])
-PY
-)" || fail "bundle id must identify the existing installed OpenGothic container"
+BUNDLE_ID="$(select_bundle_id_from_apps "$WORK/apps.json" "$BUNDLE_ID")" ||
+  fail "bundle id must identify the exact existing non-xctrunner OpenGothic container"
 
 TEAM_ID="${OPENGOTHIC_IOS_TEAM_ID:-${BUNDLE_ID##*.}}"
 [[ "$BUNDLE_ID" == "$BASE_BUNDLE_ID.$TEAM_ID" ]] ||
@@ -2041,77 +2794,8 @@ echo "== stopping any previous $BUNDLE_ID process before preflight =="
 stop_running_app 1 || fail "preflight application cleanup failed"
 park_settings_foreground || fail "could not park Settings after preflight cleanup"
 
-xcrun devicectl device info files --device "$DEVICE" \
-  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
-  --username mobile --subdirectory Documents --no-recurse \
-  --json-output "$WORK/documents-preflight.json" >/dev/null ||
-  fail "could not inspect the existing OpenGothic Documents container"
-python3 - "$WORK/documents-preflight.json" <<'PY' ||
-import json
-import sys
-
-files = json.load(open(sys.argv[1]))["result"]["files"]
-required = {"Data", "_work", "system"}
-entries = {entry.get("name"): entry for entry in files}
-invalid = []
-for name in sorted(required):
-    entry = entries.get(name)
-    resources = entry.get("resources", {}) if entry else {}
-    if (
-        entry is None
-        or resources.get("isDirectory") is not True
-        or resources.get("isSymbolicLink") is True
-    ):
-        invalid.append(name)
-if invalid:
-    raise SystemExit(
-        "existing OpenGothic Documents container has missing/invalid directories: "
-        + ", ".join(invalid)
-    )
-PY
-  fail "existing game data preflight failed before install"
-xcrun devicectl device info files --device "$DEVICE" \
-  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
-  --username mobile \
-  --subdirectory "Documents/_work/Data/Scripts/_compiled" --no-recurse \
-  --json-output "$WORK/scripts-preflight.json" >/dev/null ||
-  fail "could not inspect compiled Gothic scripts before install"
-xcrun devicectl device info files --device "$DEVICE" \
-  --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
-  --username mobile --subdirectory "Documents/system" --no-recurse \
-  --json-output "$WORK/system-preflight.json" >/dev/null ||
-  fail "could not inspect the existing Gothic system directory"
-python3 - "$WORK/scripts-preflight.json" "$WORK/system-preflight.json" <<'PY' ||
-import json
-import sys
-
-def regular_file(entries, expected):
-    matches = [
-        entry for entry in entries
-        if entry.get("name", "").lower() == expected
-    ]
-    if len(matches) != 1:
-        return False
-    resources = matches[0].get("resources", {})
-    return (
-        resources.get("isDirectory") is False
-        and resources.get("isSymbolicLink") is False
-    )
-
-scripts = json.load(open(sys.argv[1]))["result"]["files"]
-system = json.load(open(sys.argv[2]))["result"]["files"]
-invalid = []
-if not regular_file(scripts, "gothic.dat"):
-    invalid.append("_work/Data/Scripts/_compiled/Gothic.dat")
-if not regular_file(system, "gothic.ini"):
-    invalid.append("system/Gothic.ini")
-if invalid:
-    raise SystemExit(
-        "existing OpenGothic Documents container has missing/invalid files: "
-        + ", ".join(invalid)
-    )
-PY
-  fail "compiled scripts/system preflight failed before install"
+verify_game_container_resources preinstall ||
+  fail "game Data/_work/system or Gothic.dat/Gothic.ini preflight failed before install"
 
 IDENTITIES="$(security find-identity -v -p codesigning 2>/dev/null |
   awk '/Apple Development/ {print $2}')"
@@ -2195,9 +2879,15 @@ if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
 fi
 capture_crash_state before "$WORK/crash-before.log" PRE_CRASH_SHA ||
   fail "could not establish pre-run crash.log state"
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  capture_shading_prototype_forward_saves before ||
+    fail "could not fingerprint pre-run saves for Forward self-test"
+fi
 
 echo "== installing $BUNDLE_ID =="
 xcrun devicectl device install app --device "$DEVICE" "$APP" >/dev/null
+verify_game_container_resources postinstall ||
+  fail "install changed game Data/_work/system or Gothic.dat/Gothic.ini"
 
 LAUNCH_ARGS=(-nomenu)
 if ((NEW_GAME == 0)); then
@@ -2206,6 +2896,16 @@ fi
 if [[ -n "$PIPELINE_ARCHIVE_TEST_MODE" ]]; then
   LAUNCH_ARGS+=(
     "-renderer-ios-pipeline-archive-$PIPELINE_ARCHIVE_TEST_MODE"
+  )
+fi
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE="$(
+    generate_shading_prototype_forward_nonce
+  )" || fail "could not generate shading prototype Forward nonce"
+  [[ "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE" =~ ^[0-9a-f]{32}$ ]] ||
+    fail "generated shading prototype Forward nonce is invalid"
+  LAUNCH_ARGS+=(
+    "${SHADING_PROTOTYPE_FORWARD_NONCE_ARGUMENT}${SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE}"
   )
 fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
@@ -2250,7 +2950,18 @@ if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
   discover_shading_prototype_tile_self_test_pid ||
     fail "shading prototype Tile self-test did not establish exactly one bounded process within 10 seconds"
 fi
-sleep "$DURATION"
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  discover_shading_prototype_forward_self_test_pid ||
+    fail "shading prototype Forward self-test did not establish exactly one bounded process within 10 seconds"
+  wait_for_shading_prototype_forward_terminal ||
+    fail "shading prototype Forward self-test produced no nonce-bound terminal marker"
+  if [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == pass ]]; then
+    verify_shading_prototype_forward_same_pid_stability ||
+      fail "shading prototype Forward process did not remain the exact same PID for 10 seconds after terminal"
+  fi
+else
+  sleep "$DURATION"
+fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   wait_for_id3_completion ||
     fail "ID3 nonce-scoped placeholder save did not complete after the base window"
@@ -2266,7 +2977,9 @@ python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" \
     "$REQUIRE_CLEAR_ONLY_PASS_SELF_TEST" \
     "$CLEAR_ONLY_PASS_SELF_TEST_PID" \
     "$REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST" \
-    "$SHADING_PROTOTYPE_TILE_SELF_TEST_PID" <<'PY' ||
+    "$SHADING_PROTOTYPE_TILE_SELF_TEST_PID" \
+    "$REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST" \
+    "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_PID" <<'PY' ||
 import json, pathlib, sys
 processes = json.load(open(sys.argv[1]))["result"]["runningProcesses"]
 expected = sys.argv[2]
@@ -2278,6 +2991,8 @@ require_clear_only_pass_self_test = sys.argv[7] == "1"
 expected_clear_only_pass_pid = sys.argv[8]
 require_shading_prototype_tile_self_test = sys.argv[9] == "1"
 expected_shading_prototype_tile_pid = sys.argv[10]
+require_shading_prototype_forward_self_test = sys.argv[11] == "1"
+expected_shading_prototype_forward_pid = sys.argv[12]
 matches = [
     p for p in processes
     if pathlib.PurePosixPath(p.get("executable", "")).name == expected
@@ -2307,6 +3022,12 @@ if require_shading_prototype_tile_self_test and (
     != expected_shading_prototype_tile_pid
 ):
     raise SystemExit(1)
+if require_shading_prototype_forward_self_test and (
+    len(matches) != 1
+    or str(matches[0].get("processIdentifier"))
+    != expected_shading_prototype_forward_pid
+):
+    raise SystemExit(1)
 if expected_fault not in (
     "preview-fence-error-after-terminal",
     "frame-fence-error-after-terminal",
@@ -2323,6 +3044,9 @@ fi
 if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
   SHADING_PROTOTYPE_TILE_SELF_TEST_PROCESS_SURVIVED=1
 fi
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  SHADING_PROTOTYPE_FORWARD_SELF_TEST_PROCESS_SURVIVED=1
+fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ||
       "$EXPECTED_FAULT" == frame-fence-error-after-terminal ]]; then
   PROCESS_SURVIVED_FAULT_WINDOW=1
@@ -2332,6 +3056,12 @@ echo "== stopping $BUNDLE_ID after smoke window =="
 stop_running_app 1 || fail "application cleanup failed"
 park_settings_foreground || fail "could not park Settings after smoke window"
 RUNTIME_ARMED=0
+if verify_game_container_resources postruntime; then
+  GAME_CONTAINER_POSTRUNTIME_VALIDATION="passed"
+else
+  GAME_CONTAINER_POSTRUNTIME_VALIDATION="failed"
+  fail "runtime changed game Data/_work/system or Gothic.dat/Gothic.ini"
+fi
 
 for name in log.txt stderr.log; do
   xcrun devicectl device copy from --device "$DEVICE" \
@@ -2345,6 +3075,16 @@ fi
 if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
   capture_shading_prototype_tile_artifact ||
     fail "shading prototype Tile Metal capture was not copied and validated"
+fi
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  if [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == pass ]]; then
+    capture_shading_prototype_forward_artifact ||
+      fail "shading prototype Forward Metal capture was not copied and validated"
+  else
+    SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS="not-acquired-at-stage"
+  fi
+  verify_shading_prototype_forward_save_integrity ||
+    fail "shading prototype Forward run changed the save set or contents"
 fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   capture_id3_save_postflight_raw ||
@@ -2425,9 +3165,119 @@ if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0)); then
       --log "$WORK/log.txt" --expect-absent ||
     fail "unrequested shading prototype Tile marker appeared at runtime"
 fi
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0)); then
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-forward-self-test-log.py" \
+      --log "$WORK/log.txt" --expect-absent ||
+    fail "unrequested shading prototype Forward marker appeared at runtime"
+fi
 rg -F 'RendererIOS diagnostics: ON' "$WORK/log.txt" >/dev/null ||
   fail "installed app is not a diagnostics-enabled RendererIOS build"
-if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  ((SHADING_PROTOTYPE_FORWARD_SELF_TEST_PROCESS_SURVIVED == 1)) ||
+    fail "shading prototype Forward process did not survive its exact same-PID observation window"
+  if [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == fail ]]; then
+    SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS=(
+      --log "$WORK/log.txt"
+      --expected-build "$EXPECTED_BUILD"
+      --nonce "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE"
+      --expect-failure-reason "$SHADING_PROTOTYPE_FORWARD_FAILURE_REASON"
+    )
+    [[ ! -f "$WORK/stderr.log" ]] ||
+      SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="failed"
+    PYTHONDONTWRITEBYTECODE=1 \
+      python3 "$ROOT/ios/device-test/validate-shading-prototype-forward-self-test-log.py" \
+        "${SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS[@]}" ||
+      fail "shading prototype Forward FAIL terminal validation failed"
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="passed-failure-terminal"
+    fail "shading prototype Forward core FAIL: $SHADING_PROTOTYPE_FORWARD_FAILURE_REASON"
+  elif [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == unsupported ]]; then
+    SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS=(
+      --log "$WORK/log.txt"
+      --expected-build "$EXPECTED_BUILD"
+      --nonce "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE"
+      --expect-unsupported
+    )
+    [[ ! -f "$WORK/stderr.log" ]] ||
+      SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="failed"
+    PYTHONDONTWRITEBYTECODE=1 \
+      python3 "$ROOT/ios/device-test/validate-shading-prototype-forward-self-test-log.py" \
+        "${SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS[@]}" ||
+      fail "shading prototype Forward UNSUPPORTED terminal validation failed"
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="passed-unsupported-terminal"
+    fail "shading prototype Forward is unsupported on this device"
+  fi
+  [[ "$SHADING_PROTOTYPE_FORWARD_TERMINAL_KIND" == pass ]] ||
+    fail "shading prototype Forward terminal kind is invalid"
+  ((SHADING_PROTOTYPE_FORWARD_SAME_PID_STABLE_SECONDS >= 10)) ||
+    fail "shading prototype Forward same-PID post-terminal stability was shorter than 10 seconds"
+  [[ "$SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS" == acquired ]] ||
+    fail "shading prototype Forward capture was not acquired"
+  SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS=(
+    --log "$WORK/log.txt"
+    --expected-build "$EXPECTED_BUILD"
+    --nonce "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE"
+    --artifact "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME"
+    --summary "$WORK/shading-prototype-forward-self-test-summary.txt"
+  )
+  [[ ! -f "$WORK/stderr.log" ]] ||
+    SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS+=(--stderr "$WORK/stderr.log")
+  SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="failed"
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-forward-self-test-log.py" \
+      "${SHADING_PROTOTYPE_FORWARD_VALIDATOR_ARGS[@]}" ||
+    fail "shading prototype Forward self-test log validation failed"
+  python3 - "$WORK/shading-prototype-forward-self-test-summary.txt" \
+      "$EXPECTED_BUILD" "$SHADING_PROTOTYPE_FORWARD_SELF_TEST_NONCE" \
+      "$SHADING_PROTOTYPE_FORWARD_CAPTURE_KIND" \
+      "$SHADING_PROTOTYPE_FORWARD_CAPTURE_BYTES" \
+      "$SHADING_PROTOTYPE_FORWARD_CAPTURE_MANIFEST_SHA256" <<'PY' ||
+import pathlib
+import re
+import sys
+
+summary = {}
+for line in pathlib.Path(sys.argv[1]).read_text().splitlines():
+    if line.count("=") != 1:
+        raise SystemExit(f"invalid Forward summary line: {line!r}")
+    key, value = line.split("=", 1)
+    if key in summary:
+        raise SystemExit(f"duplicate Forward summary key: {key}")
+    summary[key] = value
+expected = {
+    "shading_prototype_forward_expected_build": sys.argv[2],
+    "shading_prototype_forward_nonce": sys.argv[3],
+    "shading_prototype_forward_armed_count": "1",
+    "shading_prototype_forward_factory_ready_count": "1",
+    "shading_prototype_forward_encoded_count": "1",
+    "shading_prototype_forward_submitted_count": "1",
+    "shading_prototype_forward_capture_acquired_count": "1",
+    "shading_prototype_forward_terminal_count": "1",
+    "shading_prototype_forward_readback_count": "1",
+    "shading_prototype_forward_pass_count": "1",
+    "shading_prototype_forward_unsupported_count": "0",
+    "shading_prototype_forward_fail_count": "0",
+    "shading_prototype_forward_wait_idle": "0",
+    "shading_prototype_forward_readback_bytes": "256",
+    "shading_prototype_forward_readback_words": "64",
+    "shading_prototype_forward_readback_sha256":
+        "d577b6dfa736657f93c3223b466c256c988d5eb5f02cc27ad47f92c1406f7dd2",
+    "capture_name": "RendererIOS-forward-prototype-v1.gputrace",
+    "capture_kind": sys.argv[4],
+    "capture_bytes": sys.argv[5],
+    "capture_manifest_sha256": sys.argv[6],
+}
+waits = summary.pop("shading_prototype_forward_wait_calls", "")
+if re.fullmatch(r"(?:[1-9]|[1-9][0-9]|1[01][0-9]|120)", waits) is None:
+    raise SystemExit("Forward summary wait count is not bounded 1..120")
+if summary != expected:
+    raise SystemExit("shading prototype Forward summary schema/value mismatch")
+PY
+    fail "shading prototype Forward self-test summary validation failed"
+  SHADING_PROTOTYPE_FORWARD_SELF_TEST_VALIDATION="passed"
+elif ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
   ((SHADING_PROTOTYPE_TILE_SELF_TEST_PROCESS_SURVIVED == 1)) ||
     fail "shading prototype Tile process did not survive its exact same-PID observation window"
   [[ "$SHADING_PROTOTYPE_TILE_CAPTURE_STATUS" == acquired ]] ||
@@ -3280,46 +4130,91 @@ timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
 OUT="$(smoke_evidence_path pass "$timestamp" "$$" \
   "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" ||
   fail "could not resolve smoke evidence path"
-mkdir -p "$OUT"
+(umask 077 && mkdir -p "$OUT") ||
+  fail "could not create private PASS evidence directory"
+chmod 700 "$OUT" || fail "could not secure PASS evidence directory"
 PASS_EVIDENCE_DIR="$OUT"
 publish_evidence_path "$OUT"
-ditto "$WORK/log.txt" "$OUT/log.txt"
-[[ ! -f "$WORK/stderr.log" ]] || ditto "$WORK/stderr.log" "$OUT/stderr.log"
-ditto "$WORK/device-selection.log" "$OUT/device-selection.log"
-[[ ! -f "$WORK/cleanup.log" ]] || ditto "$WORK/cleanup.log" "$OUT/cleanup.log"
+copy_private_evidence_path "$WORK/log.txt" "$OUT/log.txt" ||
+  fail "could not preserve private log evidence"
+[[ ! -f "$WORK/stderr.log" ]] ||
+  copy_private_evidence_path "$WORK/stderr.log" "$OUT/stderr.log" ||
+  fail "could not preserve private stderr evidence"
+copy_private_evidence_path "$WORK/device-selection.log" \
+  "$OUT/device-selection.log" ||
+  fail "could not preserve private device-selection evidence"
+[[ ! -f "$WORK/cleanup.log" ]] ||
+  copy_private_evidence_path "$WORK/cleanup.log" "$OUT/cleanup.log" ||
+  fail "could not preserve private cleanup evidence"
 [[ ! -f "$WORK/park-settings.log" ]] ||
-  ditto "$WORK/park-settings.log" "$OUT/park-settings.log"
+  copy_private_evidence_path "$WORK/park-settings.log" \
+    "$OUT/park-settings.log" ||
+  fail "could not preserve private park-settings evidence"
 [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
-  ditto "$WORK/fault-log-summary.txt" "$OUT/fault-log-summary.txt"
+  copy_private_evidence_path "$WORK/fault-log-summary.txt" \
+    "$OUT/fault-log-summary.txt" ||
+  fail "could not preserve private fault summary"
 [[ ! -f "$WORK/resource-allocator-self-test-summary.txt" ]] ||
-  ditto "$WORK/resource-allocator-self-test-summary.txt" \
-    "$OUT/resource-allocator-self-test-summary.txt"
+  copy_private_evidence_path "$WORK/resource-allocator-self-test-summary.txt" \
+    "$OUT/resource-allocator-self-test-summary.txt" ||
+  fail "could not preserve private allocator summary"
 [[ ! -f "$WORK/clear-only-pass-self-test-summary.txt" ]] ||
-  ditto "$WORK/clear-only-pass-self-test-summary.txt" \
-    "$OUT/clear-only-pass-self-test-summary.txt"
+  copy_private_evidence_path "$WORK/clear-only-pass-self-test-summary.txt" \
+    "$OUT/clear-only-pass-self-test-summary.txt" ||
+  fail "could not preserve private clear-only summary"
 [[ ! -f "$WORK/clear-only-capture-summary.txt" ]] ||
-  ditto "$WORK/clear-only-capture-summary.txt" \
-    "$OUT/clear-only-capture-summary.txt"
+  copy_private_evidence_path "$WORK/clear-only-capture-summary.txt" \
+    "$OUT/clear-only-capture-summary.txt" ||
+  fail "could not preserve private clear capture summary"
 [[ ! -f "$WORK/clear-only-capture-listing.json" ]] ||
-  ditto "$WORK/clear-only-capture-listing.json" \
-    "$OUT/clear-only-capture-listing.json"
+  copy_private_evidence_path "$WORK/clear-only-capture-listing.json" \
+    "$OUT/clear-only-capture-listing.json" ||
+  fail "could not preserve private clear capture listing"
 [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
-  ditto "$WORK/shading-prototype-tile-self-test-summary.txt" \
-    "$OUT/shading-prototype-tile-self-test-summary.txt"
+  copy_private_evidence_path "$WORK/shading-prototype-tile-self-test-summary.txt" \
+    "$OUT/shading-prototype-tile-self-test-summary.txt" ||
+  fail "could not preserve private Tile summary"
 [[ ! -f "$WORK/shading-prototype-tile-capture-summary.txt" ]] ||
-  ditto "$WORK/shading-prototype-tile-capture-summary.txt" \
-    "$OUT/shading-prototype-tile-capture-summary.txt"
+  copy_private_evidence_path "$WORK/shading-prototype-tile-capture-summary.txt" \
+    "$OUT/shading-prototype-tile-capture-summary.txt" ||
+  fail "could not preserve private Tile capture summary"
 [[ ! -f "$WORK/shading-prototype-tile-capture-listing.json" ]] ||
-  ditto "$WORK/shading-prototype-tile-capture-listing.json" \
-    "$OUT/shading-prototype-tile-capture-listing.json"
+  copy_private_evidence_path "$WORK/shading-prototype-tile-capture-listing.json" \
+    "$OUT/shading-prototype-tile-capture-listing.json" ||
+  fail "could not preserve private Tile capture listing"
+[[ ! -f "$WORK/shading-prototype-forward-self-test-summary.txt" ]] ||
+  copy_private_evidence_path "$WORK/shading-prototype-forward-self-test-summary.txt" \
+    "$OUT/shading-prototype-forward-self-test-summary.txt" ||
+  fail "could not preserve private Forward summary"
+[[ ! -f "$WORK/shading-prototype-forward-capture-summary.txt" ]] ||
+  copy_private_evidence_path "$WORK/shading-prototype-forward-capture-summary.txt" \
+    "$OUT/shading-prototype-forward-capture-summary.txt" ||
+  fail "could not preserve private Forward capture summary"
+[[ ! -f "$WORK/shading-prototype-forward-capture-listing.json" ]] ||
+  copy_private_evidence_path "$WORK/shading-prototype-forward-capture-listing.json" \
+    "$OUT/shading-prototype-forward-capture-listing.json" ||
+  fail "could not preserve private Forward capture listing"
+[[ ! -f "$WORK/shading-prototype-forward-terminal-wait.txt" ]] ||
+  copy_private_evidence_path "$WORK/shading-prototype-forward-terminal-wait.txt" \
+    "$OUT/shading-prototype-forward-terminal-wait.txt" ||
+  fail "could not preserve private Forward terminal evidence"
 if [[ -e "$WORK/$CLEAR_ONLY_CAPTURE_NAME" &&
       ! -L "$WORK/$CLEAR_ONLY_CAPTURE_NAME" ]]; then
-  ditto "$WORK/$CLEAR_ONLY_CAPTURE_NAME" "$OUT/$CLEAR_ONLY_CAPTURE_NAME"
+  copy_private_evidence_path "$WORK/$CLEAR_ONLY_CAPTURE_NAME" \
+    "$OUT/$CLEAR_ONLY_CAPTURE_NAME" ||
+    fail "could not preserve private clear capture"
 fi
 if [[ -e "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" &&
       ! -L "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" ]]; then
-  ditto "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
-    "$OUT/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME"
+  copy_private_evidence_path "$WORK/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
+    "$OUT/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" ||
+    fail "could not preserve private Tile capture"
+fi
+if [[ -e "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" &&
+      ! -L "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" ]]; then
+  copy_private_evidence_path "$WORK/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" \
+    "$OUT/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" ||
+    fail "could not preserve private Forward capture"
 fi
 if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
   [[ "$CLEAR_ONLY_CAPTURE_STATUS" == acquired ]] ||
@@ -3344,29 +4239,59 @@ if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
     "$WORK/shading-prototype-tile-capture-evidence-summary.txt" ||
     fail "preserved shading prototype Tile capture fingerprint changed"
 fi
+if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+  [[ "$SHADING_PROTOTYPE_FORWARD_CAPTURE_STATUS" == acquired ]] ||
+    fail "shading prototype Forward capture was not acquired at the PASS evidence boundary"
+  PYTHONDONTWRITEBYTECODE=1 \
+    python3 "$ROOT/ios/device-test/validate-shading-prototype-forward-self-test-log.py" \
+      --capture-only --artifact "$OUT/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" \
+      --summary "$WORK/shading-prototype-forward-capture-evidence-summary.txt" ||
+    fail "preserved shading prototype Forward capture is invalid"
+  cmp -s "$WORK/shading-prototype-forward-capture-summary.txt" \
+    "$WORK/shading-prototype-forward-capture-evidence-summary.txt" ||
+    fail "preserved shading prototype Forward capture fingerprint changed"
+fi
 for candidate in id3-protected-before.sha256 id3-protected-after.sha256 \
     id3-saves-before.json id3-saves-after.json save_slot_20.sav \
     processes.json processes-id3-window-start.json \
     processes-resource-allocator-window-start.json \
     processes-clear-only-pass-window-start.json \
     processes-shading-prototype-tile-window-start.json \
+    processes-shading-prototype-forward-window-start.json \
+    log-shading-prototype-forward-terminal-check.txt \
+    documents-preinstall.json scripts-preinstall.json system-preinstall.json \
+    documents-postinstall.json scripts-postinstall.json system-postinstall.json \
+    documents-postruntime.json scripts-postruntime.json system-postruntime.json \
+    shading-prototype-forward-saves-before.json \
+    shading-prototype-forward-saves-after.json \
+    shading-prototype-forward-saves-before.names \
+    shading-prototype-forward-saves-after.names \
+    shading-prototype-forward-saves-before.sha256 \
+    shading-prototype-forward-saves-after.sha256 \
     log-id3-completion-check.txt; do
   [[ -f "$WORK/$candidate" ]] || continue
-  ditto "$WORK/$candidate" "$OUT/$candidate"
+  copy_private_evidence_path "$WORK/$candidate" "$OUT/$candidate" ||
+    fail "could not preserve private evidence: $candidate"
 done
 for candidate in crash-before.log crash.log crash-final.log \
     crash-listing-before.json crash-listing-after.json crash-listing-final.json; do
   [[ -f "$WORK/$candidate" ]] || continue
-  ditto "$WORK/$candidate" "$OUT/$candidate"
+  copy_private_evidence_path "$WORK/$candidate" "$OUT/$candidate" ||
+    fail "could not preserve private crash evidence: $candidate"
 done
 rm -f "$OUT"/processes-durable-zero-*.json "$OUT"/durable-zero-*.json
 for candidate in "$WORK"/processes-durable-zero-*.json \
     "$WORK"/processes-resource-allocator-window-start-attempt-*.json \
     "$WORK"/processes-clear-only-pass-window-start-attempt-*.json \
     "$WORK"/processes-shading-prototype-tile-window-start-attempt-*.json \
+    "$WORK"/processes-shading-prototype-forward-window-start-attempt-*.json \
+    "$WORK"/processes-shading-prototype-forward-stability-*.json \
+    "$WORK"/shading-prototype-forward-before-save_slot_*.sav \
+    "$WORK"/shading-prototype-forward-after-save_slot_*.sav \
     "$WORK"/durable-zero-*.json; do
   [[ -f "$candidate" ]] || continue
-  ditto "$candidate" "$OUT/$(basename "$candidate")"
+  copy_private_evidence_path "$candidate" "$OUT/$(basename "$candidate")" ||
+    fail "could not preserve private generated evidence: $(basename "$candidate")"
 done
 {
   echo "result=PASS"
@@ -3379,6 +4304,7 @@ done
   write_resource_allocator_self_test_result_fields
   write_clear_only_pass_self_test_result_fields
   write_shading_prototype_tile_self_test_result_fields
+  write_shading_prototype_forward_self_test_result_fields
   echo "pre_crash_sha256=$PRE_CRASH_SHA"
   echo "post_crash_sha256=$POST_CRASH_SHA"
   echo "bundle_id=$BUNDLE_ID"
@@ -3406,4 +4332,10 @@ done
     cat "$WORK/clear-only-pass-self-test-summary.txt"
   [[ ! -f "$WORK/shading-prototype-tile-self-test-summary.txt" ]] ||
     cat "$WORK/shading-prototype-tile-self-test-summary.txt"
+  [[ ! -f "$WORK/shading-prototype-forward-self-test-summary.txt" ]] ||
+    cat "$WORK/shading-prototype-forward-self-test-summary.txt"
 } >"$OUT/result.txt"
+chmod 600 "$OUT/result.txt" ||
+  fail "could not secure PASS result permissions"
+secure_private_evidence "$OUT" ||
+  fail "could not secure PASS evidence permissions"

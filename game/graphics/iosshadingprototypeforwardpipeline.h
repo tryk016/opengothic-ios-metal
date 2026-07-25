@@ -152,9 +152,11 @@ struct IOSShadingPrototypeForwardComputePipelineReport final {
   bool functionMatches = false;
   bool threadGroupSizeMultipleDisabled = false;
   bool maxTotalThreadsPerThreadgroupZero = false;
-  bool stageInputDescriptorNil = false;
+  // These retain their ABI slots while reporting semantic emptiness: Metal
+  // may materialize a non-nil owner after a nil setter.
+  bool stageInputDescriptorEmpty = false;
   bool indirectCommandBuffersDisabled = false;
-  bool linkedFunctionsNil = false;
+  bool linkedFunctionsEmpty = false;
   bool addingBinaryFunctionsDisabled = false;
   uint32_t maxCallStackDepth = 0u;
   IOSShadingPrototypeForwardBindingListReport computeBindings;
@@ -182,6 +184,8 @@ struct IOSShadingPrototypeForwardRenderPipelineReport final {
   bool indirectCommandBuffersDisabled = false;
   bool alphaTestEnabled = false;
   uint32_t sampleCount = 0u;
+  // Device telemetry only. Metal defines this as native per-sample memory
+  // usage; it does not promise zero when no explicit imageblock is declared.
   uint32_t imageblockBytesPerSample = 0u;
   IOSShadingPrototypeForwardBindingListReport vertexBindings;
   IOSShadingPrototypeForwardBindingListReport fragmentBindings;
