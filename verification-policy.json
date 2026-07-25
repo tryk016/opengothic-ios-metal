@@ -31,6 +31,7 @@
     "scripts/classify_verification.py",
     "ios/tests/test_verification_classifier.py",
     "scripts/verify.command",
+    "scripts/verify-local-build.command",
     "CMakePresets.json",
     ".github/workflows/renderer-ios.yml",
     "CMakeLists.txt",
@@ -47,6 +48,7 @@
         "scripts/classify_verification.py",
         "ios/tests/test_verification_classifier.py",
         "scripts/verify.command",
+        "scripts/verify-local-build.command",
         "CMakePresets.json",
         ".github/workflows/**"
       ],
