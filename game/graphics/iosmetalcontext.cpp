@@ -40,6 +40,7 @@
 #include "iosgpuscene.h"
 #include "iosgpubink.h"
 #include "iosdevicefactscollector.h"
+#include "iosfeaturepolicyprovenance.h"
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
@@ -1212,6 +1213,9 @@ struct IOSMetalContext::Impl final {
       builtinRuntimeAfterLegacyShaders(
         MetalApi::builtinRuntimeSnapshot(device)) {
     iosLogDeviceFacts(deviceFacts);
+    if(!deviceFacts.value)
+      throw std::runtime_error(
+        "RendererIOS device facts validation failed");
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
     runIOSResourceAllocatorSelfTest(resourceAllocator,device);
 #endif
@@ -1245,6 +1249,24 @@ struct IOSMetalContext::Impl final {
     for(auto& frame:frames)
       frame.command = device.commandBuffer();
     resetTargets();
+    featurePolicyProvenance.emplace(
+      iosBuildFeaturePolicyProvenance(
+        *deviceFacts.value,
+        IOSFeatureDefaultClass::Safe,
+        {false,false,false,false,false}));
+    std::array<char,IOSFeaturePolicyTelemetryCapacity>
+        featurePolicyTelemetry{};
+    const IOSFeatureTelemetryResult featurePolicyTelemetryResult =
+      iosTakeFeaturePolicyTelemetry(
+        featurePolicyTelemetryGate,
+        *featurePolicyProvenance,
+        featurePolicyTelemetry.data(),
+        featurePolicyTelemetry.size());
+    if(featurePolicyTelemetryResult!=IOSFeatureTelemetryResult::Emitted)
+      throw std::runtime_error(
+        "RendererIOS feature policy telemetry was not emitted");
+    Log::i(featurePolicyTelemetry.data(),
+           " build=",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
     const auto platform = rendererIOSPlatformInfo();
     try {
       Log::i(RendererIOSConfiguredFaultModeEvidence);
@@ -3935,6 +3957,8 @@ struct IOSMetalContext::Impl final {
 
   Device&                                      device;
   const IOSDeviceFactsCreateResult             deviceFacts;
+  std::optional<IOSFeaturePolicyProvenance>     featurePolicyProvenance;
+  IOSFeatureTelemetryGate                      featurePolicyTelemetryGate;
   IOSMetalResourceAllocator                    resourceAllocator;
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)
   // Declaration order is the retainedReferences=false ownership contract:
@@ -4951,4 +4975,9 @@ std::size_t IOSMetalContext::retainedSceneCount() const noexcept {
     [](const Impl::FrameContext& frame) {
       return frame.sceneFrame!=nullptr;
       }));
+  }
+
+const IOSFeaturePolicyProvenance&
+IOSMetalContext::featurePolicyProvenance() const noexcept {
+  return *impl->featurePolicyProvenance;
   }

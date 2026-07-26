@@ -722,6 +722,53 @@ void testTelemetryEnumNamesAndMaximumCapacity() {
   assert(std::strlen(output)+1u<=sizeof(output));
   }
 
+void testRuntimeSafePolicyMarkerContract() {
+  const IOSDeviceFacts supported = factsWithAllProbes(
+      IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+  const IOSFeaturePolicyProvenance provenance =
+      iosBuildFeaturePolicyProvenance(
+          supported,
+          IOSFeatureDefaultClass::Safe,
+          {false,false,false,false,false});
+  constexpr char ExpectedCore[] =
+      "RendererIOS feature policy: schema=1 facts=1 probes=1 "
+      "defaults=safe spatial=0/1/0/not-requested "
+      "temporal=0/1/0/not-requested "
+      "mesh=0/1/0/not-requested rt=0/1/0/not-requested "
+      "metal4=0/1/0/not-requested";
+  constexpr char RuntimeSuffix[] = " build=host-safe-sha";
+  constexpr char ExpectedRuntime[] =
+      "RendererIOS feature policy: schema=1 facts=1 probes=1 "
+      "defaults=safe spatial=0/1/0/not-requested "
+      "temporal=0/1/0/not-requested "
+      "mesh=0/1/0/not-requested rt=0/1/0/not-requested "
+      "metal4=0/1/0/not-requested build=host-safe-sha";
+
+  IOSFeatureTelemetryGate gate{};
+  char core[IOSFeaturePolicyTelemetryCapacity]{};
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,core,sizeof(core))==
+      IOSFeatureTelemetryResult::Emitted);
+  assert(std::strcmp(core,ExpectedCore)==0);
+
+  char runtime[sizeof(ExpectedRuntime)]{};
+  const size_t coreLength = std::strlen(core);
+  std::memcpy(runtime,core,coreLength);
+  std::memcpy(
+      runtime+coreLength,RuntimeSuffix,sizeof(RuntimeSuffix));
+  assert(std::strcmp(runtime,ExpectedRuntime)==0);
+
+  IOSFeatureTelemetryGate alreadyEmitted{true};
+  assert(iosTakeFeaturePolicyTelemetry(
+      alreadyEmitted,provenance,nullptr,0u)==
+      IOSFeatureTelemetryResult::AlreadyEmitted);
+  IOSFeatureTelemetryGate insufficient{};
+  char tooSmall[1]{};
+  assert(iosTakeFeaturePolicyTelemetry(
+      insufficient,provenance,tooSmall,sizeof(tooSmall))==
+      IOSFeatureTelemetryResult::BufferTooSmall);
+  }
+
 }
 
 int main() {
@@ -831,5 +878,6 @@ int main() {
   testProvenanceOwnsSnapshot();
   testTelemetryExactAndGateBoundaries();
   testTelemetryEnumNamesAndMaximumCapacity();
+  testRuntimeSafePolicyMarkerContract();
   return 0;
   }

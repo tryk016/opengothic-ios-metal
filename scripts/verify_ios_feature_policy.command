@@ -14,8 +14,8 @@ trap cleanup EXIT
 cd "$REPO"
 
 scope_files=(
-  game/graphics/iosfeaturepolicyprovenance.h
-  game/graphics/iosfeaturepolicyprovenance.cpp
+  game/graphics/iosmetalcontext.h
+  game/graphics/iosmetalcontext.cpp
   ios/tests/iosfeaturepolicy.cpp
   scripts/verify_ios_feature_policy.command
 )
@@ -129,6 +129,8 @@ test = Path("ios/tests/iosfeaturepolicy.cpp").read_text()
 capability_header = Path(
     "game/graphics/iosdevicecapabilities.h"
 ).read_text()
+context_header = Path("game/graphics/iosmetalcontext.h").read_text()
+context_source = Path("game/graphics/iosmetalcontext.cpp").read_text()
 mutation_root = Path(os.environ["IOS_FEATURE_POLICY_MUTATION_ROOT"])
 
 expected_matrix = (
@@ -846,6 +848,390 @@ print(
     "compiled=25 executed=25 "
     f"mutations-killed={provenance_killed}"
 )
+
+def runtime_constructor(value):
+    begin = value.index(
+        "  Impl(Device& device, SystemApi::Window* window)"
+    )
+    end = value.index(
+        "\n#if defined("
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)\n"
+        "  bool clearOnlyRuntimeCompilationUnchanged",
+        begin,
+    )
+    return value[begin:end]
+
+def validate_runtime_contract(candidate_header, candidate_source):
+    compact_header = compact(candidate_header)
+    compact_source = compact(candidate_source)
+    constructor_source = runtime_constructor(candidate_source)
+    constructor = compact(constructor_source)
+
+    exact_counts = (
+        ("iosCollectDeviceFacts(", 1),
+        ("iosLogDeviceFacts(", 1),
+        ("iosBuildFeaturePolicyProvenance(", 1),
+        ("iosTakeFeaturePolicyTelemetry(", 1),
+    )
+    for anchor, expected in exact_counts:
+        if candidate_source.count(anchor) != expected:
+            raise ValueError(
+                "P2.6e2 runtime call count changed: " + anchor
+            )
+
+    facts_fail_closed = (
+        "iosLogDeviceFacts(deviceFacts);"
+        "if(!deviceFacts.value)"
+        "throwstd::runtime_error("
+        "\"RendererIOSdevicefactsvalidationfailed\");"
+    )
+    if constructor.count(facts_fail_closed) != 1:
+        raise ValueError(
+            "P2.6e2 invalid facts guard or ordering changed"
+        )
+
+    build_anchor = (
+        "featurePolicyProvenance.emplace("
+        "iosBuildFeaturePolicyProvenance("
+        "*deviceFacts.value,IOSFeatureDefaultClass::Safe,"
+        "{false,false,false,false,false}));"
+    )
+    take_anchor = (
+        "featurePolicyTelemetryResult="
+        "iosTakeFeaturePolicyTelemetry("
+        "featurePolicyTelemetryGate,*featurePolicyProvenance,"
+        "featurePolicyTelemetry.data(),"
+        "featurePolicyTelemetry.size());"
+    )
+    result_anchor = (
+        "if(featurePolicyTelemetryResult!="
+        "IOSFeatureTelemetryResult::Emitted)"
+        "throwstd::runtime_error("
+        "\"RendererIOSfeaturepolicytelemetrywasnotemitted\");"
+    )
+    log_anchor = (
+        "Log::i(featurePolicyTelemetry.data(),"
+        "\"build=\",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);"
+    )
+    marker_call_count = compact_source.count(
+        "Log::i(featurePolicyTelemetry.data(),"
+    )
+    marker_prefix_count = candidate_source.count(
+        'Log::i("RendererIOS feature policy:'
+    )
+    if marker_call_count + marker_prefix_count != 1:
+        raise ValueError(
+            "P2.6e2 global policy marker call count changed"
+        )
+    for anchor in (
+        "resetTargets();",
+        build_anchor,
+        take_anchor,
+        result_anchor,
+        log_anchor,
+    ):
+        if constructor.count(anchor) != 1:
+            raise ValueError(
+                "P2.6e2 runtime startup contract changed"
+            )
+    ordered = (
+        "iosLogDeviceFacts(deviceFacts);",
+        "if(!deviceFacts.value)",
+        "resetTargets();",
+        build_anchor,
+        take_anchor,
+        result_anchor,
+        log_anchor,
+        "constautoplatform=rendererIOSPlatformInfo();",
+    )
+    positions = [constructor.index(anchor) for anchor in ordered]
+    if positions != sorted(positions):
+        raise ValueError("P2.6e2 startup ordering changed")
+    swallowed_try = constructor.index("try{",positions[-1])
+    if swallowed_try<=positions[-2]:
+        raise ValueError("P2.6e2 mandatory log entered swallow-all")
+
+    raw_reset = constructor_source.index("    resetTargets();")
+    raw_log = constructor_source.index(
+        "    Log::i(featurePolicyTelemetry.data(),"
+    )
+    mandatory_block = constructor_source[raw_reset:raw_log]
+    if "#if" in mandatory_block or "try {" in mandatory_block:
+        raise ValueError(
+            "P2.6e2 marker moved under diagnostics or swallow-all"
+        )
+
+    owner_contracts = (
+        "std::optional<IOSFeaturePolicyProvenance>"
+        "featurePolicyProvenance;",
+        "IOSFeatureTelemetryGatefeaturePolicyTelemetryGate;",
+        "constIOSFeaturePolicyProvenance&"
+        "IOSMetalContext::featurePolicyProvenance()"
+        "constnoexcept{return*impl->featurePolicyProvenance;}",
+    )
+    for contract in owner_contracts:
+        if compact_source.count(contract) != 1:
+            raise ValueError(
+                "P2.6e2 runtime owner/accessor changed"
+            )
+    public_accessor = (
+        "constIOSFeaturePolicyProvenance&"
+        "featurePolicyProvenance()constnoexcept;"
+    )
+    if compact_header.count(public_accessor) != 1:
+        raise ValueError("P2.6e2 public accessor ABI changed")
+    if "IOSDeviceFacts" in candidate_header or \
+            "iosCollectDeviceFacts" in candidate_header:
+        raise ValueError("P2.6e2 public header exposes facts")
+
+    compact_test = compact(test)
+    test_anchors = (
+        "testRuntimeSafePolicyMarkerContract();",
+        "defaults=safespatial=0/1/0/not-requested",
+        "metal4=0/1/0/not-requestedbuild=host-safe-sha",
+        "IOSFeatureTelemetryResult::AlreadyEmitted",
+        "IOSFeatureTelemetryResult::BufferTooSmall",
+    )
+    for anchor in test_anchors:
+        if anchor not in compact_test:
+            raise ValueError(
+                "P2.6e2 host Safe oracle changed: " + anchor
+            )
+
+validate_runtime_contract(context_header,context_source)
+
+runtime_mutations = []
+facts_log = "    iosLogDeviceFacts(deviceFacts);\n"
+facts_guard = (
+    "    if(!deviceFacts.value)\n"
+    "      throw std::runtime_error(\n"
+    "        \"RendererIOS device facts validation failed\");\n"
+)
+build_block = (
+    "    featurePolicyProvenance.emplace(\n"
+    "      iosBuildFeaturePolicyProvenance(\n"
+    "        *deviceFacts.value,\n"
+    "        IOSFeatureDefaultClass::Safe,\n"
+    "        {false,false,false,false,false}));\n"
+)
+take_block = (
+    "    const IOSFeatureTelemetryResult featurePolicyTelemetryResult =\n"
+    "      iosTakeFeaturePolicyTelemetry(\n"
+    "        featurePolicyTelemetryGate,\n"
+    "        *featurePolicyProvenance,\n"
+    "        featurePolicyTelemetry.data(),\n"
+    "        featurePolicyTelemetry.size());\n"
+)
+marker_log = (
+    "    Log::i(featurePolicyTelemetry.data(),\n"
+    "           \" build=\",OPENGOTHIC_RENDERER_IOS_BUILD_SHA);\n"
+)
+
+runtime_mutations.append((
+    "second-collector",
+    context_header,
+    replace_once(
+        context_source,
+        facts_log,
+        facts_log + "    (void)iosCollectDeviceFacts(device);\n",
+    ),
+))
+runtime_mutations.append((
+    "second-build",
+    context_header,
+    replace_once(
+        context_source,
+        build_block,
+        build_block
+        + "    (void)iosBuildFeaturePolicyProvenance(\n"
+        + "      *deviceFacts.value,IOSFeatureDefaultClass::Safe,\n"
+        + "      {false,false,false,false,false});\n",
+    ),
+))
+runtime_mutations.append((
+    "second-take",
+    context_header,
+    replace_once(
+        context_source,
+        take_block,
+        take_block
+        + "    (void)iosTakeFeaturePolicyTelemetry(\n"
+        + "      featurePolicyTelemetryGate,*featurePolicyProvenance,\n"
+        + "      featurePolicyTelemetry.data(),"
+        + "featurePolicyTelemetry.size());\n",
+    ),
+))
+runtime_mutations.append((
+    "removed-invalid-facts-guard",
+    context_header,
+    replace_once(context_source,facts_guard,""),
+))
+runtime_mutations.append((
+    "inverted-invalid-facts-guard",
+    context_header,
+    replace_once(
+        context_source,
+        "    if(!deviceFacts.value)\n",
+        "    if(deviceFacts.value)\n",
+    ),
+))
+runtime_mutations.append((
+    "continue-after-invalid-facts",
+    context_header,
+    replace_once(
+        context_source,
+        "      throw std::runtime_error(\n"
+        "        \"RendererIOS device facts validation failed\");",
+        "      (void)std::runtime_error(\n"
+        "        \"RendererIOS device facts validation failed\");",
+    ),
+))
+runtime_mutations.append((
+    "guard-before-facts-log",
+    context_header,
+    replace_once(
+        context_source,
+        facts_log + facts_guard,
+        facts_guard + facts_log,
+    ),
+))
+runtime_mutations.append((
+    "build-before-reset-targets",
+    context_header,
+    replace_once(
+        context_source,
+        "    resetTargets();\n" + build_block,
+        build_block + "    resetTargets();\n",
+    ),
+))
+runtime_mutations.append((
+    "accept-already-emitted",
+    context_header,
+    replace_once(
+        context_source,
+        "    if(featurePolicyTelemetryResult!="
+        "IOSFeatureTelemetryResult::Emitted)\n",
+        "    if(featurePolicyTelemetryResult=="
+        "IOSFeatureTelemetryResult::BufferTooSmall)\n",
+    ),
+))
+runtime_mutations.append((
+    "accept-buffer-too-small",
+    context_header,
+    replace_once(
+        context_source,
+        "    if(featurePolicyTelemetryResult!="
+        "IOSFeatureTelemetryResult::Emitted)\n",
+        "    if(featurePolicyTelemetryResult=="
+        "IOSFeatureTelemetryResult::AlreadyEmitted)\n",
+    ),
+))
+runtime_mutations.append((
+    "diagnostics-only-marker",
+    context_header,
+    replace_once(
+        context_source,
+        marker_log,
+        "#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)\n"
+        + marker_log
+        + "#endif\n",
+    ),
+))
+runtime_mutations.append((
+    "marker-in-swallowed-try",
+    context_header,
+    replace_once(
+        context_source,
+        marker_log,
+        "    try {\n"
+        + marker_log
+        + "      }\n"
+        + "    catch(...) {\n"
+        + "      }\n",
+    ),
+))
+runtime_mutations.append((
+    "missing-build-sha",
+    context_header,
+    replace_once(
+        context_source,
+        marker_log,
+        "    Log::i(featurePolicyTelemetry.data());\n",
+    ),
+))
+runtime_mutations.append((
+    "second-policy-marker-in-resume",
+    context_header,
+    replace_once(
+        context_source,
+        "bool IOSMetalContext::resume() noexcept {\n",
+        "bool IOSMetalContext::resume() noexcept {\n"
+        "  Log::i(\"RendererIOS feature policy: "
+        "lifecycle-reemission build=\",\n"
+        "         OPENGOTHIC_RENDERER_IOS_BUILD_SHA);\n",
+    ),
+))
+runtime_mutations.append((
+    "activation-all-true",
+    context_header,
+    replace_once(
+        context_source,
+        "{false,false,false,false,false}));",
+        "{true,true,true,true,true}));",
+    ),
+))
+runtime_mutations.append((
+    "defaults-from-family",
+    context_header,
+    replace_once(
+        context_source,
+        "        IOSFeatureDefaultClass::Safe,\n",
+        "        deviceFacts.value->facts()."
+        "highestKnownAppleFamily>=10u\n"
+        "          ? IOSFeatureDefaultClass::Apple10\n"
+        "          : IOSFeatureDefaultClass::Safe,\n",
+    ),
+))
+runtime_mutations.append((
+    "accessor-by-value",
+    replace_once(
+        context_header,
+        "    const IOSFeaturePolicyProvenance&\n"
+        "                     featurePolicyProvenance() const noexcept;",
+        "    IOSFeaturePolicyProvenance\n"
+        "                     featurePolicyProvenance() const noexcept;",
+    ),
+    replace_once(
+        context_source,
+        "const IOSFeaturePolicyProvenance&\n"
+        "IOSMetalContext::featurePolicyProvenance() const noexcept {",
+        "IOSFeaturePolicyProvenance\n"
+        "IOSMetalContext::featurePolicyProvenance() const noexcept {",
+    ),
+))
+
+runtime_killed_labels = []
+for label, candidate_header, candidate_source in runtime_mutations:
+    try:
+        validate_runtime_contract(
+            candidate_header,candidate_source
+        )
+    except (ValueError, KeyError):
+        runtime_killed_labels.append(label)
+        continue
+    raise SystemExit(
+        "P2.6e2 source-oracle mutation survived: " + label
+    )
+if len(runtime_killed_labels) != 17:
+    raise SystemExit(
+        "P2.6e2 source mutation count drifted: "
+        f"{len(runtime_killed_labels)}/17"
+    )
+print(
+    "P2.6e2 source mutation oracle: "
+    "source-mutants-killed=17 labels="
+    + ",".join(runtime_killed_labels)
+)
 PY
 
-echo "P2.6e1 IOSFeaturePolicy provenance: PASS"
+echo "P2.6e2 IOSFeaturePolicy runtime owner: PASS"

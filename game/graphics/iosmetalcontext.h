@@ -20,6 +20,7 @@ class VectorImage;
 }
 
 class InventoryMenu;
+class IOSFeaturePolicyProvenance;
 class IOSSceneAssetRegistry;
 class VideoWidget;
 
@@ -70,6 +71,8 @@ class IOSMetalContext final {
     void             prepareForOwnerRelease() noexcept;
     void             onWorldChanged();
     std::size_t      retainedSceneCount() const noexcept;
+    const IOSFeaturePolicyProvenance&
+                     featurePolicyProvenance() const noexcept;
 
     bool             requiresGpuSavePreviewCapture() const noexcept;
     bool             savePreviewReady();
