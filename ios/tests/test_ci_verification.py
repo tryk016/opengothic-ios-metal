@@ -37,6 +37,31 @@ def expect_error(callback) -> None:
     raise AssertionError("expected fail-closed CI verification error")
 
 
+def exact_scope(source: str, start: str, end: str, label: str) -> str:
+    if source.count(start) != 1 or source.count(end) != 1:
+        raise ValueError(f"{label} boundaries are not exact")
+    start_position = source.index(start)
+    end_position = source.index(end, start_position + len(start))
+    if end_position <= start_position:
+        raise ValueError(f"{label} boundaries are out of order")
+    return source[start_position + len(start) : end_position]
+
+
+def workflow_job(source: str, job: str) -> str:
+    lines = source.splitlines()
+    anchor = f"  {job}:"
+    if lines.count(anchor) != 1:
+        raise ValueError(f"workflow must contain exact job {job}")
+    start = lines.index(anchor)
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.startswith("  ") and not line.startswith("    ") and line.endswith(":"):
+            end = index
+            break
+    return "\n".join(lines[start:end])
+
+
 def validate_workflow(source: str) -> None:
     required_jobs = (
         "classifier",
@@ -85,6 +110,25 @@ def validate_workflow(source: str) -> None:
             raise ValueError(f"workflow contract drifted: {fragment}")
     if "matrix:" in source:
         raise ValueError("split workflow must not hide profile results in a matrix")
+    for job, output, profile in (
+        ("build-off", "build_off", "off"),
+        ("build-on", "build_on", "on"),
+        ("build-tile", "build_tile", "tile"),
+        ("build-forward", "build_forward", "forward"),
+    ):
+        scope = workflow_job(source, job)
+        required_job_lines = (
+            "    needs: [classifier, contracts]",
+            f"    if: needs.classifier.outputs.{output} == 'true'",
+            "        uses: actions/checkout@v4",
+            "          fetch-depth: 0",
+            "          submodules: recursive",
+            "        run: brew install cmake glslang ripgrep",
+            f"        run: scripts/ci_build_profile.command {profile}",
+        )
+        for line in required_job_lines:
+            if scope.splitlines().count(line) != 1:
+                raise ValueError(f"{job} is not self-contained: {line.strip()}")
 
 
 def validate_extracted_oracles(contracts: str, profile: str) -> None:
@@ -136,12 +180,114 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         raise ValueError("Tempest read-only verifier must run exactly twice")
     if "bash ios/patches/apply-patches.sh" in profile:
         raise ValueError("profile builds duplicate the contracts-only Tempest oracle")
+    if ".github/workflows/renderer-ios.yml" in contracts:
+        raise ValueError("extracted contracts still parse the workflow implementation")
+
+    configure = exact_scope(
+        profile,
+        "# CI_PROFILE_CONFIGURE_BEGIN",
+        "# CI_PROFILE_CONFIGURE_END",
+        "profile configure",
+    )
+    configure_contract = (
+        "cmake -S . -B build-renderer-ios -G Xcode",
+        "-DCMAKE_SYSTEM_NAME=iOS",
+        "-DCMAKE_OSX_ARCHITECTURES=arm64",
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=16.4",
+        '-DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="$DIAGNOSTICS"',
+        '-DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE"',
+        '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST='
+        '"$SHADING_PROTOTYPE_TILE_SELF_TEST"',
+        '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST='
+        '"$SHADING_PROTOTYPE_FORWARD_SELF_TEST"',
+        '-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA"',
+    )
+    for literal in configure_contract:
+        if configure.count(literal) != 1:
+            raise ValueError(f"profile configure contract drifted: {literal}")
+
+    candidate = exact_scope(
+        profile,
+        "# CI_PROFILE_CANDIDATE_BEGIN",
+        "# CI_PROFILE_CANDIDATE_END",
+        "profile candidate metallib",
+    )
+    for literal in (
+        "for shader in landscape bink ui inventory shading-prototypes; do",
+        "xcrun --sdk iphoneos metallib",
+        "xcrun --sdk iphoneos metal-nm",
+        'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
+        ')" -eq 15',
+        "RendererIOS.candidate.sha256",
+    ):
+        if candidate.count(literal) != 1:
+            raise ValueError(f"profile candidate contract drifted: {literal}")
+    if candidate.splitlines().count("  xcrun --sdk iphoneos metal \\") != 1:
+        raise ValueError("profile candidate Metal compiler command drifted")
+
+    build = exact_scope(
+        profile,
+        "printf '\\n### CI profile Build iOS Release\\n'",
+        "printf '\\n### CI profile Verify P2.6b1 final weak MetalFX dependency\\n'",
+        "profile build",
+    )
+    if build.count("cmake --build build-renderer-ios --config Release") != 1:
+        raise ValueError("profile build command is not exact")
+    positions = tuple(
+        profile.index(anchor)
+        for anchor in (
+            "# CI_PROFILE_CONFIGURE_BEGIN",
+            "# CI_PROFILE_CANDIDATE_BEGIN",
+            "printf '\\n### CI profile Build iOS Release\\n'",
+            "printf '\\n### CI profile Verify P2.6b1 final weak MetalFX dependency\\n'",
+        )
+    )
+    if positions != tuple(sorted(positions)):
+        raise ValueError("profile configure/candidate/build/weak gates are out of order")
+
+    p23_compile = exact_scope(
+        contracts,
+        "printf '\\n### CI contract: Verify P2.3c clear-only pass contract\\n'",
+        "# CI_CONTRACT_P23C_COMPILE_END",
+        "P2.3c compile",
+    )
+    if p23_compile.count(
+        "-DOPENGOTHIC_IOS_CAPTURE_NORMALIZER_TEST_FAULTS=1"
+    ) != 1:
+        raise ValueError("P2.3c host-only fault hook is not exact")
+    smoke_invocation = (
+        "  ios/device-test/run-smoke-test.sh --save-slot 1 --self-test"
+    )
+    if contracts.splitlines().count(smoke_invocation) != 1:
+        raise ValueError("preview-fence save-slot smoke self-test is not exact")
 
 
 def replace_once(source: str, before: str, after: str) -> str:
     if source.count(before) != 1:
         raise AssertionError(f"mutation anchor is not unique: {before}")
     return source.replace(before, after, 1)
+
+
+def replace_exact_line_once(source: str, before: str, after: str) -> str:
+    lines = source.splitlines()
+    if lines.count(before) != 1:
+        raise AssertionError(f"mutation line anchor is not unique: {before}")
+    lines[lines.index(before)] = after
+    trailing_newline = "\n" if source.endswith("\n") else ""
+    return "\n".join(lines) + trailing_newline
+
+
+def replace_once_in_job(
+    source: str,
+    job: str,
+    before: str,
+    after: str,
+) -> str:
+    scope = workflow_job(source, job)
+    mutated = replace_once(scope, before, after)
+    if source.count(scope) != 1:
+        raise AssertionError(f"workflow job scope is not unique: {job}")
+    return source.replace(scope, mutated, 1)
 
 
 def test_classification() -> None:
@@ -278,6 +424,18 @@ def test_workflow_contract() -> None:
             "  build-forward:",
             "  build-forward-renamed:",
         ),
+        replace_once_in_job(
+            workflow,
+            "build-off",
+            "        run: scripts/ci_build_profile.command off",
+            "        run: true",
+        ),
+        replace_once_in_job(
+            workflow,
+            "build-on",
+            "        uses: actions/checkout@v4",
+            "        run: true",
+        ),
     )
     killed = 0
     for candidate in mutations:
@@ -287,18 +445,106 @@ def test_workflow_contract() -> None:
             killed += 1
         else:
             raise AssertionError("workflow mutation survived")
-    assert killed == 5
-    contract_mutation = replace_once(
-        contracts,
-        "### CI contract: Verify neutral P2.1 scene boundary",
-        "### CI contract removed: Verify neutral P2.1 scene boundary",
+    assert killed == 7
+    extraction_mutations = (
+        (
+            replace_once(
+                contracts,
+                "### CI contract: Verify neutral P2.1 scene boundary",
+                "### CI contract removed: Verify neutral P2.1 scene boundary",
+            ),
+            profile,
+        ),
+        (
+            replace_once(
+                contracts,
+                "# CI_CONTRACT_P23C_COMPILE_END",
+                "# CI_CONTRACT_P23C_COMPILE_REMOVED",
+            ),
+            profile,
+        ),
+        (
+            replace_once(
+                contracts,
+                "printf '\\n### CI contract: Verify P2.3c clear-only pass contract\\n'",
+                "printf '\\n### CI contract: P2.3c compile removed\\n'",
+            ),
+            profile,
+        ),
+        (
+            replace_exact_line_once(
+                contracts,
+                "  ios/device-test/run-smoke-test.sh --save-slot 1 --self-test",
+                "  ios/device-test/run-smoke-test.sh --self-test",
+            ),
+            profile,
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "# CI_PROFILE_CONFIGURE_BEGIN",
+                "# CI_PROFILE_CONFIGURE_REMOVED",
+            ),
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "# CI_PROFILE_CONFIGURE_END",
+                "# CI_PROFILE_CONFIGURE_REMOVED",
+            ),
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "# CI_PROFILE_CANDIDATE_BEGIN",
+                "# CI_PROFILE_CANDIDATE_REMOVED",
+            ),
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "# CI_PROFILE_CANDIDATE_END",
+                "# CI_PROFILE_CANDIDATE_REMOVED",
+            ),
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "cmake -S . -B build-renderer-ios -G Xcode",
+                "true # configure removed",
+            ),
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "printf '\\n### CI profile Build iOS Release\\n'",
+                "printf '\\n### CI profile build removed\\n'",
+            ),
+        ),
+        (
+            contracts,
+            replace_once(
+                profile,
+                "printf '\\n### CI profile Verify P2.6b1 final weak MetalFX dependency\\n'",
+                "printf '\\n### CI profile weak check removed\\n'",
+            ),
+        ),
     )
-    try:
-        validate_extracted_oracles(contract_mutation, profile)
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("extracted CI-only oracle mutation survived")
+    extraction_killed = 0
+    for candidate_contracts, candidate_profile in extraction_mutations:
+        try:
+            validate_extracted_oracles(candidate_contracts, candidate_profile)
+        except ValueError:
+            extraction_killed += 1
+        else:
+            raise AssertionError("extracted CI/profile mutation survived")
+    assert extraction_killed == 11
 
 
 def main() -> None:
@@ -308,7 +554,7 @@ def main() -> None:
     test_workflow_contract()
     print(
         "RendererIOS CI verification tests passed: "
-        "4 groups, 5 workflow mutations, 1 extraction mutation"
+        "4 groups, 7 workflow mutations, 11 extraction/profile mutations"
     )
 
 

@@ -98,6 +98,7 @@ for value in \
   esac
 done
 
+# CI_PROFILE_CONFIGURE_BEGIN
 cmake -S . -B build-renderer-ios -G Xcode \
   -DCMAKE_SYSTEM_NAME=iOS \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
@@ -114,7 +115,9 @@ cmake -S . -B build-renderer-ios -G Xcode \
   -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="$SHADING_PROTOTYPE_TILE_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$SHADING_PROTOTYPE_FORWARD_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA"
+# CI_PROFILE_CONFIGURE_END
 
+# CI_PROFILE_CANDIDATE_BEGIN
 for shader in landscape bink ui inventory shading-prototypes; do
   extra=()
   if [ "$shader" = shading-prototypes ]; then
@@ -151,7 +154,7 @@ test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"
 test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 15
 shasum -a 256 "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '{print $1}' >"$RUNNER_TEMP/RendererIOS.candidate.sha256"
-
+# CI_PROFILE_CANDIDATE_END
 
 printf '\n### CI profile Build iOS Release\n'
 set -euo pipefail

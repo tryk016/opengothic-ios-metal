@@ -2109,13 +2109,15 @@ xcrun clang++ -x objective-c++ -std=c++20 -fno-objc-arc \
   -isystem lib/Tempest/Engine/thirdparty/metal-cpp -fsyntax-only \
   game/graphics/iosmetalcapturesession.mm
 
+# CI_CONTRACT_P23C_COMPILE_END
 python3 - <<'PY'
 import plistlib
 from pathlib import Path
 
 context = Path("game/graphics/iosmetalcontext.cpp").read_text()
 harness = Path("ios/device-test/run-smoke-test.sh").read_text()
-workflow = Path(".github/workflows/renderer-ios.yml").read_text()
+contracts = Path("scripts/ci_contracts.command").read_text()
+profile = Path("scripts/ci_build_profile.command").read_text()
 neutral = Path(
     "game/graphics/iosmetalresourceclearpassprobe.cpp"
 ).read_text()
@@ -2226,12 +2228,22 @@ if "MetalCaptureEnabled" in off_plist:
 if on_plist.get("MetalCaptureEnabled") is not True:
     raise SystemExit("clear-only plist does not enable programmatic capture")
 
+def exact_scope(source, start, end, label):
+    if source.count(start) != 1 or source.count(end) != 1:
+        raise RuntimeError(f"{label} boundaries are not exact")
+    start_position = source.index(start)
+    end_position = source.index(end, start_position + len(start))
+    if end_position <= start_position:
+        raise RuntimeError(f"{label} boundaries are out of order")
+    return source[start_position + len(start):end_position]
+
 def build_step(source):
-    return source.split(
-        "      - name: Build iOS Release", 1
-    )[1].split(
-        "\n      - name: Package unsigned device-test IPA", 1
-    )[0]
+    return exact_scope(
+        source,
+        "printf '\\n### CI profile Build iOS Release\\n'",
+        "printf '\\n### CI profile Verify P2.6b1 final weak MetalFX dependency\\n'",
+        "profile build",
+    )
 
 def require_exact_binary_cardinality(scope):
     contracts = []
@@ -2261,7 +2273,7 @@ def require_exact_binary_cardinality(scope):
         contracts.append(contract)
     return contracts
 
-binary_scope = build_step(workflow)
+binary_scope = build_step(profile)
 binary_contracts = require_exact_binary_cardinality(binary_scope)
 presence_only_contract = binary_contracts[0].replace(
     "grep -Fxc --", "grep -Fxq --", 1
@@ -2286,7 +2298,7 @@ except RuntimeError:
     pass
 else:
     raise SystemExit("duplicate binary cardinality oracle survived")
-external_fixture = workflow + "\n# fixture duplicate: " + markers[0] + "\n"
+external_fixture = profile + "\n# fixture duplicate: " + markers[0] + "\n"
 require_exact_binary_cardinality(build_step(external_fixture))
 start_probe = context.split(
     "void startClearOnlyPassSelfTest() noexcept {", 1
@@ -2441,9 +2453,13 @@ for forbidden in (
         raise SystemExit(
             f"capture normalizer returned to path traversal: {forbidden}"
         )
-p23_compile_scope = workflow.split(
-    "      - name: Verify P2.3c clear-only pass contract", 1
-)[1].split("          python3 - <<'PY'", 1)[0]
+p23_compile_scope = exact_scope(
+    contracts,
+    "printf '\\n### CI contract: " +
+    "Verify P2.3c clear-only pass contract\\n'",
+    "# CI_CONTRACT_" + "P23C_COMPILE_END",
+    "P2.3c compile",
+)
 if p23_compile_scope.count(
     "-DOPENGOTHIC_IOS_CAPTURE_NORMALIZER_TEST_FAULTS=1"
 ) != 1:
@@ -4331,7 +4347,7 @@ validator = Path(
 validator_module = runpy.run_path(
     "ios/device-test/validate-shading-prototype-tile-self-test-log.py"
 )
-workflow = Path(".github/workflows/renderer-ios.yml").read_text()
+profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
@@ -4436,15 +4452,15 @@ if cleanup.index("capture_shading_prototype_tile_artifact") > cleanup.index(
     "preserve_failure_evidence"
 ):
     raise SystemExit("Tile capture recovery follows failure preservation")
-configure = workflow.rsplit(
-    "      - name: Configure RendererIOS", 1
-)[1].split(
-    "\n      - name: Assert legacy renderer is not in the target", 1
-)[0]
+configure_start = "# CI_PROFILE_CONFIGURE_BEGIN"
+configure_end = "# CI_PROFILE_CONFIGURE_END"
+if profile.count(configure_start) != 1 or profile.count(configure_end) != 1:
+    raise SystemExit("profile configure boundaries are not exact")
+configure = profile.split(configure_start, 1)[1].split(configure_end, 1)[0]
 if configure.count(
     "-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="
 ) != 1:
-    raise SystemExit("workflow Tile profile is not configured exactly once")
+    raise SystemExit("build profile Tile mode is not configured exactly once")
 PY
 
 configure_profile() {
@@ -4825,8 +4841,9 @@ grep -Fq 'PROCESS_SURVIVED_FAULT_WINDOW=1' \
 grep -Fq '((PROCESS_SURVIVED_FAULT_WINDOW == 1))' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'ID3 summary key mismatch' ios/device-test/run-smoke-test.sh
-grep -Fq 'run-smoke-test.sh --save-slot 1 --self-test' \
-  .github/workflows/renderer-ios.yml
+test "$(grep -Fxc \
+  '  ios/device-test/run-smoke-test.sh --save-slot 1 --self-test' \
+  scripts/ci_contracts.command)" -eq 1
 grep -Fq 'preview-fence-save-v1' game/commandline.cpp
 grep -Fq 'OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 3' game/commandline.cpp
 grep -Fq 'RendererIOS preview fence save script: REQUESTED' game/mainwindow.cpp
