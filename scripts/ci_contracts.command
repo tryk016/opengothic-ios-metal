@@ -163,8 +163,12 @@ xcrun clang++ -std=c++20 \
   -o "$RUNNER_TEMP/iosframeplan"
 "$RUNNER_TEMP/iosframeplan"
 
-printf '\n### CI contract: Verify P2.6a host-neutral device facts contract\n'
+printf '\n### CI contract: Verify P2.6c host-neutral feature policy\n'
 set -euo pipefail
+
+scripts/verify_ios_feature_policy.command
+
+printf '\n### CI contract: Verify P2.6a host-neutral device facts contract\n'
 
 capability_files=(
   game/graphics/iosdevicecapabilities.h

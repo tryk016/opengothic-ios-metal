@@ -108,6 +108,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 PYTHONDONTWRITEBYTECODE=1 python3 \
   ios/tests/test_verification_router.py
 
+echo "### P2.6c host-neutral feature policy"
+scripts/verify_ios_feature_policy.command
+
 echo "### Tempest verifier (2x)"
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh
