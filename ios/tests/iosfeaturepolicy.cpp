@@ -1,8 +1,10 @@
 #include "graphics/iosfeaturepolicy.h"
+#include "graphics/iosfeaturepolicyprovenance.h"
 
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 
@@ -111,6 +113,67 @@ void expectDefaultRequest(
       iosResolveFeatureDefaultRequest(feature,defaults);
   assert(request.requested==requested);
   assert(request.fallbackReason==fallbackReason);
+  }
+
+constexpr IOSFeatureActivationResults allActivation(
+    bool value) noexcept {
+  return {value,value,value,value,value};
+  }
+
+IOSFeatureActivationResults activationFailureAt(
+    uint8_t feature) noexcept {
+  IOSFeatureActivationResults activation = allActivation(true);
+  switch(feature) {
+    case 0u:
+      activation.metalFxSpatial = false;
+      break;
+    case 1u:
+      activation.metalFxTemporal = false;
+      break;
+    case 2u:
+      activation.meshShading = false;
+      break;
+    case 3u:
+      activation.rayTracing = false;
+      break;
+    case 4u:
+      activation.metal4Transport = false;
+      break;
+    default:
+      assert(false);
+      break;
+    }
+  return activation;
+  }
+
+void expectDecision(
+    const IOSFeaturePolicyProvenance& provenance,
+    IOSFeatureId feature,
+    IOSDeviceProbeId probe,
+    bool requested,
+    bool eligible,
+    bool active,
+    IOSFeatureFallbackReason fallbackReason) {
+  const IOSFeaturePolicyDecision* decision =
+      provenance.decision(feature);
+  assert(decision!=nullptr);
+  assert(decision->feature==feature);
+  assert(decision->probe==probe);
+  expectState(
+      decision->state,requested,eligible,active,fallbackReason);
+  }
+
+IOSFeaturePolicyProvenanceStorage provenanceStorage(
+    const IOSFeaturePolicyProvenance& provenance) {
+  IOSFeaturePolicyProvenanceStorage storage{};
+  std::memcpy(&storage,&provenance,sizeof(storage));
+  return storage;
+  }
+
+void replaceProvenanceStorage(
+    IOSFeaturePolicyProvenance& provenance,
+    const IOSFeaturePolicyProvenanceStorage& storage) {
+  std::memcpy(&provenance,&storage,sizeof(storage));
   }
 
 void testExactDefaultMatrix() {
@@ -328,6 +391,337 @@ void testExplicitRequestRegression() {
       true,false,false,IOSFeatureFallbackReason::InvalidFeature);
   }
 
+void testProvenanceMatrixAndMapping() {
+  const IOSDeviceFacts supported = factsWithAllProbes(
+      IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+  for(uint8_t defaults=0u; defaults<DefaultClassCount; ++defaults) {
+    const IOSFeaturePolicyProvenance provenance =
+        iosBuildFeaturePolicyProvenance(
+            supported,DefaultClasses[defaults],allActivation(true));
+    assert(provenance.defaults()==DefaultClasses[defaults]);
+    assert(provenance.factsAbiVersion()==IOSDeviceFactsABIVersion);
+    assert(
+        provenance.probeContractVersion()==
+        IOSDeviceProbeContractVersion);
+    const IOSFeaturePolicyDecision* first =
+        provenance.decision(IOSFeatureId::MetalFxSpatial);
+    assert(first!=nullptr);
+    for(uint8_t feature=0u; feature<ProbeCount; ++feature) {
+      const bool requested = ExpectedRequests[defaults][feature];
+      assert(provenance.decision(Features[feature])==first+feature);
+      expectDecision(
+          provenance,
+          Features[feature],
+          static_cast<IOSDeviceProbeId>(feature),
+          requested,true,requested,
+          requested
+              ? IOSFeatureFallbackReason::None
+              : IOSFeatureFallbackReason::NotRequested);
+      }
+    }
+
+  assert(iosBuildFeaturePolicyProvenance(
+      supported,IOSFeatureDefaultClass::Safe,
+      allActivation(true)).decision(IOSFeatureId::Count)==nullptr);
+  assert(iosBuildFeaturePolicyProvenance(
+      supported,IOSFeatureDefaultClass::Safe,
+      allActivation(true)).decision(
+          static_cast<IOSFeatureId>(0xFFu))==nullptr);
+  }
+
+void testProvenanceFallbacksAndNamedActivation() {
+  struct CapabilityCase final {
+    uint8_t knownStages;
+    uint8_t passedStages;
+    IOSFeatureFallbackReason fallbackReason;
+    };
+  constexpr CapabilityCase cases[] = {
+    {0u,0u,IOSFeatureFallbackReason::AvailabilityUnknown},
+    {Availability,0u,
+        IOSFeatureFallbackReason::AvailabilityUnsupported},
+    {Availability,Availability,
+        IOSFeatureFallbackReason::DeviceSupportUnknown},
+    {IOSDeviceRequiredProbeStages,Availability,
+        IOSFeatureFallbackReason::DeviceSupportUnsupported},
+    };
+  for(uint8_t feature=0u; feature<ProbeCount; ++feature) {
+    for(const CapabilityCase& capability:cases) {
+      const IOSDeviceFacts facts = factsWithSingleProbe(
+          feature,capability.knownStages,capability.passedStages);
+      const IOSFeaturePolicyProvenance provenance =
+          iosBuildFeaturePolicyProvenance(
+              facts,IOSFeatureDefaultClass::Apple10,
+              allActivation(true));
+      expectDecision(
+          provenance,Features[feature],
+          static_cast<IOSDeviceProbeId>(feature),
+          true,false,false,capability.fallbackReason);
+      }
+
+    const IOSDeviceFacts supported = factsWithAllProbes(
+        IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+    const IOSFeaturePolicyProvenance provenance =
+        iosBuildFeaturePolicyProvenance(
+            supported,IOSFeatureDefaultClass::Apple10,
+            activationFailureAt(feature));
+    for(uint8_t decision=0u; decision<ProbeCount; ++decision) {
+      const bool failed = decision==feature;
+      expectDecision(
+          provenance,Features[decision],
+          static_cast<IOSDeviceProbeId>(decision),
+          true,true,!failed,
+          failed
+              ? IOSFeatureFallbackReason::ActivationFailed
+              : IOSFeatureFallbackReason::None);
+      }
+    }
+  }
+
+void testProvenanceInvalidDefaults() {
+  const IOSDeviceFacts supported = factsWithAllProbes(
+      IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+  const IOSDeviceFacts unknown = factsWithAllProbes(0u,0u);
+  constexpr IOSFeatureDefaultClass InvalidDefaults[] = {
+    IOSFeatureDefaultClass::Count,
+    static_cast<IOSFeatureDefaultClass>(0xFFu),
+    };
+  for(const IOSFeatureDefaultClass defaults:InvalidDefaults) {
+    const IOSFeaturePolicyProvenance supportedProvenance =
+        iosBuildFeaturePolicyProvenance(
+            supported,defaults,allActivation(true));
+    const IOSFeaturePolicyProvenance unknownProvenance =
+        iosBuildFeaturePolicyProvenance(
+            unknown,defaults,allActivation(true));
+    assert(supportedProvenance.defaults()==defaults);
+    assert(unknownProvenance.defaults()==defaults);
+    for(uint8_t feature=0u; feature<ProbeCount; ++feature) {
+      expectDecision(
+          supportedProvenance,Features[feature],
+          static_cast<IOSDeviceProbeId>(feature),
+          false,true,false,
+          IOSFeatureFallbackReason::InvalidDefaultClass);
+      expectDecision(
+          unknownProvenance,Features[feature],
+          static_cast<IOSDeviceProbeId>(feature),
+          false,false,false,
+          IOSFeatureFallbackReason::InvalidDefaultClass);
+      }
+    }
+  }
+
+IOSFeaturePolicyProvenance provenanceAfterFactsLifetime() {
+  const IOSDeviceFacts facts = factsWithAllProbes(
+      IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+  return iosBuildFeaturePolicyProvenance(
+      facts,IOSFeatureDefaultClass::Apple10,allActivation(true));
+  }
+
+void testProvenanceOwnsSnapshot() {
+  IOSDeviceFactsData source = canonicalData();
+  for(uint8_t feature=0u; feature<ProbeCount; ++feature) {
+    source.probes[feature].knownStages =
+        IOSDeviceRequiredProbeStages;
+    source.probes[feature].passedStages =
+        IOSDeviceRequiredProbeStages;
+    }
+  const IOSDeviceFacts facts = requireFacts(source);
+  IOSFeaturePolicyProvenance provenance =
+      iosBuildFeaturePolicyProvenance(
+          facts,IOSFeatureDefaultClass::Apple10,
+          allActivation(true));
+  for(uint8_t feature=0u; feature<ProbeCount; ++feature) {
+    source.probes[feature].knownStages = 0u;
+    source.probes[feature].passedStages = 0u;
+    expectDecision(
+        provenance,Features[feature],
+        static_cast<IOSDeviceProbeId>(feature),
+        true,true,true,IOSFeatureFallbackReason::None);
+    }
+
+  IOSFeaturePolicyProvenance afterLifetime =
+      provenanceAfterFactsLifetime();
+  expectDecision(
+      afterLifetime,IOSFeatureId::Metal4Transport,
+      IOSDeviceProbeId::Metal4Transport,
+      true,true,true,IOSFeatureFallbackReason::None);
+
+  IOSFeaturePolicyProvenance copy = provenance;
+  IOSFeaturePolicyProvenance moved = std::move(copy);
+  copy = provenance;
+  moved = std::move(copy);
+  expectDecision(
+      moved,IOSFeatureId::RayTracing,
+      IOSDeviceProbeId::RayTracing,
+      true,true,true,IOSFeatureFallbackReason::None);
+  }
+
+void assertUnchanged(
+    const char* buffer,
+    size_t capacity,
+    char value) {
+  for(size_t i=0u; i<capacity; ++i)
+    assert(buffer[i]==value);
+  }
+
+void testTelemetryExactAndGateBoundaries() {
+  const IOSDeviceFacts supported = factsWithAllProbes(
+      IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+  const IOSFeaturePolicyProvenance provenance =
+      iosBuildFeaturePolicyProvenance(
+          supported,IOSFeatureDefaultClass::Apple9,
+          allActivation(true));
+  constexpr char Expected[] =
+      "RendererIOS feature policy: schema=1 facts=1 probes=1 "
+      "defaults=apple9 spatial=1/1/1/none temporal=1/1/1/none "
+      "mesh=1/1/1/none rt=1/1/1/none "
+      "metal4=0/1/0/not-requested";
+  const size_t required = std::strlen(Expected)+1u;
+  assert(required<=IOSFeaturePolicyTelemetryCapacity);
+
+  IOSFeatureTelemetryGate gate{};
+  char output[IOSFeaturePolicyTelemetryCapacity+8u];
+  std::memset(output,'#',sizeof(output));
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,nullptr,0u)==
+      IOSFeatureTelemetryResult::BufferTooSmall);
+  assert(!gate.emitted);
+  assertUnchanged(output,sizeof(output),'#');
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,output,0u)==
+      IOSFeatureTelemetryResult::BufferTooSmall);
+  assert(!gate.emitted);
+  assertUnchanged(output,sizeof(output),'#');
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,output,required-1u)==
+      IOSFeatureTelemetryResult::BufferTooSmall);
+  assert(!gate.emitted);
+  assertUnchanged(output,sizeof(output),'#');
+
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,output,required)==
+      IOSFeatureTelemetryResult::Emitted);
+  assert(gate.emitted);
+  assert(std::strcmp(output,Expected)==0);
+  assert(output[required]=='#');
+
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,nullptr,0u)==
+      IOSFeatureTelemetryResult::AlreadyEmitted);
+  std::memset(output,'!',sizeof(output));
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,output,1u)==
+      IOSFeatureTelemetryResult::AlreadyEmitted);
+  assertUnchanged(output,sizeof(output),'!');
+
+  IOSFeatureTelemetryGate largerGate{};
+  std::memset(output,'?',sizeof(output));
+  assert(iosTakeFeaturePolicyTelemetry(
+      largerGate,provenance,output,required+4u)==
+      IOSFeatureTelemetryResult::Emitted);
+  assert(std::strcmp(output,Expected)==0);
+  assert(output[required]=='?');
+
+  IOSFeatureTelemetryGate guaranteedGate{};
+  std::memset(output,'~',sizeof(output));
+  assert(iosTakeFeaturePolicyTelemetry(
+      guaranteedGate,provenance,output,
+      IOSFeaturePolicyTelemetryCapacity)==
+      IOSFeatureTelemetryResult::Emitted);
+  assert(std::strcmp(output,Expected)==0);
+  }
+
+void expectTelemetryContains(
+    IOSFeaturePolicyProvenance provenance,
+    const char* expected) {
+  IOSFeatureTelemetryGate gate{};
+  char output[IOSFeaturePolicyTelemetryCapacity]{};
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,provenance,output,sizeof(output))==
+      IOSFeatureTelemetryResult::Emitted);
+  assert(std::strstr(output,expected)!=nullptr);
+  }
+
+void testTelemetryEnumNamesAndMaximumCapacity() {
+  const IOSDeviceFacts supported = factsWithAllProbes(
+      IOSDeviceRequiredProbeStages,IOSDeviceRequiredProbeStages);
+  constexpr const char* DefaultNames[] = {
+    "defaults=safe",
+    "defaults=apple8",
+    "defaults=apple9",
+    "defaults=apple10",
+    };
+  for(uint8_t defaults=0u; defaults<DefaultClassCount; ++defaults) {
+    expectTelemetryContains(
+        iosBuildFeaturePolicyProvenance(
+            supported,DefaultClasses[defaults],allActivation(true)),
+        DefaultNames[defaults]);
+    }
+
+  IOSFeaturePolicyProvenance first =
+      iosBuildFeaturePolicyProvenance(
+          supported,IOSFeatureDefaultClass::Safe,
+          allActivation(true));
+  IOSFeaturePolicyProvenanceStorage storage =
+      provenanceStorage(first);
+  storage.decisions[0].state.fallbackReason =
+      IOSFeatureFallbackReason::None;
+  storage.decisions[1].state.fallbackReason =
+      IOSFeatureFallbackReason::InvalidFeature;
+  storage.decisions[2].state.fallbackReason =
+      IOSFeatureFallbackReason::NotRequested;
+  storage.decisions[3].state.fallbackReason =
+      IOSFeatureFallbackReason::AvailabilityUnknown;
+  storage.decisions[4].state.fallbackReason =
+      IOSFeatureFallbackReason::AvailabilityUnsupported;
+  replaceProvenanceStorage(first,storage);
+  expectTelemetryContains(first,"/none");
+  expectTelemetryContains(first,"/invalid-feature");
+  expectTelemetryContains(first,"/not-requested");
+  expectTelemetryContains(first,"/availability-unknown");
+  expectTelemetryContains(first,"/availability-unsupported");
+
+  IOSFeaturePolicyProvenance second =
+      iosBuildFeaturePolicyProvenance(
+          supported,IOSFeatureDefaultClass::Safe,
+          allActivation(true));
+  storage = provenanceStorage(second);
+  storage.decisions[0].state.fallbackReason =
+      IOSFeatureFallbackReason::DeviceSupportUnknown;
+  storage.decisions[1].state.fallbackReason =
+      IOSFeatureFallbackReason::DeviceSupportUnsupported;
+  storage.decisions[2].state.fallbackReason =
+      IOSFeatureFallbackReason::ActivationFailed;
+  storage.decisions[3].state.fallbackReason =
+      IOSFeatureFallbackReason::InvalidDefaultClass;
+  storage.decisions[4].state.fallbackReason =
+      IOSFeatureFallbackReason::None;
+  replaceProvenanceStorage(second,storage);
+  expectTelemetryContains(second,"/device-support-unknown");
+  expectTelemetryContains(second,"/device-support-unsupported");
+  expectTelemetryContains(second,"/activation-failed");
+  expectTelemetryContains(second,"/invalid-default-class");
+
+  IOSFeaturePolicyProvenance maximum = second;
+  storage = provenanceStorage(maximum);
+  storage.factsAbiVersion = 0xFFFFFFFFu;
+  storage.probeContractVersion = 0xFFFFFFFFu;
+  storage.defaults = static_cast<IOSFeatureDefaultClass>(0xFFu);
+  for(uint8_t feature=0u; feature<ProbeCount; ++feature) {
+    storage.decisions[feature].state.fallbackReason =
+        IOSFeatureFallbackReason::DeviceSupportUnsupported;
+    }
+  replaceProvenanceStorage(maximum,storage);
+  IOSFeatureTelemetryGate gate{};
+  char output[IOSFeaturePolicyTelemetryCapacity]{};
+  assert(iosTakeFeaturePolicyTelemetry(
+      gate,maximum,output,sizeof(output))==
+      IOSFeatureTelemetryResult::Emitted);
+  assert(std::strstr(output,"facts=4294967295")!=nullptr);
+  assert(std::strstr(output,"probes=4294967295")!=nullptr);
+  assert(std::strstr(output,"defaults=invalid")!=nullptr);
+  assert(std::strlen(output)+1u<=sizeof(output));
+  }
+
 }
 
 int main() {
@@ -383,6 +777,13 @@ int main() {
       IOSFeatureId,IOSFeatureDefaultClass) noexcept;
   using EvaluateDefaultsSignature = IOSFeaturePolicyState (*)(
       const IOSDeviceFacts&,IOSFeaturePolicyDefaultsInput) noexcept;
+  using BuildProvenanceSignature = IOSFeaturePolicyProvenance (*)(
+      const IOSDeviceFacts&,IOSFeatureDefaultClass,
+      IOSFeatureActivationResults) noexcept;
+  using TakeTelemetrySignature = IOSFeatureTelemetryResult (*)(
+      IOSFeatureTelemetryGate&,
+      const IOSFeaturePolicyProvenance&,
+      char*,size_t) noexcept;
   static_assert(std::is_same_v<
       decltype(&iosEvaluateFeaturePolicy),EvaluateSignature>);
   static_assert(std::is_same_v<
@@ -390,6 +791,12 @@ int main() {
   static_assert(std::is_same_v<
       decltype(&iosEvaluateFeaturePolicyDefaults),
       EvaluateDefaultsSignature>);
+  static_assert(std::is_same_v<
+      decltype(&iosBuildFeaturePolicyProvenance),
+      BuildProvenanceSignature>);
+  static_assert(std::is_same_v<
+      decltype(&iosTakeFeaturePolicyTelemetry),
+      TakeTelemetrySignature>);
   static_assert(noexcept(iosEvaluateFeaturePolicy(
       std::declval<const IOSDeviceFacts&>(),
       std::declval<IOSFeaturePolicyInput>())));
@@ -399,6 +806,18 @@ int main() {
   static_assert(noexcept(iosEvaluateFeaturePolicyDefaults(
       std::declval<const IOSDeviceFacts&>(),
       std::declval<IOSFeaturePolicyDefaultsInput>())));
+  static_assert(noexcept(iosBuildFeaturePolicyProvenance(
+      std::declval<const IOSDeviceFacts&>(),
+      std::declval<IOSFeatureDefaultClass>(),
+      std::declval<IOSFeatureActivationResults>())));
+  static_assert(noexcept(iosTakeFeaturePolicyTelemetry(
+      std::declval<IOSFeatureTelemetryGate&>(),
+      std::declval<const IOSFeaturePolicyProvenance&>(),
+      std::declval<char*>(),
+      std::declval<size_t>())));
+  static_assert(!std::is_constructible_v<
+      IOSFeaturePolicyProvenance,
+      IOSFeaturePolicyProvenanceStorage>);
 
   testExactDefaultMatrix();
   testCapabilityFallbacksForEveryFeature();
@@ -406,5 +825,11 @@ int main() {
   testInvalidInputsAndPrecedence();
   testFactsNeverChooseOrBypassDefaults();
   testExplicitRequestRegression();
+  testProvenanceMatrixAndMapping();
+  testProvenanceFallbacksAndNamedActivation();
+  testProvenanceInvalidDefaults();
+  testProvenanceOwnsSnapshot();
+  testTelemetryExactAndGateBoundaries();
+  testTelemetryEnumNamesAndMaximumCapacity();
   return 0;
   }

@@ -14,14 +14,16 @@ trap cleanup EXIT
 cd "$REPO"
 
 scope_files=(
-  game/graphics/iosfeaturepolicy.h
-  game/graphics/iosfeaturepolicy.cpp
+  game/graphics/iosfeaturepolicyprovenance.h
+  game/graphics/iosfeaturepolicyprovenance.cpp
   ios/tests/iosfeaturepolicy.cpp
   scripts/verify_ios_feature_policy.command
 )
 policy_files=(
   game/graphics/iosfeaturepolicy.h
   game/graphics/iosfeaturepolicy.cpp
+  game/graphics/iosfeaturepolicyprovenance.h
+  game/graphics/iosfeaturepolicyprovenance.cpp
   ios/tests/iosfeaturepolicy.cpp
 )
 for file in "${scope_files[@]}"; do
@@ -31,7 +33,7 @@ test "$(find game/graphics ios/tests scripts -maxdepth 1 -type f \
     \( -name 'iosfeaturepolicy*' \
        -o -name 'verify_ios_feature_policy.command' \) |
     LC_ALL=C sort)" = \
-  $'game/graphics/iosfeaturepolicy.cpp\ngame/graphics/iosfeaturepolicy.h\nios/tests/iosfeaturepolicy.cpp\nscripts/verify_ios_feature_policy.command'
+  $'game/graphics/iosfeaturepolicy.cpp\ngame/graphics/iosfeaturepolicy.h\ngame/graphics/iosfeaturepolicyprovenance.cpp\ngame/graphics/iosfeaturepolicyprovenance.h\nios/tests/iosfeaturepolicy.cpp\nscripts/verify_ios_feature_policy.command'
 
 directives() {
   grep -E '^[[:space:]]*(#|%:)' "$1"
@@ -40,21 +42,27 @@ test "$(directives game/graphics/iosfeaturepolicy.h)" = \
   $'#pragma once\n#include "iosdevicecapabilities.h"\n#include <cstddef>\n#include <cstdint>\n#include <type_traits>'
 test "$(directives game/graphics/iosfeaturepolicy.cpp)" = \
   $'#include "iosfeaturepolicy.h"'
+test "$(directives game/graphics/iosfeaturepolicyprovenance.h)" = \
+  $'#pragma once\n#include "iosfeaturepolicy.h"\n#include <cstddef>\n#include <cstdint>\n#include <type_traits>'
+test "$(directives game/graphics/iosfeaturepolicyprovenance.cpp)" = \
+  $'#include "iosfeaturepolicyprovenance.h"\n#include <cstdio>\n#include <cstring>'
 test "$(directives ios/tests/iosfeaturepolicy.cpp)" = \
-  $'#include "graphics/iosfeaturepolicy.h"\n#include <cassert>\n#include <cstddef>\n#include <cstdint>\n#include <type_traits>\n#include <utility>'
+  $'#include "graphics/iosfeaturepolicy.h"\n#include "graphics/iosfeaturepolicyprovenance.h"\n#include <cassert>\n#include <cstddef>\n#include <cstdint>\n#include <cstring>\n#include <type_traits>\n#include <utility>'
 
 POLICY_DENY='#import|<Metal/|@interface|@protocol|__OBJC__|MTL[A-Z]|Tempest|IOSMetalContext|IOSDeviceNative|iosCollectDeviceFacts|iosMapDeviceNativeSnapshot|Foundation|UIKit|QuartzCore|CAMetalLayer|hw\.machine|sysctlbyname|highestKnownAppleFamily|highestKnownMetalFamily|runtimeVersion|sdkVersion|knownLimitMask|formats\[|void[[:space:]]*\*|NativeHandle|newLibrary|newCommand|defaultsFromFacts|defaultClassFromFacts|malloc|calloc|realloc|operator[[:space:]]+new'
 if grep -Eni "$POLICY_DENY" \
     game/graphics/iosfeaturepolicy.h \
-    game/graphics/iosfeaturepolicy.cpp; then
-  echo 'P2.6d policy leaks native/runtime/facts-derived defaults'
+    game/graphics/iosfeaturepolicy.cpp \
+    game/graphics/iosfeaturepolicyprovenance.h \
+    game/graphics/iosfeaturepolicyprovenance.cpp; then
+  echo 'P2.6e1 policy leaks native/runtime/facts-derived behavior'
   exit 1
 fi
 POLICY_NEW_DENY='(^|[^[:alnum:]_])new([[:space:]]|\[)'
 POLICY_DYNAMIC_DENY='std::(vector|deque|list|forward_list|map|multimap|unordered_map|unordered_multimap|set|multiset|unordered_set|unordered_multiset|basic_string|string|wstring|u8string|u16string|u32string|unique_ptr|shared_ptr|weak_ptr|function|any)([^[:alnum:]_]|$)'
 if grep -En "$POLICY_NEW_DENY|$POLICY_DYNAMIC_DENY" \
     "${policy_files[@]}"; then
-  echo 'P2.6d policy uses dynamic allocation or storage'
+  echo 'P2.6e1 policy uses dynamic allocation or storage'
   exit 1
 fi
 printf '%s\n' 'highestKnownAppleFamily >= 10u' |
@@ -62,7 +70,7 @@ printf '%s\n' 'highestKnownAppleFamily >= 10u' |
 printf '%s\n' 'std::vector<int> policy;' |
   grep -Eq "$POLICY_DYNAMIC_DENY"
 
-printf '#include "graphics/iosfeaturepolicy.h"\nint main() { return 0; }\n' |
+printf '#include "graphics/iosfeaturepolicyprovenance.h"\nint main() { return 0; }\n' |
   xcrun clang++ -x c++ -std=c++20 \
     -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
     -Igame -fsyntax-only -
@@ -71,6 +79,7 @@ xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame \
   ios/tests/iosfeaturepolicy.cpp \
+  game/graphics/iosfeaturepolicyprovenance.cpp \
   game/graphics/iosfeaturepolicy.cpp \
   game/graphics/iosdevicecapabilities.cpp \
   -o "$TMP_GATE/iosfeaturepolicy"
@@ -82,6 +91,7 @@ xcrun clang++ -std=c++20 \
   -fsanitize=address,undefined -fno-omit-frame-pointer \
   -Igame \
   ios/tests/iosfeaturepolicy.cpp \
+  game/graphics/iosfeaturepolicyprovenance.cpp \
   game/graphics/iosfeaturepolicy.cpp \
   game/graphics/iosdevicecapabilities.cpp \
   -o "$TMP_GATE/iosfeaturepolicy-sanitized"
@@ -96,6 +106,7 @@ xcrun clang++ -x c++ -std=c++20 \
   -isysroot "$IOS_SDK" \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame -fsyntax-only \
+  game/graphics/iosfeaturepolicyprovenance.cpp \
   game/graphics/iosfeaturepolicy.cpp \
   ios/tests/iosfeaturepolicy.cpp
 
@@ -108,6 +119,12 @@ from pathlib import Path
 
 header = Path("game/graphics/iosfeaturepolicy.h").read_text()
 source = Path("game/graphics/iosfeaturepolicy.cpp").read_text()
+provenance_header = Path(
+    "game/graphics/iosfeaturepolicyprovenance.h"
+).read_text()
+provenance_source = Path(
+    "game/graphics/iosfeaturepolicyprovenance.cpp"
+).read_text()
 test = Path("ios/tests/iosfeaturepolicy.cpp").read_text()
 capability_header = Path(
     "game/graphics/iosdevicecapabilities.h"
@@ -265,6 +282,12 @@ def mutation_is_killed(label, candidate_source):
     graphics.mkdir(parents=True)
     (graphics / "iosfeaturepolicy.h").write_text(header)
     (graphics / "iosfeaturepolicy.cpp").write_text(candidate_source)
+    (graphics / "iosfeaturepolicyprovenance.h").write_text(
+        provenance_header
+    )
+    (graphics / "iosfeaturepolicyprovenance.cpp").write_text(
+        provenance_source
+    )
     (graphics / "iosdevicecapabilities.h").write_text(capability_header)
     test_path = case_root / "iosfeaturepolicy.cpp"
     test_path.write_text(test)
@@ -281,6 +304,7 @@ def mutation_is_killed(label, candidate_source):
             "-Werror",
             f"-I{case_root}",
             str(test_path),
+            str(graphics / "iosfeaturepolicyprovenance.cpp"),
             str(graphics / "iosfeaturepolicy.cpp"),
             "game/graphics/iosdevicecapabilities.cpp",
             "-o",
@@ -438,6 +462,390 @@ print(
     "P2.6d executable mutation oracle: "
     f"compiled=29 executed=29 mutations-killed={killed}"
 )
+
+def validate_provenance_contract():
+    compact_header = compact(provenance_header)
+    compact_source = compact(provenance_source)
+    compact_test = compact(test)
+    header_contracts = (
+        "IOSFeaturePolicyProvenanceSchemaVersion=1u",
+        "IOSFeaturePolicyTelemetryCapacity=295u",
+        "sizeof(IOSFeatureActivationResults)==5u",
+        "alignof(IOSFeatureActivationResults)==1u",
+        "sizeof(IOSFeaturePolicyDecision)==6u",
+        "alignof(IOSFeaturePolicyDecision)==1u",
+        "sizeof(IOSFeaturePolicyProvenanceStorage)==40u",
+        "alignof(IOSFeaturePolicyProvenanceStorage)==4u",
+        "sizeof(IOSFeaturePolicyProvenance)==40u",
+        "alignof(IOSFeaturePolicyProvenance)==4u",
+        "offsetof(IOSFeaturePolicyProvenanceStorage,decisions)==8u",
+        "offsetof(IOSFeaturePolicyProvenanceStorage,defaults)==38u",
+        "offsetof(IOSFeaturePolicyProvenanceStorage,reserved)==39u",
+    )
+    for contract in header_contracts:
+        if compact_header.count(contract) != 1:
+            raise ValueError(
+                "P2.6e1 provenance ABI changed: " + contract
+            )
+
+    builder_begin = provenance_source.index(
+        "IOSFeaturePolicyProvenance iosBuildFeaturePolicyProvenance("
+    )
+    telemetry_begin = provenance_source.index(
+        "IOSFeatureTelemetryResult iosTakeFeaturePolicyTelemetry("
+    )
+    builder = compact(
+        provenance_source[builder_begin:telemetry_begin]
+    )
+    builder_mappings = (
+        "storage.decisions[0]={IOSFeatureId::MetalFxSpatial,"
+        "IOSDeviceProbeId::MetalFxSpatial,"
+        "iosEvaluateFeaturePolicyDefaults(facts,"
+        "{IOSFeatureId::MetalFxSpatial,defaults,"
+        "activation.metalFxSpatial})",
+        "storage.decisions[1]={IOSFeatureId::MetalFxTemporal,"
+        "IOSDeviceProbeId::MetalFxTemporal,"
+        "iosEvaluateFeaturePolicyDefaults(facts,"
+        "{IOSFeatureId::MetalFxTemporal,defaults,"
+        "activation.metalFxTemporal})",
+        "storage.decisions[2]={IOSFeatureId::MeshShading,"
+        "IOSDeviceProbeId::MeshShading,"
+        "iosEvaluateFeaturePolicyDefaults(facts,"
+        "{IOSFeatureId::MeshShading,defaults,"
+        "activation.meshShading})",
+        "storage.decisions[3]={IOSFeatureId::RayTracing,"
+        "IOSDeviceProbeId::RayTracing,"
+        "iosEvaluateFeaturePolicyDefaults(facts,"
+        "{IOSFeatureId::RayTracing,defaults,"
+        "activation.rayTracing})",
+        "storage.decisions[4]={IOSFeatureId::Metal4Transport,"
+        "IOSDeviceProbeId::Metal4Transport,"
+        "iosEvaluateFeaturePolicyDefaults(facts,"
+        "{IOSFeatureId::Metal4Transport,defaults,"
+        "activation.metal4Transport})",
+    )
+    for mapping in builder_mappings:
+        if builder.count(mapping) != 1:
+            raise ValueError(
+                "P2.6e1 canonical decision mapping changed"
+            )
+    forbidden_builder = (
+        "iosCollectDeviceFacts",
+        "IOSDeviceNative",
+        "IOSMetalContext",
+        "Tempest",
+    )
+    if any(value in builder for value in forbidden_builder):
+        raise ValueError("P2.6e1 builder gained native dependency")
+
+    telemetry = compact(provenance_source[telemetry_begin:])
+    telemetry_signature = (
+        "iosTakeFeaturePolicyTelemetry("
+        "IOSFeatureTelemetryGate&gate,"
+        "constIOSFeaturePolicyProvenance&provenance,"
+        "char*output,size_tcapacity)noexcept"
+    )
+    if telemetry.count(telemetry_signature) != 1:
+        raise ValueError("P2.6e1 telemetry signature changed")
+    if "IOSDeviceFacts" in telemetry:
+        raise ValueError("telemetry accepts facts instead of snapshot")
+    field_order = (
+        "defaults=%sspatial=%u/%u/%u/%stemporal=%u/%u/%u/%s"
+        "mesh=%u/%u/%u/%srt=%u/%u/%u/%smetal4=%u/%u/%u/%s"
+    )
+    if field_order not in telemetry.replace('"', ""):
+        raise ValueError("P2.6e1 telemetry field order changed")
+
+    test_anchors = (
+        "testProvenanceMatrixAndMapping();",
+        "testProvenanceFallbacksAndNamedActivation();",
+        "testProvenanceInvalidDefaults();",
+        "testProvenanceOwnsSnapshot();",
+        "testTelemetryExactAndGateBoundaries();",
+        "testTelemetryEnumNamesAndMaximumCapacity();",
+        "facts=4294967295",
+        "probes=4294967295",
+        "required-1u",
+        "IOSFeatureTelemetryResult::AlreadyEmitted",
+    )
+    for anchor in test_anchors:
+        if anchor not in compact_test:
+            raise ValueError(
+                "P2.6e1 test oracle changed: " + anchor
+            )
+
+def provenance_mutation_is_killed(label, candidate_provenance):
+    case_root = mutation_root / ("provenance-" + label)
+    graphics = case_root / "graphics"
+    graphics.mkdir(parents=True)
+    (graphics / "iosfeaturepolicy.h").write_text(header)
+    (graphics / "iosfeaturepolicy.cpp").write_text(source)
+    (graphics / "iosfeaturepolicyprovenance.h").write_text(
+        provenance_header
+    )
+    (graphics / "iosfeaturepolicyprovenance.cpp").write_text(
+        candidate_provenance
+    )
+    (graphics / "iosdevicecapabilities.h").write_text(
+        capability_header
+    )
+    test_path = case_root / "iosfeaturepolicy.cpp"
+    test_path.write_text(test)
+    binary = case_root / "iosfeaturepolicy-provenance-mutant"
+    compile_result = subprocess.run(
+        [
+            "xcrun",
+            "clang++",
+            "-std=c++20",
+            "-Wall",
+            "-Wextra",
+            "-Wconversion",
+            "-Wsign-conversion",
+            "-Werror",
+            f"-I{case_root}",
+            str(test_path),
+            str(graphics / "iosfeaturepolicyprovenance.cpp"),
+            str(graphics / "iosfeaturepolicy.cpp"),
+            "game/graphics/iosdevicecapabilities.cpp",
+            "-o",
+            str(binary),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if compile_result.returncode != 0:
+        raise SystemExit(
+            "P2.6e1 mutant did not compile: "
+            + label
+            + "\n"
+            + compile_result.stderr.decode(errors="replace")
+        )
+    sign_result = subprocess.run(
+        ["codesign", "-f", "-s", "-", str(binary)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if sign_result.returncode != 0:
+        raise SystemExit(
+            "P2.6e1 mutation codesign failed: " + label
+        )
+    run_result = subprocess.run(
+        [str(binary)],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    return run_result.returncode != 0
+
+validate_provenance_contract()
+provenance_mutations = []
+
+probe_names = (
+    "MetalFxSpatial",
+    "MetalFxTemporal",
+    "MeshShading",
+    "RayTracing",
+    "Metal4Transport",
+)
+for index, current in enumerate(probe_names):
+    following = probe_names[(index + 1) % len(probe_names)]
+    anchor = f"IOSDeviceProbeId::{current},"
+    provenance_mutations.append((
+        f"probe-mapping-{index}",
+        replace_once(
+            provenance_source,
+            anchor,
+            f"IOSDeviceProbeId::{following},",
+        ),
+    ))
+
+provenance_mutations.append((
+    "omitted-feature",
+    replace_once(
+        provenance_source,
+        "  storage.decisions[4] = {\n"
+        "    IOSFeatureId::Metal4Transport,",
+        "  storage.decisions[4] = {\n"
+        "    IOSFeatureId::RayTracing,",
+    ),
+))
+
+activation_names = (
+    "metalFxSpatial",
+    "metalFxTemporal",
+    "meshShading",
+    "rayTracing",
+    "metal4Transport",
+)
+for index, current in enumerate(activation_names):
+    following = activation_names[
+        (index + 1) % len(activation_names)
+    ]
+    provenance_mutations.append((
+        f"named-activation-{index}",
+        replace_once(
+            provenance_source,
+            f"activation.{current}",
+            f"activation.{following}",
+        ),
+    ))
+
+state_mutations = (
+    (
+        "telemetry-requested-state",
+        "flag(metal4.state.requested)",
+        "flag(metal4.state.eligible)",
+    ),
+    (
+        "telemetry-eligible-state",
+        "flag(metal4.state.eligible)",
+        "flag(metal4.state.requested)",
+    ),
+    (
+        "telemetry-active-state",
+        "flag(metal4.state.active)",
+        "flag(metal4.state.eligible)",
+    ),
+    (
+        "telemetry-fallback-state",
+        "fallbackName(metal4.state.fallbackReason)",
+        "fallbackName(spatial.state.fallbackReason)",
+    ),
+)
+for label, old, new in state_mutations:
+    provenance_mutations.append((
+        label,
+        replace_once(provenance_source,old,new),
+    ))
+
+provenance_mutations.extend((
+    (
+        "telemetry-order",
+        replace_once(
+            provenance_source,
+            "defaults=%s spatial=%u/%u/%u/%s "
+            "temporal=%u/%u/%u/%s ",
+            "defaults=%s temporal=%u/%u/%u/%s "
+            "spatial=%u/%u/%u/%s ",
+        ),
+    ),
+    (
+        "telemetry-string",
+        replace_once(
+            provenance_source,
+            "RendererIOS feature policy:",
+            "RendererIos feature policy:",
+        ),
+    ),
+    (
+        "telemetry-schema",
+        replace_once(
+            provenance_source,
+            "static_cast<unsigned>(\n"
+            "          IOSFeaturePolicyProvenanceSchemaVersion)",
+            "0u",
+        ),
+    ),
+    (
+        "invalid-default-storage",
+        replace_once(
+            provenance_source,
+            "  storage.defaults = defaults;",
+            "  storage.defaults = IOSFeatureDefaultClass::Safe;",
+        ),
+    ),
+))
+
+buffer_guard = (
+    "  if(output==nullptr || capacity<required)\n"
+    "    return IOSFeatureTelemetryResult::BufferTooSmall;"
+)
+provenance_mutations.extend((
+    (
+        "gate-consumed-on-error",
+        replace_once(
+            provenance_source,
+            buffer_guard,
+            "  if(output==nullptr || capacity<required) {\n"
+            "    gate.emitted = true;\n"
+            "    return IOSFeatureTelemetryResult::BufferTooSmall;\n"
+            "    }",
+        ),
+    ),
+    (
+        "partial-write-on-error",
+        replace_once(
+            provenance_source,
+            buffer_guard,
+            "  if(output==nullptr)\n"
+            "    return IOSFeatureTelemetryResult::BufferTooSmall;\n"
+            "  if(capacity<required) {\n"
+            "    if(capacity>0u)\n"
+            "      output[0] = record[0];\n"
+            "    return IOSFeatureTelemetryResult::BufferTooSmall;\n"
+            "    }",
+        ),
+    ),
+    (
+        "off-by-one-capacity",
+        replace_once(
+            provenance_source,
+            "capacity<required",
+            "capacity+1u<required",
+        ),
+    ),
+    (
+        "write-after-already-emitted",
+        replace_once(
+            provenance_source,
+            "  if(gate.emitted)\n"
+            "    return IOSFeatureTelemetryResult::AlreadyEmitted;",
+            "  if(false)\n"
+            "    return IOSFeatureTelemetryResult::AlreadyEmitted;",
+        ),
+    ),
+    (
+        "reversed-gate-buffer-precedence",
+        replace_once(
+            provenance_source,
+            "  if(gate.emitted)\n"
+            "    return IOSFeatureTelemetryResult::AlreadyEmitted;",
+            "  if(gate.emitted && output!=nullptr && capacity>0u)\n"
+            "    return IOSFeatureTelemetryResult::AlreadyEmitted;",
+        ),
+    ),
+    (
+        "one-shot-bypass",
+        replace_once(
+            provenance_source,
+            "  gate.emitted = true;",
+            "  gate.emitted = false;",
+        ),
+    ),
+))
+
+provenance_killed = 0
+for label, candidate_provenance in provenance_mutations:
+    if provenance_mutation_is_killed(
+            label,candidate_provenance):
+        provenance_killed += 1
+        continue
+    raise SystemExit(
+        "P2.6e1 executable mutation survived: " + label
+    )
+if provenance_killed != 25:
+    raise SystemExit(
+        "P2.6e1 mutation count drifted: "
+        f"{provenance_killed}/25"
+    )
+shutil.rmtree(mutation_root)
+print(
+    "P2.6e1 executable mutation oracle: "
+    "compiled=25 executed=25 "
+    f"mutations-killed={provenance_killed}"
+)
 PY
 
-echo "P2.6d IOSFeaturePolicy defaults: PASS"
+echo "P2.6e1 IOSFeaturePolicy provenance: PASS"
