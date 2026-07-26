@@ -15,6 +15,10 @@ export REQUESTED_CLEAR_ONLY_PASS_SELF_TEST=OFF
 export REQUESTED_SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
 export REQUESTED_SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
 
+printf '\n### CI contract: Verify shared CMake presets\n'
+cmake --list-presets
+cmake --build --list-presets
+
 printf '\n### CI contract: Verify pinned Tempest fork twice\n'
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh
@@ -1780,10 +1784,7 @@ xcrun --sdk iphoneos clang++ -x c++ -std=c++20 \
 
 P25A_CMAKE_BUILD="$RUNNER_TEMP/iosshadingprototypeplan-cmake"
 rm -rf "$P25A_CMAKE_BUILD"
-cmake -S . -B "$P25A_CMAKE_BUILD" -G Xcode \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4
+cmake --preset renderer-ios-off -B "$P25A_CMAKE_BUILD"
 P25A_PROJECT="$P25A_CMAKE_BUILD/Gothic2Notr.xcodeproj/project.pbxproj"
 test -f "$P25A_PROJECT"
 if grep -Fq 'iosshadingprototypeplan.cpp' "$P25A_PROJECT"; then
@@ -4465,17 +4466,10 @@ PY
 
 configure_profile() {
   local name="$1"
-  local diagnostics="$2"
-  local tile="$3"
+  local tile="$2"
   local build="$RUNNER_TEMP/renderer-ios-tile-pbx-$name"
   rm -rf "$build"
-  cmake -S . -B "$build" -G Xcode \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
-    -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="$diagnostics" \
-    -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=none \
-    -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="$tile"
+  cmake --preset "renderer-ios-$name" -B "$build"
   local project="$build/Gothic2Notr.xcodeproj/project.pbxproj"
   test -f "$project"
   python3 - "$project" "$tile" <<'PY'
@@ -4539,9 +4533,9 @@ if build_files.count(plan) != expected_plan * 2:
     raise SystemExit("Tile plan PBXBuildFile gate is not exact")
 PY
 }
-configure_profile off OFF OFF
-configure_profile on ON OFF
-configure_profile tile ON ON
+configure_profile off OFF
+configure_profile on OFF
+configure_profile tile ON
 TILE_BUILD="$RUNNER_TEMP/renderer-ios-tile-pbx-tile"
 cmake --build "$TILE_BUILD" --config Release -- \
   -sdk iphoneos \
@@ -4571,11 +4565,7 @@ expect_configure_failure() {
   shift
   local build="$RUNNER_TEMP/renderer-ios-tile-invalid-$name"
   rm -rf "$build"
-  if cmake -S . -B "$build" -G Xcode \
-      -DCMAKE_SYSTEM_NAME=iOS \
-      -DCMAKE_OSX_ARCHITECTURES=arm64 \
-      -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
-      -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON \
+  if cmake --preset renderer-ios-tile -B "$build" \
       "$@" >/dev/null 2>&1; then
     echo "invalid shading prototype Tile CMake profile survived: $name"
     exit 1
@@ -4709,13 +4699,7 @@ done
 
 FORWARD_BUILD="$RUNNER_TEMP/renderer-ios-forward-pbx"
 rm -rf "$FORWARD_BUILD"
-cmake -S . -B "$FORWARD_BUILD" -G Xcode \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
-  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
-  -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=none \
-  -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=ON
+cmake --preset renderer-ios-forward -B "$FORWARD_BUILD"
 FORWARD_PROJECT="$FORWARD_BUILD/Gothic2Notr.xcodeproj/project.pbxproj"
 test -f "$FORWARD_PROJECT"
 test "$(grep -Fc \
@@ -4761,11 +4745,7 @@ expect_forward_configure_failure() {
   shift
   local build="$RUNNER_TEMP/renderer-ios-forward-invalid-$name"
   rm -rf "$build"
-  if cmake -S . -B "$build" -G Xcode \
-      -DCMAKE_SYSTEM_NAME=iOS \
-      -DCMAKE_OSX_ARCHITECTURES=arm64 \
-      -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
-      -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=ON \
+  if cmake --preset renderer-ios-forward -B "$build" \
       "$@" >/dev/null 2>&1; then
     echo "invalid shading prototype Forward CMake profile survived: $name"
     exit 1
@@ -5253,21 +5233,8 @@ if pass_positions != sorted(pass_positions):
 PY
 
 printf '\n### CI contract: canonical generated target\n'
-cmake -S . -B build-renderer-ios -G Xcode \
-  -DCMAKE_SYSTEM_NAME=iOS \
-  -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
+cmake --preset renderer-ios-on -B build-renderer-ios \
   -DOPENGOTHIC_IOS_VERSION=1.0.0 \
-  -DOPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO=OFF \
-  -DOPENGOTHIC_METALFX_SPATIAL=OFF \
-  -DOPENGOTHIC_METALFX_TEMPORAL=OFF \
-  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
-  -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=none \
-  -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=OFF \
-  -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=OFF \
-  -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=OFF \
-  -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=OFF \
-  -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF \
   -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA"
 
 printf '\n### CI contract: Verify P2.6a capabilities source target membership\n'

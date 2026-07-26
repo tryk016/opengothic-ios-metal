@@ -16,6 +16,9 @@ SCRIPT = REPO / "scripts" / "ci_verification.py"
 WORKFLOW = REPO / ".github" / "workflows" / "renderer-ios.yml"
 CONTRACTS = REPO / "scripts" / "ci_contracts.command"
 PROFILE = REPO / "scripts" / "ci_build_profile.command"
+PRESETS = REPO / "CMakePresets.json"
+GITIGNORE = REPO / ".gitignore"
+LOCAL_VERIFY = REPO / "scripts" / "verify-local-build.command"
 
 
 def load_module():
@@ -142,6 +145,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         if policy_oracle in contracts or policy_oracle in profile:
             raise ValueError(f"policy oracle is duplicated outside classifier: {policy_oracle}")
     contract_names = (
+        "Verify shared CMake presets",
         "Verify pinned Tempest fork twice",
         "Verify neutral P2.1 scene boundary",
         "Verify neutral P2.2d frame plan",
@@ -191,11 +195,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "profile configure",
     )
     configure_contract = (
-        "cmake -S . -B build-renderer-ios -G Xcode",
-        "-DCMAKE_SYSTEM_NAME=iOS",
-        "-DCMAKE_OSX_ARCHITECTURES=arm64",
-        "-DCMAKE_OSX_DEPLOYMENT_TARGET=16.4",
-        '-DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="$DIAGNOSTICS"',
+        'cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios',
         '-DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE"',
         '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST='
         '"$SHADING_PROTOTYPE_TILE_SELF_TEST"',
@@ -268,6 +268,164 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     )
     if contracts.splitlines().count(smoke_invocation) != 1:
         raise ValueError("preview-fence save-slot smoke self-test is not exact")
+
+
+def validate_cmake_presets(
+    presets: dict,
+    gitignore: str,
+    local_verify: str,
+    profile: str,
+    contracts: str,
+) -> None:
+    if presets.get("version") != 2:
+        raise ValueError("CMake presets schema must be version 2")
+    if presets.get("cmakeMinimumRequired") != {
+        "major": 3,
+        "minor": 20,
+        "patch": 0,
+    }:
+        raise ValueError("CMake presets minimum must be exactly 3.20.0")
+
+    configure_presets = presets.get("configurePresets")
+    if not isinstance(configure_presets, list):
+        raise ValueError("configurePresets must be a list")
+    configure_by_name = {
+        item.get("name"): item
+        for item in configure_presets
+        if isinstance(item, dict)
+    }
+    expected_configure_names = {
+        "renderer-ios-base",
+        "renderer-ios-off",
+        "renderer-ios-on",
+        "renderer-ios-tile",
+        "renderer-ios-forward",
+    }
+    if set(configure_by_name) != expected_configure_names:
+        raise ValueError("configure preset names drifted")
+
+    base = configure_by_name["renderer-ios-base"]
+    if base.get("hidden") is not True or base.get("generator") != "Xcode":
+        raise ValueError("shared iOS configure base must be hidden Xcode")
+    expected_base_cache = {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.4",
+        "OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO": "OFF",
+        "OPENGOTHIC_METALFX_SPATIAL": "OFF",
+        "OPENGOTHIC_METALFX_TEMPORAL": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+    }
+    if base.get("cacheVariables") != expected_base_cache:
+        raise ValueError("shared iOS configure base tuple drifted")
+
+    profile_tuple = {
+        "off": ("OFF", "OFF", "OFF"),
+        "on": ("ON", "OFF", "OFF"),
+        "tile": ("ON", "ON", "OFF"),
+        "forward": ("ON", "OFF", "ON"),
+    }
+    for name, (diagnostics, tile, forward) in profile_tuple.items():
+        preset = configure_by_name[f"renderer-ios-{name}"]
+        if preset.get("inherits") != "renderer-ios-base":
+            raise ValueError(f"{name} does not inherit the shared base")
+        expected_binary = (
+            "${sourceDir}/build/local-renderer-ios-" + name
+        )
+        if preset.get("binaryDir") != expected_binary:
+            raise ValueError(f"{name} public binaryDir drifted")
+        expected_profile_cache = {
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": diagnostics,
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": tile,
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": forward,
+        }
+        if preset.get("cacheVariables") != expected_profile_cache:
+            raise ValueError(f"{name} profile tuple drifted")
+        if tile == "ON" and forward == "ON":
+            raise ValueError("Tile and Forward may not be enabled together")
+
+    serialized = json.dumps(presets, sort_keys=True)
+    for forbidden in (
+        "OPENGOTHIC_RENDERER_IOS_BUILD_SHA",
+        "OPENGOTHIC_IOS_VERSION",
+        "OPENGOTHIC_BUILD_ROOT",
+    ):
+        if forbidden in serialized:
+            raise ValueError(f"dynamic/private value leaked into presets: {forbidden}")
+
+    build_presets = presets.get("buildPresets")
+    if not isinstance(build_presets, list):
+        raise ValueError("buildPresets must be a list")
+    if [item.get("name") for item in build_presets] != [
+        "renderer-ios-off",
+        "renderer-ios-on",
+        "renderer-ios-tile",
+        "renderer-ios-forward",
+    ]:
+        raise ValueError("build preset names or order drifted")
+    expected_native_options = [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY=",
+    ]
+    for item in build_presets:
+        name = item["name"]
+        if item.get("configurePreset") != name:
+            raise ValueError(f"{name} build/configure preset mismatch")
+        if item.get("configuration") != "Release":
+            raise ValueError(f"{name} build is not Release")
+        if item.get("nativeToolOptions") != expected_native_options:
+            raise ValueError(f"{name} signing policy drifted")
+
+    ignore_lines = gitignore.splitlines()
+    if ignore_lines.count("CMakeUserPresets.json") != 1:
+        raise ValueError("CMakeUserPresets.json ignore is not exact")
+    if any(
+        "*" in line and "Presets.json" in line
+        for line in ignore_lines
+    ):
+        raise ValueError("broad presets ignore would hide public presets")
+
+    script_contract = (
+        (
+            local_verify,
+            'cmake --preset "renderer-ios-$profile" -B "$build"',
+            '-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$HEAD_SHA-local"',
+            "local verifier",
+        ),
+        (
+            profile,
+            'cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios',
+            '-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA"',
+            "CI profile",
+        ),
+    )
+    for source, configure, build_sha, label in script_contract:
+        if source.count(configure) != 1:
+            raise ValueError(f"{label} preset/explicit-B contract drifted")
+        if source.count(build_sha) != 1:
+            raise ValueError(f"{label} dynamic SHA contract drifted")
+        if "cmake -S . -B" in source:
+            raise ValueError(f"{label} still duplicates preset platform tuple")
+    if local_verify.count(
+        'BUILD_ROOT="${OPENGOTHIC_BUILD_ROOT:-$REPO/build/local-renderer-ios}"'
+    ) != 1:
+        raise ValueError("local custom build-root contract drifted")
+    for line in (
+        "cmake --list-presets",
+        "cmake --build --list-presets",
+    ):
+        if contracts.splitlines().count(line) != 1:
+            raise ValueError(f"contracts do not read actual presets: {line}")
+    if "cmake -S . -B" in contracts:
+        raise ValueError("contracts still duplicate preset platform tuple")
 
 
 def replace_once(source: str, before: str, after: str) -> str:
@@ -531,7 +689,7 @@ def test_workflow_contract() -> None:
             contracts,
             replace_once(
                 profile,
-                "cmake -S . -B build-renderer-ios -G Xcode",
+                'cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios',
                 "true # configure removed",
             ),
         ),
@@ -561,6 +719,132 @@ def test_workflow_contract() -> None:
         else:
             raise AssertionError("extracted CI/profile mutation survived")
     assert extraction_killed == 12
+
+
+def test_cmake_presets_contract() -> None:
+    presets = json.loads(PRESETS.read_text(encoding="utf-8"))
+    gitignore = GITIGNORE.read_text(encoding="utf-8")
+    local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
+    profile = PROFILE.read_text(encoding="utf-8")
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    validate_cmake_presets(
+        presets,
+        gitignore,
+        local_verify,
+        profile,
+        contracts,
+    )
+
+    mutations = []
+
+    def mutated_presets(callback):
+        candidate = json.loads(json.dumps(presets))
+        callback(candidate)
+        mutations.append(
+            (candidate, gitignore, local_verify, profile, contracts)
+        )
+
+    mutated_presets(lambda candidate: candidate.__setitem__("version", 3))
+    mutated_presets(
+        lambda candidate: candidate["cmakeMinimumRequired"].__setitem__(
+            "minor", 19
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][0].__setitem__(
+            "generator", "Ninja"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][0]["cacheVariables"].__setitem__(
+            "CMAKE_OSX_ARCHITECTURES", "x86_64"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][0]["cacheVariables"].__setitem__(
+            "CMAKE_OSX_DEPLOYMENT_TARGET", "15.0"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][3]["cacheVariables"].__setitem__(
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS", "OFF"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][3]["cacheVariables"].__setitem__(
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST", "ON"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][0]["cacheVariables"].__setitem__(
+            "OPENGOTHIC_RENDERER_IOS_BUILD_SHA", "stale"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["buildPresets"][0]["nativeToolOptions"].__setitem__(
+            2, "CODE_SIGNING_ALLOWED=YES"
+        )
+    )
+    mutations.extend(
+        (
+            (
+                presets,
+                gitignore,
+                local_verify.replace(
+                    ' -B "$build"',
+                    "",
+                    1,
+                ),
+                profile,
+                contracts,
+            ),
+            (
+                presets,
+                gitignore,
+                local_verify.replace(
+                    '-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$HEAD_SHA-local"',
+                    "-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=stale",
+                    1,
+                ),
+                profile,
+                contracts,
+            ),
+            (
+                presets,
+                gitignore,
+                local_verify,
+                profile.replace(" -B build-renderer-ios", "", 1),
+                contracts,
+            ),
+            (
+                presets,
+                gitignore.replace(
+                    "CMakeUserPresets.json",
+                    "*Presets.json",
+                    1,
+                ),
+                local_verify,
+                profile,
+                contracts,
+            ),
+            (
+                presets,
+                gitignore,
+                local_verify,
+                profile,
+                contracts.replace("cmake --list-presets", "true", 1),
+            ),
+        )
+    )
+    killed = 0
+    for candidate in mutations:
+        try:
+            validate_cmake_presets(*candidate)
+        except ValueError:
+            killed += 1
+        else:
+            raise AssertionError("CMake presets mutation survived")
+    assert killed == 14
 
 
 def test_bash32_candidate_arguments() -> None:
@@ -655,11 +939,13 @@ def main() -> None:
     test_push_before_to_sha()
     test_aggregation()
     test_workflow_contract()
+    test_cmake_presets_contract()
     test_bash32_candidate_arguments()
     print(
         "RendererIOS CI verification tests passed: "
-        "5 groups, Bash 3.2 candidate smoke, "
-        "7 workflow mutations, 12 extraction/profile mutations"
+        "6 groups, Bash 3.2 candidate smoke, "
+        "7 workflow mutations, 12 extraction/profile mutations, "
+        "14 CMake presets mutations"
     )
 
 

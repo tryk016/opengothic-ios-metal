@@ -1,0 +1,119 @@
+{
+  "version": 2,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 20,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "renderer-ios-base",
+      "hidden": true,
+      "generator": "Xcode",
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "16.4",
+        "OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO": "OFF",
+        "OPENGOTHIC_METALFX_SPATIAL": "OFF",
+        "OPENGOTHIC_METALFX_TEMPORAL": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-off",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-off",
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-on",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-on",
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-tile",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-tile",
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "ON",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-forward",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-forward",
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "renderer-ios-off",
+      "configurePreset": "renderer-ios-off",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-on",
+      "configurePreset": "renderer-ios-on",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-tile",
+      "configurePreset": "renderer-ios-tile",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-forward",
+      "configurePreset": "renderer-ios-forward",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    }
+  ]
+}

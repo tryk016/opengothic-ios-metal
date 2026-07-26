@@ -1474,21 +1474,8 @@ build_variant() {
   rm -rf -- "$build"
 
   echo "### Configure diagnostics=$diagnostics tile=$tile forward=$forward"
-  cmake -S . -B "$build" -G Xcode \
-    -DCMAKE_SYSTEM_NAME=iOS \
-    -DCMAKE_OSX_ARCHITECTURES=arm64 \
-    -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
+  cmake --preset "renderer-ios-$profile" -B "$build" \
     -DOPENGOTHIC_IOS_VERSION=1.0.9000 \
-    -DOPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO=OFF \
-    -DOPENGOTHIC_METALFX_SPATIAL=OFF \
-    -DOPENGOTHIC_METALFX_TEMPORAL=OFF \
-    -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS="$diagnostics" \
-    -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=none \
-    -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=OFF \
-    -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=OFF \
-    -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=OFF \
-    -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST="$tile" \
-    -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$forward" \
     -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$HEAD_SHA-local"
 
   local project="$build/Gothic2Notr.xcodeproj/project.pbxproj"
@@ -1755,11 +1742,7 @@ expect_tile_configure_failure() {
   local name="$1"
   shift
   local build="$TMP_GATE/tile-invalid-$name"
-  if cmake -S . -B "$build" -G Xcode \
-      -DCMAKE_SYSTEM_NAME=iOS \
-      -DCMAKE_OSX_ARCHITECTURES=arm64 \
-      -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
-      -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON \
+  if cmake --preset renderer-ios-tile -B "$build" \
       "$@" >/dev/null 2>&1; then
     fail "P2.5b2a1 invalid CMake profile przetrwal: $name"
   fi
@@ -1787,11 +1770,7 @@ expect_forward_configure_failure() {
   local name="$1"
   shift
   local build="$TMP_GATE/forward-invalid-$name"
-  if cmake -S . -B "$build" -G Xcode \
-      -DCMAKE_SYSTEM_NAME=iOS \
-      -DCMAKE_OSX_ARCHITECTURES=arm64 \
-      -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
-      -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=ON \
+  if cmake --preset renderer-ios-forward -B "$build" \
       "$@" >/dev/null 2>&1; then
     fail "P2.5c1b1 invalid Forward CMake profile przetrwal: $name"
   fi
