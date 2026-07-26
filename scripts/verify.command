@@ -73,6 +73,32 @@ def tracked_diff(base: str, head: Optional[str] = None) -> bytes:
     return run_git(arguments)
 
 
+def local_tracked_changes() -> bytes:
+    staged = run_git(
+        [
+            "diff",
+            "--cached",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--find-copies",
+            "HEAD",
+            "--",
+        ]
+    )
+    unstaged = run_git(
+        [
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            "--find-copies",
+            "--",
+        ]
+    )
+    return staged + unstaged
+
+
 def untracked_changes() -> bytes:
     raw = run_git(["ls-files", "--others", "--exclude-standard", "-z", "--"])
     if not raw:
@@ -95,7 +121,7 @@ def untracked_changes() -> bytes:
 
 def slice_records() -> bytes:
     resolve_commit("HEAD", "head")
-    return tracked_diff("HEAD") + untracked_changes()
+    return local_tracked_changes() + untracked_changes()
 
 
 def prepush_records(upstream: str) -> tuple[bytes, str]:
@@ -109,7 +135,9 @@ def prepush_records(upstream: str) -> tuple[bytes, str]:
         raise ContextError("merge-base-unavailable", str(error)) from error
     if not base or any(character not in "0123456789abcdef" for character in base):
         raise ContextError("merge-base-unavailable", "merge-base is not a SHA")
-    records = tracked_diff(base, head) + tracked_diff("HEAD") + untracked_changes()
+    records = (
+        tracked_diff(base, head) + local_tracked_changes() + untracked_changes()
+    )
     return records, base
 
 

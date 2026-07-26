@@ -152,6 +152,18 @@ class VerificationRouterTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.repository.close()
 
+    def stage_then_restore_policy_in_worktree(self) -> None:
+        policy = self.repository.root / "verification-policy.json"
+        original = policy.read_bytes()
+        policy.write_bytes(original + b"\n")
+        run(["git", "add", "verification-policy.json"], cwd=self.repository.root)
+        policy.write_bytes(original)
+        status = run(
+            ["git", "status", "--short", "--", "verification-policy.json"],
+            cwd=self.repository.root,
+        ).stdout
+        self.assertEqual(status, "MM verification-policy.json\n")
+
     def test_slice_unions_staged_unstaged_and_nul_safe_untracked(self) -> None:
         staged = self.repository.root / "docs" / "staged file.md"
         staged.write_text("staged\n", encoding="utf-8")
@@ -188,6 +200,18 @@ class VerificationRouterTests(unittest.TestCase):
             },
         )
 
+    def test_slice_does_not_cancel_staged_change_restored_in_worktree(self) -> None:
+        self.stage_then_restore_policy_in_worktree()
+
+        completed, payload = self.repository.invoke("slice")
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(payload["changedPaths"], ["verification-policy.json"])
+        self.assertEqual(payload["selection"], "classified")
+        self.assertEqual(payload["gates"], ["full"])
+        self.assertFalse(payload["fallback"])
+        self.assertEqual(self.repository.executor_payload()["argv"], ["full"])
+
     def test_slice_with_no_changes_is_not_a_fake_pass(self) -> None:
         completed, payload = self.repository.invoke("slice")
 
@@ -221,6 +245,26 @@ class VerificationRouterTests(unittest.TestCase):
             ["docs/base.md", "docs/new file.md", "game/committed.cpp"],
         )
         self.assertEqual(self.repository.executor_payload()["allowDirty"], "1")
+
+    def test_prepush_does_not_cancel_staged_change_restored_in_worktree(self) -> None:
+        self.stage_then_restore_policy_in_worktree()
+        (self.repository.root / "docs" / "visible.md").write_text(
+            "visible\n", encoding="utf-8"
+        )
+
+        completed, payload = self.repository.invoke(
+            "prepush", "--upstream", "origin/main"
+        )
+
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(
+            payload["changedPaths"],
+            ["docs/visible.md", "verification-policy.json"],
+        )
+        self.assertEqual(payload["selection"], "classified")
+        self.assertEqual(payload["gates"], ["full"])
+        self.assertFalse(payload["fallback"])
+        self.assertEqual(self.repository.executor_payload()["argv"], ["full"])
 
     def test_missing_prepush_upstream_fails_closed_to_full(self) -> None:
         completed, payload = self.repository.invoke(
