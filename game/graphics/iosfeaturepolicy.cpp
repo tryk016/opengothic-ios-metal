@@ -27,6 +27,19 @@ bool featureProbe(
   return false;
   }
 
+bool validDefaultClass(IOSFeatureDefaultClass defaults) noexcept {
+  switch(defaults) {
+    case IOSFeatureDefaultClass::Safe:
+    case IOSFeatureDefaultClass::Apple8:
+    case IOSFeatureDefaultClass::Apple9:
+    case IOSFeatureDefaultClass::Apple10:
+      return true;
+    case IOSFeatureDefaultClass::Count:
+      break;
+    }
+  return false;
+  }
+
 }
 
 IOSFeaturePolicyState iosEvaluateFeaturePolicy(
@@ -88,5 +101,98 @@ IOSFeaturePolicyState iosEvaluateFeaturePolicy(
 
   state.active = true;
   state.fallbackReason = IOSFeatureFallbackReason::None;
+  return state;
+  }
+
+IOSFeatureDefaultRequest iosResolveFeatureDefaultRequest(
+    IOSFeatureId feature,
+    IOSFeatureDefaultClass defaults) noexcept {
+  IOSDeviceProbeId unusedProbe = IOSDeviceProbeId::Count;
+  if(!featureProbe(feature,unusedProbe))
+    return {false,IOSFeatureFallbackReason::InvalidFeature};
+  if(!validDefaultClass(defaults))
+    return {false,IOSFeatureFallbackReason::InvalidDefaultClass};
+
+  switch(defaults) {
+    case IOSFeatureDefaultClass::Safe:
+      switch(feature) {
+        case IOSFeatureId::MetalFxSpatial:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MetalFxTemporal:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MeshShading:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::RayTracing:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Metal4Transport:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Count:
+          break;
+        }
+      break;
+    case IOSFeatureDefaultClass::Apple8:
+      switch(feature) {
+        case IOSFeatureId::MetalFxSpatial:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MetalFxTemporal:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MeshShading:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::RayTracing:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Metal4Transport:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Count:
+          break;
+        }
+      break;
+    case IOSFeatureDefaultClass::Apple9:
+      switch(feature) {
+        case IOSFeatureId::MetalFxSpatial:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MetalFxTemporal:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MeshShading:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::RayTracing:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Metal4Transport:
+          return {false,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Count:
+          break;
+        }
+      break;
+    case IOSFeatureDefaultClass::Apple10:
+      switch(feature) {
+        case IOSFeatureId::MetalFxSpatial:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MetalFxTemporal:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::MeshShading:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::RayTracing:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Metal4Transport:
+          return {true,IOSFeatureFallbackReason::None};
+        case IOSFeatureId::Count:
+          break;
+        }
+      break;
+    case IOSFeatureDefaultClass::Count:
+      break;
+    }
+  return {false,IOSFeatureFallbackReason::InvalidDefaultClass};
+  }
+
+IOSFeaturePolicyState iosEvaluateFeaturePolicyDefaults(
+    const IOSDeviceFacts& facts,
+    IOSFeaturePolicyDefaultsInput input) noexcept {
+  const IOSFeatureDefaultRequest request =
+      iosResolveFeatureDefaultRequest(input.feature,input.defaults);
+  IOSFeaturePolicyState state = iosEvaluateFeaturePolicy(
+      facts,
+      {input.feature,request.requested,input.activationSucceeded});
+  if(request.fallbackReason!=IOSFeatureFallbackReason::None)
+    state.fallbackReason = request.fallbackReason;
   return state;
   }

@@ -13,17 +13,25 @@ trap cleanup EXIT
 
 cd "$REPO"
 
+scope_files=(
+  game/graphics/iosfeaturepolicy.h
+  game/graphics/iosfeaturepolicy.cpp
+  ios/tests/iosfeaturepolicy.cpp
+  scripts/verify_ios_feature_policy.command
+)
 policy_files=(
   game/graphics/iosfeaturepolicy.h
   game/graphics/iosfeaturepolicy.cpp
   ios/tests/iosfeaturepolicy.cpp
 )
-for file in "${policy_files[@]}"; do
+for file in "${scope_files[@]}"; do
   test -f "$file"
 done
-test "$(find game/graphics ios/tests -maxdepth 1 -type f \
-    -name 'iosfeaturepolicy*' | LC_ALL=C sort)" = \
-  $'game/graphics/iosfeaturepolicy.cpp\ngame/graphics/iosfeaturepolicy.h\nios/tests/iosfeaturepolicy.cpp'
+test "$(find game/graphics ios/tests scripts -maxdepth 1 -type f \
+    \( -name 'iosfeaturepolicy*' \
+       -o -name 'verify_ios_feature_policy.command' \) |
+    LC_ALL=C sort)" = \
+  $'game/graphics/iosfeaturepolicy.cpp\ngame/graphics/iosfeaturepolicy.h\nios/tests/iosfeaturepolicy.cpp\nscripts/verify_ios_feature_policy.command'
 
 directives() {
   grep -E '^[[:space:]]*(#|%:)' "$1"
@@ -35,18 +43,18 @@ test "$(directives game/graphics/iosfeaturepolicy.cpp)" = \
 test "$(directives ios/tests/iosfeaturepolicy.cpp)" = \
   $'#include "graphics/iosfeaturepolicy.h"\n#include <cassert>\n#include <cstddef>\n#include <cstdint>\n#include <type_traits>\n#include <utility>'
 
-POLICY_DENY='#import|<Metal/|@interface|@protocol|__OBJC__|MTL[A-Z]|Tempest|IOSMetalContext|IOSDeviceNative|iosCollectDeviceFacts|iosMapDeviceNativeSnapshot|Foundation|UIKit|QuartzCore|CAMetalLayer|hw\.machine|sysctlbyname|highestKnownAppleFamily|highestKnownMetalFamily|runtimeVersion|sdkVersion|knownLimitMask|formats\[|void[[:space:]]*\*|NativeHandle|newLibrary|newCommand|malloc|calloc|realloc|operator[[:space:]]+new'
+POLICY_DENY='#import|<Metal/|@interface|@protocol|__OBJC__|MTL[A-Z]|Tempest|IOSMetalContext|IOSDeviceNative|iosCollectDeviceFacts|iosMapDeviceNativeSnapshot|Foundation|UIKit|QuartzCore|CAMetalLayer|hw\.machine|sysctlbyname|highestKnownAppleFamily|highestKnownMetalFamily|runtimeVersion|sdkVersion|knownLimitMask|formats\[|void[[:space:]]*\*|NativeHandle|newLibrary|newCommand|defaultsFromFacts|defaultClassFromFacts|malloc|calloc|realloc|operator[[:space:]]+new'
 if grep -Eni "$POLICY_DENY" \
     game/graphics/iosfeaturepolicy.h \
     game/graphics/iosfeaturepolicy.cpp; then
-  echo 'P2.6c policy leaks native/runtime/family/format/limit inference'
+  echo 'P2.6d policy leaks native/runtime/facts-derived defaults'
   exit 1
 fi
 POLICY_NEW_DENY='(^|[^[:alnum:]_])new([[:space:]]|\[)'
 POLICY_DYNAMIC_DENY='std::(vector|deque|list|forward_list|map|multimap|unordered_map|unordered_multimap|set|multiset|unordered_set|unordered_multiset|basic_string|string|wstring|u8string|u16string|u32string|unique_ptr|shared_ptr|weak_ptr|function|any)([^[:alnum:]_]|$)'
 if grep -En "$POLICY_NEW_DENY|$POLICY_DYNAMIC_DENY" \
     "${policy_files[@]}"; then
-  echo 'P2.6c policy uses dynamic allocation or storage'
+  echo 'P2.6d policy uses dynamic allocation or storage'
   exit 1
 fi
 printf '%s\n' 'highestKnownAppleFamily >= 10u' |
@@ -78,7 +86,9 @@ xcrun clang++ -std=c++20 \
   game/graphics/iosdevicecapabilities.cpp \
   -o "$TMP_GATE/iosfeaturepolicy-sanitized"
 codesign -f -s - "$TMP_GATE/iosfeaturepolicy-sanitized"
-"$TMP_GATE/iosfeaturepolicy-sanitized"
+ASAN_OPTIONS=halt_on_error=1 \
+UBSAN_OPTIONS=halt_on_error=1 \
+  "$TMP_GATE/iosfeaturepolicy-sanitized"
 
 IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
 xcrun clang++ -x c++ -std=c++20 \
@@ -91,6 +101,7 @@ xcrun clang++ -x c++ -std=c++20 \
 
 IOS_FEATURE_POLICY_MUTATION_ROOT="$TMP_GATE/mutations" python3 - <<'PY'
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -103,6 +114,18 @@ capability_header = Path(
 ).read_text()
 mutation_root = Path(os.environ["IOS_FEATURE_POLICY_MUTATION_ROOT"])
 
+expected_matrix = (
+    False, False, False, False, False,
+    True,  True,  False, False, False,
+    True,  True,  True,  True,  False,
+    True,  True,  True,  True,  True,
+)
+matrix_labels = tuple(
+    f"matrix-{defaults}-{feature}"
+    for defaults in ("safe", "apple8", "apple9", "apple10")
+    for feature in ("spatial", "temporal", "mesh", "rt", "metal4")
+)
+
 def compact(value):
     return "".join(value.split())
 
@@ -111,34 +134,102 @@ def replace_once(value, old, new):
         raise ValueError("mutation anchor count drifted: " + old)
     return value.replace(old, new, 1)
 
+def resolver_segment(value):
+    begin = value.index(
+        "IOSFeatureDefaultRequest iosResolveFeatureDefaultRequest("
+    )
+    end = value.index(
+        "IOSFeaturePolicyState iosEvaluateFeaturePolicyDefaults(",
+        begin,
+    )
+    return value[begin:end]
+
+def wrapper_segment(value):
+    begin = value.index(
+        "IOSFeaturePolicyState iosEvaluateFeaturePolicyDefaults("
+    )
+    return value[begin:]
+
+def table_matches(value):
+    resolver = resolver_segment(value)
+    return list(re.finditer(
+        r"return \{(true|false),"
+        r"IOSFeatureFallbackReason::None\};",
+        resolver,
+    ))
+
 def validate_contract():
     compact_header = compact(header)
     compact_source = compact(source)
     compact_test = compact(test)
-    fields = (
-        "IOSFeatureIdfeature;boolrequested;boolactivationSucceeded;",
-        "boolrequested;booleligible;boolactive;"
-        "IOSFeatureFallbackReasonfallbackReason;",
+    header_contracts = (
+        "IOSFeatureIdfeature;IOSFeatureDefaultClassdefaults;"
+        "boolactivationSucceeded;",
+        "boolrequested;IOSFeatureFallbackReasonfallbackReason;",
+        "InvalidDefaultClass=8u",
+        "Safe=0u,Apple8=1u,Apple9=2u,Apple10=3u,Count=4u",
+        "sizeof(IOSFeaturePolicyDefaultsInput)==3u",
+        "alignof(IOSFeaturePolicyDefaultsInput)==1u",
+        "sizeof(IOSFeatureDefaultRequest)==2u",
+        "alignof(IOSFeatureDefaultRequest)==1u",
     )
-    for field in fields:
-        if compact_header.count(field) != 1:
-            raise ValueError("policy field contract changed")
-    mappings = (
-        "caseIOSFeatureId::MetalFxSpatial:"
-        "probe=IOSDeviceProbeId::MetalFxSpatial;",
-        "caseIOSFeatureId::MetalFxTemporal:"
-        "probe=IOSDeviceProbeId::MetalFxTemporal;",
-        "caseIOSFeatureId::MeshShading:"
-        "probe=IOSDeviceProbeId::MeshShading;",
-        "caseIOSFeatureId::RayTracing:"
-        "probe=IOSDeviceProbeId::RayTracing;",
-        "caseIOSFeatureId::Metal4Transport:"
-        "probe=IOSDeviceProbeId::Metal4Transport;",
+    for contract in header_contracts:
+        if compact_header.count(contract) != 1:
+            raise ValueError("P2.6d header contract changed: " + contract)
+
+    resolver = resolver_segment(source)
+    compact_resolver = compact(resolver)
+    if "IOSDeviceFacts" in resolver or "facts." in resolver:
+        raise ValueError("pure defaults resolver depends on facts")
+    signature = (
+        "iosResolveFeatureDefaultRequest("
+        "IOSFeatureIdfeature,IOSFeatureDefaultClassdefaults)noexcept"
     )
-    for mapping in mappings:
-        if compact_source.count(mapping) != 1:
-            raise ValueError("feature to probe mapping changed")
-    ordered = (
+    if signature not in compact_resolver:
+        raise ValueError("pure defaults resolver signature changed")
+    feature_guard = (
+        "if(!featureProbe(feature,unusedProbe))"
+        "return{false,IOSFeatureFallbackReason::InvalidFeature};"
+    )
+    default_guard = (
+        "if(!validDefaultClass(defaults))"
+        "return{false,IOSFeatureFallbackReason::InvalidDefaultClass};"
+    )
+    if compact_resolver.index(feature_guard) >= \
+            compact_resolver.index(default_guard):
+        raise ValueError("invalid feature/default precedence changed")
+
+    matches = table_matches(source)
+    actual_matrix = tuple(
+        match.group(1) == "true" for match in matches
+    )
+    if actual_matrix != expected_matrix:
+        raise ValueError("explicit 4x5 defaults matrix changed")
+
+    wrapper = compact(wrapper_segment(source))
+    if "facts.facts()" in wrapper:
+        raise ValueError("defaults wrapper reads facts directly")
+    delegation = (
+        "iosEvaluateFeaturePolicy(facts,"
+        "{input.feature,request.requested,input.activationSucceeded})"
+    )
+    if wrapper.count(delegation) != 1:
+        raise ValueError("defaults wrapper delegation changed")
+    invalid_override = (
+        "if(request.fallbackReason!="
+        "IOSFeatureFallbackReason::None)"
+        "state.fallbackReason=request.fallbackReason;"
+    )
+    if wrapper.count(invalid_override) != 1:
+        raise ValueError("invalid defaults propagation changed")
+
+    existing_eligibility = (
+        "state.eligible=availabilityKnown&&availabilityPassed&&"
+        "deviceSupportKnown&&deviceSupportPassed;"
+    )
+    if compact_source.count(existing_eligibility) != 1:
+        raise ValueError("P2.6c facts-only eligibility changed")
+    existing_order = (
         "if(!input.requested)",
         "if(!availabilityKnown)",
         "if(!availabilityPassed)",
@@ -146,52 +237,33 @@ def validate_contract():
         "if(!deviceSupportPassed)",
         "if(!input.activationSucceeded)",
         "state.active=true;",
-        "state.fallbackReason=IOSFeatureFallbackReason::None;",
     )
-    positions = [compact_source.index(anchor) for anchor in ordered]
+    positions = [compact_source.index(anchor) for anchor in existing_order]
     if positions != sorted(positions):
-        raise ValueError("fallback precedence changed")
-    eligibility = (
-        "state.eligible=availabilityKnown&&availabilityPassed&&"
-        "deviceSupportKnown&&deviceSupportPassed;"
-    )
-    if compact_source.count(eligibility) != 1:
-        raise ValueError("facts-only eligibility changed")
-    forbidden = (
-        "highestKnownAppleFamily",
-        "highestKnownMetalFamily",
-        "knownLimitMask",
-        "formats[",
-        "IOSDeviceNative",
-        "iosCollectDeviceFacts",
-    )
-    if any(value in header + source for value in forbidden):
-        raise ValueError("policy gained forbidden inference")
+        raise ValueError("P2.6c fallback precedence changed")
+
     test_anchors = (
-        "IOSFeatureFallbackReason::InvalidFeature",
-        "IOSFeatureFallbackReason::NotRequested",
-        "IOSFeatureFallbackReason::AvailabilityUnknown",
-        "IOSFeatureFallbackReason::AvailabilityUnsupported",
-        "IOSFeatureFallbackReason::DeviceSupportUnknown",
-        "IOSFeatureFallbackReason::DeviceSupportUnsupported",
-        "IOSFeatureFallbackReason::ActivationFailed",
-        "unrelatedPositive.highestKnownAppleFamily=10u;",
-        "assert((state.fallbackReason==IOSFeatureFallbackReason::None)=="
-        "state.active);",
+        "ExpectedRequests[DefaultClassCount][ProbeCount]",
+        "testExactDefaultMatrix();",
+        "testCapabilityFallbacksForEveryFeature();",
+        "testActivationFailureForEveryFeature();",
+        "testInvalidInputsAndPrecedence();",
+        "testFactsNeverChooseOrBypassDefaults();",
+        "testExplicitRequestRegression();",
+        "IOSFeatureFallbackReason::InvalidDefaultClass",
+        "IOSFeatureDefaultClass::Count,InvalidDefaults",
+        "highData.highestKnownAppleFamily=10u;",
+        "highData.runtimeVersion={99u,1u,2u,0u};",
     )
     for anchor in test_anchors:
         if anchor not in compact_test:
-            raise ValueError("policy test oracle changed: " + anchor)
+            raise ValueError("P2.6d test oracle changed: " + anchor)
 
-def mutation_is_killed(
-    label,
-    candidate_header,
-    candidate_source,
-):
+def mutation_is_killed(label, candidate_source):
     case_root = mutation_root / label
     graphics = case_root / "graphics"
     graphics.mkdir(parents=True)
-    (graphics / "iosfeaturepolicy.h").write_text(candidate_header)
+    (graphics / "iosfeaturepolicy.h").write_text(header)
     (graphics / "iosfeaturepolicy.cpp").write_text(candidate_source)
     (graphics / "iosdevicecapabilities.h").write_text(capability_header)
     test_path = case_root / "iosfeaturepolicy.cpp"
@@ -219,7 +291,12 @@ def mutation_is_killed(
         check=False,
     )
     if compile_result.returncode != 0:
-        return True
+        raise SystemExit(
+            "P2.6d mutant did not compile: "
+            + label
+            + "\n"
+            + compile_result.stderr.decode(errors="replace")
+        )
     sign_result = subprocess.run(
         ["codesign", "-f", "-s", "-", str(binary)],
         stdout=subprocess.PIPE,
@@ -227,9 +304,7 @@ def mutation_is_killed(
         check=False,
     )
     if sign_result.returncode != 0:
-        raise SystemExit(
-            "P2.6c mutation codesign failed: " + label
-        )
+        raise SystemExit("P2.6d mutation codesign failed: " + label)
     run_result = subprocess.run(
         [str(binary)],
         stdout=subprocess.PIPE,
@@ -240,98 +315,129 @@ def mutation_is_killed(
 
 validate_contract()
 mutations = []
-mapping_pairs = (
-    ("IOSDeviceProbeId::MetalFxSpatial", "IOSDeviceProbeId::MetalFxTemporal"),
-    ("IOSDeviceProbeId::MetalFxTemporal", "IOSDeviceProbeId::MeshShading"),
-    ("IOSDeviceProbeId::MeshShading", "IOSDeviceProbeId::RayTracing"),
-    ("IOSDeviceProbeId::RayTracing", "IOSDeviceProbeId::Metal4Transport"),
-    ("IOSDeviceProbeId::Metal4Transport", "IOSDeviceProbeId::MetalFxSpatial"),
-)
-for index, (old, new) in enumerate(mapping_pairs):
-    mutations.append((
-        f"mapping-{index}",
-        header,
-        replace_once(source, f"probe = {old};", f"probe = {new};"),
-        test,
-    ))
-source_mutations = (
-    (
-        "requested-copy",
-        "    input.requested,\n    false,",
-        "    false,\n    false,",
-    ),
-    (
-        "eligible-calculation",
-        "availabilityKnown && availabilityPassed &&\n"
-        "      deviceSupportKnown && deviceSupportPassed;",
-        "availabilityKnown && availabilityPassed;",
-    ),
-    (
-        "active-field",
-        "state.active = true;",
-        "state.active = false;",
-    ),
-    (
-        "not-requested-reason",
-        "IOSFeatureFallbackReason::NotRequested;",
-        "IOSFeatureFallbackReason::ActivationFailed;",
-    ),
-    (
-        "availability-unknown-reason",
-        "IOSFeatureFallbackReason::AvailabilityUnknown;",
-        "IOSFeatureFallbackReason::AvailabilityUnsupported;",
-    ),
-    (
-        "availability-unsupported-reason",
-        "IOSFeatureFallbackReason::AvailabilityUnsupported;",
-        "IOSFeatureFallbackReason::DeviceSupportUnknown;",
-    ),
-    (
-        "support-unknown-reason",
-        "IOSFeatureFallbackReason::DeviceSupportUnknown;",
-        "IOSFeatureFallbackReason::DeviceSupportUnsupported;",
-    ),
-    (
-        "support-unsupported-reason",
-        "IOSFeatureFallbackReason::DeviceSupportUnsupported;",
-        "IOSFeatureFallbackReason::ActivationFailed;",
-    ),
-    (
-        "activation-failed-reason",
-        "IOSFeatureFallbackReason::ActivationFailed;",
-        "IOSFeatureFallbackReason::None;",
-    ),
-)
-for label, old, new in source_mutations:
-    mutations.append((label, header, replace_once(source, old, new), test))
-mutations.append(
-    (
-        "family-shortcut",
-        header,
-        replace_once(
-            source,
-            "state.eligible =\n"
-            "      availabilityKnown && availabilityPassed &&\n"
-            "      deviceSupportKnown && deviceSupportPassed;",
-            "state.eligible =\n"
-            "      facts.facts().highestKnownAppleFamily>=10u ||\n"
-            "      (availabilityKnown && availabilityPassed &&\n"
-            "       deviceSupportKnown && deviceSupportPassed);",
-        ),
-        test,
+
+matches = table_matches(source)
+if len(matches) != 20:
+    raise SystemExit("P2.6d defaults matrix anchor count drifted")
+for index, match in enumerate(matches):
+    old = match.group(1)
+    new = "false" if old == "true" else "true"
+    start = (
+        source.index(
+            "IOSFeatureDefaultRequest iosResolveFeatureDefaultRequest("
+        )
+        + match.start(1)
     )
+    candidate = source[:start] + new + source[start + len(old):]
+    mutations.append((matrix_labels[index], candidate))
+
+feature_guard = (
+    "  IOSDeviceProbeId unusedProbe = IOSDeviceProbeId::Count;\n"
+    "  if(!featureProbe(feature,unusedProbe))\n"
+    "    return {false,IOSFeatureFallbackReason::InvalidFeature};\n"
 )
+default_guard = (
+    "  if(!validDefaultClass(defaults))\n"
+    "    return {false,IOSFeatureFallbackReason::InvalidDefaultClass};\n"
+)
+mutations.append((
+    "invalid-enum-precedence",
+    replace_once(
+        source,
+        feature_guard + default_guard,
+        default_guard + feature_guard,
+    ),
+))
+
+delegation = (
+    "      {input.feature,request.requested,input.activationSucceeded});"
+)
+request_dependencies = (
+    (
+        "probe-dependent-request",
+        "      {input.feature,\n"
+        "       request.requested &&\n"
+        "           (facts.facts().probes[0].passedStages &\n"
+        "            DeviceSupport)!=0u,\n"
+        "       input.activationSucceeded});",
+    ),
+    (
+        "family-dependent-request",
+        "      {input.feature,\n"
+        "       request.requested &&\n"
+        "           facts.facts().highestKnownAppleFamily>=10u,\n"
+        "       input.activationSucceeded});",
+    ),
+    (
+        "format-dependent-request",
+        "      {input.feature,\n"
+        "       request.requested &&\n"
+        "           facts.facts().formats[0].supportedUsages!=0u,\n"
+        "       input.activationSucceeded});",
+    ),
+    (
+        "limit-dependent-request",
+        "      {input.feature,\n"
+        "       request.requested &&\n"
+        "           facts.facts().knownLimitMask!=0u,\n"
+        "       input.activationSucceeded});",
+    ),
+    (
+        "version-dependent-request",
+        "      {input.feature,\n"
+        "       request.requested &&\n"
+        "           facts.facts().runtimeVersion.major!=0u,\n"
+        "       input.activationSucceeded});",
+    ),
+)
+for label, replacement in request_dependencies:
+    mutations.append((
+        label,
+        replace_once(source,delegation,replacement),
+    ))
+
+mutations.append((
+    "capability-bypass",
+    replace_once(
+        source,
+        "  state.eligible =\n"
+        "      availabilityKnown && availabilityPassed &&\n"
+        "      deviceSupportKnown && deviceSupportPassed;",
+        "  state.eligible = true;",
+    ),
+))
+mutations.append((
+    "activation-bypass",
+    replace_once(
+        source,
+        "  if(!input.activationSucceeded) {",
+        "  if(false) {",
+    ),
+))
+mutations.append((
+    "invalid-default-handling",
+    replace_once(
+        source,
+        "  if(request.fallbackReason!=IOSFeatureFallbackReason::None)",
+        "  if(false)",
+    ),
+))
+
 killed = 0
-for label, candidate_header, candidate_source, candidate_test in mutations:
-    del candidate_test
-    if mutation_is_killed(label,candidate_header,candidate_source):
+for label, candidate_source in mutations:
+    if mutation_is_killed(label,candidate_source):
         killed += 1
         continue
-    raise SystemExit("P2.6c mutation survived: " + label)
-if killed != 15:
-    raise SystemExit("P2.6c mutation count drifted")
+    raise SystemExit("P2.6d executable mutation survived: " + label)
+if killed != 29:
+    raise SystemExit(
+        f"P2.6d mutation count drifted: {killed}/29"
+    )
 shutil.rmtree(mutation_root)
-print(f"P2.6c executable mutation oracle: mutations-killed={killed}")
+print(
+    "P2.6d executable mutation oracle: "
+    f"compiled=29 executed=29 mutations-killed={killed}"
+)
 PY
 
-echo "P2.6c IOSFeaturePolicy: PASS"
+echo "P2.6d IOSFeaturePolicy defaults: PASS"
