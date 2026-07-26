@@ -1,6 +1,7 @@
 #include "graphics/iosdevicefactscollector.h"
 
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
@@ -9,8 +10,14 @@ namespace {
 
 constexpr uint8_t ProbeCount =
     static_cast<uint8_t>(IOSDeviceProbeId::Count);
+constexpr uint8_t FormatCount =
+    static_cast<uint8_t>(IOSDeviceFormatId::Count);
 constexpr uint8_t LimitCount =
     static_cast<uint8_t>(IOSDeviceLimitId::Count);
+
+constexpr uint8_t RequiredFormatUsages[FormatCount] = {
+  0x0Bu,0x0Bu,0x03u,0x05u,0x05u,
+  };
 
 constexpr uint16_t appleMask(uint8_t family) noexcept {
   return static_cast<uint16_t>(uint16_t(1u) << family);
@@ -33,6 +40,35 @@ IOSDeviceFactsData requireValue(
   assert(result.failure.reserved==0u);
   assert(result.failure.raw==0u);
   return result.value->facts();
+  }
+
+void requireFormatFailure(
+    const IOSDeviceFactsCreateResult& result,
+    IOSDeviceFactsError error,
+    uint8_t index,
+    uint32_t raw) {
+  assert(!result.value.has_value());
+  assert(result.failure.error==error);
+  assert(result.failure.section==IOSDeviceFactsSection::Format);
+  assert(result.failure.index==index);
+  assert(result.failure.reserved==0u);
+  assert(result.failure.raw==raw);
+  }
+
+void requireMappedFormats(
+    const IOSDeviceFactsData& facts,
+    uint8_t activeIndex,
+    uint8_t knownUsages,
+    uint8_t supportedUsages) {
+  for(uint8_t i=0u; i<FormatCount; ++i) {
+    assert(facts.formats[i].requiredUsages==
+           RequiredFormatUsages[i]);
+    assert(facts.formats[i].knownUsages==
+           (i==activeIndex ? knownUsages : 0u));
+    assert(facts.formats[i].supportedUsages==
+           (i==activeIndex ? supportedUsages : 0u));
+    assert(facts.formats[i].reserved==0u);
+    }
   }
 
 void requireUnknownProbe(const ProbeFacts& probe, uint8_t index) {
@@ -102,8 +138,16 @@ int main() {
   static_assert(std::is_trivially_copyable_v<IOSDeviceNativeVersion>);
   static_assert(std::is_standard_layout_v<IOSDeviceNativeProbe>);
   static_assert(std::is_trivially_copyable_v<IOSDeviceNativeProbe>);
+  static_assert(sizeof(IOSDeviceNativeFormat)==2u);
+  static_assert(alignof(IOSDeviceNativeFormat)==1u);
+  static_assert(offsetof(IOSDeviceNativeFormat,knownUsages)==0u);
+  static_assert(offsetof(IOSDeviceNativeFormat,supportedUsages)==1u);
+  static_assert(std::is_standard_layout_v<IOSDeviceNativeFormat>);
+  static_assert(std::is_trivially_copyable_v<IOSDeviceNativeFormat>);
   static_assert(std::is_standard_layout_v<IOSDeviceNativeSnapshot>);
   static_assert(std::is_trivially_copyable_v<IOSDeviceNativeSnapshot>);
+  static_assert(sizeof(IOSDeviceFactsData)==192u);
+  static_assert(IOSDeviceFactsABIVersion==1u);
   static_assert(IOSDeviceNativeKnownLimitMask==0x170u);
   using MapperSignature = IOSDeviceFactsCreateResult (*)(
       const IOSDeviceNativeSnapshot&) noexcept;
@@ -147,6 +191,158 @@ int main() {
   assert(unknownFacts.knownLimitMask==0u);
   for(uint8_t i=0u; i<LimitCount; ++i)
     assert(unknownFacts.limits[i]==0u);
+
+  uint32_t requiredStateRecords = 0u;
+  uint32_t outsideRequiredPairs = 0u;
+  for(uint8_t formatIndex=0u;
+      formatIndex<FormatCount;
+      ++formatIndex) {
+    const uint8_t required = RequiredFormatUsages[formatIndex];
+    for(uint8_t usageIndex=0u; usageIndex<4u; ++usageIndex) {
+      const uint8_t usage =
+          static_cast<uint8_t>(uint8_t(1u) << usageIndex);
+      if((required & usage)!=0u) {
+        IOSDeviceNativeSnapshot unknownUsage;
+        const IOSDeviceFactsData& unknownUsageFacts =
+            requireValue(iosMapDeviceNativeSnapshot(unknownUsage));
+        requireMappedFormats(
+            unknownUsageFacts,formatIndex,0u,0u);
+
+        IOSDeviceNativeSnapshot knownNo;
+        knownNo.formats[formatIndex].knownUsages = usage;
+        const IOSDeviceFactsData& knownNoFacts =
+            requireValue(iosMapDeviceNativeSnapshot(knownNo));
+        requireMappedFormats(
+            knownNoFacts,formatIndex,usage,0u);
+
+        IOSDeviceNativeSnapshot knownYes;
+        knownYes.formats[formatIndex].knownUsages = usage;
+        knownYes.formats[formatIndex].supportedUsages = usage;
+        const IOSDeviceFactsData& knownYesFacts =
+            requireValue(iosMapDeviceNativeSnapshot(knownYes));
+        requireMappedFormats(
+            knownYesFacts,formatIndex,usage,usage);
+        ++requiredStateRecords;
+        continue;
+        }
+
+      IOSDeviceNativeSnapshot invalidKnown;
+      invalidKnown.formats[formatIndex].knownUsages = usage;
+      requireFormatFailure(
+          iosMapDeviceNativeSnapshot(invalidKnown),
+          IOSDeviceFactsError::FormatKnownUsagesOutsideRequired,
+          formatIndex,usage);
+
+      IOSDeviceNativeSnapshot invalidSupported;
+      invalidSupported.formats[formatIndex].supportedUsages = usage;
+      requireFormatFailure(
+          iosMapDeviceNativeSnapshot(invalidSupported),
+          IOSDeviceFactsError::FormatSupportedUsagesOutsideKnown,
+          formatIndex,usage);
+      ++outsideRequiredPairs;
+      }
+    }
+  assert(requiredStateRecords==12u);
+  assert(outsideRequiredPairs==8u);
+
+  IOSDeviceNativeSnapshot fullFormats;
+  for(uint8_t i=0u; i<FormatCount; ++i) {
+    fullFormats.formats[i].knownUsages = RequiredFormatUsages[i];
+    fullFormats.formats[i].supportedUsages =
+        RequiredFormatUsages[i];
+    }
+  const IOSDeviceFactsData& fullFormatFacts =
+      requireValue(iosMapDeviceNativeSnapshot(fullFormats));
+  for(uint8_t i=0u; i<FormatCount; ++i) {
+    assert(fullFormatFacts.formats[i].requiredUsages==
+           RequiredFormatUsages[i]);
+    assert(fullFormatFacts.formats[i].knownUsages==
+           RequiredFormatUsages[i]);
+    assert(fullFormatFacts.formats[i].supportedUsages==
+           RequiredFormatUsages[i]);
+    assert(fullFormatFacts.formats[i].reserved==0u);
+    }
+
+  IOSDeviceNativeSnapshot subsetFormats;
+  for(uint8_t i=0u; i<FormatCount; ++i) {
+    const uint8_t firstRequiredBit = Sampled;
+    subsetFormats.formats[i].knownUsages =
+        RequiredFormatUsages[i];
+    subsetFormats.formats[i].supportedUsages =
+        firstRequiredBit;
+    }
+  const IOSDeviceFactsData& subsetFormatFacts =
+      requireValue(iosMapDeviceNativeSnapshot(subsetFormats));
+  for(uint8_t i=0u; i<FormatCount; ++i) {
+    assert(subsetFormatFacts.formats[i].knownUsages==
+           RequiredFormatUsages[i]);
+    assert(subsetFormatFacts.formats[i].supportedUsages!=0u);
+    assert((subsetFormatFacts.formats[i].supportedUsages &
+            ~RequiredFormatUsages[i])==0u);
+    }
+
+  IOSDeviceNativeSnapshot rawKnown;
+  rawKnown.formats[0].knownUsages = 0xFFu;
+  requireFormatFailure(
+      iosMapDeviceNativeSnapshot(rawKnown),
+      IOSDeviceFactsError::FormatKnownUsagesOutsideRequired,
+      0u,0xFFu);
+  IOSDeviceNativeSnapshot rawSupported;
+  rawSupported.formats[0].supportedUsages = 0xFFu;
+  requireFormatFailure(
+      iosMapDeviceNativeSnapshot(rawSupported),
+      IOSDeviceFactsError::FormatSupportedUsagesOutsideKnown,
+      0u,0xFFu);
+
+  IOSDeviceNativeSnapshot knownBeforeSupported;
+  knownBeforeSupported.formats[0].knownUsages = DepthAttachment;
+  knownBeforeSupported.formats[0].supportedUsages = DepthAttachment;
+  requireFormatFailure(
+      iosMapDeviceNativeSnapshot(knownBeforeSupported),
+      IOSDeviceFactsError::FormatKnownUsagesOutsideRequired,
+      0u,DepthAttachment);
+
+  IOSDeviceNativeSnapshot lowerFormatIndex;
+  lowerFormatIndex.formats[1].knownUsages = DepthAttachment;
+  lowerFormatIndex.formats[3].knownUsages = ColorAttachment;
+  requireFormatFailure(
+      iosMapDeviceNativeSnapshot(lowerFormatIndex),
+      IOSDeviceFactsError::FormatKnownUsagesOutsideRequired,
+      1u,DepthAttachment);
+
+  IOSDeviceNativeSnapshot lowerSupportedBeforeKnown;
+  lowerSupportedBeforeKnown.formats[0].supportedUsages =
+      DepthAttachment;
+  lowerSupportedBeforeKnown.formats[1].knownUsages =
+      DepthAttachment;
+  requireFormatFailure(
+      iosMapDeviceNativeSnapshot(lowerSupportedBeforeKnown),
+      IOSDeviceFactsError::FormatSupportedUsagesOutsideKnown,
+      0u,DepthAttachment);
+
+  IOSDeviceFactsData probeBeforeFormat =
+      requireValue(iosMapDeviceNativeSnapshot(unknown));
+  probeBeforeFormat.probes[0].requiredStages = Availability;
+  probeBeforeFormat.formats[0].knownUsages = DepthAttachment;
+  const IOSDeviceFactsCreateResult probeBeforeFormatResult =
+      IOSDeviceFacts::create(probeBeforeFormat);
+  assert(!probeBeforeFormatResult.value.has_value());
+  assert(probeBeforeFormatResult.failure.error==
+         IOSDeviceFactsError::ProbeRequiredStagesMismatch);
+  assert(probeBeforeFormatResult.failure.section==
+         IOSDeviceFactsSection::Probe);
+  assert(probeBeforeFormatResult.failure.index==0u);
+  assert(probeBeforeFormatResult.failure.reserved==0u);
+  assert(probeBeforeFormatResult.failure.raw==Availability);
+
+  IOSDeviceFactsData formatBeforeLimit =
+      requireValue(iosMapDeviceNativeSnapshot(unknown));
+  formatBeforeLimit.formats[0].knownUsages = DepthAttachment;
+  formatBeforeLimit.knownLimitMask = uint32_t(1u) << 31u;
+  requireFormatFailure(
+      IOSDeviceFacts::create(formatBeforeLimit),
+      IOSDeviceFactsError::FormatKnownUsagesOutsideRequired,
+      0u,DepthAttachment);
 
   const IOSDeviceFactsData& a17 =
       requireValue(iosMapDeviceNativeSnapshot(a17Reference()));

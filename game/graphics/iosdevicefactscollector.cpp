@@ -11,21 +11,9 @@ constexpr uint8_t FormatCount =
 constexpr uint8_t LimitCount =
     static_cast<uint8_t>(IOSDeviceLimitId::Count);
 
-constexpr uint8_t requiredFormatUsages(uint8_t index) noexcept {
-  switch(static_cast<IOSDeviceFormatId>(index)) {
-    case IOSDeviceFormatId::Rg11B10Float:
-    case IOSDeviceFormatId::Rgba16Float:
-      return Sampled | ColorAttachment | ShaderWrite;
-    case IOSDeviceFormatId::Rg16Float:
-      return Sampled | ColorAttachment;
-    case IOSDeviceFormatId::Depth16Unorm:
-    case IOSDeviceFormatId::Depth32Float:
-      return Sampled | DepthAttachment;
-    case IOSDeviceFormatId::Count:
-      break;
-    }
-  return 0u;
-  }
+constexpr uint8_t RequiredFormatUsages[FormatCount] = {
+  0x0Bu,0x0Bu,0x03u,0x05u,0x05u,
+  };
 
 constexpr bool isKnown(IOSDeviceNativeTruth value) noexcept {
   return value==IOSDeviceNativeTruth::No ||
@@ -119,8 +107,13 @@ IOSDeviceFactsCreateResult iosMapDeviceNativeSnapshot(
   for(uint8_t i=0u; i<ProbeCount; ++i)
     result.probes[i] = mapProbe(i,snapshot.probes[i]);
 
-  for(uint8_t i=0u; i<FormatCount; ++i)
-    result.formats[i].requiredUsages = requiredFormatUsages(i);
+  for(uint8_t i=0u; i<FormatCount; ++i) {
+    result.formats[i].requiredUsages = RequiredFormatUsages[i];
+    result.formats[i].knownUsages =
+        snapshot.formats[i].knownUsages;
+    result.formats[i].supportedUsages =
+        snapshot.formats[i].supportedUsages;
+    }
 
   const uint32_t requestedMask =
       snapshot.knownLimitMask & IOSDeviceNativeKnownLimitMask;

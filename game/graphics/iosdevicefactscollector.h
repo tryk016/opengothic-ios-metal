@@ -26,6 +26,11 @@ struct IOSDeviceNativeProbe final {
   IOSDeviceNativeTruth deviceSupport = IOSDeviceNativeTruth::Unknown;
   };
 
+struct IOSDeviceNativeFormat final {
+  uint8_t knownUsages = 0u;
+  uint8_t supportedUsages = 0u;
+  };
+
 struct IOSDeviceNativeSnapshot final {
   IOSDeviceNativeVersion runtimeVersion;
   IOSDeviceNativeVersion sdkVersion;
@@ -34,6 +39,7 @@ struct IOSDeviceNativeSnapshot final {
   uint8_t knownMetalFamilyMask = 0u;
   uint8_t supportedMetalFamilyMask = 0u;
   IOSDeviceNativeProbe probes[5];
+  IOSDeviceNativeFormat formats[5];
   uint32_t knownLimitMask = 0u;
   uint64_t limits[15] = {};
   };

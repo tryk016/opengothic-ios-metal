@@ -908,6 +908,20 @@ def validate(
     ) != 1:
         raise ValueError("native snapshot seam changed")
     if compact_header.count(
+        "structIOSDeviceNativeFormatfinal{"
+        "uint8_tknownUsages=0u;"
+        "uint8_tsupportedUsages=0u;};"
+    ) != 1:
+        raise ValueError("native format transport seam changed")
+    if compact_header.count(
+        "IOSDeviceNativeProbeprobes[5];"
+        "IOSDeviceNativeFormatformats[5];"
+        "uint32_tknownLimitMask=0u;"
+    ) != 1:
+        raise ValueError(
+            "native format field order or cardinality changed"
+        )
+    if compact_header.count(
         "IOSDeviceFactsCreateResultiosCollectDeviceFacts("
         "constTempest::Device&device)noexcept;"
     ) != 1:
@@ -917,7 +931,60 @@ def validate(
         "constIOSDeviceNativeSnapshot&snapshot)noexcept{"
     ) != 1:
         raise ValueError("snapshot mapper definition changed")
+    required_format_table = (
+        "constexpruint8_tRequiredFormatUsages[FormatCount]="
+        "{0x0Bu,0x0Bu,0x03u,0x05u,0x05u,};"
+    )
+    if compact_mapper.count(required_format_table) != 1:
+        raise ValueError("native format required masks changed")
+    format_assignments = (
+        "result.formats[i].requiredUsages="
+        "RequiredFormatUsages[i];",
+        "result.formats[i].knownUsages="
+        "snapshot.formats[i].knownUsages;",
+        "result.formats[i].supportedUsages="
+        "snapshot.formats[i].supportedUsages;",
+    )
+    for assignment in format_assignments:
+        if compact_mapper.count(assignment) != 1:
+            raise ValueError(
+                "native format raw assignment changed: "
+                + assignment
+            )
+    if (
+        compact_mapper.count("result.formats[") != 3
+        or compact_mapper.count("snapshot.formats[") != 2
+    ):
+        raise ValueError(
+            "native format mapper gained normalization or another copy"
+        )
+    if compact_mapper.count(
+        "returnIOSDeviceFacts::create(result);"
+    ) != 1:
+        raise ValueError(
+            "existing facts factory is not the sole final validator"
+        )
     required_test_contract = (
+        "static_assert(sizeof(IOSDeviceNativeFormat)==2u);",
+        "static_assert(alignof(IOSDeviceNativeFormat)==1u);",
+        "static_assert(offsetof(IOSDeviceNativeFormat,"
+        "knownUsages)==0u);",
+        "static_assert(offsetof(IOSDeviceNativeFormat,"
+        "supportedUsages)==1u);",
+        "static_assert(std::is_standard_layout_v<"
+        "IOSDeviceNativeFormat>);",
+        "static_assert(std::is_trivially_copyable_v<"
+        "IOSDeviceNativeFormat>);",
+        "assert(requiredStateRecords==12u);",
+        "assert(outsideRequiredPairs==8u);",
+        "IOSDeviceNativeSnapshotfullFormats;",
+        "IOSDeviceNativeSnapshotsubsetFormats;",
+        "IOSDeviceNativeSnapshotrawKnown;",
+        "IOSDeviceNativeSnapshotrawSupported;",
+        "IOSDeviceNativeSnapshotknownBeforeSupported;",
+        "IOSDeviceNativeSnapshotlowerSupportedBeforeKnown;",
+        "IOSDeviceFactsDataprobeBeforeFormat=",
+        "IOSDeviceFactsDataformatBeforeLimit=",
         "static_assert(std::is_standard_layout_v<"
         "IOSDeviceNativeSnapshot>);",
         "static_assert(std::is_trivially_copyable_v<"
@@ -1217,6 +1284,139 @@ factory_witness = (
     "options:0 reflection:nil error:nil];\n"
     "}\n"
 )
+required_table_source = (
+    "constexpr uint8_t RequiredFormatUsages[FormatCount] = {\n"
+    "  0x0Bu,0x0Bu,0x03u,0x05u,0x05u,\n"
+    "  };"
+)
+required_table_mutations = (
+    ("required-rg11b10", "0x01u,0x0Bu,0x03u,0x05u,0x05u"),
+    ("required-rgba16", "0x0Bu,0x01u,0x03u,0x05u,0x05u"),
+    ("required-rg16", "0x0Bu,0x0Bu,0x01u,0x05u,0x05u"),
+    ("required-depth16", "0x0Bu,0x0Bu,0x03u,0x01u,0x05u"),
+    ("required-depth32", "0x0Bu,0x0Bu,0x03u,0x05u,0x01u"),
+)
+format_mutations = [
+    (
+        label,
+        header,
+        mapper.replace(
+            required_table_source,
+            "constexpr uint8_t RequiredFormatUsages[FormatCount] = {\n"
+            f"  {values},\n"
+            "  };",
+            1,
+        ),
+        native,
+        context,
+        cmake,
+    )
+    for label, values in required_table_mutations
+]
+format_mutations.extend((
+    (
+        "missing-format-known-copy",
+        header,
+        replace_once(
+            mapper,
+            "result.formats[i].knownUsages =\n"
+            "        snapshot.formats[i].knownUsages;",
+            "(void)snapshot.formats[i].knownUsages;",
+        ),
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "replaced-format-known-copy",
+        header,
+        replace_once(
+            mapper,
+            "snapshot.formats[i].knownUsages;",
+            "snapshot.formats[i].supportedUsages;",
+        ),
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "masked-format-known-copy",
+        header,
+        replace_once(
+            mapper,
+            "snapshot.formats[i].knownUsages;",
+            "snapshot.formats[i].knownUsages & "
+            "RequiredFormatUsages[i];",
+        ),
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "missing-format-supported-copy",
+        header,
+        replace_once(
+            mapper,
+            "result.formats[i].supportedUsages =\n"
+            "        snapshot.formats[i].supportedUsages;",
+            "(void)snapshot.formats[i].supportedUsages;",
+        ),
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "replaced-format-supported-copy",
+        header,
+        replace_once(
+            mapper,
+            "snapshot.formats[i].supportedUsages;",
+            "snapshot.formats[i].knownUsages;",
+        ),
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "masked-format-supported-copy",
+        header,
+        replace_once(
+            mapper,
+            "snapshot.formats[i].supportedUsages;",
+            "snapshot.formats[i].supportedUsages & "
+            "snapshot.formats[i].knownUsages;",
+        ),
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "format-field-order",
+        replace_once(
+            header,
+            "  IOSDeviceNativeProbe probes[5];\n"
+            "  IOSDeviceNativeFormat formats[5];",
+            "  IOSDeviceNativeFormat formats[5];\n"
+            "  IOSDeviceNativeProbe probes[5];",
+        ),
+        mapper,
+        native,
+        context,
+        cmake,
+    ),
+    (
+        "format-cardinality",
+        replace_once(
+            header,
+            "  IOSDeviceNativeFormat formats[5];",
+            "  IOSDeviceNativeFormat formats[4];",
+        ),
+        mapper,
+        native,
+        context,
+        cmake,
+    ),
+))
 mutations = (
     (
         "duplicate-borrow",
@@ -1420,7 +1620,7 @@ mutations = (
             '"-framework MetalFX"',
         ),
     ),
-)
+) + tuple(format_mutations)
 mutations_killed = 0
 for label, h, m, n, c, build in mutations:
     try:
@@ -1431,11 +1631,11 @@ for label, h, m, n, c, build in mutations:
         raise SystemExit(
             "P2.6b1 source mutation survived: " + label
         )
-if mutations_killed != 19:
+if mutations_killed != 32:
     raise SystemExit(
-        "P2.6b1 source mutation count drifted"
+        "P2.6b1+b2a source mutation count drifted"
     )
-print("P2.6b1 source oracle: mutations-killed=19")
+print("P2.6b1+b2a source oracle: mutations-killed=32")
 PY
 
 printf '\n### CI contract: Verify P2.5a shading prototype plan contract\n'
