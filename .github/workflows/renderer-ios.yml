@@ -147,7 +147,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         uses: actions/upload-artifact@v4
         with:
-          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-OFF-none-bink-self-test-false-resource-allocator-self-test-false-clear-only-pass-self-test-false-shading-prototype-tile-self-test-false-shading-prototype-forward-self-test-false
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-OFF
           path: device-artifact/
           if-no-files-found: error
           retention-days: 14
@@ -181,7 +181,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.package_device_ipa
         uses: actions/upload-artifact@v4
         with:
-          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-${{ inputs.tempest_profile }}-ON-${{ inputs.fault_mode }}-bink-self-test-${{ inputs.bink_self_test }}-resource-allocator-self-test-${{ inputs.resource_allocator_self_test }}-clear-only-pass-self-test-${{ inputs.clear_only_pass_self_test }}-shading-prototype-tile-self-test-${{ inputs.shading_prototype_tile_self_test }}-shading-prototype-forward-self-test-${{ inputs.shading_prototype_forward_self_test }}
+          name: RendererIOS-${{ github.sha }}-run${{ github.run_id }}-attempt${{ github.run_attempt }}-ON
           path: device-artifact/
           if-no-files-found: error
           retention-days: 14
