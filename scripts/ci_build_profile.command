@@ -119,13 +119,13 @@ cmake -S . -B build-renderer-ios -G Xcode \
 
 # CI_PROFILE_CANDIDATE_BEGIN
 for shader in landscape bink ui inventory shading-prototypes; do
-  extra=()
+  set --
   if [ "$shader" = shading-prototypes ]; then
-    extra=(-Wall -Wextra -Werror)
+    set -- -Wall -Wextra -Werror
   fi
   xcrun --sdk iphoneos metal \
     -target air64-apple-ios16.4 \
-    "${extra[@]}" \
+    "$@" \
     -c "shader/ios-metal/$shader.metal" \
     -o "$RUNNER_TEMP/ios-$shader.air"
 done

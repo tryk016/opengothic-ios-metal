@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -214,6 +215,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     )
     for literal in (
         "for shader in landscape bink ui inventory shading-prototypes; do",
+        '"$@"',
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
@@ -222,6 +224,12 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     ):
         if candidate.count(literal) != 1:
             raise ValueError(f"profile candidate contract drifted: {literal}")
+    for line in (
+        "  set --",
+        "    set -- -Wall -Wextra -Werror",
+    ):
+        if candidate.splitlines().count(line) != 1:
+            raise ValueError(f"profile candidate arguments drifted: {line.strip()}")
     if candidate.splitlines().count("  xcrun --sdk iphoneos metal \\") != 1:
         raise ValueError("profile candidate Metal compiler command drifted")
 
@@ -481,6 +489,14 @@ def test_workflow_contract() -> None:
         ),
         (
             contracts,
+            replace_exact_line_once(
+                profile,
+                "  set --",
+                "  extra=()",
+            ),
+        ),
+        (
+            contracts,
             replace_once(
                 profile,
                 "# CI_PROFILE_CONFIGURE_BEGIN",
@@ -544,7 +560,94 @@ def test_workflow_contract() -> None:
             extraction_killed += 1
         else:
             raise AssertionError("extracted CI/profile mutation survived")
-    assert extraction_killed == 11
+    assert extraction_killed == 12
+
+
+def test_bash32_candidate_arguments() -> None:
+    profile = PROFILE.read_text(encoding="utf-8")
+    candidate = exact_scope(
+        profile,
+        "# CI_PROFILE_CANDIDATE_BEGIN",
+        "# CI_PROFILE_CANDIDATE_END",
+        "profile candidate metallib",
+    )
+    exports = (
+        "riosLandscapeVertex",
+        "riosLandscapeFragment",
+        "riosBinkVertex",
+        "riosBinkFragment",
+        "riosUiColorVertex",
+        "riosUiColorFragment",
+        "riosUiTextureVertex",
+        "riosUiTextureFragment",
+        "riosInventoryVertex",
+        "riosInventoryFragment",
+        "riosShadingPrototypeVertex",
+        "riosTileDeferredMaterialFragment",
+        "riosTileDeferredLighting",
+        "riosForwardPlusBuildLightList",
+        "riosForwardPlusFragment",
+    )
+    metal_nm_output = "".join(f"00000000 T {name}\\n" for name in exports)
+    harness = f"""\
+set -Eeuo pipefail
+IFS=$'\\n\\t'
+xcrun() {{
+  {{
+    printf 'call'
+    for argument in "$@"; do
+      printf ' <%s>' "$argument"
+    done
+    printf '\\n'
+  }} >>"$RUNNER_TEMP/xcrun.log"
+  if [ "${{3:-}}" = metal-nm ]; then
+    printf '%b' {json.dumps(metal_nm_output)}
+    return
+  fi
+  output=
+  previous=
+  for argument in "$@"; do
+    if [ "$previous" = -o ]; then
+      output="$argument"
+    fi
+    previous="$argument"
+  done
+  test -n "$output"
+  : >"$output"
+}}
+{candidate}
+"""
+    with tempfile.TemporaryDirectory() as directory:
+        environment = os.environ.copy()
+        environment["RUNNER_TEMP"] = directory
+        subprocess.run(
+            ["/bin/bash"],
+            input=harness,
+            text=True,
+            cwd=REPO,
+            env=environment,
+            check=True,
+        )
+        commands = (
+            pathlib.Path(directory) / "xcrun.log"
+        ).read_text(encoding="utf-8").splitlines()
+    metal_commands = [
+        command
+        for command in commands
+        if command.startswith(
+            "call <--sdk> <iphoneos> <metal> <-target>"
+        )
+    ]
+    assert len(commands) == 7
+    assert len(metal_commands) == 5
+    assert all(
+        flag not in metal_commands[0]
+        for flag in ("-Wall", "-Wextra", "-Werror")
+    )
+    assert all(
+        flag in metal_commands[-1]
+        for flag in ("-Wall", "-Wextra", "-Werror")
+    )
 
 
 def main() -> None:
@@ -552,9 +655,11 @@ def main() -> None:
     test_push_before_to_sha()
     test_aggregation()
     test_workflow_contract()
+    test_bash32_candidate_arguments()
     print(
         "RendererIOS CI verification tests passed: "
-        "4 groups, 7 workflow mutations, 11 extraction/profile mutations"
+        "5 groups, Bash 3.2 candidate smoke, "
+        "7 workflow mutations, 12 extraction/profile mutations"
     )
 
 
