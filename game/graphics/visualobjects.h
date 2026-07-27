@@ -15,6 +15,19 @@ class Landscape;
 class Sky;
 class AnimMesh;
 
+inline constexpr IOSSceneSourceKind iosSceneSourceKind(
+    DrawCommands::Type type) noexcept {
+  switch(type) {
+    case DrawCommands::Landscape: return IOSSceneSourceKind::Landscape;
+    case DrawCommands::Static:    return IOSSceneSourceKind::Static;
+    case DrawCommands::Movable:   return IOSSceneSourceKind::Movable;
+    case DrawCommands::Animated:  return IOSSceneSourceKind::Animated;
+    case DrawCommands::Pfx:       return IOSSceneSourceKind::Particle;
+    case DrawCommands::Morph:     return IOSSceneSourceKind::Morph;
+    }
+  return IOSSceneSourceKind::Unsupported;
+  }
+
 class VisualObjects final {
   public:
     class Item final {
@@ -167,4 +180,3 @@ class VisualObjects final {
 
     friend class Item;
   };
-

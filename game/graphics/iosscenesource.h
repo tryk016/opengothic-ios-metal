@@ -16,10 +16,11 @@ enum class IOSSceneSourceKind : uint8_t {
   Animated,
   Particle,
   Morph,
+  Unsupported,
   };
 
 struct IOSSceneSource final {
-  IOSSceneSourceKind kind = IOSSceneSourceKind::Landscape;
+  IOSSceneSourceKind kind = IOSSceneSourceKind::Unsupported;
   // Stable for one live source object. A recycled VisualObjects slot receives
   // a fresh non-zero value and never inherits the previous object's identity.
   uint64_t           sourceId = 0;

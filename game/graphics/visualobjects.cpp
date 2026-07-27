@@ -20,19 +20,6 @@ static RtScene::Category toRtCategory(DrawCommands::Type t) {
   return RtScene::None;
   }
 
-static IOSSceneSourceKind toIOSSceneSourceKind(DrawCommands::Type type) noexcept {
-  switch(type) {
-    case DrawCommands::Landscape: return IOSSceneSourceKind::Landscape;
-    case DrawCommands::Static:    return IOSSceneSourceKind::Static;
-    case DrawCommands::Movable:   return IOSSceneSourceKind::Movable;
-    case DrawCommands::Animated:  return IOSSceneSourceKind::Animated;
-    case DrawCommands::Pfx:       return IOSSceneSourceKind::Particle;
-    case DrawCommands::Morph:     return IOSSceneSourceKind::Morph;
-    }
-  return IOSSceneSourceKind::Static;
-  }
-
-
 struct VisualObjects::InstanceDesc {
   void setPosition(const Tempest::Matrix4x4& m) {
     for(int i=0; i<4; ++i)
@@ -387,7 +374,7 @@ void VisualObjects::visitIOSSceneSources(void* context, IOSSceneSourceVisitor vi
 
     const auto& bucket = *object.bucketId;
     IOSSceneSource source;
-    source.kind           = toIOSSceneSourceKind(object.type);
+    source.kind           = iosSceneSourceKind(object.type);
     source.sourceId       = object.sourceId;
     source.mesh           = object.sourceMesh;
     source.material       = &bucket.mat;
@@ -801,4 +788,3 @@ void VisualObjects::dbgDrawBBox(Tempest::Painter& p, Tempest::Vec2 wsz, const Ca
   p.drawRect(int(aabb.x), int(aabb.y), int(aabb.z-aabb.x), int(aabb.w-aabb.y));
   */
   }
-

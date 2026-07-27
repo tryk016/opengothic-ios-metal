@@ -14,9 +14,15 @@ enum class IOSSceneSourcePlanResult : uint8_t {
   InvalidSource,
   };
 
-struct IOSSceneLandscapeCandidate final {
+enum class IOSSceneOpaqueMeshKind : uint8_t {
+  Unsupported,
+  Landscape,
+  Static,
+  };
+
+struct IOSSceneOpaqueMeshCandidate final {
   uint64_t       sourceId = 0;
-  bool           isLandscape = false;
+  IOSSceneOpaqueMeshKind kind = IOSSceneOpaqueMeshKind::Unsupported;
   bool           hasStaticMesh = false;
   bool           hasMaterial = false;
   bool           isSolidMaterial = false;
@@ -30,7 +36,8 @@ struct IOSSceneLandscapeCandidate final {
 
 // Pointer-free plan. The four stable keys deliberately share sourceId but are
 // resolved in independent IOSRenderWorld registries.
-struct IOSSceneLandscapePlan final {
+struct IOSSceneOpaqueMeshPlan final {
+  IOSSceneOpaqueMeshKind kind = IOSSceneOpaqueMeshKind::Unsupported;
   uint64_t            entityStableKey = 0;
   uint64_t            meshStableKey = 0;
   uint64_t            materialStableKey = 0;
@@ -43,11 +50,19 @@ struct IOSSceneLandscapePlan final {
   bool                usesFallbackTexture = false;
   };
 
-inline IOSSceneSourcePlanResult planIOSLandscapeSource(
-    const IOSSceneLandscapeCandidate& source,
-    IOSSceneLandscapePlan& out) noexcept {
-  out = IOSSceneLandscapePlan();
-  if(!source.isLandscape)
+inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
+    const IOSSceneOpaqueMeshCandidate& source,
+    IOSSceneOpaqueMeshPlan& out) noexcept {
+  out = IOSSceneOpaqueMeshPlan();
+  switch(source.kind) {
+    case IOSSceneOpaqueMeshKind::Landscape:
+    case IOSSceneOpaqueMeshKind::Static:
+      break;
+    case IOSSceneOpaqueMeshKind::Unsupported:
+      return IOSSceneSourcePlanResult::SkippedKind;
+    }
+  if(source.kind!=IOSSceneOpaqueMeshKind::Landscape &&
+     source.kind!=IOSSceneOpaqueMeshKind::Static)
     return IOSSceneSourcePlanResult::SkippedKind;
   if(!source.hasMaterial)
     return IOSSceneSourcePlanResult::InvalidSource;
@@ -79,6 +94,7 @@ inline IOSSceneSourcePlanResult planIOSLandscapeSource(
   if(!finiteBounds || !orderedBounds)
     return IOSSceneSourcePlanResult::InvalidSource;
 
+  out.kind              = source.kind;
   out.entityStableKey   = source.sourceId;
   out.meshStableKey     = source.sourceId;
   out.materialStableKey = source.sourceId;

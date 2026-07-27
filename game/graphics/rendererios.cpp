@@ -136,18 +136,23 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
       "RendererIOS cannot extract an attached world while its owners are detached");
 
   if(bool(source)) {
-    const auto extraction = impl->extractor.extractLandscape(
+    const auto extraction = impl->extractor.extractOpaqueMeshes(
       source,impl->device,impl->renderWorld,impl->assets,scene);
     if(extraction.result!=IOSSceneExtractionResult::Success)
-      throw std::runtime_error("RendererIOS Landscape scene extraction failed");
+      throw std::runtime_error(
+        "RendererIOS opaque mesh scene extraction failed");
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     const auto nextSequence =
         impl->renderWorld.lastAcceptedSequence().value+1u;
     if(nextSequence==1u || nextSequence%300u==0u) {
       try {
-        Log::d("RendererIOS Landscape extraction: visited=",
+        Log::d("RendererIOS opaque mesh extraction: visited=",
                uint64_t(extraction.stats.visited),
                " planned=",uint64_t(extraction.stats.planned),
+               " planned-landscape=",
+               uint64_t(extraction.stats.plannedLandscape),
+               " planned-static=",
+               uint64_t(extraction.stats.plannedStatic),
                " skipped-kind=",uint64_t(extraction.stats.skippedKind),
                " skipped-material=",
                uint64_t(extraction.stats.skippedMaterial),

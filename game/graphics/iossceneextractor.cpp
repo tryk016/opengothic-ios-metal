@@ -18,8 +18,7 @@ struct ExtractionContext final {
   IOSRenderWorld*        renderWorld = nullptr;
   IOSSceneAssetRegistry* assets = nullptr;
 
-  std::vector<IOSRenderEntityState> entities;
-  std::vector<IOSMaterial>          materials;
+  IOSSceneFrameState               staging;
   IOSSceneExtractionReport          report;
   };
 
@@ -40,10 +39,9 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     return;
 
   ++context.report.stats.visited;
-  IOSSceneLandscapeCandidate candidate;
+  IOSSceneOpaqueMeshCandidate candidate;
   candidate.sourceId       = source.sourceId;
-  candidate.isLandscape    =
-      source.kind==IOSSceneSourceKind::Landscape;
+  candidate.kind           = iosSceneOpaqueMeshKind(source.kind);
   candidate.hasStaticMesh  = source.mesh!=nullptr;
   candidate.hasMaterial    = source.material!=nullptr;
   candidate.isSolidMaterial =
@@ -59,20 +57,16 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.localBounds    = bounds(source);
   candidate.indices        = {source.firstIndex,source.indexCount};
 
-  IOSSceneLandscapePlan plan;
-  const auto planned = planIOSLandscapeSource(candidate,plan);
+  IOSSceneOpaqueMeshPlan plan;
+  const auto planned = planIOSOpaqueMeshSource(candidate,plan);
   switch(planned) {
     case IOSSceneSourcePlanResult::SkippedKind:
-      ++context.report.stats.skippedKind;
-      return;
     case IOSSceneSourcePlanResult::SkippedMaterial:
-      ++context.report.stats.skippedMaterial;
-      return;
     case IOSSceneSourcePlanResult::SkippedTextureAnimation:
-      ++context.report.stats.skippedTextureAnimation;
+      (void)recordIOSScenePlanResult(planned,plan,context.report.stats);
       return;
     case IOSSceneSourcePlanResult::InvalidSource:
-      ++context.report.stats.invalidSource;
+      (void)recordIOSScenePlanResult(planned,plan,context.report.stats);
       context.report.result = IOSSceneExtractionResult::InvalidSource;
       return;
     case IOSSceneSourcePlanResult::Planned:
@@ -97,8 +91,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       std::size_t(plan.indices.offset),
       std::size_t(plan.indices.count),
       plan.localBounds);
-  if(bound!=IOSSceneAssetBindResult::Bound &&
-     bound!=IOSSceneAssetBindResult::AlreadyBound) {
+  if(!isIOSSceneAssetBindSuccess(bound)) {
     context.report.result = IOSSceneExtractionResult::AssetBindFailed;
     context.report.bindFailure = bound;
     return;
@@ -110,8 +103,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
         : Resources::fallbackTexture();
   const auto textureBound = context.assets->bindTexture(
       *context.device,texture,baseColorTexture);
-  if(textureBound!=IOSSceneAssetBindResult::Bound &&
-     textureBound!=IOSSceneAssetBindResult::AlreadyBound) {
+  if(!isIOSSceneAssetBindSuccess(textureBound)) {
     context.report.result = IOSSceneExtractionResult::AssetBindFailed;
     context.report.bindFailure = textureBound;
     return;
@@ -121,7 +113,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   materialRecord.id               = material;
   materialRecord.baseColorTexture = texture;
   materialRecord.category         = plan.materialCategory;
-  context.materials.push_back(materialRecord);
+  context.staging.materials.push_back(materialRecord);
 
   IOSRenderEntityState entityRecord;
   entityRecord.id             = entity;
@@ -130,15 +122,15 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   entityRecord.transform      = plan.transform;
   entityRecord.bounds         = plan.localBounds;
   entityRecord.visibilityMask = plan.visibilityMask;
-  context.entities.push_back(entityRecord);
-  ++context.report.stats.planned;
-  if(plan.usesFallbackTexture)
-    ++context.report.stats.fallbackTexture;
+  context.staging.entities.push_back(entityRecord);
+  if(!recordIOSScenePlanResult(
+       IOSSceneSourcePlanResult::Planned,plan,context.report.stats))
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
   }
 
 }
 
-IOSSceneExtractionReport IOSSceneExtractor::extractLandscape(
+IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     const IOSSceneSourceProvider& source,
     const Tempest::Device& device,
     IOSRenderWorld& renderWorld,
@@ -170,7 +162,10 @@ IOSSceneExtractionReport IOSSceneExtractor::extractLandscape(
   if(context.report.result!=IOSSceneExtractionResult::Success)
     return context.report;
 
-  frame.entities  = std::move(context.entities);
-  frame.materials = std::move(context.materials);
+  if(!publishIOSSceneExtraction(
+       context.report.result,context.staging,frame)) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }
   return context.report;
   }

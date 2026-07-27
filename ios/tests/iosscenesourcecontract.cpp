@@ -53,8 +53,31 @@ int main() {
   static_assert(std::is_same_v<
       decltype(&VisualObjects::Item::sourceId),
       ItemSourceId>);
+  static_assert(static_cast<uint8_t>(IOSSceneSourceKind::Landscape)==0u);
+  static_assert(static_cast<uint8_t>(IOSSceneSourceKind::Static)==1u);
+  static_assert(static_cast<uint8_t>(IOSSceneSourceKind::Movable)==2u);
+  static_assert(static_cast<uint8_t>(IOSSceneSourceKind::Animated)==3u);
+  static_assert(static_cast<uint8_t>(IOSSceneSourceKind::Particle)==4u);
+  static_assert(static_cast<uint8_t>(IOSSceneSourceKind::Morph)==5u);
 
   IOSSceneSource source;
+  assert(source.kind==IOSSceneSourceKind::Unsupported);
+  assert(iosSceneSourceKind(DrawCommands::Landscape)==
+         IOSSceneSourceKind::Landscape);
+  assert(iosSceneSourceKind(DrawCommands::Static)==
+         IOSSceneSourceKind::Static);
+  assert(iosSceneSourceKind(DrawCommands::Movable)==
+         IOSSceneSourceKind::Movable);
+  assert(iosSceneSourceKind(DrawCommands::Animated)==
+         IOSSceneSourceKind::Animated);
+  assert(iosSceneSourceKind(DrawCommands::Pfx)==
+         IOSSceneSourceKind::Particle);
+  assert(iosSceneSourceKind(DrawCommands::Morph)==
+         IOSSceneSourceKind::Morph);
+  assert(iosSceneSourceKind(
+           static_cast<DrawCommands::Type>(255u))==
+         IOSSceneSourceKind::Unsupported);
+
   source.kind       = IOSSceneSourceKind::Landscape;
   source.hasLocalBounds = true;
   source.firstIndex = 3;
