@@ -44,12 +44,14 @@ case "$MODE" in
           exit 2
           ;;
       esac
-      for existing in "${REQUESTED_PROFILES[@]}"; do
-        if [[ "$existing" == "$profile" ]]; then
-          echo "duplicate verification profile: $profile" >&2
-          exit 2
-        fi
-      done
+      if ((REQUESTED_PROFILE_COUNT > 0)); then
+        for existing in "${REQUESTED_PROFILES[@]}"; do
+          if [[ "$existing" == "$profile" ]]; then
+            echo "duplicate verification profile: $profile" >&2
+            exit 2
+          fi
+        done
+      fi
       REQUESTED_PROFILES+=("$profile")
       REQUESTED_PROFILE_COUNT=$((REQUESTED_PROFILE_COUNT + 1))
     done

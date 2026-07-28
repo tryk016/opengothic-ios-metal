@@ -934,6 +934,36 @@ xcrun() {{
     )
 
 
+def test_bash32_local_profile_parser() -> None:
+    source = LOCAL_VERIFY.read_text(encoding="utf-8")
+    parser = source.split('\nSCRIPT_DIR="', 1)[0]
+    if parser == source:
+        raise AssertionError("local verifier parser boundary is missing")
+
+    single = subprocess.run(
+        ["/bin/bash", "-s", "--", "profiles", "on"],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert single.returncode == 0, single.stderr
+
+    duplicate = subprocess.run(
+        ["/bin/bash", "-s", "--", "profiles", "on", "on"],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert duplicate.returncode == 2
+    assert duplicate.stderr.strip() == "duplicate verification profile: on"
+
+
 def main() -> None:
     test_classification()
     test_push_before_to_sha()
@@ -941,9 +971,10 @@ def main() -> None:
     test_workflow_contract()
     test_cmake_presets_contract()
     test_bash32_candidate_arguments()
+    test_bash32_local_profile_parser()
     print(
         "RendererIOS CI verification tests passed: "
-        "6 groups, Bash 3.2 candidate smoke, "
+        "7 groups, Bash 3.2 candidate/profile-parser smoke, "
         "7 workflow mutations, 12 extraction/profile mutations, "
         "14 CMake presets mutations"
     )
