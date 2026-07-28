@@ -168,33 +168,164 @@ import json, sys
 devices = json.load(open(sys.argv[1]))
 core_devices = json.load(open(sys.argv[2]))["result"]["devices"]
 requested = sys.argv[3]
-matches = [
-    device for device in devices
-    if not device.get("simulator")
-    and device.get("available")
-    and device.get("interface") == "usb"
-    and device.get("platform") == "com.apple.platform.iphoneos"
+
+def nonempty_string(value):
+    return isinstance(value, str) and bool(value.strip())
+
+def core_device_is_connected(device):
+    witnesses = 0
+    if "properties" in device:
+        properties = device["properties"]
+        if not isinstance(properties, dict):
+            return False
+    else:
+        properties = None
+    if properties is not None and "connection" in properties:
+        connection = properties["connection"]
+        if not isinstance(connection, dict):
+            return False
+        state = connection.get("state")
+        if not nonempty_string(state) or state != "connected":
+            return False
+        witnesses += 1
+    if "connectionProperties" in device:
+        legacy = device["connectionProperties"]
+        if not isinstance(legacy, dict) or "tunnelState" not in legacy:
+            return False
+        tunnel_state = legacy["tunnelState"]
+        if not nonempty_string(tunnel_state) or tunnel_state != "connected":
+            return False
+        witnesses += 1
+    return witnesses > 0
+
+physical_core_records = [
+    device for device in core_devices
+    if isinstance(device, dict)
+    and isinstance(device.get("hardwareProperties"), dict)
+    and device["hardwareProperties"].get("platform") == "iOS"
+    and device["hardwareProperties"].get("reality") == "physical"
 ]
+
 if requested:
     requested_records = [
-        device for device in core_devices
-        if device.get("hardwareProperties", {}).get("platform") == "iOS"
-        and device.get("hardwareProperties", {}).get("reality") == "physical"
-        and requested in (
+        device for device in physical_core_records
+        if requested in (
             device.get("identifier"),
-            device.get("hardwareProperties", {}).get("udid"),
+            device["hardwareProperties"].get("udid"),
         )
     ]
+    if any(
+        not nonempty_string(device.get("identifier"))
+        or not nonempty_string(device["hardwareProperties"].get("udid"))
+        for device in requested_records
+    ):
+        raise SystemExit(
+            "explicit CoreDevice candidate has an empty identifier or UDID"
+        )
     if len(requested_records) != 1:
         raise SystemExit(
             f"expected one physical CoreDevice for explicit selection, "
             f"found {len(requested_records)}"
         )
-    requested_udid = requested_records[0]["hardwareProperties"]["udid"]
-    matches = [
-        device for device in matches
+    requested_record = requested_records[0]
+    requested_identifier = requested_record["identifier"]
+    requested_udid = requested_record["hardwareProperties"]["udid"]
+    same_identity_core_records = [
+        device for device in physical_core_records
+        if device.get("identifier") == requested_identifier
+        or device["hardwareProperties"].get("udid") == requested_udid
+    ]
+    if any(
+        not nonempty_string(device.get("identifier"))
+        or not nonempty_string(device["hardwareProperties"].get("udid"))
+        for device in same_identity_core_records
+    ):
+        raise SystemExit(
+            "matching physical CoreDevice record has an empty identifier or UDID"
+        )
+    if len(same_identity_core_records) != 1:
+        raise SystemExit(
+            f"expected one physical CoreDevice record for explicit identity, "
+            f"found {len(same_identity_core_records)}"
+        )
+    if not core_device_is_connected(requested_record):
+        raise SystemExit("explicitly selected CoreDevice is not connected")
+    exact_records = [
+        device for device in devices
         if device.get("identifier") == requested_udid
     ]
+    if len(exact_records) != 1:
+        raise SystemExit(
+            f"expected one xcdevice record for explicit selection, "
+            f"found {len(exact_records)}"
+        )
+    selected = exact_records[0]
+    if not (
+        selected.get("simulator") is False
+        and selected.get("available") is True
+        and selected.get("interface") in ("usb", "network")
+        and selected.get("platform") == "com.apple.platform.iphoneos"
+        and nonempty_string(selected.get("identifier"))
+    ):
+        raise SystemExit(
+            "explicitly selected xcdevice is not an available USB/network iPhone"
+        )
+    matches = [selected]
+else:
+    matches = [
+        device for device in devices
+        if device.get("simulator") is False
+        and device.get("available") is True
+        and device.get("interface") == "usb"
+        and device.get("platform") == "com.apple.platform.iphoneos"
+    ]
+    if any(not nonempty_string(device.get("identifier")) for device in matches):
+        raise SystemExit("USB xcdevice candidate has an empty identifier")
+    if len(matches) == 1:
+        selected_udid = matches[0]["identifier"]
+        exact_xc_records = [
+            device for device in devices
+            if device.get("identifier") == selected_udid
+        ]
+        if len(exact_xc_records) != 1:
+            raise SystemExit(
+                f"expected one xcdevice record for USB iPhone, "
+                f"found {len(exact_xc_records)}"
+            )
+        auto_core_records = [
+            device for device in core_devices
+            if device.get("hardwareProperties", {}).get("platform") == "iOS"
+            and device.get("hardwareProperties", {}).get("reality") == "physical"
+            and device.get("hardwareProperties", {}).get("udid")
+                == selected_udid
+        ]
+        if len(auto_core_records) != 1:
+            raise SystemExit(
+                f"expected one physical CoreDevice record for USB UDID, "
+                f"found {len(auto_core_records)}"
+            )
+        auto_core = auto_core_records[0]
+        auto_identifier = auto_core.get("identifier")
+        same_identity_core_records = [
+            device for device in physical_core_records
+            if device.get("identifier") == auto_identifier
+            or device["hardwareProperties"].get("udid") == selected_udid
+        ]
+        if len(same_identity_core_records) != 1:
+            raise SystemExit(
+                f"expected one physical CoreDevice identity for USB iPhone, "
+                f"found {len(same_identity_core_records)}"
+            )
+        if (
+            not nonempty_string(auto_identifier)
+            or not nonempty_string(
+                auto_core.get("hardwareProperties", {}).get("udid")
+            )
+            or not core_device_is_connected(auto_core)
+        ):
+            raise SystemExit(
+                "USB-selected physical CoreDevice is invalid or disconnected"
+            )
 if len(matches) != 1:
     raise SystemExit(f"expected one available USB iPhone, found {len(matches)}")
 print(matches[0]["identifier"])
