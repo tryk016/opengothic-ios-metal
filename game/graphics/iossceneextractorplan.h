@@ -18,6 +18,7 @@ enum class IOSSceneOpaqueMeshKind : uint8_t {
   Unsupported,
   Landscape,
   Static,
+  Movable,
   };
 
 struct IOSSceneOpaqueMeshCandidate final {
@@ -57,12 +58,14 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   switch(source.kind) {
     case IOSSceneOpaqueMeshKind::Landscape:
     case IOSSceneOpaqueMeshKind::Static:
+    case IOSSceneOpaqueMeshKind::Movable:
       break;
     case IOSSceneOpaqueMeshKind::Unsupported:
       return IOSSceneSourcePlanResult::SkippedKind;
     }
   if(source.kind!=IOSSceneOpaqueMeshKind::Landscape &&
-     source.kind!=IOSSceneOpaqueMeshKind::Static)
+     source.kind!=IOSSceneOpaqueMeshKind::Static &&
+     source.kind!=IOSSceneOpaqueMeshKind::Movable)
     return IOSSceneSourcePlanResult::SkippedKind;
   if(!source.hasMaterial)
     return IOSSceneSourcePlanResult::InvalidSource;

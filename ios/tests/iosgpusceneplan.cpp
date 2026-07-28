@@ -7,6 +7,17 @@
 
 namespace {
 
+// Exact P2.1c2 compositional fixture, mirrored in iosscenecontract.cpp.
+constexpr uint64_t MovableSourceId = 0x21C2u;
+
+IOSMatrix4x4 movableT1() {
+  IOSMatrix4x4 transform;
+  transform.set(0u,3u,44.f);
+  transform.set(1u,3u,55.f);
+  transform.set(2u,3u,66.f);
+  return transform;
+  }
+
 IOSGPUSceneMeshCandidate validCandidate() {
   IOSGPUSceneMeshCandidate source;
   source.snapshotGeneration    = IOSWorldGeneration{7};
@@ -46,14 +57,15 @@ int main() {
 
   {
     auto source = validCandidate();
-    source.entity.currentTransform.set(2u,3u,4.f);
+    source.entity.id.value = MovableSourceId;
+    source.entity.currentTransform = movableT1();
     IOSGPUSceneDrawPlan plan;
     assert(planIOSGPUSceneDraw(camera,source,plan)==
            IOSGPUSceneDrawPlanResult::Draw);
     assert(plan.indexBufferOffset==3u*sizeof(uint32_t));
     assert(plan.indexCount==6u);
     assert(plan.constants.viewProjection.at(1u,2u)==3.f);
-    assert(plan.constants.model.at(2u,3u)==4.f);
+    assert(plan.constants.model==movableT1());
     assert(plan.constants.baseColor==source.material.baseColor);
     assert(plan.baseColorTexture==source.material.baseColorTexture);
     assert(iosGPUSceneFailingHandle(

@@ -1,5 +1,7 @@
 #include "graphics/iosframeinput.h"
+#include "graphics/iosgpusceneplan.h"
 #include "graphics/iosrenderworld.h"
+#include "graphics/iossceneextractorplan.h"
 #include "graphics/iosscenesnapshot.h"
 
 #include <array>
@@ -10,6 +12,41 @@
 #include <utility>
 
 namespace {
+
+// Exact P2.1c2 compositional fixture, mirrored in iosgpusceneplan.cpp.
+constexpr uint64_t MovableSourceId = 0x21C2u;
+
+IOSMatrix4x4 movableT0() {
+  IOSMatrix4x4 transform;
+  transform.set(0u,3u,11.f);
+  transform.set(1u,3u,22.f);
+  transform.set(2u,3u,33.f);
+  return transform;
+  }
+
+IOSMatrix4x4 movableT1() {
+  IOSMatrix4x4 transform;
+  transform.set(0u,3u,44.f);
+  transform.set(1u,3u,55.f);
+  transform.set(2u,3u,66.f);
+  return transform;
+  }
+
+IOSSceneOpaqueMeshCandidate movableCandidate(
+    const IOSMatrix4x4& transform) {
+  IOSSceneOpaqueMeshCandidate source;
+  source.sourceId       = MovableSourceId;
+  source.kind           = IOSSceneOpaqueMeshKind::Movable;
+  source.hasStaticMesh  = true;
+  source.hasMaterial    = true;
+  source.isSolidMaterial = true;
+  source.hasBaseColorTexture = true;
+  source.hasLocalBounds = true;
+  source.transform      = transform;
+  source.localBounds    = {{-1.f,-2.f,-3.f},{1.f,2.f,3.f}};
+  source.indices        = {3u,6u};
+  return source;
+  }
 
 IOSSceneFrameState frameState(float cameraX) {
   IOSSceneFrameState frame;
@@ -86,6 +123,56 @@ void addDeformation(IOSSceneFrameState& frame,
   frame.morphWeights.push_back(morphValue);
   frame.entities[0].boneRange  = {0u,1u};
   frame.entities[0].morphRange = {0u,1u};
+  }
+
+IOSSceneFrameState movableFrame(const SceneHandles& handles,
+                                const IOSSceneOpaqueMeshPlan& plan) {
+  auto frame = frameState(0.f);
+
+  IOSMaterial material;
+  material.id               = handles.material;
+  material.baseColorTexture = handles.texture;
+  material.category         = plan.materialCategory;
+  frame.materials.push_back(material);
+
+  IOSRenderEntityState entity;
+  entity.id             = handles.entity;
+  entity.mesh           = handles.mesh;
+  entity.material       = handles.material;
+  entity.transform      = plan.transform;
+  entity.bounds         = plan.localBounds;
+  entity.visibilityMask = plan.visibilityMask;
+  frame.entities.push_back(entity);
+  return frame;
+  }
+
+IOSGPUSceneMeshCandidate gpuCandidate(
+    const IOSSceneSnapshot& snapshot,
+    const IOSSceneOpaqueMeshPlan& plan) {
+  IOSGPUSceneMeshCandidate source;
+  source.snapshotGeneration = snapshot.generation;
+  source.registryGeneration = snapshot.generation;
+  source.entity             = snapshot.entities[0];
+  source.material           = snapshot.materials[0];
+  source.hasMaterial        = true;
+  source.hasTexture         = true;
+  source.hasNativeTexture   = true;
+  source.hasSupportedTextureFormat = true;
+  source.hasValidNativeTexture = true;
+  source.textureWidth       = 1u;
+  source.textureHeight      = 1u;
+  source.textureMipCount    = 1u;
+  source.hasMesh            = true;
+  source.hasNativeVertexBuffer = true;
+  source.hasNativeIndexBuffer  = true;
+  source.vertexBufferByteSize  = IOSLandscapeVertexStride*3u;
+  source.indexBufferByteSize =
+      IOSLandscapeIndexStride*
+      std::size_t(plan.indices.offset+plan.indices.count);
+  source.vertexStride = IOSLandscapeVertexStride;
+  source.firstIndex   = plan.indices.offset;
+  source.indexCount   = plan.indices.count;
+  return source;
   }
 
 template<class Function>
@@ -187,6 +274,55 @@ int main() {
   assert(populatedAccepted->particles[0].previousPosition.x==1.f);
   assert(!populatedWorld.acceptsForSubmit(populatedCanceled));
   assert(populatedWorld.commitAccepted(populatedAccepted));
+
+  IOSSceneOpaqueMeshPlan movablePlanA;
+  IOSSceneOpaqueMeshPlan movablePlanB;
+  assert(planIOSOpaqueMeshSource(
+           movableCandidate(movableT0()),movablePlanA)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(planIOSOpaqueMeshSource(
+           movableCandidate(movableT1()),movablePlanB)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(movablePlanA.kind==IOSSceneOpaqueMeshKind::Movable);
+  assert(movablePlanB.kind==IOSSceneOpaqueMeshKind::Movable);
+  assert(movablePlanA.entityStableKey==MovableSourceId);
+  assert(movablePlanA.entityStableKey==movablePlanB.entityStableKey);
+  assert(movablePlanA.meshStableKey==movablePlanB.meshStableKey);
+  assert(movablePlanA.materialStableKey==movablePlanB.materialStableKey);
+  assert(movablePlanA.textureStableKey==movablePlanB.textureStableKey);
+
+  IOSRenderWorld movableWorld;
+  const SceneHandles movableHandles = {
+    movableWorld.resolveEntity(movablePlanA.entityStableKey),
+    movableWorld.resolveMesh(movablePlanA.meshStableKey),
+    movableWorld.resolveMaterial(movablePlanA.materialStableKey),
+    movableWorld.resolveTexture(movablePlanA.textureStableKey),
+    {},
+    {},
+    };
+  assert(movableHandles.entity==
+         movableWorld.resolveEntity(MovableSourceId));
+  const auto movableA =
+    movableWorld.buildSnapshot(movableFrame(movableHandles,movablePlanA));
+  assert(movableA->entities.size()==1u);
+  assert(movableA->entities[0].id==movableHandles.entity);
+  assert(movableA->entities[0].currentTransform==movableT0());
+  assert(movableWorld.commitAccepted(movableA));
+
+  const auto movableB =
+    movableWorld.buildSnapshot(movableFrame(movableHandles,movablePlanB));
+  assert(movableB->historyValid);
+  assert(movableB->entities.size()==1u);
+  assert(movableB->entities[0].id==movableA->entities[0].id);
+  assert(movableB->entities[0].currentTransform==movableT1());
+  assert(movableB->entities[0].previousTransform==movableT0());
+
+  IOSGPUSceneDrawPlan movableGpuPlan;
+  assert(planIOSGPUSceneDraw(
+           movableB->currentCamera,
+           gpuCandidate(*movableB,movablePlanB),
+           movableGpuPlan)==IOSGPUSceneDrawPlanResult::Draw);
+  assert(movableGpuPlan.constants.model==movableT1());
 
   auto deformationA = populatedFrame(handles,40.f,4.f);
   addDeformation(deformationA,2.f,0.25f);

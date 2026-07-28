@@ -63,7 +63,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     case IOSSceneSourcePlanResult::SkippedKind:
     case IOSSceneSourcePlanResult::SkippedMaterial:
     case IOSSceneSourcePlanResult::SkippedTextureAnimation:
-      (void)recordIOSScenePlanResult(planned,plan,context.report.stats);
+      if(!recordIOSScenePlanResult(planned,plan,context.report.stats))
+        context.report.result = IOSSceneExtractionResult::InvalidSource;
       return;
     case IOSSceneSourcePlanResult::InvalidSource:
       (void)recordIOSScenePlanResult(planned,plan,context.report.stats);
@@ -161,6 +162,10 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
   source.visit(&context,&visitSource);
   if(context.report.result!=IOSSceneExtractionResult::Success)
     return context.report;
+  if(!context.report.stats.hasConsistentPlannedCounts()) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }
 
   if(!publishIOSSceneExtraction(
        context.report.result,context.staging,frame)) {

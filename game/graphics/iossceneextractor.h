@@ -28,6 +28,7 @@ struct IOSSceneExtractionStats final {
   std::size_t planned = 0;
   std::size_t plannedLandscape = 0;
   std::size_t plannedStatic = 0;
+  std::size_t plannedMovable = 0;
   std::size_t skippedKind = 0;
   std::size_t skippedMaterial = 0;
   std::size_t skippedTextureAnimation = 0;
@@ -35,7 +36,7 @@ struct IOSSceneExtractionStats final {
   std::size_t invalidSource = 0;
 
   constexpr bool hasConsistentPlannedCounts() const noexcept {
-    return planned==plannedLandscape+plannedStatic;
+    return planned==plannedLandscape+plannedStatic+plannedMovable;
     }
   };
 
@@ -53,6 +54,7 @@ inline constexpr IOSSceneOpaqueMeshKind iosSceneOpaqueMeshKind(
     case IOSSceneSourceKind::Static:
       return IOSSceneOpaqueMeshKind::Static;
     case IOSSceneSourceKind::Movable:
+      return IOSSceneOpaqueMeshKind::Movable;
     case IOSSceneSourceKind::Animated:
     case IOSSceneSourceKind::Particle:
     case IOSSceneSourceKind::Morph:
@@ -83,27 +85,32 @@ inline bool recordIOSScenePlanResult(
           ++stats.planned;
           ++stats.plannedStatic;
           break;
+        case IOSSceneOpaqueMeshKind::Movable:
+          ++stats.planned;
+          ++stats.plannedMovable;
+          break;
         case IOSSceneOpaqueMeshKind::Unsupported:
           ++stats.invalidSource;
           return false;
         }
       if(plan.kind!=IOSSceneOpaqueMeshKind::Landscape &&
-         plan.kind!=IOSSceneOpaqueMeshKind::Static) {
+         plan.kind!=IOSSceneOpaqueMeshKind::Static &&
+         plan.kind!=IOSSceneOpaqueMeshKind::Movable) {
         ++stats.invalidSource;
         return false;
         }
       if(plan.usesFallbackTexture)
         ++stats.fallbackTexture;
-      return true;
+      return stats.hasConsistentPlannedCounts();
     case IOSSceneSourcePlanResult::SkippedKind:
       ++stats.skippedKind;
-      return true;
+      return stats.hasConsistentPlannedCounts();
     case IOSSceneSourcePlanResult::SkippedMaterial:
       ++stats.skippedMaterial;
-      return true;
+      return stats.hasConsistentPlannedCounts();
     case IOSSceneSourcePlanResult::SkippedTextureAnimation:
       ++stats.skippedTextureAnimation;
-      return true;
+      return stats.hasConsistentPlannedCounts();
     case IOSSceneSourcePlanResult::InvalidSource:
       ++stats.invalidSource;
       return false;
