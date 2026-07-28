@@ -132,7 +132,13 @@ final class RendererIOSUITests: XCTestCase {
         y: frame.height - ringMargin - ringButtonSize / 2)
     wait(seconds: 2)
 
-    XCUIDevice.shared.press(.home)
+    // Xcode 27 beta can report a successful Home-button press without moving
+    // the target out of the foreground. Activating a different real process
+    // gives the lifecycle oracle an observable foreground owner.
+    let settings = XCUIApplication(bundleIdentifier: "com.apple.Preferences")
+    settings.activate()
+    XCTAssertTrue(settings.wait(for: .runningForeground, timeout: 15),
+                  "Settings did not reach the foreground")
     XCTAssertTrue(waitForBackground(app, timeout: 15),
                   "OpenGothic did not enter the background")
     app.activate()
