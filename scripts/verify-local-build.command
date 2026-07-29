@@ -654,7 +654,16 @@ xcrun clang++ -std=c++20 \
   ios/tests/ioslandscapeshader.cpp \
   -o "$TMP_GATE/ioslandscapeshader"
 codesign -f -s - "$TMP_GATE/ioslandscapeshader"
-"$TMP_GATE/ioslandscapeshader" shader/ios-metal/landscape.metal
+"$TMP_GATE/ioslandscapeshader" shader/ios-metal/landscape.metal "$REPO"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -Igame \
+  ios/tests/ioslandscapeshader.cpp \
+  -o "$TMP_GATE/ioslandscapeshader-sanitized"
+codesign -f -s - "$TMP_GATE/ioslandscapeshader-sanitized"
+"$TMP_GATE/ioslandscapeshader-sanitized" \
+  shader/ios-metal/landscape.metal "$REPO"
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame \
@@ -702,6 +711,7 @@ codesign -f -s - "$TMP_GATE/iosbinkselftest"
 "$TMP_GATE/iosbinkselftest"
 xcrun --sdk iphoneos metal \
   -target air64-apple-ios16.4 \
+  -Wall -Wextra -Werror \
   -c shader/ios-metal/landscape.metal \
   -o "$TMP_GATE/ios-landscape.air"
 xcrun --sdk iphoneos metal \
@@ -745,6 +755,7 @@ xcrun --sdk iphoneos metallib \
   -o "$TMP_GATE/RendererIOS.metallib"
 for function in \
     riosLandscapeVertex riosLandscapeFragment \
+    riosLandscapeAlphaTestFragment \
     riosBinkVertex riosBinkFragment \
     riosUiColorVertex riosUiColorFragment \
     riosUiTextureVertex riosUiTextureFragment \
@@ -762,6 +773,7 @@ RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
+  riosLandscapeAlphaTestFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -772,9 +784,9 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 15-export ABI5"
-[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 15 ] ||
-  fail "RendererIOS.metallib export count nie wynosi 15"
+  fail "RendererIOS.metallib nie ma exact 16-export ABI6"
+[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 16 ] ||
+  fail "RendererIOS.metallib export count nie wynosi 16"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   shasum -a 256 "$TMP_GATE/RendererIOS.metallib" | awk '{print $1}'
 )"
@@ -1127,7 +1139,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -1650,7 +1662,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
     fail "profil $profile nie ma minimum iOS 16.4"
   metallib_sha256="$(shasum -a 256 "$metallib" | awk '{print $1}')"
   [ "$metallib_sha256" = "$CANONICAL_RENDERER_IOS_METALLIB_SHA256" ] ||
-    fail "profil $profile ma RendererIOS.metallib inny niz canonical exact15"
+    fail "profil $profile ma RendererIOS.metallib inny niz canonical exact16"
   strings "$binary" >"$strings_file"
   [ "$(grep -Fxc "$HEAD_SHA-local" "$strings_file" || true)" -eq 1 ] ||
     fail "profil $profile nie ma exact binarnego build SHA $HEAD_SHA-local"
@@ -1703,7 +1715,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

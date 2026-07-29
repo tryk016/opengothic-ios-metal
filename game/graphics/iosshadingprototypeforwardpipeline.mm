@@ -42,7 +42,7 @@ static_assert(
     RendererIOSShadingPrototypeShader::TileFinalColorAttachment==
     FinalColorAttachment);
 static_assert(
-    RendererIOSShadingPrototypeShader::TotalMetallibExportCount==15u);
+    RendererIOSShadingPrototypeShader::TotalMetallibExportCount==16u);
 
 class OwnedObjectiveC final {
   public:

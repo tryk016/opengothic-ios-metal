@@ -137,7 +137,7 @@ def require_nonce(nonce: str) -> None:
 
 def armed(nonce: str) -> str:
     return (
-        f"{PREFIX} ARMED case={CASE} nonce={nonce} contract=1 metallib-abi=5 "
+        f"{PREFIX} ARMED case={CASE} nonce={nonce} contract=1 metallib-abi=6 "
         "minimum-apple=4"
     )
 
@@ -732,6 +732,7 @@ def self_test() -> None:
                 f"capture: ACQUIRED case={CASE} nonce={other_nonce}",
             ),
             "wrong-build": valid.replace(build, "f" * 40 + "-local"),
+            "wrong-abi": valid.replace("metallib-abi=6", "metallib-abi=5"),
             "extra-command-buffer": valid.replace("cb=1", "cb=2"),
             "extra-compute": valid.replace("compute=1", "compute=2"),
             "extra-render": valid.replace("render=1", "render=2"),

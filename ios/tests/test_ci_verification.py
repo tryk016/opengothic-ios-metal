@@ -219,7 +219,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
-        ')" -eq 15',
+        ')" -eq 16',
         "RendererIOS.candidate.sha256",
     ):
         if candidate.count(literal) != 1:
@@ -858,6 +858,7 @@ def test_bash32_candidate_arguments() -> None:
     exports = (
         "riosLandscapeVertex",
         "riosLandscapeFragment",
+        "riosLandscapeAlphaTestFragment",
         "riosBinkVertex",
         "riosBinkFragment",
         "riosUiColorVertex",
@@ -925,7 +926,12 @@ xcrun() {{
     assert len(commands) == 7
     assert len(metal_commands) == 5
     assert all(
-        flag not in metal_commands[0]
+        flag in metal_commands[0]
+        for flag in ("-Wall", "-Wextra", "-Werror")
+    )
+    assert all(
+        flag not in command
+        for command in metal_commands[1:4]
         for flag in ("-Wall", "-Wextra", "-Werror")
     )
     assert all(

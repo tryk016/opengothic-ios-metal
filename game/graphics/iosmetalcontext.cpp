@@ -610,7 +610,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1764,7 +1764,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==5u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==6u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2553,12 +2553,12 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==5u);
+    static_assert(Pipeline::OfflineMetallibAbi==6u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
                  RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=5 minimum-apple=4");
+             " contract=1 metallib-abi=6 minimum-apple=4");
       }
     catch(...) {
       }

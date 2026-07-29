@@ -40,3 +40,13 @@ fragment float4 riosLandscapeFragment(
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
   return float4(texel.rgb*in.color.rgb,1.0);
 }
+
+fragment float4 riosLandscapeAlphaTestFragment(
+    IOSLandscapeVertexOut in [[stage_in]],
+    texture2d<float, access::sample> baseColorTexture [[texture(0)]],
+    sampler baseColorSampler [[sampler(0)]]) {
+  const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
+  if(texel.a<0.5)
+    discard_fragment();
+  return float4(texel.rgb*in.color.rgb,1.0);
+}

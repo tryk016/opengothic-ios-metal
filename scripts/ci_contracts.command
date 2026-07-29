@@ -3071,13 +3071,13 @@ grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
 grep -Fq 'opengothic-ios-patch-stack-v14' \
   ios/patches/apply-patches.sh
 
-grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-5.binaryarchive' \
+grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-6.binaryarchive' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'PreviousArchiveFileName' \
   game/graphics/iospipelinearchivepolicy.h
-grep -Fq '"RendererIOS-abi-4.binaryarchive"' \
+grep -Fq '"RendererIOS-abi-5.binaryarchive"' \
   game/graphics/iospipelinearchivepolicy.h
-grep -Fq '"RendererIOS-abi-4.provenance"' \
+grep -Fq '"RendererIOS-abi-5.provenance"' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'NSSearchPathForDirectoriesInDomains(' \
   game/graphics/rendereriosplatform.mm
@@ -3554,7 +3554,15 @@ xcrun clang++ -std=c++20 \
   ios/tests/ioslandscapeshader.cpp \
   -o "$RUNNER_TEMP/ioslandscapeshader"
 "$RUNNER_TEMP/ioslandscapeshader" \
-  shader/ios-metal/landscape.metal
+  shader/ios-metal/landscape.metal "$PWD"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -Igame \
+  ios/tests/ioslandscapeshader.cpp \
+  -o "$RUNNER_TEMP/ioslandscapeshader-sanitized"
+"$RUNNER_TEMP/ioslandscapeshader-sanitized" \
+  shader/ios-metal/landscape.metal "$PWD"
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame \
@@ -3599,6 +3607,7 @@ xcrun clang++ -std=c++20 \
 "$RUNNER_TEMP/iosbinkselftest"
 xcrun --sdk iphoneos metal \
   -target air64-apple-ios16.4 \
+  -Wall -Wextra -Werror \
   -c "$PWD/shader/ios-metal/landscape.metal" \
   -o "$RUNNER_TEMP/ios-landscape.air"
 xcrun --sdk iphoneos metal \
@@ -3639,7 +3648,6 @@ P25C1A_CANDIDATE_METALLIB="$RUNNER_TEMP/RendererIOS.candidate.metallib"
 git cat-file -e "${P25C1A_BASELINE_SHA}^{commit}"
 git merge-base --is-ancestor "$P25C1A_BASELINE_SHA" HEAD
 for source in \
-    shader/ios-metal/landscape.metal \
     shader/ios-metal/bink.metal \
     shader/ios-metal/ui.metal \
     shader/ios-metal/inventory.metal; do
@@ -3711,6 +3719,7 @@ link_rendererios_metallib \
 
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
+  riosLandscapeAlphaTestFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -3726,6 +3735,7 @@ require_exact_rendererios_exports() {
   local function
   for function in \
       riosLandscapeVertex riosLandscapeFragment \
+      riosLandscapeAlphaTestFragment \
       riosBinkVertex riosBinkFragment \
       riosUiColorVertex riosUiColorFragment \
       riosUiTextureVertex riosUiTextureFragment \
@@ -3740,7 +3750,7 @@ require_exact_rendererios_exports() {
   exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
     awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
   test "$exports" = "$EXPECTED_RIOS_EXPORTS"
-  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 15
+  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 16
 }
 require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
 require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
@@ -3770,7 +3780,7 @@ int main(int argc, char** argv) {
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==5u);
+  static_assert(Archive::MetallibAbiVersion==6u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
   static_assert(
     Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
@@ -3778,7 +3788,7 @@ int main(int argc, char** argv) {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-5.binaryarchive");
+    "RendererIOS-abi-6.binaryarchive");
   if(argc!=3)
     return 1;
   const std::string_view candidate = argv[1];
@@ -3797,9 +3807,9 @@ int main(int argc, char** argv) {
     "provenance-schema=1\n"
     "cache-schema=1\n"
     "pipeline-key-abi=1\n"
-    "metallib-abi=5\n"
+    "metallib-abi=6\n"
     "metallib-sha256="+std::string(candidate)+"\n"
-    "archive-file=RendererIOS-abi-5.binaryarchive\n";
+    "archive-file=RendererIOS-abi-6.binaryarchive\n";
   return record==expected ? 0 : 4;
 }
 CPP
@@ -3981,7 +3991,7 @@ normalized = "".join(source.split())
 needle = (
     "static_assert("
     "RendererIOSShadingPrototypeShader::"
-    "TotalMetallibExportCount==15u);"
+    "TotalMetallibExportCount==16u);"
 )
 print(normalized.count(needle))
 PY
@@ -4563,7 +4573,7 @@ profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
-    "case=tile-prototype-v1 contract=1 metallib-abi=5 "
+    "case=tile-prototype-v1 contract=1 metallib-abi=6 "
     "minimum-apple=4 output=4x4 rgba8-private=1",
     "RendererIOS shading prototype tile self-test: FACTORY READY "
     "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
@@ -4766,7 +4776,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
 TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
 strings "$TILE_BINARY" >"$TILE_STRINGS"
 for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=5 minimum-apple=4 output=4x4 rgba8-private=1' \
+    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 output=4x4 rgba8-private=1' \
     'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
     'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
