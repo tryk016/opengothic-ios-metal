@@ -2,8 +2,10 @@
 
 #include "iosscenesnapshot.h"
 
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
@@ -17,6 +19,8 @@ enum class IOSGPUSceneDrawPlanResult : uint8_t {
   GenerationMismatch,
   MissingMaterial,
   UnsupportedMaterial,
+  InvalidAlphaCutoff,
+  MissingAlphaTexture,
   MissingTexture,
   InvalidTexture,
   MissingMesh,
@@ -51,6 +55,19 @@ inline constexpr bool iosGPUScenePipelineSelectionMatches(
       iosGPUScenePipelineSelector(category);
   return expected!=IOSGPUScenePipelineSelector::Unsupported &&
       selected==expected;
+  }
+
+inline constexpr bool iosGPUSceneRequiredShaderFunctionsAreAvailable(
+    bool vertex,
+    bool opaqueFragment,
+    bool alphaTestFragment) noexcept {
+  return vertex && opaqueFragment && alphaTestFragment;
+  }
+
+inline constexpr bool iosGPUSceneProductionPipelineStatesAreAvailable(
+    bool opaque,
+    bool alphaTest) noexcept {
+  return opaque && alphaTest;
   }
 
 struct IOSGPUSceneMaterialCounts final {
@@ -90,6 +107,21 @@ struct IOSGPUSceneFrameCounts final {
   uint64_t              controlAlphaToOpaqueBinds = 0;
 
   constexpr bool operator==(const IOSGPUSceneFrameCounts&) const noexcept =
+      default;
+  };
+
+struct IOSGPUSceneFailureCounts final {
+  uint64_t unknownCategory = 0;
+  uint64_t unknownKind = 0;
+  uint64_t invalidCutoff = 0;
+  uint64_t missingAlphaTexture = 0;
+  uint64_t selectorMismatch = 0;
+  uint64_t psoUnavailable = 0;
+  uint64_t overflow = 0;
+  uint64_t plannedDrawn = 0;
+  uint64_t nativeEncode = 0;
+
+  constexpr bool operator==(const IOSGPUSceneFailureCounts&) const noexcept =
       default;
   };
 
@@ -158,6 +190,142 @@ inline constexpr bool iosGPUSceneCausalBFrameCountsAreConsistent(
       counts.opaquePsoBinds==counts.drawn.material.total &&
       counts.alphaPsoBinds==0u &&
       counts.controlAlphaToOpaqueBinds==counts.drawn.material.alphaTest;
+  }
+
+inline constexpr bool iosGPUSceneFailureCountsAreClear(
+    const IOSGPUSceneFailureCounts& counts) noexcept {
+  return counts==IOSGPUSceneFailureCounts{};
+  }
+
+inline constexpr bool iosGPUSceneProductionReportCountsAreConsistent(
+    const IOSGPUSceneFrameCounts& frame,
+    const IOSGPUSceneFailureCounts& failure) noexcept {
+  return iosGPUSceneProductionFrameCountsAreConsistent(frame) &&
+      iosGPUSceneFailureCountsAreClear(failure);
+  }
+
+inline constexpr std::size_t IOSGPUSceneMarkerCapacity = 255u;
+
+struct IOSGPUSceneMarker final {
+  std::array<char,IOSGPUSceneMarkerCapacity> text = {};
+  std::size_t                                length = 0;
+  bool                                       valid = false;
+
+  constexpr explicit operator bool() const noexcept {
+    return valid;
+    }
+  };
+
+template<class... Args>
+inline IOSGPUSceneMarker iosGPUSceneFormatProductionMarker(
+    const char* format,
+    Args... args) noexcept {
+  IOSGPUSceneMarker marker;
+  const int written = std::snprintf(
+      marker.text.data(),marker.text.size(),format,args...);
+  if(written<0 ||
+     std::size_t(written)>=marker.text.size())
+    return marker;
+  marker.length = std::size_t(written);
+  marker.valid  = true;
+  return marker;
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneIdentityMarker(
+    uint64_t generation,
+    uint64_t sequence) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene identity: mode=production "
+      "generation=%llu sequence=%llu",
+      static_cast<unsigned long long>(generation),
+      static_cast<unsigned long long>(sequence));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneMaterialPlannedMarker(
+    const IOSGPUSceneFrameCounts& counts) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene material-planned: mode=production "
+      "total=%llu opaque=%llu alpha=%llu",
+      static_cast<unsigned long long>(counts.planned.material.total),
+      static_cast<unsigned long long>(counts.planned.material.opaque),
+      static_cast<unsigned long long>(counts.planned.material.alphaTest));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneMaterialDrawnMarker(
+    const IOSGPUSceneFrameCounts& counts) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene material-drawn: mode=production "
+      "total=%llu opaque=%llu alpha=%llu textured=%llu",
+      static_cast<unsigned long long>(counts.drawn.material.total),
+      static_cast<unsigned long long>(counts.drawn.material.opaque),
+      static_cast<unsigned long long>(counts.drawn.material.alphaTest),
+      static_cast<unsigned long long>(counts.drawn.texturedDraws));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneKindPlannedMarker(
+    const IOSGPUSceneFrameCounts& counts) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene kind-planned: mode=production "
+      "total=%llu landscape=%llu static=%llu movable=%llu",
+      static_cast<unsigned long long>(counts.planned.kind.total),
+      static_cast<unsigned long long>(counts.planned.kind.landscape),
+      static_cast<unsigned long long>(counts.planned.kind.staticMeshes),
+      static_cast<unsigned long long>(counts.planned.kind.movable));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneKindDrawnMarker(
+    const IOSGPUSceneFrameCounts& counts) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene kind-drawn: mode=production "
+      "total=%llu landscape=%llu static=%llu movable=%llu",
+      static_cast<unsigned long long>(counts.drawn.kind.total),
+      static_cast<unsigned long long>(counts.drawn.kind.landscape),
+      static_cast<unsigned long long>(counts.drawn.kind.staticMeshes),
+      static_cast<unsigned long long>(counts.drawn.kind.movable));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneAlphaMarker(
+    const IOSGPUSceneFrameCounts& counts) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene alpha: mode=production "
+      "opaque-pso=%llu alpha-pso=%llu control-alpha-to-opaque=%llu "
+      "alpha-fallback=%llu",
+      static_cast<unsigned long long>(counts.opaquePsoBinds),
+      static_cast<unsigned long long>(counts.alphaPsoBinds),
+      static_cast<unsigned long long>(
+          counts.controlAlphaToOpaqueBinds),
+      static_cast<unsigned long long>(counts.drawn.alphaFallback));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneFailContractMarker(
+    const IOSGPUSceneFailureCounts& failure) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene fail-contract: mode=production "
+      "unknown-category=%llu unknown-kind=%llu invalid-cutoff=%llu "
+      "missing-alpha-texture=%llu",
+      static_cast<unsigned long long>(failure.unknownCategory),
+      static_cast<unsigned long long>(failure.unknownKind),
+      static_cast<unsigned long long>(failure.invalidCutoff),
+      static_cast<unsigned long long>(failure.missingAlphaTexture));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneFailSelectorMarker(
+    const IOSGPUSceneFailureCounts& failure) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene fail-selector: mode=production "
+      "selector-mismatch=%llu pso-unavailable=%llu",
+      static_cast<unsigned long long>(failure.selectorMismatch),
+      static_cast<unsigned long long>(failure.psoUnavailable));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneFailExecutionMarker(
+    const IOSGPUSceneFailureCounts& failure) noexcept {
+  return iosGPUSceneFormatProductionMarker(
+      "RendererIOS native scene fail-execution: mode=production "
+      "overflow=%llu planned-drawn=%llu native-encode=%llu",
+      static_cast<unsigned long long>(failure.overflow),
+      static_cast<unsigned long long>(failure.plannedDrawn),
+      static_cast<unsigned long long>(failure.nativeEncode));
   }
 
 inline constexpr IOSGPUSceneCountResult recordIOSGPUSceneDrawCount(
@@ -253,7 +421,9 @@ inline uint64_t iosGPUSceneFailingHandle(
   switch(result) {
     case IOSGPUSceneDrawPlanResult::MissingMaterial:
     case IOSGPUSceneDrawPlanResult::UnsupportedMaterial:
+    case IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff:
       return source.entity.material.value;
+    case IOSGPUSceneDrawPlanResult::MissingAlphaTexture:
     case IOSGPUSceneDrawPlanResult::MissingTexture:
       return source.material.baseColorTexture
           ? source.material.baseColorTexture.value
@@ -314,9 +484,7 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
     return IOSGPUSceneDrawPlanResult::MissingMaterial;
   const IOSGPUScenePipelineSelector pipeline =
       iosGPUScenePipelineSelector(source.material.category);
-  // C3b1 exposes the neutral selector but keeps production GPU admission
-  // fail-closed until the AlphaTest PSO and encode land atomically in C3b2.
-  if(pipeline!=IOSGPUScenePipelineSelector::Opaque)
+  if(pipeline==IOSGPUScenePipelineSelector::Unsupported)
     return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
   switch(source.entity.kind) {
     case IOSSceneMeshKind::Landscape:
@@ -330,8 +498,16 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
      source.entity.kind!=IOSSceneMeshKind::Static &&
      source.entity.kind!=IOSSceneMeshKind::Movable)
     return IOSGPUSceneDrawPlanResult::InvalidMesh;
-  if(!source.material.baseColorTexture || !source.hasTexture)
+  if(pipeline==IOSGPUScenePipelineSelector::AlphaTest) {
+    if(!source.material.baseColorTexture || !source.hasTexture ||
+       source.material.usesFallbackTexture)
+      return IOSGPUSceneDrawPlanResult::MissingAlphaTexture;
+    if(source.material.alphaCutoff!=0.5f)
+      return IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff;
+    }
+  else if(!source.material.baseColorTexture || !source.hasTexture) {
     return IOSGPUSceneDrawPlanResult::MissingTexture;
+    }
   if(!source.hasNativeTexture || !source.hasSupportedTextureFormat ||
      !source.hasValidNativeTexture || source.textureWidth==0u ||
      source.textureHeight==0u || source.textureMipCount==0u)

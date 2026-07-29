@@ -124,25 +124,29 @@ void validatePublicContract() {
   }
 
 void validateAcceptedKinds() {
-  for(const auto kind:{
-        IOSSceneMeshKind::Landscape,
-        IOSSceneMeshKind::Static,
-        IOSSceneMeshKind::Movable}) {
-    const auto accepted = candidate(kind);
-    IOSSceneOpaqueMeshPlan plan;
-    assert(planIOSOpaqueMeshSource(accepted,plan)==
-           IOSSceneSourcePlanResult::Planned);
-    assert(plan.kind==kind);
-    assert(plan.entityStableKey==41);
-    assert(plan.meshStableKey==41);
-    assert(plan.materialStableKey==41);
-    assert(plan.textureStableKey==41);
-    assert(plan.indices==accepted.indices);
-    assert(plan.localBounds==accepted.localBounds);
-    assert(plan.transform==accepted.transform);
-    assert(plan.materialCategory==IOSMaterialCategory::Opaque);
-    assert(plan.visibilityMask==IOSSceneVisibilityMain);
-    assert(!plan.usesFallbackTexture);
+  for(const auto category:{
+        IOSMaterialCategory::Opaque,
+        IOSMaterialCategory::AlphaTest}) {
+    for(const auto kind:{
+          IOSSceneMeshKind::Landscape,
+          IOSSceneMeshKind::Static,
+          IOSSceneMeshKind::Movable}) {
+      const auto accepted = candidate(kind,category);
+      IOSSceneOpaqueMeshPlan plan;
+      assert(planIOSOpaqueMeshSource(accepted,plan)==
+             IOSSceneSourcePlanResult::Planned);
+      assert(plan.kind==kind);
+      assert(plan.entityStableKey==41);
+      assert(plan.meshStableKey==41);
+      assert(plan.materialStableKey==41);
+      assert(plan.textureStableKey==41);
+      assert(plan.indices==accepted.indices);
+      assert(plan.localBounds==accepted.localBounds);
+      assert(plan.transform==accepted.transform);
+      assert(plan.materialCategory==category);
+      assert(plan.visibilityMask==IOSSceneVisibilityMain);
+      assert(!plan.usesFallbackTexture);
+      }
     }
   }
 
@@ -174,7 +178,7 @@ void validateSkippedSources() {
         IOSSceneMeshKind::Movable}) {
     auto alphaTest = candidate(kind,IOSMaterialCategory::AlphaTest);
     assert(planIOSOpaqueMeshSource(alphaTest,plan)==
-           IOSSceneSourcePlanResult::SkippedMaterial);
+           IOSSceneSourcePlanResult::Planned);
     auto alphaFrameAnimated = alphaTest;
     alphaFrameAnimated.hasFrameAnimation = true;
     assert(planIOSOpaqueMeshSource(alphaFrameAnimated,plan)==
@@ -260,6 +264,7 @@ void validateFallbackAndMixedCounters() {
   staticMesh.hasBaseColorTexture = false;
   staticMesh.usesFallbackTexture = true;
   auto movable = candidate(IOSSceneMeshKind::Movable);
+  movable.materialCategory = IOSMaterialCategory::AlphaTest;
   auto unsupported = candidate(IOSSceneMeshKind::Unsupported);
   auto materialSkip = candidate(IOSSceneMeshKind::Static);
   materialSkip.hasMappedMaterialCategory = false;
@@ -289,8 +294,8 @@ void validateFallbackAndMixedCounters() {
 
   assert(stats.visited==7u);
   assert(stats.planned==3u);
-  assert(stats.plannedOpaque==3u);
-  assert(stats.plannedAlphaTest==0u);
+  assert(stats.plannedOpaque==2u);
+  assert(stats.plannedAlphaTest==1u);
   assert(stats.plannedLandscape==1u);
   assert(stats.plannedStatic==1u);
   assert(stats.plannedMovable==1u);
@@ -370,9 +375,14 @@ void validatePlanProvenanceAndCounterMutations() {
   auto alpha = candidate(
       IOSSceneMeshKind::Landscape,IOSMaterialCategory::AlphaTest);
   assert(planIOSOpaqueMeshSource(alpha,plan)==
-         IOSSceneSourcePlanResult::SkippedMaterial);
+         IOSSceneSourcePlanResult::Planned);
+  assert(plan.materialCategory==IOSMaterialCategory::AlphaTest);
+  assert(!plan.usesFallbackTexture);
   alpha.hasBaseColorTexture = false;
   alpha.usesFallbackTexture = false;
+  assert(planIOSOpaqueMeshSource(alpha,plan)==
+         IOSSceneSourcePlanResult::SkippedMaterial);
+  alpha.usesFallbackTexture = true;
   assert(planIOSOpaqueMeshSource(alpha,plan)==
          IOSSceneSourcePlanResult::SkippedMaterial);
 

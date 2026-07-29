@@ -336,6 +336,51 @@ int main() {
   assert(movableGpuPlan.pipeline==IOSGPUScenePipelineSelector::Opaque);
   assert(!movableGpuPlan.usesFallbackTexture);
 
+  auto alphaCandidateA = movableCandidate(movableT0());
+  alphaCandidateA.materialCategory = IOSMaterialCategory::AlphaTest;
+  auto alphaCandidateB = movableCandidate(movableT1());
+  alphaCandidateB.materialCategory = IOSMaterialCategory::AlphaTest;
+  IOSSceneOpaqueMeshPlan alphaPlanA;
+  IOSSceneOpaqueMeshPlan alphaPlanB;
+  assert(planIOSOpaqueMeshSource(alphaCandidateA,alphaPlanA)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(planIOSOpaqueMeshSource(alphaCandidateB,alphaPlanB)==
+         IOSSceneSourcePlanResult::Planned);
+
+  IOSRenderWorld alphaWorld;
+  const SceneHandles alphaHandles = {
+    alphaWorld.resolveEntity(alphaPlanA.entityStableKey),
+    alphaWorld.resolveMesh(alphaPlanA.meshStableKey),
+    alphaWorld.resolveMaterial(alphaPlanA.materialStableKey),
+    alphaWorld.resolveTexture(alphaPlanA.textureStableKey),
+    {},
+    {},
+    };
+  const auto alphaA =
+      alphaWorld.buildSnapshot(movableFrame(alphaHandles,alphaPlanA));
+  assert(alphaA->isStructurallyValid());
+  assert(alphaA->materials[0].category==
+         IOSMaterialCategory::AlphaTest);
+  assert(alphaA->materials[0].alphaCutoff==0.5f);
+  assert(alphaWorld.commitAccepted(alphaA));
+  const auto alphaB =
+      alphaWorld.buildSnapshot(movableFrame(alphaHandles,alphaPlanB));
+  assert(alphaB->historyValid);
+  assert(alphaB->entities[0].previousTransform==movableT0());
+  assert(alphaB->materials[0].category==
+         IOSMaterialCategory::AlphaTest);
+
+  IOSGPUSceneDrawPlan alphaGpuPlan;
+  assert(planIOSGPUSceneDraw(
+           alphaB->currentCamera,gpuCandidate(*alphaB,alphaPlanB),
+           alphaGpuPlan)==IOSGPUSceneDrawPlanResult::Draw);
+  assert(alphaGpuPlan.materialCategory==
+         IOSMaterialCategory::AlphaTest);
+  assert(alphaGpuPlan.kind==IOSSceneMeshKind::Movable);
+  assert(alphaGpuPlan.pipeline==
+         IOSGPUScenePipelineSelector::AlphaTest);
+  assert(!alphaGpuPlan.usesFallbackTexture);
+
   auto deformationA = populatedFrame(handles,40.f,4.f);
   addDeformation(deformationA,2.f,0.25f);
   const auto acceptedDeformationA =
@@ -430,11 +475,17 @@ int main() {
     alpha.materials[0].category = IOSMaterialCategory::AlphaTest;
     alpha.materials[0].alphaCutoff = 0.5f;
     alpha.materials[0].usesFallbackTexture = false;
-    assert(!alpha.isStructurallyValid());
+    assert(alpha.isStructurallyValid());
     alpha.materials[0].usesFallbackTexture = true;
     assert(!alpha.isStructurallyValid());
     alpha.materials[0].usesFallbackTexture = false;
-    alpha.materials[0].alphaCutoff = 0.25f;
+    alpha.materials[0].baseColorTexture = {};
+    assert(!alpha.isStructurallyValid());
+    alpha.materials[0].baseColorTexture =
+        opaque.materials[0].baseColorTexture;
+    alpha.materials[0].alphaCutoff = 0.499f;
+    assert(!alpha.isStructurallyValid());
+    alpha.materials[0].alphaCutoff = 0.501f;
     assert(!alpha.isStructurallyValid());
     }
 
@@ -444,7 +495,6 @@ int main() {
   assert(!fabricatedKindSnapshot.isStructurallyValid());
   auto fabricatedCategorySnapshot = *firstValidAfterRejects;
   for(const auto category:{
-        IOSMaterialCategory::AlphaTest,
         IOSMaterialCategory::Transparent,
         IOSMaterialCategory::Additive,
         IOSMaterialCategory::Water,

@@ -230,6 +230,10 @@ IOSGPUScene::Result resultForPlan(
       return IOSGPUScene::Result::MissingMaterial;
     case IOSGPUSceneDrawPlanResult::UnsupportedMaterial:
       return IOSGPUScene::Result::UnsupportedMaterial;
+    case IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff:
+      return IOSGPUScene::Result::InvalidAlphaCutoff;
+    case IOSGPUSceneDrawPlanResult::MissingAlphaTexture:
+      return IOSGPUScene::Result::MissingAlphaTexture;
     case IOSGPUSceneDrawPlanResult::MissingTexture:
       return IOSGPUScene::Result::MissingTexture;
     case IOSGPUSceneDrawPlanResult::InvalidTexture:
@@ -248,6 +252,85 @@ IOSGPUScene::Report makeReport(IOSGPUScene::Result result,
   report.result        = result;
   report.failingHandle = failingHandle;
   return report;
+  }
+
+bool validSceneKind(IOSSceneMeshKind kind) noexcept {
+  return kind==IOSSceneMeshKind::Landscape ||
+         kind==IOSSceneMeshKind::Static ||
+         kind==IOSSceneMeshKind::Movable;
+  }
+
+void recordFailure(uint64_t& counter,
+                   IOSGPUScene::Report& report) noexcept {
+  if(iosGPUSceneCheckedIncrement(counter))
+    return;
+  report.result = IOSGPUScene::Result::CountOverflow;
+  report.failures.overflow = 1u;
+  }
+
+void recordPlanFailure(
+    IOSGPUScene::Report& report,
+    IOSGPUSceneDrawPlanResult result,
+    const IOSGPUSceneMeshCandidate& source) noexcept {
+  report.result        = resultForPlan(result);
+  report.failingHandle = iosGPUSceneFailingHandle(result,source);
+  switch(result) {
+    case IOSGPUSceneDrawPlanResult::UnsupportedMaterial:
+      recordFailure(report.failures.unknownCategory,report);
+      return;
+    case IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff:
+      recordFailure(report.failures.invalidCutoff,report);
+      return;
+    case IOSGPUSceneDrawPlanResult::MissingAlphaTexture:
+      recordFailure(report.failures.missingAlphaTexture,report);
+      return;
+    case IOSGPUSceneDrawPlanResult::InvalidMesh:
+      if(!validSceneKind(source.entity.kind))
+        recordFailure(report.failures.unknownKind,report);
+      return;
+    case IOSGPUSceneDrawPlanResult::Draw:
+    case IOSGPUSceneDrawPlanResult::SkippedVisibility:
+    case IOSGPUSceneDrawPlanResult::GenerationMismatch:
+    case IOSGPUSceneDrawPlanResult::MissingMaterial:
+    case IOSGPUSceneDrawPlanResult::MissingTexture:
+    case IOSGPUSceneDrawPlanResult::InvalidTexture:
+    case IOSGPUSceneDrawPlanResult::MissingMesh:
+      return;
+    }
+  }
+
+bool recordCountFailure(
+    IOSGPUSceneCountResult result,
+    IOSGPUScene::Report& report) noexcept {
+  switch(result) {
+    case IOSGPUSceneCountResult::Recorded:
+      return true;
+    case IOSGPUSceneCountResult::UnknownCategory:
+      report.result = IOSGPUScene::Result::UnsupportedMaterial;
+      recordFailure(report.failures.unknownCategory,report);
+      return false;
+    case IOSGPUSceneCountResult::UnknownKind:
+      report.result = IOSGPUScene::Result::InvalidMesh;
+      recordFailure(report.failures.unknownKind,report);
+      return false;
+    case IOSGPUSceneCountResult::InconsistentCounts:
+      report.result = IOSGPUScene::Result::CountMismatch;
+      recordFailure(report.failures.plannedDrawn,report);
+      return false;
+    case IOSGPUSceneCountResult::Overflow:
+      report.result = IOSGPUScene::Result::CountOverflow;
+      recordFailure(report.failures.overflow,report);
+      return false;
+    }
+  report.result = IOSGPUScene::Result::CountMismatch;
+  recordFailure(report.failures.plannedDrawn,report);
+  return false;
+  }
+
+void recordPlannedDrawnFailure(IOSGPUScene::Report& report) noexcept {
+  if(report.counts.planned.material!=report.counts.drawn.material ||
+     report.counts.planned.kind!=report.counts.drawn.kind)
+    recordFailure(report.failures.plannedDrawn,report);
   }
 
 }
@@ -317,14 +400,30 @@ struct IOSGPUScene::Impl final {
               initWithBytes:RendererIOSShader::FragmentFunction.data()
                      length:RendererIOSShader::FragmentFunction.size()
                                 encoding:NSUTF8StringEncoding]);
+      OwnedObjectiveC alphaTestFragmentName(
+          [[NSString alloc]
+              initWithBytes:
+                  RendererIOSShader::AlphaTestFragmentFunction.data()
+                     length:
+                  RendererIOSShader::AlphaTestFragmentFunction.size()
+                                encoding:NSUTF8StringEncoding]);
       id<MTLLibrary> nativeLibrary = (id<MTLLibrary>)library.get();
       OwnedObjectiveC vertexFunction(
           [nativeLibrary newFunctionWithName:(NSString*)vertexName.get()]);
       OwnedObjectiveC fragmentFunction(
           [nativeLibrary newFunctionWithName:(NSString*)fragmentName.get()]);
-      if(vertexFunction.get()==nil || fragmentFunction.get()==nil)
-        throw std::runtime_error(
-          "RendererIOS IOSGPUScene could not resolve its Metal shader functions");
+      OwnedObjectiveC alphaTestFragmentFunction(
+          [nativeLibrary
+              newFunctionWithName:(NSString*)alphaTestFragmentName.get()]);
+      if(!iosGPUSceneRequiredShaderFunctionsAreAvailable(
+             vertexFunction.get()!=nil,
+             fragmentFunction.get()!=nil,
+             alphaTestFragmentFunction.get()!=nil)) {
+        Tempest::Log::e(
+          "RendererIOS IOSGPUScene initialization: "
+          "result=pipeline-unavailable reason=missing-shader-function");
+        return;
+        }
 
       OwnedObjectiveC vertexDescriptor(
           [[MTLVertexDescriptor alloc] init]);
@@ -357,17 +456,41 @@ struct IOSGPUScene::Impl final {
           (id<MTLFunction>)fragmentFunction.get();
       pipelineDesc.vertexDescriptor = descriptor;
       pipelineDesc.colorAttachments[0].pixelFormat = colorFormat;
+      pipelineDesc.colorAttachments[0].blendingEnabled = NO;
       pipelineDesc.depthAttachmentPixelFormat      = depthFormat;
       pipelineDesc.rasterSampleCount = NSUInteger(target.sampleCount);
+      pipelineDesc.alphaToCoverageEnabled = NO;
+      pipelineDesc.alphaToOneEnabled      = NO;
 
-      NSError* pipelineError = nil;
-      OwnedObjectiveC pipelineOwner(
+      NSError* opaquePipelineError = nil;
+      OwnedObjectiveC opaquePipelineOwner(
           [device newRenderPipelineStateWithDescriptor:pipelineDesc
-                                                 error:&pipelineError]);
-      if(pipelineOwner.get()==nil)
-        throw std::runtime_error(
-          metalFailure("RendererIOS IOSGPUScene pipeline creation failed",
-                       pipelineError));
+                                                 error:&opaquePipelineError]);
+      if(opaquePipelineOwner.get()==nil) {
+        Tempest::Log::e(
+          metalFailure(
+              "RendererIOS IOSGPUScene initialization: "
+              "result=pipeline-unavailable reason=opaque-pso",
+              opaquePipelineError));
+        return;
+        }
+
+      pipelineDesc.fragmentFunction =
+          (id<MTLFunction>)alphaTestFragmentFunction.get();
+      NSError* alphaTestPipelineError = nil;
+      OwnedObjectiveC alphaTestPipelineOwner(
+          [device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                                 error:&alphaTestPipelineError]);
+      if(!iosGPUSceneProductionPipelineStatesAreAvailable(
+             opaquePipelineOwner.get()!=nil,
+             alphaTestPipelineOwner.get()!=nil)) {
+        Tempest::Log::e(
+          metalFailure(
+              "RendererIOS IOSGPUScene initialization: "
+              "result=pipeline-unavailable reason=alpha-test-pso",
+              alphaTestPipelineError));
+        return;
+        }
 
       OwnedObjectiveC depthDescriptor(
           [[MTLDepthStencilDescriptor alloc] init]);
@@ -402,40 +525,48 @@ struct IOSGPUScene::Impl final {
         throw std::runtime_error(
           "RendererIOS IOSGPUScene sampler-state creation failed");
 
-      pipelineState = pipelineOwner.relinquish();
-      depthState    = depthOwner.relinquish();
-      samplerState  = samplerOwner.relinquish();
+      opaquePipelineState    = opaquePipelineOwner.relinquish();
+      alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
+      depthState             = depthOwner.relinquish();
+      samplerState           = samplerOwner.relinquish();
+      initializationResult   = IOSGPUScene::Result::Success;
       }
     }
 
   ~Impl() {
     [samplerState release];
     [depthState release];
-    [pipelineState release];
+    [alphaTestPipelineState release];
+    [opaquePipelineState release];
     }
 
   Tempest::Device&                  owner;
   Tempest::BorrowedMetalDevice      nativeDevice;
-  id                               pipelineState = nil;
+  id                               opaquePipelineState = nil;
+  id                               alphaTestPipelineState = nil;
   id                               depthState = nil;
   id                               samplerState = nil;
+  IOSGPUScene::Result              initializationResult =
+      IOSGPUScene::Result::PipelineUnavailable;
   NativeTextureValidationCache     textureValidation;
   };
 
 void IOSGPUScene::Impl::encodeLandscape(
     void* opaque,
     MTL::RenderCommandEncoder* nativeEncoder) {
+  if(opaque==nullptr)
+    return;
   auto& context = *static_cast<NativeEncodeContext*>(opaque);
   if(context.scene==nullptr || context.snapshot==nullptr ||
      context.assets==nullptr || nativeEncoder==nullptr) {
     context.report.result = IOSGPUScene::Result::NativeEncodingFailed;
+    recordFailure(context.report.failures.nativeEncode,context.report);
+    recordPlannedDrawnFailure(context.report);
     return;
     }
 
   id<MTLRenderCommandEncoder> encoder =
       (id<MTLRenderCommandEncoder>)(void*)nativeEncoder;
-  [encoder setRenderPipelineState:
-      (id<MTLRenderPipelineState>)context.scene->pipelineState];
   [encoder setDepthStencilState:
       (id<MTLDepthStencilState>)context.scene->depthState];
   [encoder setFrontFacingWinding:MTLWindingClockwise];
@@ -452,8 +583,6 @@ void IOSGPUScene::Impl::encodeLandscape(
     [encoder setFrontFacingWinding:MTLWindingClockwise];
     };
 
-  uint32_t drawCount = 0;
-  uint32_t texturedDrawCount = 0;
   for(const auto& entity:context.snapshot->entities) {
     const auto source = candidate(
         *context.snapshot,*context.assets,
@@ -464,9 +593,8 @@ void IOSGPUScene::Impl::encodeLandscape(
     if(planned==IOSGPUSceneDrawPlanResult::SkippedVisibility)
       continue;
     if(planned!=IOSGPUSceneDrawPlanResult::Draw) {
-      context.report.result        = resultForPlan(planned);
-      context.report.failingHandle =
-          iosGPUSceneFailingHandle(planned,source);
+      recordPlanFailure(context.report,planned,source);
+      recordPlannedDrawnFailure(context.report);
       restoreEncoderState();
       return;
       }
@@ -475,6 +603,7 @@ void IOSGPUScene::Impl::encodeLandscape(
     if(mesh==nullptr) {
       context.report.result        = IOSGPUScene::Result::MissingMesh;
       context.report.failingHandle = entity.mesh.value;
+      recordPlannedDrawnFailure(context.report);
       restoreEncoderState();
       return;
       }
@@ -482,8 +611,79 @@ void IOSGPUScene::Impl::encodeLandscape(
     const auto* texture =
         context.assets->lookupTexture(plan.baseColorTexture);
     if(texture==nullptr || !texture->texture) {
-      context.report.result        = IOSGPUScene::Result::MissingTexture;
+      context.report.result =
+          plan.materialCategory==IOSMaterialCategory::AlphaTest
+            ? IOSGPUScene::Result::MissingAlphaTexture
+            : IOSGPUScene::Result::MissingTexture;
       context.report.failingHandle = plan.baseColorTexture.value;
+      if(plan.materialCategory==IOSMaterialCategory::AlphaTest)
+        recordFailure(
+            context.report.failures.missingAlphaTexture,context.report);
+      recordPlannedDrawnFailure(context.report);
+      restoreEncoderState();
+      return;
+      }
+
+    if(!iosGPUScenePipelineSelectionMatches(
+           plan.materialCategory,plan.pipeline)) {
+      context.report.result = IOSGPUScene::Result::SelectorMismatch;
+      context.report.failingHandle = entity.material.value;
+      recordFailure(context.report.failures.selectorMismatch,context.report);
+      recordPlannedDrawnFailure(context.report);
+      restoreEncoderState();
+      return;
+      }
+
+    id<MTLRenderPipelineState> pipelineState = nil;
+    IOSGPUSceneFrameCounts nextCounts = context.report.counts;
+    if(!recordCountFailure(
+           recordIOSGPUSceneDrawCount(
+               plan.materialCategory,plan.kind,
+               plan.usesFallbackTexture,true,nextCounts.drawn),
+           context.report)) {
+      recordPlannedDrawnFailure(context.report);
+      restoreEncoderState();
+      return;
+      }
+    switch(plan.pipeline) {
+      case IOSGPUScenePipelineSelector::Opaque:
+        pipelineState =
+            (id<MTLRenderPipelineState>)
+                context.scene->opaquePipelineState;
+        if(!iosGPUSceneCheckedIncrement(nextCounts.opaquePsoBinds)) {
+          context.report.result = IOSGPUScene::Result::CountOverflow;
+          recordFailure(context.report.failures.overflow,context.report);
+          recordPlannedDrawnFailure(context.report);
+          restoreEncoderState();
+          return;
+          }
+        break;
+      case IOSGPUScenePipelineSelector::AlphaTest:
+        pipelineState =
+            (id<MTLRenderPipelineState>)
+                context.scene->alphaTestPipelineState;
+        if(!iosGPUSceneCheckedIncrement(nextCounts.alphaPsoBinds)) {
+          context.report.result = IOSGPUScene::Result::CountOverflow;
+          recordFailure(context.report.failures.overflow,context.report);
+          recordPlannedDrawnFailure(context.report);
+          restoreEncoderState();
+          return;
+          }
+        break;
+      case IOSGPUScenePipelineSelector::Unsupported:
+        context.report.result = IOSGPUScene::Result::SelectorMismatch;
+        context.report.failingHandle = entity.material.value;
+        recordFailure(
+            context.report.failures.selectorMismatch,context.report);
+        recordPlannedDrawnFailure(context.report);
+        restoreEncoderState();
+        return;
+      }
+    if(pipelineState==nil) {
+      context.report.result = IOSGPUScene::Result::PipelineUnavailable;
+      context.report.failingHandle = entity.material.value;
+      recordFailure(context.report.failures.psoUnavailable,context.report);
+      recordPlannedDrawnFailure(context.report);
       restoreEncoderState();
       return;
       }
@@ -494,6 +694,7 @@ void IOSGPUScene::Impl::encodeLandscape(
         (id<MTLBuffer>)(void*)mesh->indexBuffer.get();
     id<MTLTexture> baseColorTexture =
         (id<MTLTexture>)(void*)texture->texture.get();
+    [encoder setRenderPipelineState:pipelineState];
     [encoder setVertexBuffer:vertexBuffer offset:0u atIndex:0u];
     [encoder setVertexBytes:&plan.constants
                      length:sizeof(plan.constants)
@@ -507,16 +708,24 @@ void IOSGPUScene::Impl::encodeLandscape(
                      instanceCount:1u
                         baseVertex:0
                         baseInstance:0u];
-    ++drawCount;
-    ++texturedDrawCount;
+    context.report.counts = nextCounts;
+    context.report.drawCount =
+        context.report.counts.drawn.material.total;
+    context.report.texturedDrawCount =
+        context.report.counts.drawn.texturedDraws;
     }
 
   restoreEncoderState();
-  context.report.result    =
-      drawCount!=0u ? IOSGPUScene::Result::Success
-                    : IOSGPUScene::Result::Empty;
-  context.report.drawCount         = drawCount;
-  context.report.texturedDrawCount = texturedDrawCount;
+  if(!iosGPUSceneProductionReportCountsAreConsistent(
+         context.report.counts,context.report.failures)) {
+    context.report.result = IOSGPUScene::Result::CountMismatch;
+    recordFailure(context.report.failures.plannedDrawn,context.report);
+    return;
+    }
+  context.report.result =
+      context.report.counts.drawn.material.total!=0u
+        ? IOSGPUScene::Result::Success
+        : IOSGPUScene::Result::Empty;
   }
 
 IOSGPUScene::IOSGPUScene(Tempest::Device& device, TargetLayout target)
@@ -529,9 +738,17 @@ IOSGPUScene::Report IOSGPUScene::encode(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,
     const IOSSceneSnapshot& snapshot,
     const IOSSceneAssetRegistry& assets) noexcept {
-  if(impl==nullptr || impl->pipelineState==nil || impl->depthState==nil ||
-     impl->samplerState==nil)
-    return makeReport(Result::PipelineUnavailable);
+  Report report = makeReport(Result::NativeEncodingFailed);
+  if(impl==nullptr) {
+    report.result = Result::PipelineUnavailable;
+    recordFailure(report.failures.psoUnavailable,report);
+    return report;
+    }
+  if(impl->initializationResult!=Result::Success) {
+    report.result = Result::PipelineUnavailable;
+    recordFailure(report.failures.psoUnavailable,report);
+    return report;
+    }
   if(!assets.isInitialized() ||
      assets.state()!=IOSSceneAssetRegistryState::Active ||
      !assets.nativeDevice() ||
@@ -541,7 +758,6 @@ IOSGPUScene::Report IOSGPUScene::encode(
      snapshot.generation!=assets.generation())
     return makeReport(Result::GenerationMismatch);
 
-  uint32_t plannedDraws = 0;
   try {
     for(const auto& entity:snapshot.entities) {
       const auto source = candidate(
@@ -551,33 +767,59 @@ IOSGPUScene::Report IOSGPUScene::encode(
           planIOSGPUSceneDraw(snapshot.currentCamera,source,plan);
       if(planned==IOSGPUSceneDrawPlanResult::SkippedVisibility)
         continue;
-      if(planned!=IOSGPUSceneDrawPlanResult::Draw)
-        return makeReport(
-            resultForPlan(planned),iosGPUSceneFailingHandle(planned,source));
-      if(plannedDraws==std::numeric_limits<uint32_t>::max())
-        return makeReport(Result::InvalidMesh,entity.mesh.value);
-      ++plannedDraws;
+      if(planned!=IOSGPUSceneDrawPlanResult::Draw) {
+        recordPlanFailure(report,planned,source);
+        return report;
+        }
+      if(!recordCountFailure(
+             recordIOSGPUSceneDrawCount(
+                 plan.materialCategory,plan.kind,
+                 plan.usesFallbackTexture,false,report.counts.planned),
+             report))
+        return report;
       }
     }
   catch(...) {
-    return makeReport(Result::NativeEncodingFailed);
+    report.result = Result::NativeEncodingFailed;
+    recordFailure(report.failures.nativeEncode,report);
+    return report;
     }
-  if(plannedDraws==0u)
-    return makeReport(Result::Empty);
+  if(report.counts.planned.material.total==0u) {
+    report.result = Result::Empty;
+    return report;
+    }
+  if(impl->opaquePipelineState==nil ||
+     impl->alphaTestPipelineState==nil ||
+     impl->depthState==nil ||
+     impl->samplerState==nil) {
+    report.result = Result::PipelineUnavailable;
+    recordFailure(report.failures.psoUnavailable,report);
+    recordPlannedDrawnFailure(report);
+    return report;
+    }
 
   Impl::NativeEncodeContext context;
   context.scene    = impl.get();
   context.snapshot = &snapshot;
   context.assets   = &assets;
-  context.report   = makeReport(Result::NativeEncodingFailed);
+  context.report   = report;
   try {
     const bool encoded = Tempest::MetalApi::withActiveRenderEncoder(
         impl->owner,encoder,&context,&Impl::encodeLandscape);
-    if(!encoded)
-      return makeReport(Result::NoActiveRenderEncoder);
+    if(!encoded) {
+      context.report.result = Result::NoActiveRenderEncoder;
+      recordFailure(
+          context.report.failures.nativeEncode,context.report);
+      recordPlannedDrawnFailure(context.report);
+      return context.report;
+      }
     }
   catch(...) {
-    return makeReport(Result::NativeEncodingFailed);
+    context.report.result = Result::NativeEncodingFailed;
+    recordFailure(
+        context.report.failures.nativeEncode,context.report);
+    recordPlannedDrawnFailure(context.report);
+    return context.report;
     }
   return context.report;
   }
@@ -598,6 +840,10 @@ const char* iosGPUSceneResultName(IOSGPUScene::Result result) noexcept {
       return "missing-material";
     case IOSGPUScene::Result::UnsupportedMaterial:
       return "unsupported-material";
+    case IOSGPUScene::Result::InvalidAlphaCutoff:
+      return "invalid-alpha-cutoff";
+    case IOSGPUScene::Result::MissingAlphaTexture:
+      return "missing-alpha-texture";
     case IOSGPUScene::Result::MissingTexture:
       return "missing-texture";
     case IOSGPUScene::Result::InvalidTexture:
@@ -610,6 +856,12 @@ const char* iosGPUSceneResultName(IOSGPUScene::Result result) noexcept {
       return "no-active-render-encoder";
     case IOSGPUScene::Result::PipelineUnavailable:
       return "pipeline-unavailable";
+    case IOSGPUScene::Result::SelectorMismatch:
+      return "selector-mismatch";
+    case IOSGPUScene::Result::CountOverflow:
+      return "count-overflow";
+    case IOSGPUScene::Result::CountMismatch:
+      return "count-mismatch";
     case IOSGPUScene::Result::NativeEncodingFailed:
       return "native-encoding-failed";
     }

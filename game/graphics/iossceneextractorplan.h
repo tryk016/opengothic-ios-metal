@@ -67,12 +67,16 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     return IOSSceneSourcePlanResult::InvalidSource;
   if(!source.hasMappedMaterialCategory)
     return IOSSceneSourcePlanResult::SkippedMaterial;
+  if(source.materialCategory!=IOSMaterialCategory::Opaque &&
+     source.materialCategory!=IOSMaterialCategory::AlphaTest)
+    return IOSSceneSourcePlanResult::SkippedMaterial;
+  if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
+     (!source.hasBaseColorTexture || source.usesFallbackTexture))
+    return IOSSceneSourcePlanResult::SkippedMaterial;
   if(source.hasFrameAnimation || source.hasUvAnimation)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;
-  // C3b1 carries the mapped category but keeps production admission opaque.
-  if(source.materialCategory!=IOSMaterialCategory::Opaque)
-    return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(source.hasBaseColorTexture==source.usesFallbackTexture)
+  if(source.materialCategory==IOSMaterialCategory::Opaque &&
+     source.hasBaseColorTexture==source.usesFallbackTexture)
     return IOSSceneSourcePlanResult::InvalidSource;
   if(source.sourceId==0 || !source.hasStaticMesh || !source.hasLocalBounds ||
      source.indices.count==0 ||

@@ -3319,14 +3319,212 @@ if mutations_killed != 16:
     raise SystemExit("RendererIOS extractor adapter mutation count drifted")
 print("RendererIOS extractor adapter oracle: mutations-killed=16")
 PY
-grep -Fq 'source.materialCategory!=IOSMaterialCategory::Opaque' \
-  game/graphics/iossceneextractorplan.h
-grep -Fq 'material.category!=IOSMaterialCategory::Opaque' \
-  game/graphics/iosscenesnapshot.cpp
-grep -Fq 'pipeline!=IOSGPUScenePipelineSelector::Opaque' \
-  game/graphics/iosgpusceneplan.h
-grep -Fq 'source.hasFrameAnimation || source.hasUvAnimation' \
-  game/graphics/iossceneextractorplan.h
+python3 - <<'PY'
+from pathlib import Path
+
+paths = {
+    path: Path(path).read_text()
+    for path in (
+        "game/graphics/iossceneextractorplan.h",
+        "game/graphics/iosscenesnapshot.cpp",
+        "game/graphics/iosgpusceneplan.h",
+        "game/graphics/iosgpuscene.mm",
+        "game/graphics/iosmetalcontext.cpp",
+    )
+}
+required = (
+    ("extractor-two-category-admission",
+     "game/graphics/iossceneextractorplan.h",
+     """source.materialCategory!=IOSMaterialCategory::Opaque &&
+     source.materialCategory!=IOSMaterialCategory::AlphaTest"""),
+    ("extractor-alpha-texture-provenance",
+     "game/graphics/iossceneextractorplan.h",
+     """source.materialCategory==IOSMaterialCategory::AlphaTest &&
+     (!source.hasBaseColorTexture || source.usesFallbackTexture)"""),
+    ("extractor-animation-rejection",
+     "game/graphics/iossceneextractorplan.h",
+     "source.hasFrameAnimation || source.hasUvAnimation"),
+    ("snapshot-alpha-category",
+     "game/graphics/iosscenesnapshot.cpp",
+     """case IOSMaterialCategory::AlphaTest:
+      return bool(material.baseColorTexture) &&"""),
+    ("snapshot-alpha-cutoff",
+     "game/graphics/iosscenesnapshot.cpp",
+     "material.alphaCutoff==0.5f"),
+    ("gpu-plan-unsupported-selector",
+     "game/graphics/iosgpusceneplan.h",
+     "pipeline==IOSGPUScenePipelineSelector::Unsupported"),
+    ("gpu-plan-alpha-selector",
+     "game/graphics/iosgpusceneplan.h",
+     "pipeline==IOSGPUScenePipelineSelector::AlphaTest"),
+    ("gpu-plan-alpha-texture-provenance",
+     "game/graphics/iosgpusceneplan.h",
+     """!source.material.baseColorTexture || !source.hasTexture ||
+       source.material.usesFallbackTexture"""),
+    ("gpu-plan-alpha-cutoff",
+     "game/graphics/iosgpusceneplan.h",
+     "source.material.alphaCutoff!=0.5f"),
+    ("opaque-fragment-abi",
+     "game/graphics/iosgpuscene.mm",
+     "RendererIOSShader::FragmentFunction.data()"),
+    ("alpha-fragment-abi",
+     "game/graphics/iosgpuscene.mm",
+     "RendererIOSShader::AlphaTestFragmentFunction.data()"),
+    ("explicit-nonblended-pso",
+     "game/graphics/iosgpuscene.mm",
+     "pipelineDesc.colorAttachments[0].blendingEnabled = NO;"),
+    ("opaque-pso-state",
+     "game/graphics/iosgpuscene.mm",
+     "opaquePipelineState    = opaquePipelineOwner.relinquish();"),
+    ("alpha-pso-state",
+     "game/graphics/iosgpuscene.mm",
+     "alphaTestPipelineState = alphaTestPipelineOwner.relinquish();"),
+    ("alpha-fragment-descriptor-assignment",
+     "game/graphics/iosgpuscene.mm",
+     """pipelineDesc.fragmentFunction =
+          (id<MTLFunction>)alphaTestFragmentFunction.get();"""),
+    ("strict-selector",
+     "game/graphics/iosgpuscene.mm",
+     """iosGPUScenePipelineSelectionMatches(
+           plan.materialCategory,plan.pipeline)"""),
+    ("required-functions-availability-map",
+     "game/graphics/iosgpuscene.mm",
+     "iosGPUSceneRequiredShaderFunctionsAreAvailable("),
+    ("required-pso-availability-map",
+     "game/graphics/iosgpuscene.mm",
+     "iosGPUSceneProductionPipelineStatesAreAvailable("),
+    ("pipeline-initialization-success",
+     "game/graphics/iosgpuscene.mm",
+     "initializationResult   = IOSGPUScene::Result::Success;"),
+    ("planned-production-count",
+     "game/graphics/iosgpuscene.mm",
+     "plan.usesFallbackTexture,false,report.counts.planned"),
+    ("drawn-production-count",
+     "game/graphics/iosgpuscene.mm",
+     "plan.usesFallbackTexture,true,nextCounts.drawn"),
+    ("production-count-equations",
+     "game/graphics/iosgpuscene.mm",
+     "iosGPUSceneProductionReportCountsAreConsistent("),
+    ("production-marker-set",
+     "game/graphics/iosmetalcontext.cpp",
+     "const IOSGPUSceneMarker markers[] = {"),
+    ("identity-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneIdentityMarker("),
+    ("material-planned-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneMaterialPlannedMarker("),
+    ("material-drawn-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneMaterialDrawnMarker("),
+    ("kind-planned-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneKindPlannedMarker("),
+    ("kind-drawn-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneKindDrawnMarker("),
+    ("alpha-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneAlphaMarker("),
+    ("fail-contract-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneFailContractMarker("),
+    ("fail-selector-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneFailSelectorMarker("),
+    ("fail-execution-marker-call",
+     "game/graphics/iosmetalcontext.cpp",
+     "iosGPUSceneFailExecutionMarker("),
+    ("failure-marker-before-fatal",
+     "game/graphics/iosmetalcontext.cpp",
+     """report.result!=IOSGPUScene::Result::Success ||
+           input.snapshot->sequence.value==1u"""),
+)
+marker_order = (
+    "iosGPUSceneIdentityMarker(",
+    "iosGPUSceneMaterialPlannedMarker(",
+    "iosGPUSceneMaterialDrawnMarker(",
+    "iosGPUSceneKindPlannedMarker(",
+    "iosGPUSceneKindDrawnMarker(",
+    "iosGPUSceneAlphaMarker(",
+    "iosGPUSceneFailContractMarker(",
+    "iosGPUSceneFailSelectorMarker(",
+    "iosGPUSceneFailExecutionMarker(",
+)
+
+
+def valid(sources: dict[str, str]) -> bool:
+    if not all(sources[path].count(snippet) == 1
+               for _, path, snippet in required):
+        return False
+    marker_source = sources["game/graphics/iosmetalcontext.cpp"]
+    return [
+        marker_source.index(marker) for marker in marker_order
+    ] == sorted(marker_source.index(marker) for marker in marker_order)
+
+
+missing = [
+    label for label, path, snippet in required
+    if paths[path].count(snippet) != 1
+]
+if missing:
+    raise SystemExit(
+        "RendererIOS C3b2 source contract missing or duplicated: "
+        + ",".join(missing)
+    )
+if paths["game/graphics/iosgpuscene.mm"].count(
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 2:
+    raise SystemExit("RendererIOS C3b2 must create exactly two offline PSOs")
+for forbidden in (
+    "newLibraryWithSource",
+    "newCommandQueue",
+    "presentDrawable",
+    "mode=causal-a",
+    "mode=causal-b",
+):
+    if forbidden in paths["game/graphics/iosgpuscene.mm"] or \
+       forbidden in paths["game/graphics/iosmetalcontext.cpp"]:
+        raise SystemExit(
+            "RendererIOS C3b2 product path contains forbidden token: "
+            + forbidden
+        )
+
+mutations_killed = 0
+for label, path, snippet in required:
+    for operation, replacement in (
+        ("removed", ""),
+        ("replaced", "C3B2_MUTANT"),
+    ):
+        mutant = dict(paths)
+        mutant[path] = mutant[path].replace(snippet,replacement,1)
+        if valid(mutant):
+            raise SystemExit(
+                "RendererIOS C3b2 source mutation survived: "
+                + label + "-" + operation
+            )
+        mutations_killed += 1
+marker_path = "game/graphics/iosmetalcontext.cpp"
+for index in range(len(marker_order)-1):
+    mutant = dict(paths)
+    first = marker_order[index]
+    second = marker_order[index+1]
+    swapped = mutant[marker_path].replace(first,"C3B2_MARKER_SWAP",1)
+    swapped = swapped.replace(second,first,1)
+    mutant[marker_path] = swapped.replace("C3B2_MARKER_SWAP",second,1)
+    if valid(mutant):
+        raise SystemExit(
+            "RendererIOS C3b2 marker-order mutation survived: "
+            + str(index)
+        )
+    mutations_killed += 1
+expected_mutations = 2*len(required)+len(marker_order)-1
+if mutations_killed != expected_mutations:
+    raise SystemExit("RendererIOS C3b2 mutation count drifted")
+print(
+    "RendererIOS C3b2 source oracle: mutations-killed="
+    + str(mutations_killed)
+)
+PY
 
 printf '\n### CI contract: Verify RendererIOS native GPU and offline Metal contracts\n'
 set -euo pipefail

@@ -327,7 +327,10 @@ bool symbolAllowlistMatches(const std::filesystem::path& repository) {
   };
   const std::map<std::string,size_t> expectedAbiReferences = {
     {"game/graphics/ioslandscapeshaderabi.h",1u},
+    {"game/graphics/iosgpuscene.mm",2u},
     {"ios/tests/ioslandscapeshader.cpp",4u},
+    {"scripts/verify-local-build.command",1u},
+    {"scripts/ci_contracts.command",1u},
   };
   constexpr std::string_view AlphaTestAbiIdentifier =
       "AlphaTestFragmentFunction";

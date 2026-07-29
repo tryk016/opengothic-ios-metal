@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -131,6 +132,21 @@ int main() {
     assert(!iosGPUScenePipelineSelectionMatches(
         IOSMaterialCategory::Opaque,
         IOSGPUScenePipelineSelector::Unsupported));
+    for(unsigned mask=0u; mask<8u; ++mask) {
+      const bool vertex = (mask&1u)!=0u;
+      const bool opaqueFragment = (mask&2u)!=0u;
+      const bool alphaTestFragment = (mask&4u)!=0u;
+      assert(iosGPUSceneRequiredShaderFunctionsAreAvailable(
+                 vertex,opaqueFragment,alphaTestFragment)==
+             (mask==7u));
+      }
+    for(unsigned mask=0u; mask<4u; ++mask) {
+      const bool opaque = (mask&1u)!=0u;
+      const bool alphaTest = (mask&2u)!=0u;
+      assert(iosGPUSceneProductionPipelineStatesAreAvailable(
+                 opaque,alphaTest)==
+             (mask==3u));
+      }
     for(const auto category:{
           IOSMaterialCategory::Transparent,
           IOSMaterialCategory::Additive,
@@ -153,8 +169,11 @@ int main() {
       source.material.category = IOSMaterialCategory::AlphaTest;
       IOSGPUSceneDrawPlan plan;
       assert(planIOSGPUSceneDraw(camera,source,plan)==
-             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
-      assert(plan.pipeline==IOSGPUScenePipelineSelector::Unsupported);
+             IOSGPUSceneDrawPlanResult::Draw);
+      assert(plan.kind==kind);
+      assert(plan.materialCategory==IOSMaterialCategory::AlphaTest);
+      assert(plan.pipeline==IOSGPUScenePipelineSelector::AlphaTest);
+      assert(!plan.usesFallbackTexture);
       }
   }
 
@@ -199,6 +218,43 @@ int main() {
     assert(iosGPUSceneFailingHandle(
                IOSGPUSceneDrawPlanResult::MissingTexture,source)==
            source.entity.material.value);
+  }
+
+  {
+    for(const bool removeHandle:{false,true}) {
+      auto source = validCandidate();
+      source.material.category = IOSMaterialCategory::AlphaTest;
+      if(removeHandle)
+        source.material.baseColorTexture = {};
+      else
+        source.hasTexture = false;
+      IOSGPUSceneDrawPlan plan;
+      assert(planIOSGPUSceneDraw(camera,source,plan)==
+             IOSGPUSceneDrawPlanResult::MissingAlphaTexture);
+      assert(iosGPUSceneFailingHandle(
+                 IOSGPUSceneDrawPlanResult::MissingAlphaTexture,source)!=0u);
+      }
+
+    auto fallback = validCandidate();
+    fallback.material.category = IOSMaterialCategory::AlphaTest;
+    fallback.material.usesFallbackTexture = true;
+    IOSGPUSceneDrawPlan fallbackPlan;
+    assert(planIOSGPUSceneDraw(camera,fallback,fallbackPlan)==
+           IOSGPUSceneDrawPlanResult::MissingAlphaTexture);
+
+    for(const float cutoff:{
+          0.f,0.499f,0.501f,1.f,
+          std::numeric_limits<float>::quiet_NaN()}) {
+      auto source = validCandidate();
+      source.material.category = IOSMaterialCategory::AlphaTest;
+      source.material.alphaCutoff = cutoff;
+      IOSGPUSceneDrawPlan plan;
+      assert(planIOSGPUSceneDraw(camera,source,plan)==
+             IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff);
+      assert(iosGPUSceneFailingHandle(
+                 IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff,source)==
+             source.entity.material.value);
+      }
   }
 
   {
@@ -531,6 +587,28 @@ int main() {
     counts.opaquePsoBinds = 1u;
     counts.alphaPsoBinds = 2u;
     assert(iosGPUSceneProductionFrameCountsAreConsistent(counts));
+    IOSGPUSceneFailureCounts failures;
+    assert(iosGPUSceneFailureCountsAreClear(failures));
+    assert(iosGPUSceneProductionReportCountsAreConsistent(
+        counts,failures));
+
+    for(std::size_t mutation=0u; mutation<9u; ++mutation) {
+      auto broken = failures;
+      switch(mutation) {
+        case 0u: ++broken.unknownCategory; break;
+        case 1u: ++broken.unknownKind; break;
+        case 2u: ++broken.invalidCutoff; break;
+        case 3u: ++broken.missingAlphaTexture; break;
+        case 4u: ++broken.selectorMismatch; break;
+        case 5u: ++broken.psoUnavailable; break;
+        case 6u: ++broken.overflow; break;
+        case 7u: ++broken.plannedDrawn; break;
+        case 8u: ++broken.nativeEncode; break;
+        }
+      assert(!iosGPUSceneFailureCountsAreClear(broken));
+      assert(!iosGPUSceneProductionReportCountsAreConsistent(
+          counts,broken));
+      }
 
     for(std::size_t mutation=0u; mutation<23u; ++mutation) {
       auto broken = counts;
@@ -583,6 +661,97 @@ int main() {
         case 2u: ++broken.controlAlphaToOpaqueBinds; break;
         }
       assert(!iosGPUSceneCausalBFrameCountsAreConsistent(broken));
+      }
+  }
+
+  {
+    IOSGPUSceneFrameCounts counts;
+    counts.planned.material = {3u,1u,2u};
+    counts.planned.kind = {3u,1u,1u,1u};
+    counts.drawn.material = {3u,1u,2u};
+    counts.drawn.kind = {3u,1u,1u,1u};
+    counts.drawn.texturedDraws = 3u;
+    counts.opaquePsoBinds = 1u;
+    counts.alphaPsoBinds = 2u;
+    IOSGPUSceneFailureCounts failures;
+
+    const auto assertMarker = [](
+        const IOSGPUSceneMarker& marker,
+        std::string_view expected) {
+      assert(marker);
+      assert(marker.length==expected.size());
+      assert(marker.length<IOSGPUSceneMarkerCapacity);
+      assert(std::string_view(marker.text.data(),marker.length)==expected);
+      };
+    assertMarker(
+        iosGPUSceneIdentityMarker(7u,300u),
+        "RendererIOS native scene identity: mode=production "
+        "generation=7 sequence=300");
+    assertMarker(
+        iosGPUSceneMaterialPlannedMarker(counts),
+        "RendererIOS native scene material-planned: mode=production "
+        "total=3 opaque=1 alpha=2");
+    assertMarker(
+        iosGPUSceneMaterialDrawnMarker(counts),
+        "RendererIOS native scene material-drawn: mode=production "
+        "total=3 opaque=1 alpha=2 textured=3");
+    assertMarker(
+        iosGPUSceneKindPlannedMarker(counts),
+        "RendererIOS native scene kind-planned: mode=production "
+        "total=3 landscape=1 static=1 movable=1");
+    assertMarker(
+        iosGPUSceneKindDrawnMarker(counts),
+        "RendererIOS native scene kind-drawn: mode=production "
+        "total=3 landscape=1 static=1 movable=1");
+    assertMarker(
+        iosGPUSceneAlphaMarker(counts),
+        "RendererIOS native scene alpha: mode=production "
+        "opaque-pso=1 alpha-pso=2 control-alpha-to-opaque=0 "
+        "alpha-fallback=0");
+    assertMarker(
+        iosGPUSceneFailContractMarker(failures),
+        "RendererIOS native scene fail-contract: mode=production "
+        "unknown-category=0 unknown-kind=0 invalid-cutoff=0 "
+        "missing-alpha-texture=0");
+    assertMarker(
+        iosGPUSceneFailSelectorMarker(failures),
+        "RendererIOS native scene fail-selector: mode=production "
+        "selector-mismatch=0 pso-unavailable=0");
+    assertMarker(
+        iosGPUSceneFailExecutionMarker(failures),
+        "RendererIOS native scene fail-execution: mode=production "
+        "overflow=0 planned-drawn=0 native-encode=0");
+
+    constexpr uint64_t maximum =
+        std::numeric_limits<uint64_t>::max();
+    IOSGPUSceneFrameCounts worstFrame;
+    worstFrame.planned.material = {maximum,maximum,maximum};
+    worstFrame.planned.kind = {maximum,maximum,maximum,maximum};
+    worstFrame.drawn.material = {maximum,maximum,maximum};
+    worstFrame.drawn.kind = {maximum,maximum,maximum,maximum};
+    worstFrame.drawn.texturedDraws = maximum;
+    worstFrame.drawn.alphaFallback = maximum;
+    worstFrame.opaquePsoBinds = maximum;
+    worstFrame.alphaPsoBinds = maximum;
+    worstFrame.controlAlphaToOpaqueBinds = maximum;
+    IOSGPUSceneFailureCounts worstFailure = {
+      maximum,maximum,maximum,maximum,maximum,
+      maximum,maximum,maximum,maximum,
+      };
+    const IOSGPUSceneMarker worstMarkers[] = {
+      iosGPUSceneIdentityMarker(maximum,maximum),
+      iosGPUSceneMaterialPlannedMarker(worstFrame),
+      iosGPUSceneMaterialDrawnMarker(worstFrame),
+      iosGPUSceneKindPlannedMarker(worstFrame),
+      iosGPUSceneKindDrawnMarker(worstFrame),
+      iosGPUSceneAlphaMarker(worstFrame),
+      iosGPUSceneFailContractMarker(worstFailure),
+      iosGPUSceneFailSelectorMarker(worstFailure),
+      iosGPUSceneFailExecutionMarker(worstFailure),
+      };
+    for(const auto& marker:worstMarkers) {
+      assert(marker);
+      assert(marker.length<IOSGPUSceneMarkerCapacity);
       }
   }
   return 0;

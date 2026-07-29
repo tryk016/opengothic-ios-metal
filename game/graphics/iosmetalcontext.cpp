@@ -4499,6 +4499,31 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           {impl->overlayDepth,1.f,Tempest::Preserve});
         const auto report =
           impl->gpuScene->encode(encoder,*input.snapshot,assets);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        if(report.result!=IOSGPUScene::Result::Success ||
+           input.snapshot->sequence.value==1u ||
+           input.snapshot->sequence.value%300u==0u) {
+          const IOSGPUSceneMarker markers[] = {
+            iosGPUSceneIdentityMarker(
+                input.snapshot->generation.value,
+                input.snapshot->sequence.value),
+            iosGPUSceneMaterialPlannedMarker(report.counts),
+            iosGPUSceneMaterialDrawnMarker(report.counts),
+            iosGPUSceneKindPlannedMarker(report.counts),
+            iosGPUSceneKindDrawnMarker(report.counts),
+            iosGPUSceneAlphaMarker(report.counts),
+            iosGPUSceneFailContractMarker(report.failures),
+            iosGPUSceneFailSelectorMarker(report.failures),
+            iosGPUSceneFailExecutionMarker(report.failures),
+            };
+          for(const auto& marker:markers) {
+            if(!marker)
+              throw std::runtime_error(
+                  "RendererIOS native scene marker formatting failed");
+            Log::d(marker.text.data());
+            }
+          }
+#endif
         if(report.result!=IOSGPUScene::Result::Success) {
           throw std::runtime_error(
             std::string("RendererIOS native Landscape encode failed: ")+
@@ -4513,16 +4538,6 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             std::to_string(report.drawCount)+
             " textured="+std::to_string(report.texturedDrawCount));
           }
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-        if(input.snapshot->sequence.value==1u ||
-           input.snapshot->sequence.value%300u==0u) {
-          Log::d("RendererIOS native Landscape: generation=",
-                 input.snapshot->generation.value,
-                 " sequence=",input.snapshot->sequence.value,
-                 " draws=",uint64_t(report.drawCount),
-                 " textured=",uint64_t(report.texturedDrawCount));
-          }
-#endif
         encoder.setDebugMarker("RendererIOS UI over native Landscape");
         encoder.setFramebuffer(
           {{drawable,Tempest::Preserve,Tempest::Preserve}});

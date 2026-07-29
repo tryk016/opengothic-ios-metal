@@ -83,6 +83,22 @@ bool validMaterialCategory(IOSMaterialCategory category) noexcept {
   return false;
   }
 
+bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
+  switch(material.category) {
+    case IOSMaterialCategory::Opaque:
+      return true;
+    case IOSMaterialCategory::AlphaTest:
+      return bool(material.baseColorTexture) &&
+             !material.usesFallbackTexture &&
+             material.alphaCutoff==0.5f;
+    case IOSMaterialCategory::Transparent:
+    case IOSMaterialCategory::Additive:
+    case IOSMaterialCategory::Water:
+      return false;
+    }
+  return false;
+  }
+
 bool validSceneMeshKind(IOSSceneMeshKind kind) noexcept {
   switch(kind) {
     case IOSSceneMeshKind::Landscape:
@@ -198,8 +214,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        material.metallic<0.f || material.metallic>1.f ||
        material.alphaCutoff<0.f || material.alphaCutoff>1.f ||
        !validMaterialCategory(material.category) ||
-       // C3b1 preserves AlphaTest metadata but does not activate it.
-       material.category!=IOSMaterialCategory::Opaque)
+       !validNativeSceneMaterial(material))
       return false;
     }
   if(!idsStrictlyIncrease(materials,&IOSMaterial::id))

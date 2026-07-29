@@ -1,5 +1,7 @@
 #pragma once
 
+#include "iosgpusceneplan.h"
+
 #include <cstdint>
 #include <memory>
 
@@ -38,20 +40,27 @@ class IOSGPUScene final {
       GenerationMismatch,
       MissingMaterial,
       UnsupportedMaterial,
+      InvalidAlphaCutoff,
+      MissingAlphaTexture,
       MissingTexture,
       InvalidTexture,
       MissingMesh,
       InvalidMesh,
       NoActiveRenderEncoder,
       PipelineUnavailable,
+      SelectorMismatch,
+      CountOverflow,
+      CountMismatch,
       NativeEncodingFailed,
       };
 
     struct Report final {
-      Result   result = Result::Empty;
-      uint32_t drawCount = 0;
-      uint32_t texturedDrawCount = 0;
-      uint64_t failingHandle = 0;
+      Result                       result = Result::Empty;
+      uint64_t                     drawCount = 0;
+      uint64_t                     texturedDrawCount = 0;
+      uint64_t                     failingHandle = 0;
+      IOSGPUSceneFrameCounts       counts;
+      IOSGPUSceneFailureCounts     failures;
       };
 
     IOSGPUScene(Tempest::Device& device, TargetLayout target);
