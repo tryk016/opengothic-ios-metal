@@ -72,13 +72,55 @@ final class RendererIOSUITests: XCTestCase {
 
     if config.scenario == .newGame {
       // Leave the first real Bink frame enough time to decode and encode, then
-      // skip a bounded number of intro clips. A centre tap is inert in World.
+      // cover the full intro chain with bounded skip taps. A centre tap is inert
+      // in World, so additional attempts are safe after the final clip.
       wait(seconds: 6)
-      for _ in 0..<4 {
+      for _ in 0..<10 {
         tap(app, normalizedX: 0.5, normalizedY: 0.5)
         wait(seconds: 4)
       }
-      wait(seconds: 45)
+      wait(seconds: 20)
+
+      // New Game continues into the opening Xardas dialogue. Escape skips the
+      // current phrase and Return selects the current choice. The Escape tap
+      // uses the part of the larger Dialog-B hitbox that lies between World-X
+      // and World-A. Return uses the left strip of the larger Dialog-A hitbox,
+      // before World-X begins. Both taps are inert once World owns input.
+      let dialogFrame = app.frame
+      let dialogButtonSize = dialogFrame.height / 9
+      let dialogWorldButtonSize = dialogFrame.height / 11
+      let dialogMargin = dialogFrame.height / 40
+      let dialogButtonY =
+        dialogFrame.height - dialogMargin - dialogButtonSize / 2
+      let dialogEscapeExclusiveX =
+        dialogFrame.width - dialogButtonSize - dialogMargin +
+        (dialogButtonSize - dialogWorldButtonSize) / 2
+      let dialogReturnExclusiveX =
+        dialogFrame.width - 2 * dialogButtonSize - 2 * dialogMargin +
+        (dialogButtonSize - dialogWorldButtonSize) / 2
+      let dialogReturnLeft =
+        dialogFrame.width - 2 * dialogButtonSize - 2 * dialogMargin
+      let worldXLeft =
+        dialogFrame.width - 2 * dialogWorldButtonSize - 2 * dialogMargin
+      XCTAssertGreaterThanOrEqual(dialogReturnExclusiveX, dialogReturnLeft)
+      XCTAssertLessThan(
+        dialogReturnExclusiveX, dialogReturnLeft + dialogButtonSize)
+      XCTAssertLessThan(dialogReturnExclusiveX, worldXLeft)
+      // The compiled new-game script contains 33 spoken outputs before
+      // DIA_XARDAS_FIRSTEXIT_INFO returns to World (6 Hello, 11 Dragons,
+      // 1 Addon intro, 8 Todo, 4 Away, 3 FirstExit). One tap dismisses the
+      // Addon video, one dismisses the chapter screen, and one is bounded
+      // scheduling margin after the exact script-derived count.
+      for _ in 0..<36 {
+        tap(app, x: dialogEscapeExclusiveX, y: dialogButtonY)
+        wait(seconds: 0.75)
+        tap(app,
+            x: dialogReturnExclusiveX,
+            y: dialogButtonY)
+        wait(seconds: 1.25)
+      }
+      wait(seconds: 5)
+
     } else {
       // Save 1 was not yet receptive to the inventory tap at 27 s, while the
       // first QuickRing tap succeeded at 35 s. Keep the first UI action beyond

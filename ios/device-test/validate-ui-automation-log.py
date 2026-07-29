@@ -20,6 +20,12 @@ EVIDENCE_RE = re.compile(
 DIAGNOSTICS_RE = re.compile(
     r"^RendererIOS diagnostics: ON frames-in-flight=(\d+) ", re.MULTILINE
 )
+INPUT_OWNERSHIP_MARKER = (
+    "RendererIOS input ownership: previous=dialog current=world ready=1"
+)
+INPUT_OWNERSHIP_RE = re.compile(
+    r"^RendererIOS input ownership:[^\r\n]*$", re.MULTILINE
+)
 
 
 class ValidationError(RuntimeError):
@@ -36,6 +42,7 @@ def validate(
     stderr: str = "",
     require_bink: bool = False,
     require_ui_items: bool = False,
+    require_dialog_world_ownership: bool = False,
 ) -> None:
     diagnostics = [int(match.group(1)) for match in DIAGNOSTICS_RE.finditer(log)]
     require(len(diagnostics) == 1, "expected one diagnostics frames-in-flight marker")
@@ -116,6 +123,35 @@ def validate(
             "expected exactly one terminal real Bink ordinal 30",
         )
 
+    if require_dialog_world_ownership:
+        ownership = list(INPUT_OWNERSHIP_RE.finditer(log))
+        require(
+            len(ownership) == 1,
+            "expected exactly one Dialog-to-World input ownership marker",
+        )
+        require(
+            ownership[0].group(0) == INPUT_OWNERSHIP_MARKER,
+            "Dialog-to-World input ownership marker fields are not exact",
+        )
+        terminal_bink_30_positions = [
+            position for position, _, _, bink, _ in events if bink == 30
+        ]
+        require(
+            len(terminal_bink_30_positions) == 1
+            and terminal_bink_30_positions[0] < ownership[0].start(),
+            "Dialog-to-World input ownership marker does not follow terminal Bink 30",
+        )
+        terminal_ui_positions = [
+            position
+            for position, ui, _, _, _ in events
+            if ui in ("inventory", "quickring-items", "quickring-weapons")
+        ]
+        require(
+            terminal_ui_positions
+            and ownership[0].start() < min(terminal_ui_positions),
+            "Dialog-to-World input ownership marker follows terminal UI evidence",
+        )
+
     resume_events = [
         (position, cycle) for position, _, _, _, cycle in events if cycle
     ]
@@ -159,6 +195,7 @@ def fixture() -> str:
             "RendererIOS diagnostics: ON frames-in-flight=3 context=IOSMetalContext transport=Tempest",
             "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=0 serial=1 ui=none ui-item-draw-count=0 real-bink-ordinal=1 resume-cycle=0",
             "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=2 serial=30 ui=none ui-item-draw-count=0 real-bink-ordinal=30 resume-cycle=0",
+            INPUT_OWNERSHIP_MARKER,
             "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=0 serial=90 ui=inventory ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0",
             "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=1 serial=91 ui=quickring-items ui-item-draw-count=5 real-bink-ordinal=0 resume-cycle=0",
             "RendererIOS functional evidence: fence-terminal=1 submitted=1 presented=1 slot=2 serial=92 ui=quickring-weapons ui-item-draw-count=2 real-bink-ordinal=0 resume-cycle=0",
@@ -173,7 +210,12 @@ def fixture() -> str:
 
 def self_test() -> None:
     base = fixture()
-    validate(base, require_bink=True, require_ui_items=True)
+    validate(
+        base,
+        require_bink=True,
+        require_ui_items=True,
+        require_dialog_world_ownership=True,
+    )
     validate(
         base.replace("real-bink-ordinal=1", "real-bink-ordinal=0").replace(
             "real-bink-ordinal=30", "real-bink-ordinal=0"
@@ -197,6 +239,56 @@ def self_test() -> None:
         pass
     else:
         raise ValidationError("mutation survived: empty UI item content")
+    inventory_marker = (
+        "RendererIOS functional evidence: fence-terminal=1 submitted=1 "
+        "presented=1 slot=0 serial=90 ui=inventory "
+        "ui-item-draw-count=7 real-bink-ordinal=0 resume-cycle=0"
+    )
+    bink_30_marker = (
+        "RendererIOS functional evidence: fence-terminal=1 submitted=1 "
+        "presented=1 slot=2 serial=30 ui=none "
+        "ui-item-draw-count=0 real-bink-ordinal=30 resume-cycle=0"
+    )
+    ownership_mutations = {
+        "missing-dialog-world-ownership": base.replace(
+            INPUT_OWNERSHIP_MARKER + "\n", ""
+        ),
+        "duplicate-dialog-world-ownership": base.replace(
+            INPUT_OWNERSHIP_MARKER,
+            INPUT_OWNERSHIP_MARKER + "\n" + INPUT_OWNERSHIP_MARKER,
+        ),
+        "wrong-dialog-world-fields": base.replace(
+            INPUT_OWNERSHIP_MARKER,
+            "RendererIOS input ownership: previous=world current=dialog ready=1",
+        ),
+        "dialog-world-not-ready": base.replace(
+            INPUT_OWNERSHIP_MARKER,
+            "RendererIOS input ownership: previous=dialog current=world ready=0",
+        ),
+        "dialog-world-after-inventory": base.replace(
+            INPUT_OWNERSHIP_MARKER + "\n", ""
+        ).replace(
+            inventory_marker,
+            inventory_marker + "\n" + INPUT_OWNERSHIP_MARKER,
+        ),
+        "dialog-world-before-bink-30": base.replace(
+            INPUT_OWNERSHIP_MARKER + "\n", ""
+        ).replace(
+            bink_30_marker,
+            INPUT_OWNERSHIP_MARKER + "\n" + bink_30_marker,
+        ),
+    }
+    for name, mutated in ownership_mutations.items():
+        try:
+            validate(
+                mutated,
+                require_bink=True,
+                require_ui_items=True,
+                require_dialog_world_ownership=True,
+            )
+        except ValidationError:
+            continue
+        raise ValidationError(f"mutation survived: {name}")
     mutations = {
         "missing-inventory": base.replace("ui=inventory", "ui=none"),
         "missing-items": base.replace("ui=quickring-items", "ui=none"),
@@ -256,6 +348,9 @@ def main() -> int:
     parser.add_argument("--stderr", type=pathlib.Path)
     parser.add_argument("--require-bink", action="store_true")
     parser.add_argument("--require-ui-items", action="store_true")
+    parser.add_argument(
+        "--require-dialog-world-ownership", action="store_true"
+    )
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -270,6 +365,7 @@ def main() -> int:
         stderr=stderr,
         require_bink=args.require_bink,
         require_ui_items=args.require_ui_items,
+        require_dialog_world_ownership=args.require_dialog_world_ownership,
     )
     print("PASS — terminal RendererIOS UI/Bink/lifecycle evidence")
     return 0

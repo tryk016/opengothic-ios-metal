@@ -1789,7 +1789,29 @@ uint64_t MainWindow::tick() {
 #if defined(__MOBILE_PLATFORM__)
   mobileUi.tick();
   gamepad.tick(dt);
-  if(const PadCtx pc = padContext(); pc!=lastPadCtx) {
+  const PadCtx pc = padContext();
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  static bool rendererIOSDialogWorldOwnershipPending = false;
+  static bool rendererIOSDialogWorldOwnershipReported = false;
+  if(!rendererIOSDialogWorldOwnershipReported &&
+     lastPadCtx==PadCtx::Dialog && pc==PadCtx::World)
+    rendererIOSDialogWorldOwnershipPending = true;
+  if(rendererIOSDialogWorldOwnershipPending &&
+     !rendererIOSDialogWorldOwnershipReported) {
+    auto& gothic = Gothic::inst();
+    auto* world = gothic.world();
+    if(gothic.checkLoading()==Gothic::LoadState::Idle &&
+       gothic.isInGameAndAlive() && world!=nullptr &&
+       world->player()!=nullptr && !world->isCutsceneLock() &&
+       !gothic.isPause() && pc==PadCtx::World) {
+      Log::i(
+        "RendererIOS input ownership: previous=dialog current=world ready=1");
+      rendererIOSDialogWorldOwnershipPending = false;
+      rendererIOSDialogWorldOwnershipReported = true;
+      }
+    }
+#endif
+  if(pc!=lastPadCtx) {
     lastPadCtx   = pc;                       // flash the controls-help on context change
     padHintUntil = Application::tickCount() + 4000;
     }
