@@ -44,14 +44,22 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.kind           = iosSceneOpaqueMeshKind(source.kind);
   candidate.hasStaticMesh  = source.mesh!=nullptr;
   candidate.hasMaterial    = source.material!=nullptr;
-  candidate.isSolidMaterial =
-      source.material!=nullptr && source.material->alpha==Material::Solid;
+  const IOSSceneMaterialMapping materialMapping =
+      source.material!=nullptr
+        ? iosSceneMaterialMapping(source.material->alpha)
+        : IOSSceneMaterialMapping{};
+  candidate.hasMappedMaterialCategory = materialMapping.mapped;
+  candidate.materialCategory = materialMapping.category;
   candidate.hasBaseColorTexture =
       source.material!=nullptr && source.material->tex!=nullptr;
-  candidate.hasTextureAnimation =
-      source.material!=nullptr &&
-      (source.material->hasFrameAnimation() ||
-       source.material->hasUvAnimation());
+  candidate.usesFallbackTexture =
+      materialMapping==IOSSceneMaterialMapping{
+          IOSMaterialCategory::Opaque,true} &&
+      !candidate.hasBaseColorTexture;
+  candidate.hasFrameAnimation =
+      source.material!=nullptr && source.material->hasFrameAnimation();
+  candidate.hasUvAnimation =
+      source.material!=nullptr && source.material->hasUvAnimation();
   candidate.hasLocalBounds = source.hasLocalBounds;
   candidate.transform      = IOSSceneConversion::matrix(source.transform);
   candidate.localBounds    = bounds(source);
@@ -113,6 +121,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   IOSMaterial materialRecord;
   materialRecord.id               = material;
   materialRecord.baseColorTexture = texture;
+  materialRecord.usesFallbackTexture = plan.usesFallbackTexture;
   materialRecord.category         = plan.materialCategory;
   context.staging.materials.push_back(materialRecord);
 
@@ -120,6 +129,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   entityRecord.id             = entity;
   entityRecord.mesh           = mesh;
   entityRecord.material       = material;
+  entityRecord.kind           = plan.kind;
   entityRecord.transform      = plan.transform;
   entityRecord.bounds         = plan.localBounds;
   entityRecord.visibilityMask = plan.visibilityMask;

@@ -14,21 +14,17 @@ enum class IOSSceneSourcePlanResult : uint8_t {
   InvalidSource,
   };
 
-enum class IOSSceneOpaqueMeshKind : uint8_t {
-  Unsupported,
-  Landscape,
-  Static,
-  Movable,
-  };
-
 struct IOSSceneOpaqueMeshCandidate final {
   uint64_t       sourceId = 0;
-  IOSSceneOpaqueMeshKind kind = IOSSceneOpaqueMeshKind::Unsupported;
+  IOSSceneMeshKind kind = IOSSceneMeshKind::Unsupported;
   bool           hasStaticMesh = false;
   bool           hasMaterial = false;
-  bool           isSolidMaterial = false;
+  bool           hasMappedMaterialCategory = false;
+  IOSMaterialCategory materialCategory = IOSMaterialCategory::Opaque;
   bool           hasBaseColorTexture = false;
-  bool           hasTextureAnimation = false;
+  bool           usesFallbackTexture = false;
+  bool           hasFrameAnimation = false;
+  bool           hasUvAnimation = false;
   bool           hasLocalBounds = false;
   IOSMatrix4x4   transform;
   IOSBounds      localBounds;
@@ -38,7 +34,7 @@ struct IOSSceneOpaqueMeshCandidate final {
 // Pointer-free plan. The four stable keys deliberately share sourceId but are
 // resolved in independent IOSRenderWorld registries.
 struct IOSSceneOpaqueMeshPlan final {
-  IOSSceneOpaqueMeshKind kind = IOSSceneOpaqueMeshKind::Unsupported;
+  IOSSceneMeshKind    kind = IOSSceneMeshKind::Unsupported;
   uint64_t            entityStableKey = 0;
   uint64_t            meshStableKey = 0;
   uint64_t            materialStableKey = 0;
@@ -56,23 +52,28 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     IOSSceneOpaqueMeshPlan& out) noexcept {
   out = IOSSceneOpaqueMeshPlan();
   switch(source.kind) {
-    case IOSSceneOpaqueMeshKind::Landscape:
-    case IOSSceneOpaqueMeshKind::Static:
-    case IOSSceneOpaqueMeshKind::Movable:
+    case IOSSceneMeshKind::Landscape:
+    case IOSSceneMeshKind::Static:
+    case IOSSceneMeshKind::Movable:
       break;
-    case IOSSceneOpaqueMeshKind::Unsupported:
+    case IOSSceneMeshKind::Unsupported:
       return IOSSceneSourcePlanResult::SkippedKind;
     }
-  if(source.kind!=IOSSceneOpaqueMeshKind::Landscape &&
-     source.kind!=IOSSceneOpaqueMeshKind::Static &&
-     source.kind!=IOSSceneOpaqueMeshKind::Movable)
+  if(source.kind!=IOSSceneMeshKind::Landscape &&
+     source.kind!=IOSSceneMeshKind::Static &&
+     source.kind!=IOSSceneMeshKind::Movable)
     return IOSSceneSourcePlanResult::SkippedKind;
   if(!source.hasMaterial)
     return IOSSceneSourcePlanResult::InvalidSource;
-  if(!source.isSolidMaterial)
+  if(!source.hasMappedMaterialCategory)
     return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(source.hasTextureAnimation)
+  if(source.hasFrameAnimation || source.hasUvAnimation)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;
+  // C3b1 carries the mapped category but keeps production admission opaque.
+  if(source.materialCategory!=IOSMaterialCategory::Opaque)
+    return IOSSceneSourcePlanResult::SkippedMaterial;
+  if(source.hasBaseColorTexture==source.usesFallbackTexture)
+    return IOSSceneSourcePlanResult::InvalidSource;
   if(source.sourceId==0 || !source.hasStaticMesh || !source.hasLocalBounds ||
      source.indices.count==0 ||
      source.indices.count%uint32_t(3)!=0 ||
@@ -105,8 +106,8 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.transform         = source.transform;
   out.localBounds       = source.localBounds;
   out.indices           = source.indices;
-  out.materialCategory  = IOSMaterialCategory::Opaque;
+  out.materialCategory  = source.materialCategory;
   out.visibilityMask    = IOSSceneVisibilityMain;
-  out.usesFallbackTexture = !source.hasBaseColorTexture;
+  out.usesFallbackTexture = source.usesFallbackTexture;
   return IOSSceneSourcePlanResult::Planned;
   }

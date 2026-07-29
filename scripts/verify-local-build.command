@@ -268,6 +268,7 @@ xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame \
   -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
   ios/tests/iossceneextractorplan.cpp \
   -o "$TMP_GATE/iossceneextractorplan"
 codesign -f -s - "$TMP_GATE/iossceneextractorplan"
@@ -277,6 +278,99 @@ if grep -Eq 'DrawCommands|DrawBuckets|cmdId|clusterId|std::function' \
     game/graphics/iossceneextractor.h; then
   fail "kontrakt extractora RendererIOS przecieka detalami legacy renderera"
 fi
+python3 - <<'PY'
+from pathlib import Path
+
+source = Path("game/graphics/iossceneextractor.cpp").read_text()
+required = (
+    (
+        "actual-alpha-func-mapping",
+        """  const IOSSceneMaterialMapping materialMapping =
+      source.material!=nullptr
+        ? iosSceneMaterialMapping(source.material->alpha)
+        : IOSSceneMaterialMapping{};""",
+        """  const IOSSceneMaterialMapping materialMapping = {};""",
+    ),
+    (
+        "mapped-material-admission",
+        "  candidate.hasMappedMaterialCategory = materialMapping.mapped;",
+        "  candidate.hasMappedMaterialCategory = false;",
+    ),
+    (
+        "mapped-material-category",
+        "  candidate.materialCategory = materialMapping.category;",
+        "  candidate.materialCategory = IOSMaterialCategory::Opaque;",
+    ),
+    (
+        "fallback-provenance",
+        """  candidate.usesFallbackTexture =
+      materialMapping==IOSSceneMaterialMapping{
+          IOSMaterialCategory::Opaque,true} &&
+      !candidate.hasBaseColorTexture;""",
+        """  candidate.usesFallbackTexture = false;""",
+    ),
+    (
+        "frame-animation",
+        """  candidate.hasFrameAnimation =
+      source.material!=nullptr && source.material->hasFrameAnimation();""",
+        """  candidate.hasFrameAnimation = false;""",
+    ),
+    (
+        "uv-animation",
+        """  candidate.hasUvAnimation =
+      source.material!=nullptr && source.material->hasUvAnimation();""",
+        """  candidate.hasUvAnimation = false;""",
+    ),
+    (
+        "snapshot-fallback-provenance",
+        "  materialRecord.usesFallbackTexture = plan.usesFallbackTexture;",
+        "  materialRecord.usesFallbackTexture = false;",
+    ),
+    (
+        "snapshot-kind",
+        "  entityRecord.kind           = plan.kind;",
+        "  entityRecord.kind           = IOSSceneMeshKind::Unsupported;",
+    ),
+)
+
+
+def valid(candidate: str) -> bool:
+    return all(candidate.count(snippet) == 1 for _, snippet, _ in required)
+
+
+missing = [label for label, snippet, _ in required if source.count(snippet) != 1]
+if missing:
+    raise SystemExit(
+        "RendererIOS extractor adapter assignment missing or duplicated: "
+        + ",".join(missing)
+    )
+
+mutations_killed = 0
+for label, snippet, replacement in required:
+    for operation, mutant in (
+        ("removed", source.replace(snippet, "", 1)),
+        ("replaced", source.replace(snippet, replacement, 1)),
+    ):
+        if valid(mutant):
+            raise SystemExit(
+                "RendererIOS extractor adapter mutation survived: "
+                + label
+                + "-"
+                + operation
+            )
+        mutations_killed += 1
+if mutations_killed != 16:
+    raise SystemExit("RendererIOS extractor adapter mutation count drifted")
+print("RendererIOS extractor adapter oracle: mutations-killed=16")
+PY
+grep -Fq 'source.materialCategory!=IOSMaterialCategory::Opaque' \
+  game/graphics/iossceneextractorplan.h
+grep -Fq 'material.category!=IOSMaterialCategory::Opaque' \
+  game/graphics/iosscenesnapshot.cpp
+grep -Fq 'pipeline!=IOSGPUScenePipelineSelector::Opaque' \
+  game/graphics/iosgpusceneplan.h
+grep -Fq 'source.hasFrameAnimation || source.hasUvAnimation' \
+  game/graphics/iossceneextractorplan.h
 
 echo "### RendererIOS native GPU and offline Metal contracts"
 [ -x ios/device-test/run-smoke-test.sh ]

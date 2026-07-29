@@ -27,13 +27,15 @@ IOSMatrix4x4 movableT1() {
   }
 
 IOSSceneOpaqueMeshCandidate candidate(
-    IOSSceneOpaqueMeshKind kind = IOSSceneOpaqueMeshKind::Landscape) {
+    IOSSceneMeshKind kind = IOSSceneMeshKind::Landscape,
+    IOSMaterialCategory category = IOSMaterialCategory::Opaque) {
   IOSSceneOpaqueMeshCandidate source;
   source.sourceId       = 41;
   source.kind           = kind;
   source.hasStaticMesh  = true;
   source.hasMaterial    = true;
-  source.isSolidMaterial = true;
+  source.hasMappedMaterialCategory = true;
+  source.materialCategory = category;
   source.hasBaseColorTexture = true;
   source.hasLocalBounds = true;
   source.localBounds    = {{-2.f,-3.f,-4.f},{5.f,6.f,7.f}};
@@ -49,6 +51,7 @@ IOSRenderEntityState entity(uint64_t value) {
   result.id = {{7},value};
   result.mesh = {{7},value+1u};
   result.material = {{7},value+2u};
+  result.kind = IOSSceneMeshKind::Landscape;
   return result;
   }
 
@@ -75,7 +78,8 @@ bool sameFrame(const IOSSceneFrameState& lhs,
   }
 
 void validatePublicContract() {
-  static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshKind>);
+  static_assert(std::is_trivially_copyable_v<IOSSceneMeshKind>);
+  static_assert(std::is_trivially_copyable_v<IOSSceneMaterialMapping>);
   static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshCandidate>);
   static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshPlan>);
 
@@ -87,29 +91,43 @@ void validatePublicContract() {
       Extract>);
 
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Landscape)==
-         IOSSceneOpaqueMeshKind::Landscape);
+         IOSSceneMeshKind::Landscape);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Static)==
-         IOSSceneOpaqueMeshKind::Static);
+         IOSSceneMeshKind::Static);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Movable)==
-         IOSSceneOpaqueMeshKind::Movable);
+         IOSSceneMeshKind::Movable);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Animated)==
-         IOSSceneOpaqueMeshKind::Unsupported);
+         IOSSceneMeshKind::Unsupported);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Particle)==
-         IOSSceneOpaqueMeshKind::Unsupported);
+         IOSSceneMeshKind::Unsupported);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Morph)==
-         IOSSceneOpaqueMeshKind::Unsupported);
+         IOSSceneMeshKind::Unsupported);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Unsupported)==
-         IOSSceneOpaqueMeshKind::Unsupported);
+         IOSSceneMeshKind::Unsupported);
   assert(iosSceneOpaqueMeshKind(
            static_cast<IOSSceneSourceKind>(255u))==
-         IOSSceneOpaqueMeshKind::Unsupported);
+         IOSSceneMeshKind::Unsupported);
+  assert((iosSceneMaterialMapping(Material::Solid)==
+          IOSSceneMaterialMapping{IOSMaterialCategory::Opaque,true}));
+  assert((iosSceneMaterialMapping(Material::AlphaTest)==
+          IOSSceneMaterialMapping{IOSMaterialCategory::AlphaTest,true}));
+  for(const auto alpha:{
+        Material::Water,
+        Material::Ghost,
+        Material::Multiply,
+        Material::Multiply2,
+        Material::Transparent,
+        Material::AdditiveLight,
+        static_cast<Material::AlphaFunc>(255u)}) {
+    assert(iosSceneMaterialMapping(alpha)==IOSSceneMaterialMapping{});
+    }
   }
 
 void validateAcceptedKinds() {
   for(const auto kind:{
-        IOSSceneOpaqueMeshKind::Landscape,
-        IOSSceneOpaqueMeshKind::Static,
-        IOSSceneOpaqueMeshKind::Movable}) {
+        IOSSceneMeshKind::Landscape,
+        IOSSceneMeshKind::Static,
+        IOSSceneMeshKind::Movable}) {
     const auto accepted = candidate(kind);
     IOSSceneOpaqueMeshPlan plan;
     assert(planIOSOpaqueMeshSource(accepted,plan)==
@@ -130,29 +148,51 @@ void validateAcceptedKinds() {
 
 void validateSkippedSources() {
   IOSSceneOpaqueMeshPlan plan;
-  auto unsupported = candidate(IOSSceneOpaqueMeshKind::Unsupported);
+  auto unsupported = candidate(IOSSceneMeshKind::Unsupported);
   assert(planIOSOpaqueMeshSource(unsupported,plan)==
          IOSSceneSourcePlanResult::SkippedKind);
 
   auto fabricated = candidate(
-      static_cast<IOSSceneOpaqueMeshKind>(255u));
+      static_cast<IOSSceneMeshKind>(255u));
   assert(planIOSOpaqueMeshSource(fabricated,plan)==
          IOSSceneSourcePlanResult::SkippedKind);
 
+  for(const auto category:{
+        IOSMaterialCategory::Transparent,
+        IOSMaterialCategory::Additive,
+        IOSMaterialCategory::Water,
+        static_cast<IOSMaterialCategory>(255u)}) {
+    auto unsupportedMaterial =
+        candidate(IOSSceneMeshKind::Landscape,category);
+    assert(planIOSOpaqueMeshSource(unsupportedMaterial,plan)==
+           IOSSceneSourcePlanResult::SkippedMaterial);
+    }
+
   for(const auto kind:{
-        IOSSceneOpaqueMeshKind::Landscape,
-        IOSSceneOpaqueMeshKind::Static,
-        IOSSceneOpaqueMeshKind::Movable}) {
-    auto alphaTest = candidate(kind);
-    alphaTest.isSolidMaterial = false;
+        IOSSceneMeshKind::Landscape,
+        IOSSceneMeshKind::Static,
+        IOSSceneMeshKind::Movable}) {
+    auto alphaTest = candidate(kind,IOSMaterialCategory::AlphaTest);
     assert(planIOSOpaqueMeshSource(alphaTest,plan)==
            IOSSceneSourcePlanResult::SkippedMaterial);
-
-    auto animatedTexture = candidate(kind);
-    animatedTexture.hasTextureAnimation = true;
-    assert(planIOSOpaqueMeshSource(animatedTexture,plan)==
+    auto alphaFrameAnimated = alphaTest;
+    alphaFrameAnimated.hasFrameAnimation = true;
+    assert(planIOSOpaqueMeshSource(alphaFrameAnimated,plan)==
            IOSSceneSourcePlanResult::SkippedTextureAnimation);
-    assert(plan.kind==IOSSceneOpaqueMeshKind::Unsupported);
+    auto alphaUvAnimated = alphaTest;
+    alphaUvAnimated.hasUvAnimation = true;
+    assert(planIOSOpaqueMeshSource(alphaUvAnimated,plan)==
+           IOSSceneSourcePlanResult::SkippedTextureAnimation);
+
+    auto frameAnimated = candidate(kind);
+    frameAnimated.hasFrameAnimation = true;
+    assert(planIOSOpaqueMeshSource(frameAnimated,plan)==
+           IOSSceneSourcePlanResult::SkippedTextureAnimation);
+    auto uvAnimated = candidate(kind);
+    uvAnimated.hasUvAnimation = true;
+    assert(planIOSOpaqueMeshSource(uvAnimated,plan)==
+           IOSSceneSourcePlanResult::SkippedTextureAnimation);
+    assert(plan.kind==IOSSceneMeshKind::Unsupported);
     assert(plan.entityStableKey==0u);
     assert(plan.textureStableKey==0u);
     assert(plan.indices==IOSIndexRange{});
@@ -161,9 +201,9 @@ void validateSkippedSources() {
 
 void validateMalformedAcceptedKinds() {
   for(const auto kind:{
-        IOSSceneOpaqueMeshKind::Landscape,
-        IOSSceneOpaqueMeshKind::Static,
-        IOSSceneOpaqueMeshKind::Movable}) {
+        IOSSceneMeshKind::Landscape,
+        IOSSceneMeshKind::Static,
+        IOSSceneMeshKind::Movable}) {
     IOSSceneOpaqueMeshPlan plan;
 
     auto noMaterial = candidate(kind);
@@ -215,16 +255,17 @@ void validateMalformedAcceptedKinds() {
   }
 
 void validateFallbackAndMixedCounters() {
-  auto landscape = candidate(IOSSceneOpaqueMeshKind::Landscape);
-  auto staticMesh = candidate(IOSSceneOpaqueMeshKind::Static);
+  auto landscape = candidate(IOSSceneMeshKind::Landscape);
+  auto staticMesh = candidate(IOSSceneMeshKind::Static);
   staticMesh.hasBaseColorTexture = false;
-  auto movable = candidate(IOSSceneOpaqueMeshKind::Movable);
-  auto unsupported = candidate(IOSSceneOpaqueMeshKind::Unsupported);
-  auto materialSkip = candidate(IOSSceneOpaqueMeshKind::Static);
-  materialSkip.isSolidMaterial = false;
-  auto animationSkip = candidate(IOSSceneOpaqueMeshKind::Landscape);
-  animationSkip.hasTextureAnimation = true;
-  auto malformed = candidate(IOSSceneOpaqueMeshKind::Static);
+  staticMesh.usesFallbackTexture = true;
+  auto movable = candidate(IOSSceneMeshKind::Movable);
+  auto unsupported = candidate(IOSSceneMeshKind::Unsupported);
+  auto materialSkip = candidate(IOSSceneMeshKind::Static);
+  materialSkip.hasMappedMaterialCategory = false;
+  auto animationSkip = candidate(IOSSceneMeshKind::Landscape);
+  animationSkip.hasFrameAnimation = true;
+  auto malformed = candidate(IOSSceneMeshKind::Static);
   malformed.hasStaticMesh = false;
 
   const std::vector<IOSSceneOpaqueMeshCandidate> sources = {
@@ -248,6 +289,8 @@ void validateFallbackAndMixedCounters() {
 
   assert(stats.visited==7u);
   assert(stats.planned==3u);
+  assert(stats.plannedOpaque==3u);
+  assert(stats.plannedAlphaTest==0u);
   assert(stats.plannedLandscape==1u);
   assert(stats.plannedStatic==1u);
   assert(stats.plannedMovable==1u);
@@ -255,12 +298,13 @@ void validateFallbackAndMixedCounters() {
   assert(stats.skippedMaterial==1u);
   assert(stats.skippedTextureAnimation==1u);
   assert(stats.fallbackTexture==1u);
+  assert(stats.alphaFallback==0u);
   assert(stats.invalidSource==1u);
   assert(stats.hasConsistentPlannedCounts());
   }
 
 void validateStableKeysArePerLiveSlot() {
-  auto first = candidate(IOSSceneOpaqueMeshKind::Movable);
+  auto first = candidate(IOSSceneMeshKind::Movable);
   first.sourceId = 501u;
   auto second = first;
   second.sourceId = 502u;
@@ -271,8 +315,8 @@ void validateStableKeysArePerLiveSlot() {
          IOSSceneSourcePlanResult::Planned);
   assert(planIOSOpaqueMeshSource(second,secondPlan)==
          IOSSceneSourcePlanResult::Planned);
-  assert(firstPlan.kind==IOSSceneOpaqueMeshKind::Movable);
-  assert(secondPlan.kind==IOSSceneOpaqueMeshKind::Movable);
+  assert(firstPlan.kind==IOSSceneMeshKind::Movable);
+  assert(secondPlan.kind==IOSSceneMeshKind::Movable);
   assert(firstPlan.entityStableKey!=secondPlan.entityStableKey);
   assert(firstPlan.meshStableKey!=secondPlan.meshStableKey);
   assert(firstPlan.materialStableKey!=secondPlan.materialStableKey);
@@ -282,7 +326,7 @@ void validateStableKeysArePerLiveSlot() {
 void validateRecordRejectsBrokenPlannedInvariant() {
   IOSSceneOpaqueMeshPlan movablePlan;
   assert(planIOSOpaqueMeshSource(
-           candidate(IOSSceneOpaqueMeshKind::Movable),movablePlan)==
+           candidate(IOSSceneMeshKind::Movable),movablePlan)==
          IOSSceneSourcePlanResult::Planned);
 
   for(const auto result:{
@@ -298,8 +342,74 @@ void validateRecordRejectsBrokenPlannedInvariant() {
     }
   }
 
+void validatePlanProvenanceAndCounterMutations() {
+  IOSSceneOpaqueMeshPlan plan;
+  auto fallback = candidate(IOSSceneMeshKind::Static);
+  fallback.hasBaseColorTexture = false;
+  fallback.usesFallbackTexture = true;
+  assert(planIOSOpaqueMeshSource(fallback,plan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(plan.materialCategory==IOSMaterialCategory::Opaque);
+  assert(plan.kind==IOSSceneMeshKind::Static);
+  assert(plan.usesFallbackTexture);
+
+  for(auto inconsistent:{
+        candidate(IOSSceneMeshKind::Landscape),
+        candidate(IOSSceneMeshKind::Movable)}) {
+    inconsistent.usesFallbackTexture =
+        inconsistent.hasBaseColorTexture;
+    assert(planIOSOpaqueMeshSource(inconsistent,plan)==
+           IOSSceneSourcePlanResult::InvalidSource);
+    }
+  auto missingProvenance = candidate(IOSSceneMeshKind::Landscape);
+  missingProvenance.hasBaseColorTexture = false;
+  missingProvenance.usesFallbackTexture = false;
+  assert(planIOSOpaqueMeshSource(missingProvenance,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+
+  auto alpha = candidate(
+      IOSSceneMeshKind::Landscape,IOSMaterialCategory::AlphaTest);
+  assert(planIOSOpaqueMeshSource(alpha,plan)==
+         IOSSceneSourcePlanResult::SkippedMaterial);
+  alpha.hasBaseColorTexture = false;
+  alpha.usesFallbackTexture = false;
+  assert(planIOSOpaqueMeshSource(alpha,plan)==
+         IOSSceneSourcePlanResult::SkippedMaterial);
+
+  IOSSceneExtractionStats overflow;
+  overflow.planned = std::numeric_limits<std::size_t>::max();
+  overflow.plannedOpaque = overflow.planned;
+  overflow.plannedLandscape = overflow.planned;
+  const IOSSceneExtractionStats before = overflow;
+  IOSSceneOpaqueMeshPlan landscapePlan;
+  assert(planIOSOpaqueMeshSource(
+           candidate(IOSSceneMeshKind::Landscape),landscapePlan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,landscapePlan,overflow));
+  assert(overflow.planned==before.planned);
+  assert(overflow.plannedOpaque==before.plannedOpaque);
+  assert(overflow.plannedLandscape==before.plannedLandscape);
+  assert(overflow.invalidSource==before.invalidSource+1u);
+
+  IOSSceneExtractionStats invalidStats;
+  auto fabricatedPlan = landscapePlan;
+  fabricatedPlan.materialCategory =
+      static_cast<IOSMaterialCategory>(255u);
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,fabricatedPlan,invalidStats));
+  assert(invalidStats.planned==0u);
+  assert(invalidStats.invalidSource==1u);
+  fabricatedPlan = landscapePlan;
+  fabricatedPlan.kind = static_cast<IOSSceneMeshKind>(255u);
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,fabricatedPlan,invalidStats));
+  assert(invalidStats.planned==0u);
+  assert(invalidStats.invalidSource==2u);
+  }
+
 void validateMovableTransformFixture() {
-  auto frameA = candidate(IOSSceneOpaqueMeshKind::Movable);
+  auto frameA = candidate(IOSSceneMeshKind::Movable);
   frameA.sourceId = MovableSourceId;
   frameA.transform = movableT0();
   auto frameB = frameA;
@@ -311,8 +421,8 @@ void validateMovableTransformFixture() {
          IOSSceneSourcePlanResult::Planned);
   assert(planIOSOpaqueMeshSource(frameB,planB)==
          IOSSceneSourcePlanResult::Planned);
-  assert(planA.kind==IOSSceneOpaqueMeshKind::Movable);
-  assert(planB.kind==IOSSceneOpaqueMeshKind::Movable);
+  assert(planA.kind==IOSSceneMeshKind::Movable);
+  assert(planB.kind==IOSSceneMeshKind::Movable);
   assert(planA.entityStableKey==MovableSourceId);
   assert(planA.entityStableKey==planB.entityStableKey);
   assert(planA.meshStableKey==planB.meshStableKey);
@@ -404,6 +514,7 @@ int main() {
   validateFallbackAndMixedCounters();
   validateStableKeysArePerLiveSlot();
   validateRecordRejectsBrokenPlannedInvariant();
+  validatePlanProvenanceAndCounterMutations();
   validateMovableTransformFixture();
   validateBindSuccessClassification();
   validateAtomicPublication();

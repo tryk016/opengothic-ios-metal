@@ -36,10 +36,11 @@ IOSSceneOpaqueMeshCandidate movableCandidate(
     const IOSMatrix4x4& transform) {
   IOSSceneOpaqueMeshCandidate source;
   source.sourceId       = MovableSourceId;
-  source.kind           = IOSSceneOpaqueMeshKind::Movable;
+  source.kind           = IOSSceneMeshKind::Movable;
   source.hasStaticMesh  = true;
   source.hasMaterial    = true;
-  source.isSolidMaterial = true;
+  source.hasMappedMaterialCategory = true;
+  source.materialCategory = IOSMaterialCategory::Opaque;
   source.hasBaseColorTexture = true;
   source.hasLocalBounds = true;
   source.transform      = transform;
@@ -95,6 +96,7 @@ IOSSceneFrameState populatedFrame(const SceneHandles& handles,
   entity.id       = handles.entity;
   entity.mesh     = handles.mesh;
   entity.material = handles.material;
+  entity.kind     = IOSSceneMeshKind::Landscape;
   entity.transform.set(0u,3u,objectX);
   entity.bounds.minimum = {-1.f,-2.f,-3.f};
   entity.bounds.maximum = { 1.f, 2.f, 3.f};
@@ -132,6 +134,7 @@ IOSSceneFrameState movableFrame(const SceneHandles& handles,
   IOSMaterial material;
   material.id               = handles.material;
   material.baseColorTexture = handles.texture;
+  material.usesFallbackTexture = plan.usesFallbackTexture;
   material.category         = plan.materialCategory;
   frame.materials.push_back(material);
 
@@ -139,6 +142,7 @@ IOSSceneFrameState movableFrame(const SceneHandles& handles,
   entity.id             = handles.entity;
   entity.mesh           = handles.mesh;
   entity.material       = handles.material;
+  entity.kind           = plan.kind;
   entity.transform      = plan.transform;
   entity.bounds         = plan.localBounds;
   entity.visibilityMask = plan.visibilityMask;
@@ -283,8 +287,8 @@ int main() {
   assert(planIOSOpaqueMeshSource(
            movableCandidate(movableT1()),movablePlanB)==
          IOSSceneSourcePlanResult::Planned);
-  assert(movablePlanA.kind==IOSSceneOpaqueMeshKind::Movable);
-  assert(movablePlanB.kind==IOSSceneOpaqueMeshKind::Movable);
+  assert(movablePlanA.kind==IOSSceneMeshKind::Movable);
+  assert(movablePlanB.kind==IOSSceneMeshKind::Movable);
   assert(movablePlanA.entityStableKey==MovableSourceId);
   assert(movablePlanA.entityStableKey==movablePlanB.entityStableKey);
   assert(movablePlanA.meshStableKey==movablePlanB.meshStableKey);
@@ -306,6 +310,9 @@ int main() {
     movableWorld.buildSnapshot(movableFrame(movableHandles,movablePlanA));
   assert(movableA->entities.size()==1u);
   assert(movableA->entities[0].id==movableHandles.entity);
+  assert(movableA->entities[0].kind==IOSSceneMeshKind::Movable);
+  assert(movableA->materials[0].category==IOSMaterialCategory::Opaque);
+  assert(!movableA->materials[0].usesFallbackTexture);
   assert(movableA->entities[0].currentTransform==movableT0());
   assert(movableWorld.commitAccepted(movableA));
 
@@ -314,6 +321,7 @@ int main() {
   assert(movableB->historyValid);
   assert(movableB->entities.size()==1u);
   assert(movableB->entities[0].id==movableA->entities[0].id);
+  assert(movableB->entities[0].kind==IOSSceneMeshKind::Movable);
   assert(movableB->entities[0].currentTransform==movableT1());
   assert(movableB->entities[0].previousTransform==movableT0());
 
@@ -323,6 +331,10 @@ int main() {
            gpuCandidate(*movableB,movablePlanB),
            movableGpuPlan)==IOSGPUSceneDrawPlanResult::Draw);
   assert(movableGpuPlan.constants.model==movableT1());
+  assert(movableGpuPlan.materialCategory==IOSMaterialCategory::Opaque);
+  assert(movableGpuPlan.kind==IOSSceneMeshKind::Movable);
+  assert(movableGpuPlan.pipeline==IOSGPUScenePipelineSelector::Opaque);
+  assert(!movableGpuPlan.usesFallbackTexture);
 
   auto deformationA = populatedFrame(handles,40.f,4.f);
   addDeformation(deformationA,2.f,0.25f);
@@ -406,6 +418,41 @@ int main() {
   assert(firstValidAfterRejects->sequence.value==1u);
   assert(firstValidAfterRejects->isStructurallyValid());
 
+  for(const auto kind:{
+        IOSSceneMeshKind::Landscape,
+        IOSSceneMeshKind::Static,
+        IOSSceneMeshKind::Movable}) {
+    auto opaque = *firstValidAfterRejects;
+    opaque.entities[0].kind = kind;
+    assert(opaque.isStructurallyValid());
+
+    auto alpha = opaque;
+    alpha.materials[0].category = IOSMaterialCategory::AlphaTest;
+    alpha.materials[0].alphaCutoff = 0.5f;
+    alpha.materials[0].usesFallbackTexture = false;
+    assert(!alpha.isStructurallyValid());
+    alpha.materials[0].usesFallbackTexture = true;
+    assert(!alpha.isStructurallyValid());
+    alpha.materials[0].usesFallbackTexture = false;
+    alpha.materials[0].alphaCutoff = 0.25f;
+    assert(!alpha.isStructurallyValid());
+    }
+
+  auto fabricatedKindSnapshot = *firstValidAfterRejects;
+  fabricatedKindSnapshot.entities[0].kind =
+      static_cast<IOSSceneMeshKind>(255u);
+  assert(!fabricatedKindSnapshot.isStructurallyValid());
+  auto fabricatedCategorySnapshot = *firstValidAfterRejects;
+  for(const auto category:{
+        IOSMaterialCategory::AlphaTest,
+        IOSMaterialCategory::Transparent,
+        IOSMaterialCategory::Additive,
+        IOSMaterialCategory::Water,
+        static_cast<IOSMaterialCategory>(255u)}) {
+    fabricatedCategorySnapshot.materials[0].category = category;
+    assert(!fabricatedCategorySnapshot.isStructurallyValid());
+    }
+
   IOSRenderWorld optionalTextureWorld;
   const auto optionalHandles = resolveScene(optionalTextureWorld,4000u);
   auto optionalTextureFrame = populatedFrame(optionalHandles,1.f,1.f);
@@ -440,6 +487,7 @@ int main() {
   staleEntity.id       = oldEntity;
   staleEntity.mesh     = {oldGeneration,1u};
   staleEntity.material = staleMaterial.id;
+  staleEntity.kind     = IOSSceneMeshKind::Landscape;
   staleFrame.entities.push_back(staleEntity);
   assert(rejectsFrame([&]() {
     (void)world.buildSnapshot(std::move(staleFrame));

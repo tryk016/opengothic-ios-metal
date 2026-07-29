@@ -83,6 +83,18 @@ bool validMaterialCategory(IOSMaterialCategory category) noexcept {
   return false;
   }
 
+bool validSceneMeshKind(IOSSceneMeshKind kind) noexcept {
+  switch(kind) {
+    case IOSSceneMeshKind::Landscape:
+    case IOSSceneMeshKind::Static:
+    case IOSSceneMeshKind::Movable:
+      return true;
+    case IOSSceneMeshKind::Unsupported:
+      return false;
+    }
+  return false;
+  }
+
 bool validLightType(IOSLightType type) noexcept {
   switch(type) {
     case IOSLightType::Directional:
@@ -185,7 +197,9 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        material.roughness<0.f || material.roughness>1.f ||
        material.metallic<0.f || material.metallic>1.f ||
        material.alphaCutoff<0.f || material.alphaCutoff>1.f ||
-       !validMaterialCategory(material.category))
+       !validMaterialCategory(material.category) ||
+       // C3b1 preserves AlphaTest metadata but does not activate it.
+       material.category!=IOSMaterialCategory::Opaque)
       return false;
     }
   if(!idsStrictlyIncrease(materials,&IOSMaterial::id))
@@ -196,6 +210,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !validHandle(entity.mesh,generation) ||
        !validHandle(entity.material,generation) ||
        !containsMaterial(materials,entity.material) ||
+       !validSceneMeshKind(entity.kind) ||
        !isFinite(entity.currentTransform) ||
        !isFinite(entity.previousTransform) ||
        !validBounds(entity.bounds) ||

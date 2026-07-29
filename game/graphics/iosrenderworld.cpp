@@ -134,6 +134,7 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       entity.id,
       entity.mesh,
       entity.material,
+      entity.kind,
       entity.transform,
       entity.transform,
       entity.bounds,

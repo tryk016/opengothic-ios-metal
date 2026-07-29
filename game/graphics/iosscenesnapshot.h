@@ -170,6 +170,13 @@ enum class IOSMaterialCategory : uint8_t {
   Water,
   };
 
+enum class IOSSceneMeshKind : uint8_t {
+  Unsupported,
+  Landscape,
+  Static,
+  Movable,
+  };
+
 enum class IOSLightType : uint8_t {
   Directional,
   Point,
@@ -220,6 +227,7 @@ struct IOSRenderEntityState final {
   IOSRenderEntityId id;
   IOSMeshHandle     mesh;
   IOSMaterialHandle material;
+  IOSSceneMeshKind  kind = IOSSceneMeshKind::Unsupported;
   IOSMatrix4x4      transform;
   IOSBounds         bounds;
   IOSIndexRange     boneRange;
@@ -233,6 +241,7 @@ struct IOSRenderEntity final {
   IOSRenderEntityId id;
   IOSMeshHandle     mesh;
   IOSMaterialHandle material;
+  IOSSceneMeshKind  kind = IOSSceneMeshKind::Unsupported;
   IOSMatrix4x4      currentTransform;
   IOSMatrix4x4      previousTransform;
   IOSBounds         bounds;
@@ -246,6 +255,7 @@ struct IOSRenderEntity final {
 struct IOSMaterial final {
   IOSMaterialHandle  id;
   IOSTextureHandle   baseColorTexture;
+  bool               usesFallbackTexture = false;
   IOSTextureHandle   normalTexture;
   IOSTextureHandle   emissiveTexture;
   IOSFloat4          baseColor = {1.f,1.f,1.f,1.f};
