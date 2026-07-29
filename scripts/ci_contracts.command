@@ -2079,7 +2079,9 @@ grep -Fq 'unrequested resource allocator binary profile survived' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'RESOURCE_ALLOCATOR_SELF_TEST_PID' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'build/device-self-test/%s/resource-allocator/%s-%s-%s' \
+grep -Fq 'build/device-self-test/%s/resource-allocator\n' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq "printf '%s/%s-%s-%s\\n'" \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'resource_allocator_self_test_process_survived=' \
   ios/device-test/run-smoke-test.sh
@@ -2237,7 +2239,7 @@ grep -Fq -- '--require-clear-only-pass-self-test' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'validate_clear_only_pass_binary_profile()' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'build/device-self-test/%s/clear-only-pass/%s-%s-%s' \
+grep -Fq 'build/device-self-test/%s/clear-only-pass\n' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'clear_only_pass_self_test_process_survived=' \
   ios/device-test/run-smoke-test.sh
@@ -2732,13 +2734,18 @@ if "not ordinary_frame_lines" not in validator:
     raise SystemExit(
         "clear-only runtime validator does not require zero ordinary frames"
     )
-evidence_resolver = harness.split(
+evidence_root = harness.split(
+    "smoke_evidence_root() {", 1
+)[1].split("\nsmoke_evidence_path() {", 1)[0]
+evidence_leaf = harness.split(
     "smoke_evidence_path() {", 1
 )[1].split("\npublish_evidence_path() {", 1)[0]
-if evidence_resolver.count(
-    "build/device-self-test/%s/clear-only-pass/%s-%s-%s"
+if evidence_root.count(
+    "build/device-self-test/%s/clear-only-pass\\n"
 ) != 1:
-    raise SystemExit("clear-only evidence resolver is not exact and scoped")
+    raise SystemExit("clear-only evidence root is not exact and scoped")
+if evidence_leaf.count("printf '%s/%s-%s-%s\\n'") != 1:
+    raise SystemExit("shared immutable evidence leaf is not exact")
 failure_evidence = harness.split(
     "preserve_failure_evidence() {", 1
 )[1].split("\ncleanup() {", 1)[0]
@@ -4495,7 +4502,7 @@ grep -Fq -- '--require-shading-prototype-tile-self-test' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'validate_shading_prototype_tile_binary_profile()' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'build/device-self-test/%s/shading-prototype-tile/%s-%s-%s' \
+grep -Fq 'build/device-self-test/%s/shading-prototype-tile\n' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'self_test_profile=shading-prototype-tile' \
   ios/device-test/run-smoke-test.sh
@@ -4639,13 +4646,18 @@ if (
     != 1
 ):
     raise SystemExit("P2.5a plan source does not have one Tile-only target gate")
-evidence_resolver = harness.split(
+evidence_root = harness.split(
+    "smoke_evidence_root() {", 1
+)[1].split("\nsmoke_evidence_path() {", 1)[0]
+evidence_leaf = harness.split(
     "smoke_evidence_path() {", 1
 )[1].split("\npublish_evidence_path() {", 1)[0]
-if evidence_resolver.count(
-    "build/device-self-test/%s/shading-prototype-tile/%s-%s-%s"
+if evidence_root.count(
+    "build/device-self-test/%s/shading-prototype-tile\\n"
 ) != 1:
     raise SystemExit("Tile evidence namespace is not exact")
+if evidence_leaf.count("printf '%s/%s-%s-%s\\n'") != 1:
+    raise SystemExit("shared immutable evidence leaf is not exact")
 cleanup = harness.split("cleanup() {", 1)[1].split(
     "\ntrap cleanup EXIT", 1
 )[0]
@@ -5304,13 +5316,18 @@ legacy_guard = (
     '[[ "$expected_fault" == none && '
     '"$expected_build" == "$expected_sha" ]]; then'
 )
-evidence_resolver = source.split(
+evidence_root = source.split(
+    'smoke_evidence_root() {', 1)[1].split(
+    '\nsmoke_evidence_path() {', 1)[0]
+evidence_leaf = source.split(
     'smoke_evidence_path() {', 1)[1].split(
     '\npublish_evidence_path() {', 1)[0]
-if evidence_resolver.count(legacy_guard) != 1:
+if evidence_root.count(legacy_guard) != 1:
     raise SystemExit("legacy smoke evidence path is not clean-none-only")
-if evidence_resolver.count('%s/build/device-fault/%s/%s/%s-%s-%s') != 1:
+if evidence_root.count('%s/build/device-fault/%s/%s\\n') != 1:
     raise SystemExit("fault evidence does not use exact build/fault namespace")
+if evidence_leaf.count("printf '%s/%s-%s-%s\\n'") != 1:
+    raise SystemExit("fault evidence does not use the immutable shared leaf")
 failure_evidence = source.split(
     'preserve_failure_evidence() {', 1)[1].split(
     '\ncleanup() {', 1)[0]
