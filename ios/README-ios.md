@@ -134,7 +134,12 @@ present-count gates, not elapsed-time gates. A normal smoke also requires a
 textured native Landscape frame. The specialized new-game pipeline-archive
 mode instead requires a confirmed world gate followed by a non-empty scene
 snapshot; intro video can delay Landscape, and Bink/direct PSOs remain outside
-D-041. Evidence is written under `build/device-smoke/<source-sha>/`.
+D-041. A clean committed PASS writes an immutable evidence leaf under
+`build/device-smoke/<source-sha>/pass-<timestamp>-<pid>/`; failures,
+SHA-local/fault runs and special self-test/device-facts profiles use their
+documented sibling roots. The harness creates every leaf relative to the
+selected expected evidence root, rejects symlink parents or real paths outside
+that root, and never reuses an existing leaf.
 
 The only unavoidable manual precondition is that iOS must already trust the
 Mac/development identity and the device must be unlocked at launch time.
@@ -210,8 +215,9 @@ requirement because loading directly into a save need not play an intro clip.
 
 The device must be attached over USB, unlocked and have Developer Mode and
 Enable UI Automation active. The harness targets only the existing
-team-suffixed OpenGothic bundle, never uninstalls it, and uses bounded
-terminate-to-kill cleanup plus a final zero-process scan on success and failure.
+team-suffixed OpenGothic bundle, never uninstalls it, and uses a finite
+terminate-to-kill retry sequence plus a final zero-process scan on success and
+failure.
 Evidence is stored below `build/device-ui-automation/<source-sha>/`.
 
 Archive snapshots occur at present 300, after the new-game role-3 warmup has
@@ -222,6 +228,11 @@ bounded to presents 301 and 302; no flush is attempted before 300 or after
 game, while warm/recovery require the matching exact hit count and every phase
 requires zero archive fallback. Scenario and save-slot selection are preserved
 in PASS and failure evidence.
+
+In the base smoke and pipeline-archive harnesses, every post-launch process
+query and terminate request has a bounded timeout. Their bounded-command helper
+also terminates and reaps any remaining request process group after timeout,
+signal or normal leader exit, including process work issued by trap cleanup.
 
 ---
 

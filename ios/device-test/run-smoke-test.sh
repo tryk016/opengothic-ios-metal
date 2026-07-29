@@ -47,6 +47,8 @@ readonly DURABLE_ZERO_MAX_CYCLES=3
 readonly DURABLE_ZERO_SCANS_PER_CYCLE=10
 readonly DURABLE_ZERO_INTERVAL_SECONDS=10
 readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
+readonly DEVICECTL_PROCESS_QUERY_TIMEOUT_SECONDS=30
+readonly DEVICECTL_TERMINATE_TIMEOUT_SECONDS=30
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PREFIX='RendererIOS resource allocator self-test:'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_ARMED='RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PASS='RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2'
@@ -88,6 +90,264 @@ fail() {
   exit 1
 }
 
+run_bounded_command() {
+  local timeout_seconds="$1"
+  shift
+
+  [[ "$timeout_seconds" =~ ^[1-9][0-9]*$ && $# -gt 0 ]] || return 2
+  python3 - "$timeout_seconds" "$@" <<'PY'
+import os
+import signal
+import subprocess
+import sys
+import time
+
+timeout_seconds = int(sys.argv[1])
+command = sys.argv[2:]
+process = None
+process_group = None
+cleanup_latched = False
+first_signal = None
+
+class ForwardedSignal(Exception):
+    def __init__(self, signum):
+        super().__init__(signum)
+        self.signum = signum
+
+def forward_signal(signum, _frame):
+    global first_signal
+    if first_signal is None:
+        first_signal = signum
+    if cleanup_latched:
+        return
+    raise ForwardedSignal(first_signal)
+
+def group_exists():
+    if process_group is None:
+        return False
+    try:
+        os.killpg(process_group, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+def bounded_leader_wait(deadline):
+    if process is None or process.poll() is not None:
+        return
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return
+    try:
+        process.wait(timeout=min(0.1, remaining))
+    except subprocess.TimeoutExpired:
+        pass
+
+def terminate_group():
+    global cleanup_latched
+    cleanup_latched = True
+    if process_group is None:
+        return True
+    try:
+        os.killpg(process_group, signal.SIGTERM)
+    except ProcessLookupError:
+        bounded_leader_wait(time.monotonic() + 0.1)
+        return True
+    term_deadline = time.monotonic() + 2
+    while group_exists() and time.monotonic() < term_deadline:
+        bounded_leader_wait(term_deadline)
+        if process is None or process.poll() is not None:
+            time.sleep(0.05)
+    if not group_exists():
+        bounded_leader_wait(time.monotonic() + 0.1)
+        return True
+    try:
+        os.killpg(process_group, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    kill_deadline = time.monotonic() + 5
+    while group_exists() and time.monotonic() < kill_deadline:
+        bounded_leader_wait(kill_deadline)
+        if process is None or process.poll() is not None:
+            time.sleep(0.05)
+    bounded_leader_wait(kill_deadline)
+    return not group_exists() and (
+        process is None or process.poll() is not None
+    )
+
+for handled_signal in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(handled_signal, forward_signal)
+
+try:
+    process = subprocess.Popen(command, start_new_session=True)
+    process_group = process.pid
+    returncode = process.wait(timeout=timeout_seconds)
+except subprocess.TimeoutExpired:
+    if not terminate_group():
+        print("timed-out command process group could not be reaped", file=sys.stderr)
+        raise SystemExit(125)
+    print(
+        f"command timed out after {timeout_seconds} seconds",
+        file=sys.stderr,
+    )
+    raise SystemExit(124)
+except ForwardedSignal as received:
+    if not terminate_group():
+        print("signalled command process group could not be reaped", file=sys.stderr)
+        raise SystemExit(125)
+    raise SystemExit(128 + received.signum)
+except BaseException:
+    if not terminate_group():
+        print("failed command process group could not be reaped", file=sys.stderr)
+        raise SystemExit(125)
+    raise
+if group_exists() and not terminate_group():
+    print("completed command process group could not be reaped", file=sys.stderr)
+    raise SystemExit(125)
+raise SystemExit(returncode)
+PY
+}
+
+secure_private_evidence() {
+  local directory="$1"
+
+  [[ -d "$directory" && ! -L "$directory" ]] || return 1
+  find "$directory" -type d -exec chmod 700 {} + || return 1
+  find "$directory" -type f -exec chmod 600 {} + || return 1
+}
+
+create_private_evidence_directory() {
+  local directory="$1"
+  local allowed_root="$2"
+
+  python3 - "$directory" "$allowed_root" <<'PY'
+import os
+import sys
+
+directory_arg, allowed_root_arg = sys.argv[1:]
+if not os.path.isabs(directory_arg) or not os.path.isabs(allowed_root_arg):
+    raise SystemExit(1)
+
+directory = os.path.abspath(directory_arg)
+allowed_root = os.path.abspath(allowed_root_arg)
+if directory != directory_arg or allowed_root != allowed_root_arg:
+    raise SystemExit(1)
+
+try:
+    relative = os.path.relpath(directory, allowed_root)
+except ValueError:
+    raise SystemExit(1)
+if relative in ("", ".") or relative == os.pardir or relative.startswith(
+    os.pardir + os.sep
+):
+    raise SystemExit(1)
+
+components = [component for component in relative.split(os.sep) if component]
+if not components or any(component in (".", os.pardir) for component in components):
+    raise SystemExit(1)
+
+flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+opened = []
+
+def open_or_create(parent_fd, component):
+    try:
+        return os.open(component, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        os.mkdir(component, 0o700, dir_fd=parent_fd)
+        return os.open(component, flags, dir_fd=parent_fd)
+
+try:
+    current_fd = os.open(os.sep, flags)
+    opened.append(current_fd)
+    for component in [
+        component for component in allowed_root.split(os.sep) if component
+    ]:
+        current_fd = open_or_create(current_fd, component)
+        opened.append(current_fd)
+
+    allowed_real = os.path.realpath(allowed_root)
+    if allowed_real != allowed_root:
+        raise OSError("allowed evidence root contains a symlink")
+
+    for component in components[:-1]:
+        current_fd = open_or_create(current_fd, component)
+        opened.append(current_fd)
+
+    leaf = components[-1]
+    os.mkdir(leaf, 0o700, dir_fd=current_fd)
+    leaf_fd = os.open(leaf, flags, dir_fd=current_fd)
+    opened.append(leaf_fd)
+    os.fchmod(leaf_fd, 0o700)
+
+    directory_real = os.path.realpath(directory)
+    if directory_real != directory or os.path.commonpath(
+        (allowed_real, directory_real)
+    ) != allowed_real:
+        raise OSError("evidence leaf escaped its allowed root")
+except (OSError, ValueError):
+    raise SystemExit(1)
+finally:
+    for descriptor in reversed(opened):
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+PY
+}
+
+copy_private_evidence_path() {
+  local source="$1"
+  local destination="$2"
+
+  [[ -e "$source" && ! -L "$source" &&
+     ! -e "$destination" && ! -L "$destination" ]] || return 1
+  ditto "$source" "$destination" || return 1
+  if [[ -d "$destination" ]]; then
+    secure_private_evidence "$destination"
+  else
+    chmod 600 "$destination"
+  fi
+}
+
+smoke_evidence_root() {
+  local expected_sha="$1"
+  local expected_build="$2"
+  local expected_fault="$3"
+
+  if ((REQUIRE_DEVICE_FACTS_REFERENCE_A17 != 0)); then
+    printf '%s/build/device-facts/%s/reference-a17\n' \
+      "$ROOT" "$expected_build"
+    return 0
+  fi
+  if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/shading-prototype-forward\n' \
+      "$ROOT" "$expected_build"
+    return 0
+  fi
+  if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/shading-prototype-tile\n' \
+      "$ROOT" "$expected_build"
+    return 0
+  fi
+  if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/clear-only-pass\n' \
+      "$ROOT" "$expected_build"
+    return 0
+  fi
+  if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
+    printf '%s/build/device-self-test/%s/resource-allocator\n' \
+      "$ROOT" "$expected_build"
+    return 0
+  fi
+  if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
+    printf '%s/build/device-smoke/%s\n' "$ROOT" "$expected_sha"
+  else
+    printf '%s/build/device-fault/%s/%s\n' \
+      "$ROOT" "$expected_build" "$expected_fault"
+  fi
+}
+
 smoke_evidence_path() {
   local outcome="$1"
   local timestamp="$2"
@@ -98,43 +358,10 @@ smoke_evidence_path() {
   local evidence_root
 
   [[ "$outcome" == pass || "$outcome" == failure ]] || return 1
-  if ((REQUIRE_DEVICE_FACTS_REFERENCE_A17 != 0)); then
-    printf '%s/build/device-facts/%s/reference-a17/%s-%s-%s\n' \
-      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
-    return 0
-  fi
-  if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
-    printf '%s/build/device-self-test/%s/shading-prototype-forward/%s-%s-%s\n' \
-      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
-    return 0
-  fi
-  if ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
-    printf '%s/build/device-self-test/%s/shading-prototype-tile/%s-%s-%s\n' \
-      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
-    return 0
-  fi
-  if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0)); then
-    printf '%s/build/device-self-test/%s/clear-only-pass/%s-%s-%s\n' \
-      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
-    return 0
-  fi
-  if ((REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST != 0)); then
-    printf '%s/build/device-self-test/%s/resource-allocator/%s-%s-%s\n' \
-      "$ROOT" "$expected_build" "$outcome" "$timestamp" "$process_id"
-    return 0
-  fi
-  if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
-    evidence_root="$ROOT/build/device-smoke/$expected_sha"
-    if [[ "$outcome" == pass ]]; then
-      printf '%s\n' "$evidence_root"
-    else
-      printf '%s/failure-%s-%s\n' "$evidence_root" "$timestamp" "$process_id"
-    fi
-  else
-    printf '%s/build/device-fault/%s/%s/%s-%s-%s\n' \
-      "$ROOT" "$expected_build" "$expected_fault" \
-      "$outcome" "$timestamp" "$process_id"
-  fi
+  evidence_root="$(smoke_evidence_root \
+    "$expected_sha" "$expected_build" "$expected_fault")" || return 1
+  printf '%s/%s-%s-%s\n' \
+    "$evidence_root" "$outcome" "$timestamp" "$process_id"
 }
 
 publish_evidence_path() {
@@ -388,11 +615,14 @@ run_host_contract_self_test() {
   local timestamp="${OPENGOTHIC_IOS_EVIDENCE_TIMESTAMP:-20000101T000000Z}"
   local process_id="${OPENGOTHIC_IOS_EVIDENCE_PID:-4242}"
   local self_test_work evidence_file actual expected expected_plain expected_resource
+  local expected_committed
   local expected_clear clear_path clear_failure_path clear_committed_path
   local expected_tile tile_path tile_failure_path tile_committed_path
   local expected_forward forward_path forward_failure_path forward_committed_path
   local expected_device_facts device_facts_path device_facts_failure_path
-  local plain_path resource_path resource_failure_path resource_committed_path
+  local plain_path plain_repeat_path committed_path committed_repeat_path
+  local resource_path resource_failure_path
+  local resource_committed_path
   local plain_binary self_test_binary duplicate_binary clear_binary duplicate_clear_binary
   local tile_binary duplicate_tile_binary missing_tile_unsupported_binary
   local duplicate_tile_unsupported_binary
@@ -427,6 +657,7 @@ run_host_contract_self_test() {
     fail "shading prototype Forward host contract self-test requires expected fault none"
 
   self_test_work="$(mktemp -d -t opengothic-smoke-contract)"
+  self_test_work="$(cd "$self_test_work" && pwd -P)"
   evidence_file="$EVIDENCE_PATH_FILE"
   [[ -n "$evidence_file" ]] || evidence_file="$self_test_work/evidence-path.txt"
   EVIDENCE_PATH_FILE="$evidence_file"
@@ -438,12 +669,28 @@ run_host_contract_self_test() {
   plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
-    expected_plain="$ROOT/build/device-smoke/$expected_sha"
+    expected_plain="$ROOT/build/device-smoke/$expected_sha/pass-$timestamp-$process_id"
   else
     expected_plain="$ROOT/build/device-fault/$expected_build/$expected_fault/pass-$timestamp-$process_id"
   fi
   [[ "$plain_path" == "$expected_plain" ]] ||
     fail "SHA-local smoke evidence path self-test failed"
+  plain_repeat_path="$(smoke_evidence_path pass "$timestamp" \
+    "$((process_id + 1))" "$expected_sha" "$expected_build" "$expected_fault")"
+  [[ "$plain_repeat_path" != "$plain_path" ]] ||
+    fail "repeat smoke evidence path collides with an earlier PASS"
+  committed_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  expected_committed="$ROOT/build/device-smoke/$expected_sha/pass-$timestamp-$process_id"
+  [[ "$committed_path" == "$expected_committed" &&
+     "$committed_path" != "$ROOT/build/device-smoke/$expected_sha" ]] ||
+    fail "committed clean smoke evidence path is not an immutable run leaf"
+  committed_repeat_path="$(smoke_evidence_path pass "$timestamp" \
+    "$((process_id + 1))" "$expected_sha" "$expected_sha" none)"
+  [[ "$committed_repeat_path" != "$committed_path" &&
+     "$committed_repeat_path" == \
+       "$ROOT/build/device-smoke/$expected_sha/pass-$timestamp-$((process_id + 1))" ]] ||
+    fail "repeated committed clean smoke evidence path collides"
   REQUIRE_DEVICE_FACTS_REFERENCE_A17=1
   device_facts_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" none)"
@@ -782,8 +1029,127 @@ run_host_contract_self_test() {
      "$nonce_one" != "$nonce_two" ]] ||
     fail "Forward nonce generator is not random 32 lowercase hex"
 
+  local evidence_parent="$self_test_work/evidence"
+  local evidence_leaf="$evidence_parent/pass-$timestamp-$process_id"
+  local evidence_symlink="$evidence_parent/pass-$timestamp-$((process_id + 1))"
+  local evidence_escape_root="$self_test_work/evidence-escape"
+  local evidence_symlink_parent="$evidence_parent/symlink-parent"
+  local evidence_escaped_leaf="$evidence_symlink_parent/pass-$timestamp-$process_id"
+  local evidence_traversal_leaf="$evidence_parent/../escaped-pass-$timestamp-$process_id"
+  local copy_source="$self_test_work/copy-source.txt"
+  local copy_destination="$self_test_work/copy-destination.txt"
+  local timeout_descendant_pid="$self_test_work/timeout-descendant.pid"
+  local timeout_group_pid="$self_test_work/timeout-group.pid"
+  local success_descendant_pid="$self_test_work/success-descendant.pid"
+  local success_group_pid="$self_test_work/success-group.pid"
+  local timeout_descendant timeout_group timeout_started timeout_elapsed
+  local success_descendant success_group
+  local timeout_status=0 success_status=0 nonzero_status=0
+  create_private_evidence_directory "$evidence_leaf" "$evidence_parent" ||
+    fail "private evidence directory creation self-test failed"
+  [[ -d "$evidence_leaf" && ! -L "$evidence_leaf" ]] ||
+    fail "private evidence directory is not a real directory"
+  if create_private_evidence_directory "$evidence_leaf" "$evidence_parent"; then
+    fail "existing private evidence directory survived collision check"
+  fi
+  ln -s "$evidence_leaf" "$evidence_symlink"
+  if create_private_evidence_directory "$evidence_symlink" "$evidence_parent"; then
+    fail "private evidence directory admitted a symlink leaf"
+  fi
+  mkdir "$evidence_escape_root"
+  ln -s "$evidence_escape_root" "$evidence_symlink_parent"
+  if create_private_evidence_directory \
+      "$evidence_escaped_leaf" "$evidence_parent"; then
+    fail "private evidence directory admitted a symlink parent"
+  fi
+  [[ ! -e "$evidence_escape_root/pass-$timestamp-$process_id" ]] ||
+    fail "private evidence directory escaped through a symlink parent"
+  if create_private_evidence_directory \
+      "$evidence_traversal_leaf" "$evidence_parent"; then
+    fail "private evidence directory admitted parent traversal"
+  fi
+  [[ ! -e "$self_test_work/escaped-pass-$timestamp-$process_id" ]] ||
+    fail "private evidence directory escaped through parent traversal"
+  printf '%s\n' source >"$copy_source"
+  printf '%s\n' original >"$copy_destination"
+  if copy_private_evidence_path "$copy_source" "$copy_destination"; then
+    fail "private evidence copy overwrote an existing destination"
+  fi
+  [[ "$(cat "$copy_destination")" == original ]] ||
+    fail "private evidence collision changed existing bytes"
+  timeout_started=$SECONDS
+  run_bounded_command 1 /bin/sh -c \
+    'echo "$$" >"$1"; /bin/sh -c '"'"'trap "" TERM; sleep 30'"'"' & echo "$!" >"$2"; wait' \
+    _ "$timeout_group_pid" "$timeout_descendant_pid" \
+    >/dev/null 2>&1 || timeout_status=$?
+  timeout_elapsed=$((SECONDS - timeout_started))
+  [[ "$timeout_status" == 124 ]] ||
+    fail "bounded command timeout did not return exact status 124"
+  [[ "$timeout_elapsed" -ge 1 && "$timeout_elapsed" -le 8 ]] ||
+    fail "bounded command timeout exceeded its cleanup deadline"
+  [[ -s "$timeout_group_pid" && -s "$timeout_descendant_pid" ]] ||
+    fail "bounded command timeout did not create process-group witnesses"
+  timeout_group="$(cat "$timeout_group_pid")"
+  timeout_descendant="$(cat "$timeout_descendant_pid")"
+  [[ "$timeout_group" =~ ^[0-9]+$ &&
+     "$timeout_descendant" =~ ^[0-9]+$ ]] ||
+    fail "bounded command process-group witnesses are invalid"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    if ! kill -0 "$timeout_descendant" 2>/dev/null &&
+       ! kill -0 "-$timeout_group" 2>/dev/null; then
+      break
+    fi
+    sleep 0.1
+  done
+  if kill -0 "$timeout_descendant" 2>/dev/null ||
+     kill -0 "-$timeout_group" 2>/dev/null; then
+    kill -KILL "$timeout_descendant" 2>/dev/null || true
+    kill -KILL "-$timeout_group" 2>/dev/null || true
+    fail "bounded command timeout left a live descendant"
+  fi
+  run_bounded_command 5 python3 -c '
+import os
+import sys
+import time
+
+with open(sys.argv[1], "w") as stream:
+    stream.write(str(os.getpid()))
+child = os.fork()
+if child:
+    with open(sys.argv[2], "w") as stream:
+        stream.write(str(child))
+    os._exit(0)
+time.sleep(30)
+' "$success_group_pid" "$success_descendant_pid" \
+    >/dev/null 2>&1 || success_status=$?
+  [[ "$success_status" == 0 ]] ||
+    fail "bounded command did not preserve normal leader success"
+  [[ -s "$success_group_pid" && -s "$success_descendant_pid" ]] ||
+    fail "bounded command normal success did not create orphan witnesses"
+  success_group="$(cat "$success_group_pid")"
+  success_descendant="$(cat "$success_descendant_pid")"
+  [[ "$success_group" =~ ^[0-9]+$ &&
+     "$success_descendant" =~ ^[0-9]+$ ]] ||
+    fail "bounded command normal-success orphan witnesses are invalid"
+  if kill -0 "$success_descendant" 2>/dev/null ||
+     kill -0 "-$success_group" 2>/dev/null; then
+    kill -KILL "$success_descendant" 2>/dev/null || true
+    kill -KILL "-$success_group" 2>/dev/null || true
+    fail "bounded command normal success left a live descendant"
+  fi
+  run_bounded_command 1 /usr/bin/true ||
+    fail "bounded command rejected a successful command"
+  run_bounded_command 1 /usr/bin/false >/dev/null 2>&1 ||
+    nonzero_status=$?
+  [[ "$nonzero_status" == 1 ]] ||
+    fail "bounded command did not propagate an ordinary nonzero status"
+
+  find "$self_test_work" -type l -delete
   find "$self_test_work" -type f -delete
+  find "$self_test_work" -depth -type d ! -path "$self_test_work" \
+    -exec rmdir {} +
   rmdir "$self_test_work"
+  echo "smoke bounded-command normal-success orphan cleanup self-test passed"
   echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass,shading-prototype-tile,shading-prototype-forward bundle-selector=xctrunner-safe nonce=32hex crash-states=3"
 }
 
@@ -1037,7 +1403,8 @@ strings "$APP_INPUT/$APP_EXECUTABLE" |
 list_game_pids() {
   local output="$1"
 
-  xcrun devicectl device info processes --device "$DEVICE" \
+  run_bounded_command "$DEVICECTL_PROCESS_QUERY_TIMEOUT_SECONDS" \
+    xcrun devicectl device info processes --device "$DEVICE" \
     --json-output "$output" >/dev/null 2>>"$WORK/cleanup.log" || return 1
   python3 - "$output" "$APP_EXECUTABLE" 2>>"$WORK/cleanup.log" <<'PY'
 import json, pathlib, sys
@@ -1076,11 +1443,15 @@ stop_running_app() {
       echo "attempt=$attempt mode=$mode executable=$APP_EXECUTABLE pid=$pid" \
         >>"$WORK/cleanup.log"
       if [[ "$mode" == "kill" ]]; then
-        xcrun devicectl device process terminate --device "$DEVICE" --pid "$pid" \
-          --kill --quiet >/dev/null 2>>"$WORK/cleanup.log" || true
+        run_bounded_command "$DEVICECTL_TERMINATE_TIMEOUT_SECONDS" \
+          xcrun devicectl device process terminate --device "$DEVICE" \
+          --pid "$pid" --kill --quiet \
+          >/dev/null 2>>"$WORK/cleanup.log" || true
       else
-        xcrun devicectl device process terminate --device "$DEVICE" --pid "$pid" \
-          --quiet >/dev/null 2>>"$WORK/cleanup.log" || true
+        run_bounded_command "$DEVICECTL_TERMINATE_TIMEOUT_SECONDS" \
+          xcrun devicectl device process terminate --device "$DEVICE" \
+          --pid "$pid" --quiet \
+          >/dev/null 2>>"$WORK/cleanup.log" || true
       fi
     done <<<"$pids"
     sleep 1
@@ -1857,28 +2228,6 @@ sync_shading_prototype_forward_recovery() {
   chmod 700 "$SHADING_PROTOTYPE_FORWARD_RECOVERY_PATH" || return 1
 }
 
-secure_private_evidence() {
-  local directory="$1"
-
-  [[ -d "$directory" && ! -L "$directory" ]] || return 1
-  find "$directory" -type d -exec chmod 700 {} + || return 1
-  find "$directory" -type f -exec chmod 600 {} + || return 1
-}
-
-copy_private_evidence_path() {
-  local source="$1"
-  local destination="$2"
-
-  [[ -e "$source" && ! -L "$source" &&
-     ! -e "$destination" && ! -L "$destination" ]] || return 1
-  ditto "$source" "$destination" || return 1
-  if [[ -d "$destination" ]]; then
-    secure_private_evidence "$destination"
-  else
-    chmod 600 "$destination"
-  fi
-}
-
 create_id3_recovery_path() {
   local recovery_root timestamp
 
@@ -2410,18 +2759,20 @@ PY
 preserve_failure_evidence() {
   local original_status="$1"
   local cleanup_status="$2"
-  local candidate failure_dir timestamp
+  local candidate failure_dir failure_root timestamp
 
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] || return 0
   timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
   if [[ ! "$EXPECTED_BUILD" =~ ^[0-9a-f]{40}(-local)?$ ]]; then
-    failure_dir="$ROOT/build/device-fault/$EXPECTED_SHA/invalid-build/failure-$timestamp-$$"
+    failure_root="$ROOT/build/device-fault/$EXPECTED_SHA/invalid-build"
+    failure_dir="$failure_root/failure-$timestamp-$$"
   else
+    failure_root="$(smoke_evidence_root \
+      "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" || return 1
     failure_dir="$(smoke_evidence_path failure "$timestamp" "$$" \
       "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" || return 0
   fi
-  (umask 077 && mkdir -p "$failure_dir") || return 1
-  chmod 700 "$failure_dir" || return 1
+  create_private_evidence_directory "$failure_dir" "$failure_root" || return 1
   publish_evidence_path "$failure_dir"
   for candidate in \
       launch.log cleanup.log \
@@ -3024,8 +3375,10 @@ if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   ID3_POST_COMPLETION_STABLE_SECONDS=10
 fi
 
-xcrun devicectl device info processes --device "$DEVICE" \
-  --json-output "$WORK/processes.json" >/dev/null
+run_bounded_command "$DEVICECTL_PROCESS_QUERY_TIMEOUT_SECONDS" \
+  xcrun devicectl device info processes --device "$DEVICE" \
+  --json-output "$WORK/processes.json" >/dev/null 2>>"$WORK/cleanup.log" ||
+  fail "could not query processes after launch"
 python3 - "$WORK/processes.json" "$APP_EXECUTABLE" "$EXPECTED_FAULT" \
     "$ID3_FAULT_WINDOW_PID" "$REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST" \
     "$RESOURCE_ALLOCATOR_SELF_TEST_PID" \
@@ -4194,12 +4547,14 @@ capture_crash_state final "$WORK/crash-final.log" POST_CRASH_SHA ||
   fail "crash.log changed before the durable PASS boundary"
 
 timestamp="$(date -u '+%Y%m%dT%H%M%SZ')"
+OUT_ROOT="$(smoke_evidence_root \
+  "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" ||
+  fail "could not resolve smoke evidence root"
 OUT="$(smoke_evidence_path pass "$timestamp" "$$" \
   "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" ||
   fail "could not resolve smoke evidence path"
-(umask 077 && mkdir -p "$OUT") ||
+create_private_evidence_directory "$OUT" "$OUT_ROOT" ||
   fail "could not create private PASS evidence directory"
-chmod 700 "$OUT" || fail "could not secure PASS evidence directory"
 PASS_EVIDENCE_DIR="$OUT"
 publish_evidence_path "$OUT"
 copy_private_evidence_path "$WORK/log.txt" "$OUT/log.txt" ||
