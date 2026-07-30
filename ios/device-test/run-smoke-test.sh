@@ -40,9 +40,15 @@ REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
 REQUIRE_DEVICE_FACTS_REFERENCE_A17=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
+EXPECTED_FAULT_SEEN=0
 EVIDENCE_PATH_FILE=""
 SELF_TEST=0
 APP_INPUT=""
+NATIVE_ALPHA_TEST_CAUSAL_MODE=""
+NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE=""
+NATIVE_ALPHA_TEST_CAUSAL_MODE_SEEN=0
+NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_SEEN=0
+NATIVE_ALPHA_TEST_CAUSAL_FINALIZER_TEST_FAULT=""
 readonly DURABLE_ZERO_MAX_CYCLES=3
 readonly DURABLE_ZERO_SCANS_PER_CYCLE=10
 readonly DURABLE_ZERO_INTERVAL_SECONDS=10
@@ -84,6 +90,10 @@ readonly SHADING_PROTOTYPE_FORWARD_SELF_TEST_FAIL_TEMPLATE='RendererIOS shading 
 readonly SHADING_PROTOTYPE_FORWARD_CAPTURE_ACQUIRED_TEMPLATE='RendererIOS shading prototype forward capture: ACQUIRED case=forward-prototype-v1 nonce='
 readonly SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME='RendererIOS-forward-prototype-v1.gputrace'
 readonly SHADING_PROTOTYPE_FORWARD_NONCE_ARGUMENT='-renderer-ios-forward-self-test-nonce='
+readonly NATIVE_ALPHA_TEST_CAUSAL_PREFIX='RendererIOS native causal capture:'
+readonly NATIVE_ALPHA_TEST_CAUSAL_MODE_ARGUMENT='-renderer-ios-native-alpha-test-causal-mode='
+readonly NATIVE_ALPHA_TEST_CAUSAL_NONCE_ARGUMENT='-renderer-ios-native-alpha-test-causal-nonce='
+readonly NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_ARGUMENT='-renderer-ios-native-alpha-test-causal-sequence='
 
 fail() {
   echo "FAIL: $*" >&2
@@ -320,6 +330,11 @@ smoke_evidence_root() {
       "$ROOT" "$expected_build"
     return 0
   fi
+  if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+    printf '%s/build/device-self-test/%s/native-alpha-test-%s\n' \
+      "$ROOT" "$expected_build" "$NATIVE_ALPHA_TEST_CAUSAL_MODE"
+    return 0
+  fi
   if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
     printf '%s/build/device-self-test/%s/shading-prototype-forward\n' \
       "$ROOT" "$expected_build"
@@ -500,6 +515,1063 @@ generate_shading_prototype_forward_nonce() {
   printf '%s\n' "$nonce"
 }
 
+is_canonical_positive_uint64() {
+  python3 - "$1" <<'PY' >/dev/null 2>&1
+import re
+import sys
+
+value = sys.argv[1]
+if not re.fullmatch(r"[1-9][0-9]*", value):
+    raise SystemExit(1)
+if int(value) > 0xFFFFFFFFFFFFFFFF:
+    raise SystemExit(1)
+PY
+}
+
+generate_native_alpha_test_causal_nonce() {
+  local nonce
+
+  nonce="$(openssl rand -hex 16)" || return 1
+  [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 1
+  printf '%s\n' "$nonce"
+}
+
+validate_native_alpha_test_causal_binary_profile() {
+  local strings_file="$1"
+  local expected_build="$2"
+  local opposite_mode
+
+  [[ -f "$strings_file" ]] || return 1
+  [[ "$NATIVE_ALPHA_TEST_CAUSAL_MODE" == causal-a ||
+     "$NATIVE_ALPHA_TEST_CAUSAL_MODE" == causal-b ]] || return 1
+  if [[ "$NATIVE_ALPHA_TEST_CAUSAL_MODE" == causal-a ]]; then
+    opposite_mode=causal-b
+  else
+    opposite_mode=causal-a
+  fi
+  [[ "$(grep -Fxc -- "$expected_build" "$strings_file" || true)" -eq 1 ]] ||
+    return 1
+  [[ "$(grep -Fxc -- "$NATIVE_ALPHA_TEST_CAUSAL_MODE" \
+    "$strings_file" || true)" -eq 1 ]] || return 1
+  [[ "$(grep -Fxc -- "$opposite_mode" "$strings_file" || true)" -eq 0 ]] ||
+    return 1
+  [[ "$(grep -Fxc -- production "$strings_file" || true)" -eq 0 ]]
+}
+
+write_native_alpha_test_causal_contract() {
+  local result="$1"
+  local cleanup_result="$2"
+
+  [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" && -n "${WORK:-}" ]] || return 0
+  python3 - "$WORK/causal-contract.json" "$result" "$cleanup_result" \
+      "$EXPECTED_SHA" "$NATIVE_ALPHA_TEST_CAUSAL_MODE" \
+      "${NATIVE_ALPHA_TEST_CAUSAL_NONCE:-uncomputed}" \
+      "$NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE" \
+      "$CAUSAL_BINARY_SHA256" "$CAUSAL_METALLIB_SHA256" <<'PY'
+import json
+import os
+import pathlib
+import re
+import sys
+import tempfile
+
+path = pathlib.Path(sys.argv[1])
+result, cleanup = sys.argv[2:4]
+parent_sha, mode, nonce, sequence = sys.argv[4:8]
+binary_sha, metallib_sha = sys.argv[8:10]
+keys = {
+    "schemaVersion",
+    "result",
+    "parentSha",
+    "mode",
+    "nonce",
+    "targetSequence",
+    "launchBoundary",
+    "armedLine",
+    "encodedLine",
+    "draws",
+    "alpha",
+    "binarySha256",
+    "metallibSha256",
+    "cleanupResult",
+}
+payload = {}
+if path.is_symlink():
+    raise SystemExit("causal contract path must not be a symlink")
+if path.exists():
+    with path.open(encoding="utf-8") as source:
+        payload = json.load(source)
+    if set(payload) != keys:
+        raise SystemExit("causal contract has an unexpected schema")
+    if (
+        type(payload["schemaVersion"]) is not int
+        or payload["schemaVersion"] != 1
+        or payload["result"] not in {"PENDING", "PASS", "FAIL"}
+        or not isinstance(payload["parentSha"], str)
+        or not isinstance(payload["mode"], str)
+        or not isinstance(payload["nonce"], str)
+        or type(payload["targetSequence"]) is not int
+        or payload["targetSequence"] <= 0
+        or payload["targetSequence"] > 0xFFFFFFFFFFFFFFFF
+        or not isinstance(payload["binarySha256"], str)
+        or not isinstance(payload["metallibSha256"], str)
+        or payload["cleanupResult"] not in {"pending", "passed", "failed"}
+    ):
+        raise SystemExit("existing causal contract scalar type is invalid")
+payload.update(
+    {
+        "schemaVersion": 1,
+        "result": result,
+        "parentSha": parent_sha,
+        "mode": mode,
+        "nonce": nonce,
+        "targetSequence": int(sequence),
+        "binarySha256": binary_sha,
+        "metallibSha256": metallib_sha,
+        "cleanupResult": cleanup,
+    }
+)
+payload.setdefault("launchBoundary", None)
+payload.setdefault("armedLine", None)
+payload.setdefault("encodedLine", None)
+payload.setdefault("draws", None)
+payload.setdefault("alpha", None)
+if set(payload) != keys:
+    raise SystemExit("causal contract is incomplete")
+if result not in {"PASS", "FAIL"}:
+    raise SystemExit("causal contract result is invalid")
+if cleanup not in {"passed", "failed"}:
+    raise SystemExit("causal contract cleanup result is invalid")
+if result == "PASS" and cleanup != "passed":
+    raise SystemExit("causal PASS requires successful cleanup")
+if (
+    type(payload["schemaVersion"]) is not int
+    or payload["schemaVersion"] != 1
+    or payload["result"] != result
+    or payload["parentSha"] != parent_sha
+    or payload["mode"] != mode
+    or payload["nonce"] != nonce
+    or type(payload["targetSequence"]) is not int
+    or payload["targetSequence"] <= 0
+    or payload["targetSequence"] > 0xFFFFFFFFFFFFFFFF
+    or payload["binarySha256"] != binary_sha
+    or payload["metallibSha256"] != metallib_sha
+    or payload["cleanupResult"] != cleanup
+):
+    raise SystemExit("causal contract identity or scalar type is invalid")
+boundary = payload["launchBoundary"]
+if boundary is not None and (
+    not isinstance(boundary, dict)
+    or set(boundary) != {
+        "kind", "byteOffset", "preLaunchBytes", "preLaunchSha256"
+    }
+    or boundary["kind"] not in {
+        "append-offset", "empty-prelaunch", "replaced-log"
+    }
+    or type(boundary["byteOffset"]) is not int
+    or boundary["byteOffset"] < 0
+    or type(boundary["preLaunchBytes"]) is not int
+    or boundary["preLaunchBytes"] < 0
+    or not isinstance(boundary["preLaunchSha256"], str)
+    or not re.fullmatch(r"[0-9a-f]{64}", boundary["preLaunchSha256"])
+):
+    raise SystemExit("causal contract launch boundary is invalid")
+if not all(
+    value is None or isinstance(value, str)
+    for value in (payload["armedLine"], payload["encodedLine"])
+):
+    raise SystemExit("causal contract marker type is invalid")
+if (payload["draws"] is None) != (payload["alpha"] is None):
+    raise SystemExit("causal contract draw counters are incomplete")
+if payload["draws"] is not None and (
+    type(payload["draws"]) is not int
+    or type(payload["alpha"]) is not int
+    or payload["alpha"] <= 0
+    or payload["draws"] < payload["alpha"]
+):
+    raise SystemExit("causal contract draw counters are invalid")
+if result == "PASS":
+    target = payload["targetSequence"]
+    expected_armed = (
+        f"RendererIOS native causal capture: ARMED mode={mode} "
+        f"nonce={nonce} target-sequence={target}"
+    )
+    encoded = re.fullmatch(
+        rf"RendererIOS native causal capture: ENCODED mode={re.escape(mode)} "
+        rf"nonce={re.escape(nonce)} generation=([1-9][0-9]*) "
+        rf"sequence={target} draws=([1-9][0-9]*) alpha=([1-9][0-9]*)",
+        payload["encodedLine"] if isinstance(payload["encodedLine"], str) else "",
+    )
+    if (
+        cleanup != "passed"
+        or not re.fullmatch(r"[0-9a-f]{40}", parent_sha)
+        or mode not in {"causal-a", "causal-b"}
+        or not re.fullmatch(r"[0-9a-f]{32}", nonce)
+        or type(target) is not int
+        or target <= 0
+        or target > 0xFFFFFFFFFFFFFFFF
+        or not isinstance(payload["launchBoundary"], dict)
+        or set(payload["launchBoundary"]) != {
+            "kind", "byteOffset", "preLaunchBytes", "preLaunchSha256"
+        }
+        or payload["launchBoundary"]["kind"] not in {
+            "append-offset", "empty-prelaunch", "replaced-log"
+        }
+        or type(payload["launchBoundary"]["byteOffset"]) is not int
+        or payload["launchBoundary"]["byteOffset"] < 0
+        or type(payload["launchBoundary"]["preLaunchBytes"]) is not int
+        or payload["launchBoundary"]["preLaunchBytes"] < 0
+        or not re.fullmatch(
+            r"[0-9a-f]{64}",
+            payload["launchBoundary"]["preLaunchSha256"],
+        )
+        or payload["armedLine"] != expected_armed
+        or encoded is None
+        or type(payload["draws"]) is not int
+        or type(payload["alpha"]) is not int
+        or payload["alpha"] <= 0
+        or payload["draws"] < payload["alpha"]
+        or int(encoded.group(2)) != payload["draws"]
+        or int(encoded.group(3)) != payload["alpha"]
+        or not re.fullmatch(r"[0-9a-f]{64}", binary_sha)
+        or not re.fullmatch(r"[0-9a-f]{64}", metallib_sha)
+    ):
+        raise SystemExit("causal PASS contract is inconsistent")
+fd, temporary = tempfile.mkstemp(
+    prefix=".causal-contract.", suffix=".json", dir=str(path.parent)
+)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
+        json.dump(payload, output, sort_keys=True, separators=(",", ":"))
+        output.write("\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    with path.open(encoding="utf-8") as source:
+        if json.load(source) != payload:
+            raise SystemExit("causal contract readback mismatch")
+    if path.stat().st_mode & 0o777 != 0o600:
+        raise SystemExit("causal contract permissions mismatch")
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+install_native_alpha_test_causal_contract() {
+  local source="$1"
+  local destination="$2"
+  local expected_result="$3"
+  local expected_cleanup="$4"
+
+  python3 - "$source" "$destination" "$expected_result" "$expected_cleanup" \
+      "$NATIVE_ALPHA_TEST_CAUSAL_FINALIZER_TEST_FAULT" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+import tempfile
+
+source = pathlib.Path(sys.argv[1])
+destination = pathlib.Path(sys.argv[2])
+expected_result, expected_cleanup, injected_fault = sys.argv[3:6]
+expected_keys = {
+    "schemaVersion", "result", "parentSha", "mode", "nonce",
+    "targetSequence", "launchBoundary", "armedLine", "encodedLine",
+    "draws", "alpha", "binarySha256", "metallibSha256", "cleanupResult",
+}
+if (
+    not source.is_file()
+    or source.is_symlink()
+    or destination.is_symlink()
+    or not destination.parent.is_dir()
+    or destination.parent.is_symlink()
+):
+    raise SystemExit("causal contract install paths are invalid")
+payload = json.loads(source.read_text(encoding="utf-8"))
+if (
+    set(payload) != expected_keys
+    or payload["result"] != expected_result
+    or payload["cleanupResult"] != expected_cleanup
+    or type(payload["schemaVersion"]) is not int
+    or payload["schemaVersion"] != 1
+):
+    raise SystemExit("causal contract install identity is invalid")
+if injected_fault == "copy":
+    raise SystemExit("causal contract injected copy failure")
+source_bytes = source.read_bytes()
+descriptor, temporary = tempfile.mkstemp(
+    prefix=".causal-contract.", suffix=".json", dir=str(destination.parent)
+)
+try:
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(source_bytes)
+        output.flush()
+        os.fsync(output.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, destination)
+    if injected_fault == "readback":
+        raise SystemExit("causal contract injected readback failure")
+    if destination.read_bytes() != source_bytes:
+        raise SystemExit("causal contract destination readback mismatch")
+    if json.loads(destination.read_text(encoding="utf-8")) != payload:
+        raise SystemExit("causal contract destination JSON mismatch")
+    if stat.S_IMODE(destination.stat().st_mode) != 0o600:
+        raise SystemExit("causal contract destination permissions mismatch")
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+commit_native_alpha_test_causal_pass_evidence() {
+  local pending_directory="$1"
+  local final_directory="$2"
+
+  python3 - "$pending_directory" "$final_directory" <<'PY'
+import json
+import os
+import pathlib
+import stat
+import sys
+
+pending = pathlib.Path(sys.argv[1])
+final = pathlib.Path(sys.argv[2])
+if (
+    not pending.is_dir()
+    or pending.is_symlink()
+    or final.exists()
+    or final.is_symlink()
+    or pending.parent != final.parent
+):
+    raise SystemExit("causal PASS evidence commit paths are invalid")
+contract = pending / "causal-contract.json"
+result = pending / "result.txt"
+if (
+    not contract.is_file()
+    or contract.is_symlink()
+    or not result.is_file()
+    or result.is_symlink()
+):
+    raise SystemExit("causal PASS evidence is incomplete")
+payload = json.loads(contract.read_text(encoding="utf-8"))
+if (
+    payload.get("result") != "PASS"
+    or payload.get("cleanupResult") != "passed"
+    or stat.S_IMODE(contract.stat().st_mode) != 0o600
+    or "result=PASS" not in result.read_text(encoding="utf-8").splitlines()
+):
+    raise SystemExit("causal PASS evidence is not final")
+os.rename(pending, final)
+PY
+}
+
+retract_native_alpha_test_causal_pass_evidence() {
+  local final_directory="$1"
+  local pending_directory="$2"
+
+  python3 - "$final_directory" "$pending_directory" <<'PY'
+import os
+import pathlib
+import sys
+
+final = pathlib.Path(sys.argv[1])
+pending = pathlib.Path(sys.argv[2])
+if (
+    not final.is_dir()
+    or final.is_symlink()
+    or os.path.lexists(pending)
+    or final.parent != pending.parent
+):
+    raise SystemExit("causal PASS evidence retraction paths are invalid")
+os.rename(final, pending)
+if (
+    os.path.lexists(final)
+    or not pending.is_dir()
+    or pending.is_symlink()
+):
+    raise SystemExit("causal PASS evidence retraction readback failed")
+PY
+}
+
+invalidate_native_alpha_test_causal_result() {
+  local evidence_directory="$1"
+  local cleanup_status="$2"
+
+  python3 - "$evidence_directory/result.txt" "$cleanup_status" <<'PY'
+import os
+import pathlib
+import stat
+import sys
+import tempfile
+
+path = pathlib.Path(sys.argv[1])
+cleanup_status = sys.argv[2]
+if (
+    cleanup_status not in {"0", "1"}
+    or not path.parent.is_dir()
+    or path.parent.is_symlink()
+    or path.is_symlink()
+    or (path.exists() and not path.is_file())
+):
+    raise SystemExit("causal result invalidation paths are invalid")
+lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+preserved = [
+    line
+    for line in lines
+    if not line.startswith("result=")
+    and not line.startswith("failure_reason=")
+    and not line.startswith("cleanup_status=")
+]
+rewritten = "\n".join(
+    [
+        "result=FAIL",
+        *preserved,
+        "failure_reason=causal-finalizer-fail-closed",
+        f"cleanup_status={cleanup_status}",
+    ]
+) + "\n"
+descriptor, temporary = tempfile.mkstemp(
+    prefix=".result.", suffix=".txt", dir=str(path.parent)
+)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+        output.write(rewritten)
+        output.flush()
+        os.fsync(output.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+    readback = path.read_text(encoding="utf-8").splitlines()
+    if (
+        readback.count("result=FAIL") != 1
+        or "result=PASS" in readback
+        or stat.S_IMODE(path.stat().st_mode) != 0o600
+    ):
+        raise SystemExit("causal result invalidation readback failed")
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+finalize_native_alpha_test_causal_cleanup() {
+  local original_status="$1"
+  local initial_cleanup_status="$2"
+  local cleanup_result=passed
+  local pending_evidence_dir=""
+  local publication_failed=0
+
+  CAUSAL_FINALIZER_CLEANUP_STATUS="$initial_cleanup_status"
+  CAUSAL_FINALIZER_PUBLISHED=0
+  if ((original_status != 0 || CAUSAL_FINALIZER_CLEANUP_STATUS != 0)); then
+    :
+  else
+    if write_native_alpha_test_causal_contract PASS passed &&
+       [[ -n "$PASS_EVIDENCE_DIR" &&
+          -d "$PASS_EVIDENCE_DIR" &&
+          -n "$PASS_EVIDENCE_FINAL_DIR" ]] &&
+       install_native_alpha_test_causal_contract \
+         "$WORK/causal-contract.json" \
+         "$PASS_EVIDENCE_DIR/causal-contract.json" PASS passed &&
+       secure_private_evidence "$PASS_EVIDENCE_DIR" &&
+       pending_evidence_dir="$PASS_EVIDENCE_DIR" &&
+       commit_native_alpha_test_causal_pass_evidence \
+         "$pending_evidence_dir" "$PASS_EVIDENCE_FINAL_DIR"; then
+      PASS_EVIDENCE_DIR="$PASS_EVIDENCE_FINAL_DIR"
+      if publish_evidence_path "$PASS_EVIDENCE_DIR"; then
+        CAUSAL_FINALIZER_PUBLISHED=1
+        return 0
+      fi
+      publication_failed=1
+      CAUSAL_FINALIZER_CLEANUP_STATUS=1
+      NATIVE_ALPHA_TEST_CAUSAL_FINALIZER_TEST_FAULT=""
+      if retract_native_alpha_test_causal_pass_evidence \
+          "$PASS_EVIDENCE_DIR" "$pending_evidence_dir"; then
+        PASS_EVIDENCE_DIR="$pending_evidence_dir"
+      fi
+    fi
+    CAUSAL_FINALIZER_CLEANUP_STATUS=1
+    NATIVE_ALPHA_TEST_CAUSAL_FINALIZER_TEST_FAULT=""
+  fi
+
+  if ((CAUSAL_FINALIZER_CLEANUP_STATUS != 0)); then
+    cleanup_result=failed
+  fi
+  write_native_alpha_test_causal_contract FAIL "$cleanup_result" || return 1
+  if [[ -n "$PASS_EVIDENCE_DIR" && -d "$PASS_EVIDENCE_DIR" ]]; then
+    install_native_alpha_test_causal_contract \
+      "$WORK/causal-contract.json" \
+      "$PASS_EVIDENCE_DIR/causal-contract.json" FAIL "$cleanup_result" ||
+      return 1
+    invalidate_native_alpha_test_causal_result \
+      "$PASS_EVIDENCE_DIR" "$CAUSAL_FINALIZER_CLEANUP_STATUS" || return 1
+  fi
+  ((publication_failed == 0)) || return 1
+  return 0
+}
+
+validate_native_alpha_test_causal_log() {
+  local log_file="$1"
+  local prelaunch_log="$2"
+  local stderr_file="$3"
+  local prelaunch_stderr="$4"
+
+  python3 - "$log_file" "$prelaunch_log" "$stderr_file" "$prelaunch_stderr" \
+      "$NATIVE_ALPHA_TEST_CAUSAL_MODE" "$NATIVE_ALPHA_TEST_CAUSAL_NONCE" \
+      "$NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE" "$EXPECTED_BUILD" \
+      "$EXPECTED_SHA" "$CAUSAL_BINARY_SHA256" "$CAUSAL_METALLIB_SHA256" \
+      "$WORK/causal-contract.json" <<'PY'
+import hashlib
+import json
+import os
+import pathlib
+import re
+import sys
+import tempfile
+
+(
+    log_path,
+    prelaunch_path,
+    stderr_path,
+    prelaunch_stderr_path,
+    mode,
+    nonce,
+    sequence_text,
+    expected_build,
+    parent_sha,
+    binary_sha,
+    metallib_sha,
+    output_path,
+) = sys.argv[1:]
+full = pathlib.Path(log_path).read_bytes()
+pre = pathlib.Path(prelaunch_path).read_bytes()
+stderr_full = (
+    pathlib.Path(stderr_path).read_bytes()
+    if pathlib.Path(stderr_path).is_file()
+    else b""
+)
+stderr_pre = pathlib.Path(prelaunch_stderr_path).read_bytes()
+prefix = "RendererIOS native causal capture:"
+if pre and full.startswith(pre):
+    offset = len(pre)
+    boundary_kind = "append-offset"
+elif not pre:
+    offset = 0
+    boundary_kind = "empty-prelaunch"
+else:
+    offset = 0
+    boundary_kind = "replaced-log"
+segment = full[offset:].decode(errors="replace")
+if stderr_pre and stderr_full.startswith(stderr_pre):
+    stderr_offset = len(stderr_pre)
+elif not stderr_pre:
+    stderr_offset = 0
+else:
+    stderr_offset = 0
+stderr_segment = stderr_full[stderr_offset:].decode(errors="replace")
+lines = segment.splitlines()
+causal = [(index, line) for index, line in enumerate(lines)
+          if line.startswith(prefix)]
+armed_pattern = re.compile(
+    rf"^{re.escape(prefix)} ARMED mode={re.escape(mode)} "
+    rf"nonce={re.escape(nonce)} target-sequence={re.escape(sequence_text)}$"
+)
+encoded_pattern = re.compile(
+    rf"^{re.escape(prefix)} ENCODED mode={re.escape(mode)} "
+    rf"nonce={re.escape(nonce)} generation=([1-9][0-9]*) "
+    rf"sequence={re.escape(sequence_text)} draws=([1-9][0-9]*) "
+    rf"alpha=([1-9][0-9]*)$"
+)
+armed = [(index, line) for index, line in causal if armed_pattern.fullmatch(line)]
+encoded = []
+for index, line in causal:
+    match = encoded_pattern.fullmatch(line)
+    if match:
+        encoded.append((index, line, int(match.group(2)), int(match.group(3))))
+if len(causal) != 2 or len(armed) != 1 or len(encoded) != 1:
+    raise SystemExit("causal marker count or identity mismatch")
+shell = [
+    (index, match.group(1))
+    for index, line in enumerate(lines)
+    if (match := re.fullmatch(
+        r"RendererIOS shell: version=[^\r\n]* build=([^\s]+) gpu=[^\r\n]*",
+        line,
+    ))
+]
+fault = [
+    (index, match.group(1))
+    for index, line in enumerate(lines)
+    if (match := re.fullmatch(
+        r"RendererIOS configured fault mode=([^\s]+)",
+        line,
+    ))
+]
+if len(shell) != 1 or shell[0][1] != expected_build:
+    raise SystemExit("current launch shell identity is missing or inconsistent")
+if len(fault) != 1 or fault[0][1] != "none":
+    raise SystemExit("current launch fault identity is missing or inconsistent")
+if not (
+    shell[0][0] < armed[0][0]
+    and fault[0][0] < armed[0][0]
+    and armed[0][0] < encoded[0][0]
+):
+    raise SystemExit("current launch identity and causal markers are reordered")
+draws, alpha = encoded[0][2:4]
+if alpha <= 0 or draws < alpha:
+    raise SystemExit("causal draw counts are invalid")
+competing_prefixes = (
+    "RendererIOS Bink self-test:",
+    "RendererIOS resource allocator self-test:",
+    "RendererIOS clear-only pass self-test:",
+    "RendererIOS shading prototype tile self-test:",
+    "RendererIOS shading prototype forward self-test:",
+)
+if any(line.startswith(competing_prefixes) for line in lines):
+    raise SystemExit("competing self-test marker appeared in causal segment")
+fatal = re.compile(
+    r"RendererIOS (?:fatal|GPU shutdown failed|native Landscape encode failed|"
+    r"IOSGPUScene metallib loading failed)|libc\+\+abi:|SIGABRT",
+    re.IGNORECASE,
+)
+if fatal.search(segment) or fatal.search(stderr_segment):
+    raise SystemExit("fatal or crash marker appeared in causal segment")
+payload = {
+    "schemaVersion": 1,
+    "result": "PENDING",
+    "parentSha": parent_sha,
+    "mode": mode,
+    "nonce": nonce,
+    "targetSequence": int(sequence_text),
+    "launchBoundary": {
+        "kind": boundary_kind,
+        "byteOffset": offset,
+        "preLaunchBytes": len(pre),
+        "preLaunchSha256": hashlib.sha256(pre).hexdigest(),
+    },
+    "armedLine": armed[0][1],
+    "encodedLine": encoded[0][1],
+    "draws": draws,
+    "alpha": alpha,
+    "binarySha256": binary_sha,
+    "metallibSha256": metallib_sha,
+    "cleanupResult": "pending",
+}
+final_path = pathlib.Path(output_path)
+if final_path.is_symlink():
+    raise SystemExit("causal contract path must not be a symlink")
+fd, temporary = tempfile.mkstemp(
+    prefix=".causal-contract.", suffix=".json",
+    dir=str(final_path.parent),
+)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as output:
+        json.dump(payload, output, sort_keys=True, separators=(",", ":"))
+        output.write("\n")
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, output_path)
+    with final_path.open(encoding="utf-8") as source:
+        if json.load(source) != payload:
+            raise SystemExit("causal contract readback mismatch")
+    if final_path.stat().st_mode & 0o777 != 0o600:
+        raise SystemExit("causal contract permissions mismatch")
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+}
+
+run_native_alpha_test_causal_host_self_test() {
+  local directory="$1"
+  local expected_sha="$2"
+  local candidate
+  local caller_evidence_path_file="$EVIDENCE_PATH_FILE"
+  local prelaunch="$directory/causal-prelaunch.log"
+  local prelaunch_stderr="$directory/causal-prelaunch-stderr.log"
+  local good="$directory/causal-good.log"
+  local good_replaced="$directory/causal-good-replaced.log"
+  local good_stderr="$directory/causal-good-stderr.log"
+  local binary="$directory/causal-binary.txt"
+
+  EVIDENCE_PATH_FILE="$directory/causal-finalizer-evidence-path.txt"
+  is_canonical_positive_uint64 1 ||
+    fail "causal uint64 parser rejected one"
+  is_canonical_positive_uint64 18446744073709551615 ||
+    fail "causal uint64 parser rejected uint64 max"
+  if is_canonical_positive_uint64 0 ||
+     is_canonical_positive_uint64 01 ||
+     is_canonical_positive_uint64 +1 ||
+     is_canonical_positive_uint64 18446744073709551616; then
+    fail "causal uint64 parser accepted a non-canonical or overflowing value"
+  fi
+
+  WORK="$directory"
+  EXPECTED_SHA="$expected_sha"
+  EXPECTED_BUILD="$expected_sha"
+  EXPECTED_FAULT=none
+  NATIVE_ALPHA_TEST_CAUSAL_MODE=causal-a
+  NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE=18446744073709551615
+  NATIVE_ALPHA_TEST_CAUSAL_NONCE=0123456789abcdef0123456789abcdef
+  CAUSAL_BINARY_SHA256="$(printf 'causal-binary\n' | shasum -a 256 | awk '{print $1}')"
+  CAUSAL_METALLIB_SHA256="$(printf 'causal-metallib\n' | shasum -a 256 | awk '{print $1}')"
+  APP_EXECUTABLE_SHA256="$CAUSAL_BINARY_SHA256"
+  METALLIB_SHA="$CAUSAL_METALLIB_SHA256"
+
+  printf '%s\n%s\n' "$expected_sha" causal-a >"$binary"
+  validate_native_alpha_test_causal_binary_profile "$binary" "$expected_sha" ||
+    fail "causal binary profile rejected its exact mode and SHA"
+  for candidate in wrong-sha missing-mode duplicate-mode opposite-mode production; do
+    case "$candidate" in
+      wrong-sha)
+        printf '%s\n%s\n' 1111111111111111111111111111111111111111 causal-a \
+          >"$directory/causal-$candidate.txt"
+        ;;
+      missing-mode)
+        printf '%s\n' "$expected_sha" >"$directory/causal-$candidate.txt"
+        ;;
+      duplicate-mode)
+        printf '%s\n%s\n%s\n' "$expected_sha" causal-a causal-a \
+          >"$directory/causal-$candidate.txt"
+        ;;
+      opposite-mode)
+        printf '%s\n%s\n%s\n' "$expected_sha" causal-a causal-b \
+          >"$directory/causal-$candidate.txt"
+        ;;
+      production)
+        printf '%s\n%s\n%s\n' "$expected_sha" causal-a production \
+          >"$directory/causal-$candidate.txt"
+        ;;
+    esac
+    if validate_native_alpha_test_causal_binary_profile \
+        "$directory/causal-$candidate.txt" "$expected_sha"; then
+      fail "causal binary profile mutation survived: $candidate"
+    fi
+  done
+  NATIVE_ALPHA_TEST_CAUSAL_MODE=causal-b
+  printf '%s\n%s\n' "$expected_sha" causal-b >"$directory/causal-valid-b.txt"
+  validate_native_alpha_test_causal_binary_profile \
+      "$directory/causal-valid-b.txt" "$expected_sha" ||
+    fail "causal binary profile rejected valid causal-b"
+  printf '%s\n%s\n%s\n' "$expected_sha" causal-b causal-a \
+    >"$directory/causal-b-opposite.txt"
+  if validate_native_alpha_test_causal_binary_profile \
+      "$directory/causal-b-opposite.txt" "$expected_sha"; then
+    fail "causal-b binary profile accepted its opposite token"
+  fi
+  NATIVE_ALPHA_TEST_CAUSAL_MODE=causal-a
+
+  python3 - "$prelaunch" "$prelaunch_stderr" "$good" "$good_replaced" \
+      "$good_stderr" "$expected_sha" \
+      "$NATIVE_ALPHA_TEST_CAUSAL_NONCE" \
+      "$NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE" <<'PY'
+import pathlib
+import sys
+
+(
+    pre_path,
+    pre_stderr_path,
+    good_path,
+    good_replaced_path,
+    good_stderr_path,
+    build,
+    nonce,
+    sequence,
+) = sys.argv[1:]
+old_armed = (
+    "RendererIOS native causal capture: ARMED mode=causal-a "
+    "nonce=ffffffffffffffffffffffffffffffff target-sequence=1\n"
+)
+pre = ("old launch\n" + old_armed).encode()
+current = (
+    f"RendererIOS shell: version=fixture build={build} gpu=fixture\n"
+    "RendererIOS configured fault mode=none\n"
+    f"RendererIOS native causal capture: ARMED mode=causal-a "
+    f"nonce={nonce} target-sequence={sequence}\n"
+    f"RendererIOS native causal capture: ENCODED mode=causal-a "
+    f"nonce={nonce} generation=7 sequence={sequence} draws=9 alpha=3\n"
+)
+pathlib.Path(pre_path).write_bytes(pre)
+pathlib.Path(good_path).write_bytes(pre + current.encode())
+pathlib.Path(good_replaced_path).write_text(current)
+stderr_pre = b"old launch: SIGABRT libc++abi: terminating\n"
+pathlib.Path(pre_stderr_path).write_bytes(stderr_pre)
+pathlib.Path(good_stderr_path).write_bytes(stderr_pre + b"current warning only\n")
+armed_line = (
+    f"RendererIOS native causal capture: ARMED mode=causal-a "
+    f"nonce={nonce} target-sequence={sequence}\n"
+)
+encoded_line = (
+    f"RendererIOS native causal capture: ENCODED mode=causal-a "
+    f"nonce={nonce} generation=7 sequence={sequence} draws=9 alpha=3\n"
+)
+mutations = {
+    "missing-armed": current.replace(armed_line, ""),
+    "missing-encoded": current.replace(encoded_line, ""),
+    "duplicate-armed": current.replace(armed_line, armed_line + armed_line),
+    "duplicate-encoded": current + encoded_line,
+    "wrong-armed-mode": current.replace("mode=causal-a", "mode=causal-b", 1),
+    "wrong-armed-nonce": current.replace(nonce, "f" * 32, 1),
+    "wrong-armed-sequence": current.replace(
+        f"target-sequence={sequence}", "target-sequence=1", 1
+    ),
+    "wrong-encoded-mode": current.replace(
+        "ENCODED mode=causal-a", "ENCODED mode=causal-b", 1
+    ),
+    "wrong-encoded-nonce": current.replace(
+        f"ENCODED mode=causal-a nonce={nonce}",
+        f"ENCODED mode=causal-a nonce={'e' * 32}",
+        1,
+    ),
+    "wrong-encoded-sequence": current.replace(
+        f"generation=7 sequence={sequence}",
+        "generation=7 sequence=1",
+        1,
+    ),
+    "reordered": "\n".join(current.rstrip().splitlines()[:2]
+                            + list(reversed(current.rstrip().splitlines()[2:])))
+                 + "\n",
+    "markers-after-snapshot-before-shell": armed_line + encoded_line
+        + "\n".join(current.rstrip().splitlines()[:2]) + "\n",
+    "extra": current + "RendererIOS native causal capture: ACQUIRED\n",
+    "post-encoded": current + (
+        f"RendererIOS native causal capture: FAIL mode=causal-a nonce={nonce} "
+        f"generation=7 sequence={sequence} reason=duplicate-target\n"
+    ),
+    "alpha-zero": current.replace("alpha=3", "alpha=0"),
+    "draws-less-alpha": current.replace("draws=9 alpha=3", "draws=2 alpha=3"),
+    "competing": current + "RendererIOS Bink self-test: PASS fixture\n",
+    "fatal": current + "RendererIOS fatal fixture\n",
+}
+directory = pathlib.Path(good_path).parent
+for name, text in mutations.items():
+    (directory / f"causal-log-{name}.txt").write_bytes(pre + text.encode())
+(directory / "causal-log-replaced-markers-before-shell.txt").write_text(
+    armed_line
+    + encoded_line
+    + "\n".join(current.rstrip().splitlines()[:2])
+    + "\n"
+)
+for name, text in {
+    "sigabrt": "current SIGABRT\n",
+    "libcxxabi": "libc++abi: terminating due to exception\n",
+    "renderer-fatal": "RendererIOS fatal fixture\n",
+}.items():
+    (directory / f"causal-stderr-{name}.log").write_bytes(
+        stderr_pre + text.encode()
+    )
+PY
+
+  validate_native_alpha_test_causal_log \
+      "$good" "$prelaunch" "$good_stderr" "$prelaunch_stderr" ||
+    fail "causal current-launch log self-test rejected a valid contract"
+  validate_native_alpha_test_causal_log \
+      "$good_replaced" "$prelaunch" "$good_stderr" "$prelaunch_stderr" ||
+    fail "causal replaced-log self-test rejected a valid current launch"
+  for candidate in "$directory"/causal-log-*.txt; do
+    if validate_native_alpha_test_causal_log \
+        "$candidate" "$prelaunch" "$good_stderr" "$prelaunch_stderr" \
+        >/dev/null 2>&1; then
+      fail "causal log mutation survived: $(basename "$candidate")"
+    fi
+  done
+  for candidate in "$directory"/causal-stderr-*.log; do
+    if validate_native_alpha_test_causal_log \
+        "$good" "$prelaunch" "$candidate" "$prelaunch_stderr" \
+        >/dev/null 2>&1; then
+      fail "causal stderr mutation survived: $(basename "$candidate")"
+    fi
+  done
+  write_native_alpha_test_causal_contract PASS passed ||
+    fail "causal PASS contract finalization failed"
+  python3 - "$WORK/causal-contract.json" "$expected_sha" <<'PY' ||
+import json
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = json.loads(path.read_text())
+expected_keys = {
+    "schemaVersion", "result", "parentSha", "mode", "nonce",
+    "targetSequence", "launchBoundary", "armedLine", "encodedLine",
+    "draws", "alpha", "binarySha256", "metallibSha256", "cleanupResult",
+}
+if (
+    set(payload) != expected_keys
+    or payload["schemaVersion"] != 1
+    or payload["result"] != "PASS"
+    or payload["cleanupResult"] != "passed"
+    or payload["parentSha"] != sys.argv[2]
+    or payload["targetSequence"] != 18446744073709551615
+    or payload["draws"] != 9
+    or payload["alpha"] != 3
+    or stat.S_IMODE(path.stat().st_mode) != 0o600
+):
+    raise SystemExit(1)
+PY
+    fail "causal PASS contract schema/readback self-test failed"
+  cp "$WORK/causal-contract.json" "$directory/causal-contract-valid.json"
+  python3 - "$directory/causal-contract-valid.json" "$directory" <<'PY'
+import json
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = json.loads(path.read_text())
+directory = pathlib.Path(sys.argv[2])
+mutations = {
+    "missing-key": lambda value: value.pop("armedLine"),
+    "bool-schema": lambda value: value.__setitem__("schemaVersion", True),
+    "bool-sequence": lambda value: value.__setitem__("targetSequence", True),
+    "bool-draws": lambda value: value.__setitem__("draws", True),
+    "bool-boundary": lambda value: value["launchBoundary"].__setitem__(
+        "byteOffset", True
+    ),
+    "wrong-result": lambda value: value.__setitem__("result", "BROKEN"),
+    "wrong-mode-type": lambda value: value.__setitem__("mode", False),
+    "zero-alpha": lambda value: value.__setitem__("alpha", 0),
+}
+for name, mutate in mutations.items():
+    candidate = json.loads(json.dumps(payload))
+    mutate(candidate)
+    (directory / f"causal-contract-{name}.json").write_text(
+        json.dumps(candidate) + "\n"
+    )
+PY
+  for candidate in "$directory"/causal-contract-{missing-key,bool-schema,bool-sequence,bool-draws,bool-boundary,wrong-result,wrong-mode-type,zero-alpha}.json; do
+    cp "$candidate" "$WORK/causal-contract.json"
+    if write_native_alpha_test_causal_contract PASS passed >/dev/null 2>&1; then
+      fail "causal JSON mutation survived: $(basename "$candidate")"
+    fi
+  done
+
+  prepare_causal_finalizer_fixture() {
+    local name="$1"
+
+    validate_native_alpha_test_causal_log \
+        "$good" "$prelaunch" "$good_stderr" "$prelaunch_stderr" ||
+      fail "causal finalizer fixture log validation failed: $name"
+    PASS_EVIDENCE_DIR="$directory/.pending-$name"
+    PASS_EVIDENCE_FINAL_DIR="$directory/pass-$name"
+    mkdir -m 700 "$PASS_EVIDENCE_DIR" ||
+      fail "could not create causal finalizer fixture: $name"
+    printf 'result=PASS\n' >"$PASS_EVIDENCE_DIR/result.txt"
+    chmod 600 "$PASS_EVIDENCE_DIR/result.txt"
+  }
+  verify_causal_finalizer_contract() {
+    local path="$1"
+    local result="$2"
+    local cleanup_result="$3"
+
+    python3 - "$path" "$result" "$cleanup_result" <<'PY'
+import json
+import pathlib
+import stat
+import sys
+
+path = pathlib.Path(sys.argv[1])
+payload = json.loads(path.read_text())
+if (
+    payload["result"] != sys.argv[2]
+    or payload["cleanupResult"] != sys.argv[3]
+    or type(payload["targetSequence"]) is not int
+    or type(payload["draws"]) is not int
+    or type(payload["alpha"]) is not int
+    or stat.S_IMODE(path.stat().st_mode) != 0o600
+):
+    raise SystemExit(1)
+PY
+  }
+
+  prepare_causal_finalizer_fixture pass
+  finalize_native_alpha_test_causal_cleanup 0 0 ||
+    fail "causal atomic PASS finalizer self-test failed"
+  ((CAUSAL_FINALIZER_PUBLISHED == 1 &&
+    CAUSAL_FINALIZER_CLEANUP_STATUS == 0)) ||
+    fail "causal atomic PASS finalizer state is invalid"
+  [[ -d "$directory/pass-pass" &&
+     ! -e "$directory/.pending-pass" ]] ||
+    fail "causal PASS evidence was not committed by atomic rename"
+  verify_causal_finalizer_contract \
+      "$directory/pass-pass/causal-contract.json" PASS passed ||
+    fail "causal committed PASS contract is invalid"
+
+  prepare_causal_finalizer_fixture ordinary-fail
+  finalize_native_alpha_test_causal_cleanup 1 0 ||
+    fail "causal ordinary FAIL finalizer self-test failed"
+  ((CAUSAL_FINALIZER_PUBLISHED == 0 &&
+    CAUSAL_FINALIZER_CLEANUP_STATUS == 0)) ||
+    fail "causal ordinary FAIL cleanup state is invalid"
+  verify_causal_finalizer_contract \
+      "$directory/.pending-ordinary-fail/causal-contract.json" FAIL passed ||
+    fail "causal ordinary FAIL did not preserve successful cleanup"
+  [[ "$(grep -Fxc result=FAIL \
+      "$directory/.pending-ordinary-fail/result.txt" || true)" -eq 1 &&
+     "$(grep -Fxc result=PASS \
+      "$directory/.pending-ordinary-fail/result.txt" || true)" -eq 0 ]] ||
+    fail "causal ordinary FAIL left a provisional PASS result"
+  verify_causal_finalizer_contract \
+      "$WORK/causal-contract.json" FAIL passed ||
+    fail "causal ordinary FAIL work contract is invalid"
+
+  prepare_causal_finalizer_fixture cleanup-fail
+  write_native_alpha_test_causal_contract PASS passed ||
+    fail "causal provisional PASS fixture could not be finalized"
+  install_native_alpha_test_causal_contract \
+      "$WORK/causal-contract.json" \
+      "$PASS_EVIDENCE_DIR/causal-contract.json" PASS passed ||
+    fail "causal provisional PASS fixture could not be installed"
+  finalize_native_alpha_test_causal_cleanup 0 1 ||
+    fail "causal cleanup-invalidated PASS finalizer self-test failed"
+  ((CAUSAL_FINALIZER_PUBLISHED == 0 &&
+    CAUSAL_FINALIZER_CLEANUP_STATUS == 1)) ||
+    fail "causal cleanup-invalidated PASS state is invalid"
+  verify_causal_finalizer_contract \
+      "$directory/.pending-cleanup-fail/causal-contract.json" FAIL failed ||
+    fail "causal cleanup failure did not overwrite provisional PASS"
+
+  for candidate in copy readback; do
+    prepare_causal_finalizer_fixture "$candidate-fail"
+    NATIVE_ALPHA_TEST_CAUSAL_FINALIZER_TEST_FAULT="$candidate"
+    finalize_native_alpha_test_causal_cleanup 0 0 ||
+      fail "causal $candidate failure recovery did not finalize FAIL"
+    ((CAUSAL_FINALIZER_PUBLISHED == 0 &&
+      CAUSAL_FINALIZER_CLEANUP_STATUS == 1)) ||
+      fail "causal $candidate failure did not invalidate PASS"
+    [[ ! -e "$directory/pass-$candidate-fail" ]] ||
+      fail "causal $candidate failure published a PASS directory"
+    verify_causal_finalizer_contract \
+        "$directory/.pending-$candidate-fail/causal-contract.json" \
+        FAIL failed ||
+      fail "causal $candidate failure did not preserve final FAIL"
+  done
+  NATIVE_ALPHA_TEST_CAUSAL_FINALIZER_TEST_FAULT=""
+
+  prepare_causal_finalizer_fixture publish-fail
+  mkdir "$directory/evidence-path-directory" ||
+    fail "could not create causal publication failure fixture"
+  EVIDENCE_PATH_FILE="$directory/evidence-path-directory"
+  if finalize_native_alpha_test_causal_cleanup 0 0 >/dev/null 2>&1; then
+    fail "causal evidence-path publication failure returned success"
+  fi
+  ((CAUSAL_FINALIZER_PUBLISHED == 0 &&
+    CAUSAL_FINALIZER_CLEANUP_STATUS == 1)) ||
+    fail "causal evidence-path publication failure state is invalid"
+  [[ ! -e "$directory/pass-publish-fail" &&
+     -d "$directory/.pending-publish-fail" ]] ||
+    fail "causal evidence-path publication failure left public PASS evidence"
+  verify_causal_finalizer_contract \
+      "$directory/.pending-publish-fail/causal-contract.json" FAIL failed ||
+    fail "causal evidence-path publication failure left a PASS contract"
+  [[ "$(grep -Fxc result=FAIL \
+      "$directory/.pending-publish-fail/result.txt" || true)" -eq 1 &&
+     "$(grep -Fxc result=PASS \
+      "$directory/.pending-publish-fail/result.txt" || true)" -eq 0 ]] ||
+    fail "causal evidence-path publication failure left a PASS result"
+  EVIDENCE_PATH_FILE="$caller_evidence_path_file"
+  PASS_EVIDENCE_DIR=""
+  PASS_EVIDENCE_FINAL_DIR=""
+}
+
 select_bundle_id_from_apps() {
   local apps_json="$1"
   local requested="${2:-}"
@@ -619,6 +1691,7 @@ run_host_contract_self_test() {
   local expected_clear clear_path clear_failure_path clear_committed_path
   local expected_tile tile_path tile_failure_path tile_committed_path
   local expected_forward forward_path forward_failure_path forward_committed_path
+  local expected_causal causal_path causal_failure_path
   local expected_device_facts device_facts_path device_facts_failure_path
   local plain_path plain_repeat_path committed_path committed_repeat_path
   local resource_path resource_failure_path
@@ -632,6 +1705,8 @@ run_host_contract_self_test() {
   local requested_shading_prototype_tile_self_test="$REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST"
   local requested_shading_prototype_forward_self_test="$REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST"
   local requested_device_facts_reference_a17="$REQUIRE_DEVICE_FACTS_REFERENCE_A17"
+  local requested_native_alpha_test_causal_mode="$NATIVE_ALPHA_TEST_CAUSAL_MODE"
+  local requested_native_alpha_test_causal_sequence="$NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE"
 
   [[ "$expected_sha" =~ ^[0-9a-f]{40}$ ]] ||
     fail "self-test expected SHA is invalid"
@@ -666,6 +1741,8 @@ run_host_contract_self_test() {
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
   REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
   REQUIRE_DEVICE_FACTS_REFERENCE_A17=0
+  NATIVE_ALPHA_TEST_CAUSAL_MODE=""
+  NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE=""
   plain_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_build" "$expected_fault")"
   if [[ "$expected_fault" == none && "$expected_build" == "$expected_sha" ]]; then
@@ -786,8 +1863,20 @@ run_host_contract_self_test() {
   forward_committed_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
     "$expected_sha" "$expected_sha" none)"
   [[ "$forward_committed_path" == \
-     "$ROOT/build/device-self-test/$expected_sha/shading-prototype-forward/pass-$timestamp-$process_id" ]] ||
+    "$ROOT/build/device-self-test/$expected_sha/shading-prototype-forward/pass-$timestamp-$process_id" ]] ||
     fail "committed shading prototype Forward evidence path self-test failed"
+  NATIVE_ALPHA_TEST_CAUSAL_MODE=causal-a
+  causal_path="$(smoke_evidence_path pass "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  expected_causal="$ROOT/build/device-self-test/$expected_sha/native-alpha-test-causal-a/pass-$timestamp-$process_id"
+  [[ "$causal_path" == "$expected_causal" ]] ||
+    fail "native alpha-test causal smoke evidence path self-test failed"
+  causal_failure_path="$(smoke_evidence_path failure "$timestamp" "$process_id" \
+    "$expected_sha" "$expected_sha" none)"
+  [[ "$causal_failure_path" == \
+    "$ROOT/build/device-self-test/$expected_sha/native-alpha-test-causal-a/failure-$timestamp-$process_id" ]] ||
+    fail "native alpha-test causal failure evidence path self-test failed"
+  NATIVE_ALPHA_TEST_CAUSAL_MODE=""
   REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST="$requested_resource_allocator_self_test"
   REQUIRE_CLEAR_ONLY_PASS_SELF_TEST="$requested_clear_only_pass_self_test"
   REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST="$requested_shading_prototype_tile_self_test"
@@ -811,10 +1900,6 @@ run_host_contract_self_test() {
     actual="$forward_path"
     expected="$expected_forward"
   fi
-  publish_evidence_path "$actual"
-  [[ "$(cat "$evidence_file")" == "$expected" ]] ||
-    fail "smoke evidence path publication self-test failed"
-
   plain_binary="$self_test_work/plain-binary.txt"
   self_test_binary="$self_test_work/resource-allocator-binary.txt"
   duplicate_binary="$self_test_work/resource-allocator-duplicate-binary.txt"
@@ -1144,13 +2229,20 @@ time.sleep(30)
   [[ "$nonzero_status" == 1 ]] ||
     fail "bounded command did not propagate an ordinary nonzero status"
 
+  run_native_alpha_test_causal_host_self_test \
+    "$self_test_work" "$expected_sha"
+  NATIVE_ALPHA_TEST_CAUSAL_MODE="$requested_native_alpha_test_causal_mode"
+  NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE="$requested_native_alpha_test_causal_sequence"
+  publish_evidence_path "$actual"
+  [[ "$(cat "$evidence_file")" == "$expected" ]] ||
+    fail "smoke final evidence path publication self-test failed"
   find "$self_test_work" -type l -delete
   find "$self_test_work" -type f -delete
   find "$self_test_work" -depth -type d ! -path "$self_test_work" \
     -exec rmdir {} +
   rmdir "$self_test_work"
   echo "smoke bounded-command normal-success orphan cleanup self-test passed"
-  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass,shading-prototype-tile,shading-prototype-forward bundle-selector=xctrunner-safe nonce=32hex crash-states=3"
+  echo "smoke host contract self-test passed: fault=$expected_fault build=$expected_build profiles=plain,resource-allocator,clear-only-pass,shading-prototype-tile,shading-prototype-forward,native-alpha-test-causal bundle-selector=xctrunner-safe nonce=32hex crash-states=3"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -1183,12 +2275,29 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_DEVICE_FACTS_REFERENCE_A17=1
       shift
       ;;
+    --native-alpha-test-causal-mode)
+      ((NATIVE_ALPHA_TEST_CAUSAL_MODE_SEEN == 0)) ||
+        fail "native alpha-test causal mode may be supplied exactly once"
+      NATIVE_ALPHA_TEST_CAUSAL_MODE="${2:?missing native alpha-test causal mode}"
+      NATIVE_ALPHA_TEST_CAUSAL_MODE_SEEN=1
+      shift 2
+      ;;
+    --native-alpha-test-causal-sequence)
+      ((NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_SEEN == 0)) ||
+        fail "native alpha-test causal sequence may be supplied exactly once"
+      NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE="${2:?missing native alpha-test causal sequence}"
+      NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_SEEN=1
+      shift 2
+      ;;
     --pipeline-archive-test-mode)
       PIPELINE_ARCHIVE_TEST_MODE="${2:?missing pipeline archive test mode}"
       shift 2
       ;;
     --expected-fault)
+      ((EXPECTED_FAULT_SEEN == 0)) ||
+        fail "expected fault may be supplied exactly once"
       EXPECTED_FAULT="${2:?missing expected fault}"
+      EXPECTED_FAULT_SEEN=1
       shift 2
       ;;
     --evidence-path-file)
@@ -1196,7 +2305,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-device-facts-reference-a17] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-device-facts-reference-a17] [--native-alpha-test-causal-mode causal-a|causal-b --native-alpha-test-causal-sequence canonical-positive-uint64] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -1206,6 +2315,16 @@ done
 [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be a non-negative integer"
 ((NEW_GAME == 0 || SAVE_SLOT_EXPLICIT == 0)) ||
   fail "--new-game and --save-slot are mutually exclusive"
+((NATIVE_ALPHA_TEST_CAUSAL_MODE_SEEN ==
+  NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_SEEN)) ||
+  fail "native alpha-test causal mode and sequence must be supplied together"
+if ((NATIVE_ALPHA_TEST_CAUSAL_MODE_SEEN != 0)); then
+  [[ "$NATIVE_ALPHA_TEST_CAUSAL_MODE" == causal-a ||
+     "$NATIVE_ALPHA_TEST_CAUSAL_MODE" == causal-b ]] ||
+    fail "native alpha-test causal mode must be causal-a or causal-b"
+  is_canonical_positive_uint64 "$NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE" ||
+    fail "native alpha-test causal sequence must be a canonical positive uint64"
+fi
 [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ||
    "$PIPELINE_ARCHIVE_TEST_MODE" == cold ||
    "$PIPELINE_ARCHIVE_TEST_MODE" == corrupt ]] ||
@@ -1284,6 +2403,19 @@ done
 ((REQUIRE_DEVICE_FACTS_REFERENCE_A17 == 0)) ||
   [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
   fail "device-facts A17 reference gate requires an empty pipeline archive profile"
+if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+  [[ "$EXPECTED_FAULT" == none ]] ||
+    fail "native alpha-test causal mode requires expected fault none"
+  ((REQUIRE_BINK_SELF_TEST == 0 &&
+    REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST == 0 &&
+    REQUIRE_CLEAR_ONLY_PASS_SELF_TEST == 0 &&
+    REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST == 0 &&
+    REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 &&
+    REQUIRE_DEVICE_FACTS_REFERENCE_A17 == 0)) ||
+    fail "native alpha-test causal mode is mutually exclusive with all other self-tests"
+  [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
+    fail "native alpha-test causal mode requires an empty pipeline archive profile"
+fi
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -1310,6 +2442,9 @@ chmod 700 "$WORK" || fail "could not secure smoke work directory"
 DEVICE=""
 APP_EXECUTABLE=""
 APP_EXECUTABLE_SHA256="uncomputed"
+CAUSAL_BINARY_SHA256="uncomputed"
+CAUSAL_METALLIB_SHA256="uncomputed"
+NATIVE_ALPHA_TEST_CAUSAL_NONCE="uncomputed"
 BUNDLE_ID=""
 EXPECTED_SHA=""
 EXPECTED_BUILD=""
@@ -1390,6 +2525,9 @@ ID3_PID_DISCOVERY_ATTEMPTS=0
 ID3_COMPLETION_OBSERVED=0
 ID3_POST_COMPLETION_STABLE_SECONDS=0
 PASS_EVIDENCE_DIR=""
+PASS_EVIDENCE_FINAL_DIR=""
+CAUSAL_FINALIZER_CLEANUP_STATUS=0
+CAUSAL_FINALIZER_PUBLISHED=0
 APP_EXECUTABLE="$(
   /usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' \
     "$APP_INPUT/Info.plist" 2>/dev/null
@@ -2795,6 +3933,8 @@ preserve_failure_evidence() {
       shading-prototype-forward-saves-before.sha256 \
       shading-prototype-forward-saves-after.sha256 \
       shading-prototype-forward-terminal-wait.txt \
+      causal-contract.json log-native-alpha-test-causal-prelaunch.txt \
+      stderr-native-alpha-test-causal-prelaunch.log \
       documents-preinstall.json scripts-preinstall.json system-preinstall.json \
       documents-postinstall.json scripts-postinstall.json system-postinstall.json \
       documents-postruntime.json scripts-postruntime.json system-postruntime.json \
@@ -2990,6 +4130,14 @@ cleanup() {
       preserve_id3_recovery_if_present || cleanup_status=1
     fi
   fi
+  if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+    if finalize_native_alpha_test_causal_cleanup "$status" "$cleanup_status"; then
+      cleanup_status="$CAUSAL_FINALIZER_CLEANUP_STATUS"
+    else
+      cleanup_status=1
+      CAUSAL_FINALIZER_CLEANUP_STATUS=1
+    fi
+  fi
   if ((status != 0 || cleanup_status != 0)); then
     preserve_failure_evidence "$status" "$cleanup_status"
   fi
@@ -3032,7 +4180,9 @@ cleanup() {
     final_status=1
   fi
   if ((status == 0 && cleanup_status == 0)) && [[ -n "$PASS_EVIDENCE_DIR" ]]; then
-    if ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
+    if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+      echo "PASS — native alpha-test causal ARMED→ENCODED contract proven; app stopped"
+    elif ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
       echo "PASS — shading prototype Forward execution/readback/capture acquired; app stopped"
     elif ((REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0)); then
       echo "PASS — shading prototype Tile execution and capture acquired; app stopped"
@@ -3067,9 +4217,31 @@ EXPECTED_BUILD="${OPENGOTHIC_IOS_EXPECTED_BUILD:-$EXPECTED_SHA}"
 [[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||
    "$EXPECTED_BUILD" == "$EXPECTED_SHA-local" ]] ||
   fail "expected build must identify the expected source SHA"
+[[ -z "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ||
+   "$EXPECTED_BUILD" == "$EXPECTED_SHA" ]] ||
+  fail "native alpha-test causal mode requires an exact-SHA build"
 strings "$APP_INPUT/$APP_EXECUTABLE" >"$WORK/app-strings.txt"
 grep -Fxq "$EXPECTED_BUILD" "$WORK/app-strings.txt" ||
   fail "app binary does not contain exact expected RendererIOS build"
+CAUSAL_BINARY_SHA256="$(
+  shasum -a 256 "$APP_INPUT/$APP_EXECUTABLE" | awk '{print $1}'
+)"
+CAUSAL_METALLIB_SHA256="$(
+  shasum -a 256 "$APP_INPUT/RendererIOS.metallib" | awk '{print $1}'
+)"
+[[ "$CAUSAL_BINARY_SHA256" =~ ^[0-9a-f]{64}$ &&
+   "$CAUSAL_METALLIB_SHA256" =~ ^[0-9a-f]{64}$ ]] ||
+  fail "could not fingerprint the unsigned causal input artifacts"
+if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+  validate_native_alpha_test_causal_binary_profile \
+      "$WORK/app-strings.txt" "$EXPECTED_BUILD" ||
+    fail "app binary native alpha-test causal profile does not match the request"
+  NATIVE_ALPHA_TEST_CAUSAL_NONCE="$(
+    generate_native_alpha_test_causal_nonce
+  )" || fail "could not generate native alpha-test causal nonce"
+  [[ "$NATIVE_ALPHA_TEST_CAUSAL_NONCE" =~ ^[0-9a-f]{32}$ ]] ||
+    fail "generated native alpha-test causal nonce is invalid"
+fi
 validate_resource_allocator_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary resource allocator self-test profile does not match the request"
 validate_clear_only_pass_binary_profile "$WORK/app-strings.txt" ||
@@ -3324,6 +4496,18 @@ if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
     "-renderer-ios-semantic-nonce=$ID3_SEMANTIC_NONCE"
   )
 fi
+if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+  LAUNCH_ARGS+=(
+    "${NATIVE_ALPHA_TEST_CAUSAL_MODE_ARGUMENT}${NATIVE_ALPHA_TEST_CAUSAL_MODE}"
+    "${NATIVE_ALPHA_TEST_CAUSAL_NONCE_ARGUMENT}${NATIVE_ALPHA_TEST_CAUSAL_NONCE}"
+    "${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_ARGUMENT}${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE}"
+  )
+  pull_runtime_logs native-alpha-test-causal-prelaunch
+  [[ -f "$WORK/log-native-alpha-test-causal-prelaunch.txt" ]] ||
+    : >"$WORK/log-native-alpha-test-causal-prelaunch.txt"
+  [[ -f "$WORK/stderr-native-alpha-test-causal-prelaunch.log" ]] ||
+    : >"$WORK/stderr-native-alpha-test-causal-prelaunch.log"
+fi
 if ((NEW_GAME != 0)); then
   echo "== unattended launch: new game, ${DURATION}s =="
 else
@@ -3516,6 +4700,14 @@ if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
 fi
 
 [[ -s "$WORK/log.txt" ]] || fail "device produced no log.txt"
+if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+  validate_native_alpha_test_causal_log \
+      "$WORK/log.txt" \
+      "$WORK/log-native-alpha-test-causal-prelaunch.txt" \
+      "$WORK/stderr.log" \
+      "$WORK/stderr-native-alpha-test-causal-prelaunch.log" ||
+    fail "native alpha-test causal current-launch log validation failed"
+else
 python3 - "$WORK/log.txt" "$EXPECTED_BUILD" "$EXPECTED_FAULT" <<'PY' ||
 import pathlib
 import re
@@ -4522,6 +5714,7 @@ PY
 fi
 fi
 fi
+fi
 
 capture_crash_state after "$WORK/crash.log" POST_CRASH_SHA ||
   fail "could not establish post-run crash.log state"
@@ -4553,10 +5746,16 @@ OUT_ROOT="$(smoke_evidence_root \
 OUT="$(smoke_evidence_path pass "$timestamp" "$$" \
   "$EXPECTED_SHA" "$EXPECTED_BUILD" "$EXPECTED_FAULT")" ||
   fail "could not resolve smoke evidence path"
+if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+  PASS_EVIDENCE_FINAL_DIR="$OUT"
+  OUT="$OUT_ROOT/.pending-pass-$timestamp-$$"
+fi
 create_private_evidence_directory "$OUT" "$OUT_ROOT" ||
   fail "could not create private PASS evidence directory"
 PASS_EVIDENCE_DIR="$OUT"
-publish_evidence_path "$OUT"
+if [[ -z "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
+  publish_evidence_path "$OUT"
+fi
 copy_private_evidence_path "$WORK/log.txt" "$OUT/log.txt" ||
   fail "could not preserve private log evidence"
 [[ ! -f "$WORK/stderr.log" ]] ||
@@ -4572,6 +5771,15 @@ copy_private_evidence_path "$WORK/device-selection.log" \
   copy_private_evidence_path "$WORK/park-settings.log" \
     "$OUT/park-settings.log" ||
   fail "could not preserve private park-settings evidence"
+[[ ! -f "$WORK/log-native-alpha-test-causal-prelaunch.txt" ]] ||
+  copy_private_evidence_path "$WORK/log-native-alpha-test-causal-prelaunch.txt" \
+    "$OUT/log-native-alpha-test-causal-prelaunch.txt" ||
+  fail "could not preserve private causal pre-launch log evidence"
+[[ ! -f "$WORK/stderr-native-alpha-test-causal-prelaunch.log" ]] ||
+  copy_private_evidence_path \
+    "$WORK/stderr-native-alpha-test-causal-prelaunch.log" \
+    "$OUT/stderr-native-alpha-test-causal-prelaunch.log" ||
+  fail "could not preserve private causal pre-launch stderr evidence"
 [[ ! -f "$WORK/fault-log-summary.txt" ]] ||
   copy_private_evidence_path "$WORK/fault-log-summary.txt" \
     "$OUT/fault-log-summary.txt" ||

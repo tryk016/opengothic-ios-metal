@@ -3571,7 +3571,7 @@ for artifact in (
         raise SystemExit(
             f"clear-only failure evidence omits {artifact}"
         )
-cleanup = harness.split("cleanup() {", 1)[1].split(
+cleanup = harness.split("\ncleanup() {", 1)[1].split(
     "\ntrap cleanup EXIT", 1
 )[0]
 if cleanup.index("ensure_durable_zero") > cleanup.index(
@@ -5769,7 +5769,7 @@ if evidence_root.count(
     raise SystemExit("Tile evidence namespace is not exact")
 if evidence_leaf.count("printf '%s/%s-%s-%s\\n'") != 1:
     raise SystemExit("shared immutable evidence leaf is not exact")
-cleanup = harness.split("cleanup() {", 1)[1].split(
+cleanup = harness.split("\ncleanup() {", 1)[1].split(
     "\ntrap cleanup EXIT", 1
 )[0]
 if cleanup.index("ensure_durable_zero") > cleanup.index(
@@ -6095,6 +6095,323 @@ expect_forward_configure_failure clear \
 expect_forward_configure_failure tile \
   -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
   -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON
+
+printf '\n### CI contract: Verify P2.1c3b3 causal device harness\n'
+set -euo pipefail
+
+CAUSAL_HARNESS=ios/device-test/run-smoke-test.sh
+test -x "$CAUSAL_HARNESS"
+/bin/bash -n "$CAUSAL_HARNESS"
+/bin/bash "$CAUSAL_HARNESS" --self-test \
+  --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 18446744073709551615
+/bin/bash ios/device-test/run-pipeline-archive-test.sh --self-test
+
+expect_causal_harness_parser_failure() {
+  local name="$1"
+  shift
+  if /bin/bash "$CAUSAL_HARNESS" "$@" >/dev/null 2>&1; then
+    echo "causal device harness parser mutation survived: $name"
+    exit 1
+  fi
+}
+expect_causal_harness_parser_failure missing-sequence \
+  --self-test --native-alpha-test-causal-mode causal-a
+expect_causal_harness_parser_failure missing-mode \
+  --self-test --native-alpha-test-causal-sequence 7
+expect_causal_harness_parser_failure wrong-mode \
+  --self-test --native-alpha-test-causal-mode production \
+  --native-alpha-test-causal-sequence 7
+expect_causal_harness_parser_failure duplicate-mode \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 7
+expect_causal_harness_parser_failure duplicate-sequence \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 7 \
+  --native-alpha-test-causal-sequence 8
+expect_causal_harness_parser_failure zero-sequence \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 0
+expect_causal_harness_parser_failure leading-zero-sequence \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 01
+expect_causal_harness_parser_failure overflowing-sequence \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 18446744073709551616
+expect_causal_harness_parser_failure extra-causal-argument \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 7 \
+  --renderer-ios-native-alpha-test-causal-extra=1
+expect_causal_harness_parser_failure competing-self-test \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 7 --require-bink-self-test
+expect_causal_harness_parser_failure competing-fault \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 7 \
+  --expected-fault post-submit-suboptimal
+expect_causal_harness_parser_failure fault-history-reset \
+  --self-test --native-alpha-test-causal-mode causal-a \
+  --native-alpha-test-causal-sequence 7 \
+  --expected-fault post-submit-suboptimal --expected-fault none
+
+python3 - "$CAUSAL_HARNESS" <<'PY'
+import pathlib
+import re
+import sys
+
+source = pathlib.Path(sys.argv[1]).read_text()
+launch_block = (
+    '  LAUNCH_ARGS+=(\n'
+    '    "${NATIVE_ALPHA_TEST_CAUSAL_MODE_ARGUMENT}'
+    '${NATIVE_ALPHA_TEST_CAUSAL_MODE}"\n'
+    '    "${NATIVE_ALPHA_TEST_CAUSAL_NONCE_ARGUMENT}'
+    '${NATIVE_ALPHA_TEST_CAUSAL_NONCE}"\n'
+    '    "${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_ARGUMENT}'
+    '${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE}"\n'
+    "  )"
+)
+requested_guard = (
+    '[[ "$(grep -Fxc -- "$NATIVE_ALPHA_TEST_CAUSAL_MODE" \\\n'
+    '    "$strings_file" || true)" -eq 1 ]] || return 1'
+)
+failure_install = (
+    '"$PASS_EVIDENCE_DIR/causal-contract.json" FAIL "$cleanup_result" ||'
+)
+expected_schema = {
+    "schemaVersion", "result", "parentSha", "mode", "nonce",
+    "targetSequence", "launchBoundary", "armedLine", "encodedLine",
+    "draws", "alpha", "binarySha256", "metallibSha256", "cleanupResult",
+}
+
+def validate(candidate):
+    required = (
+        "is_canonical_positive_uint64()",
+        "generate_native_alpha_test_causal_nonce()",
+        "validate_native_alpha_test_causal_binary_profile()",
+        "validate_native_alpha_test_causal_log()",
+        "write_native_alpha_test_causal_contract()",
+        "install_native_alpha_test_causal_contract()",
+        "commit_native_alpha_test_causal_pass_evidence()",
+        "retract_native_alpha_test_causal_pass_evidence()",
+        "invalidate_native_alpha_test_causal_result()",
+        "finalize_native_alpha_test_causal_cleanup()",
+        "run_native_alpha_test_causal_host_self_test()",
+        "pull_runtime_logs native-alpha-test-causal-prelaunch",
+        "stderr-native-alpha-test-causal-prelaunch.log",
+        "causal-log-replaced-markers-before-shell.txt",
+        "write_native_alpha_test_causal_contract PASS passed",
+        'write_native_alpha_test_causal_contract FAIL "$cleanup_result"',
+        "causal-contract.json",
+        "len(causal) != 2",
+        "shell[0][0] < armed[0][0]",
+        "fault[0][0] < armed[0][0]",
+        "armed[0][0] < encoded[0][0]",
+        "alpha <= 0 or draws < alpha",
+        "fatal.search(segment) or fatal.search(stderr_segment)",
+        'if injected_fault == "copy":',
+        'if injected_fault == "readback":',
+        "type(payload[\"targetSequence\"]) is not int",
+        "((EXPECTED_FAULT_SEEN == 0))",
+        'fail "native alpha-test causal mode requires an exact-SHA build"',
+        "prepare_causal_finalizer_fixture publish-fail",
+        "causal evidence-path publication failure returned success",
+        "causal ordinary FAIL left a provisional PASS result",
+        'EVIDENCE_PATH_FILE="$directory/causal-finalizer-evidence-path.txt"',
+        'EVIDENCE_PATH_FILE="$caller_evidence_path_file"',
+        "smoke final evidence path publication self-test failed",
+    )
+    for literal in required:
+        if literal not in candidate:
+            raise ValueError("causal harness contract drifted: " + literal)
+    for bash4_only in ("declare -A", "mapfile ", "readarray ", "local -n "):
+        if bash4_only in candidate:
+            raise ValueError("causal harness is not Bash 3.2: " + bash4_only)
+    if candidate.count(requested_guard) != 1:
+        raise ValueError("causal requested binary token is not exact-one")
+
+    launch_start = candidate.index("LAUNCH_ARGS=(-nomenu)")
+    launch_end = candidate.index(
+        'if ((NEW_GAME != 0)); then\n  echo "== unattended launch:',
+        launch_start,
+    )
+    launch = candidate[launch_start:launch_end]
+    if launch.count(launch_block) != 1:
+        raise ValueError("causal launch is not one exact contiguous argv triple")
+
+    contract_source = candidate[candidate.index(
+        "write_native_alpha_test_causal_contract()"
+    ):]
+    match = re.search(
+        r'keys = \{\n(?P<body>.*?)\n\}', contract_source, re.DOTALL
+    )
+    if match is None:
+        raise ValueError("causal contract schema is missing")
+    actual = set(re.findall(
+        r'"([A-Za-z][A-Za-z0-9]+)"', match.group("body")
+    ))
+    if actual != expected_schema:
+        raise ValueError("causal contract exact schema drifted")
+
+    finalizer = candidate[
+        candidate.index("finalize_native_alpha_test_causal_cleanup() {"):
+        candidate.index("validate_native_alpha_test_causal_log() {")
+    ]
+    for literal in (
+        "if ((original_status != 0 || CAUSAL_FINALIZER_CLEANUP_STATUS != 0))",
+        "commit_native_alpha_test_causal_pass_evidence",
+        failure_install,
+        "CAUSAL_FINALIZER_PUBLISHED=1",
+    ):
+        if literal not in finalizer:
+            raise ValueError("causal finalizer drifted: " + literal)
+    if finalizer.count("install_native_alpha_test_causal_contract") != 2:
+        raise ValueError("causal finalizer lost PASS/FAIL contract installs")
+    if finalizer.count(
+        'if publish_evidence_path "$PASS_EVIDENCE_DIR"; then'
+    ) != 1:
+        raise ValueError("causal finalizer lost checked evidence-path publication")
+    if finalizer.count(
+        "retract_native_alpha_test_causal_pass_evidence \\"
+    ) != 1:
+        raise ValueError("causal finalizer lost atomic PASS retraction")
+    if finalizer.count(
+        "invalidate_native_alpha_test_causal_result \\"
+    ) != 1:
+        raise ValueError("causal finalizer lost FAIL result invalidation")
+    cleanup = candidate[
+        candidate.index("\ncleanup() {"):
+        candidate.index("trap cleanup EXIT")
+    ]
+    if 'publish_evidence_path "$PASS_EVIDENCE_DIR"' in cleanup:
+        raise ValueError("causal cleanup bypasses fail-closed publication")
+    if (
+        'OUT="$OUT_ROOT/.pending-pass-$timestamp-$$"' not in candidate
+        or 'PASS_EVIDENCE_FINAL_DIR="$OUT"' not in candidate
+    ):
+        raise ValueError("causal PASS evidence is not atomically published")
+    host_self_test = candidate[
+        candidate.index("run_host_contract_self_test() {"):
+        candidate.index("\nwhile [[ $# -gt 0 ]]; do")
+    ]
+    causal_fixture_call = "run_native_alpha_test_causal_host_self_test \\"
+    final_publication = 'publish_evidence_path "$actual"'
+    if (
+        host_self_test.count(causal_fixture_call) != 1
+        or host_self_test.count(final_publication) != 1
+        or host_self_test.index(causal_fixture_call)
+        >= host_self_test.index(final_publication)
+    ):
+        raise ValueError("causal fixture can overwrite final host evidence path")
+
+def replace_once(candidate, before, after):
+    if candidate.count(before) != 1:
+        raise SystemExit("causal mutation anchor drifted: " + before)
+    return candidate.replace(before, after, 1)
+
+validate(source)
+mutations = (
+    replace_once(source, "len(causal) != 2", "len(causal) < 2"),
+    replace_once(
+        source,
+        "shell[0][0] < armed[0][0]",
+        "shell[0][0] > armed[0][0]",
+    ),
+    replace_once(
+        source,
+        "alpha <= 0 or draws < alpha",
+        "alpha < 0 or draws < alpha",
+    ),
+    replace_once(source, requested_guard, requested_guard.replace("-eq", "-le")),
+    replace_once(
+        source,
+        launch_block,
+        launch_block.replace(
+            "${NATIVE_ALPHA_TEST_CAUSAL_MODE_ARGUMENT}"
+            "${NATIVE_ALPHA_TEST_CAUSAL_MODE}",
+            "${NATIVE_ALPHA_TEST_CAUSAL_NONCE_ARGUMENT}"
+            "${NATIVE_ALPHA_TEST_CAUSAL_NONCE}",
+            1,
+        ),
+    ),
+    replace_once(
+        source,
+        '    "${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_ARGUMENT}'
+        '${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE}"\n  )',
+        '    "${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE_ARGUMENT}'
+        '${NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE}"\n'
+        '    "${NATIVE_ALPHA_TEST_CAUSAL_MODE_ARGUMENT}'
+        '${NATIVE_ALPHA_TEST_CAUSAL_MODE}"\n  )',
+    ),
+    replace_once(
+        source,
+        "if ((original_status != 0 || "
+        "CAUSAL_FINALIZER_CLEANUP_STATUS != 0)); then",
+        "if ((original_status != 0 && "
+        "CAUSAL_FINALIZER_CLEANUP_STATUS != 0)); then",
+    ),
+    replace_once(source, failure_install, failure_install.replace("FAIL", "PASS")),
+    replace_once(
+        source, 'if injected_fault == "copy":',
+        'if injected_fault == "disabled-copy":',
+    ),
+    replace_once(
+        source, 'if injected_fault == "readback":',
+        'if injected_fault == "disabled-readback":',
+    ),
+    replace_once(
+        source,
+        "fatal.search(segment) or fatal.search(stderr_segment)",
+        "fatal.search(segment)",
+    ),
+    replace_once(
+        source,
+        "((EXPECTED_FAULT_SEEN == 0))",
+        "((EXPECTED_FAULT_SEEN >= 0))",
+    ),
+    replace_once(
+        source,
+        "commit_native_alpha_test_causal_pass_evidence \\",
+        "true # missing atomic causal PASS rename",
+    ),
+    replace_once(
+        source,
+        'if publish_evidence_path "$PASS_EVIDENCE_DIR"; then',
+        "if true; then # ignored causal evidence-path publication",
+    ),
+    replace_once(
+        source,
+        "retract_native_alpha_test_causal_pass_evidence \\",
+        "true # missing atomic causal PASS retraction",
+    ),
+    replace_once(
+        source,
+        "invalidate_native_alpha_test_causal_result \\",
+        "true # missing causal FAIL result invalidation",
+    ),
+    replace_once(
+        source,
+        'EVIDENCE_PATH_FILE="$directory/causal-finalizer-evidence-path.txt"',
+        'EVIDENCE_PATH_FILE="$caller_evidence_path_file"',
+    ),
+    replace_once(
+        source,
+        'publish_evidence_path "$actual"',
+        "true # missing final host evidence-path publication",
+    ),
+)
+killed = 0
+for mutation in mutations:
+    try:
+        validate(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("causal harness source mutation survived")
+if killed != 18:
+    raise SystemExit("causal harness mutation count drifted")
+print(f"causal device harness source oracle: mutations-killed={killed}")
+PY
 
 printf '\n### CI contract: Verify physical-device smoke cleanup contract\n'
 set -euo pipefail
@@ -6462,7 +6779,7 @@ raw_function = source.split(
 )[0]
 if 'ID3_DESTINATION_RESTORED == 0' not in raw_function:
     raise SystemExit("ID3 raw capture can overwrite its fault artifact after restore")
-cleanup_function = source.split("cleanup() {", 1)[1].split(
+cleanup_function = source.split("\ncleanup() {", 1)[1].split(
     "\ntrap cleanup EXIT", 1)[0]
 cleanup_contract = (
     'capture_id3_save_postflight_raw',
@@ -6524,7 +6841,7 @@ if schedule_positions != sorted(schedule_positions):
 if durable_function.rfind('return 1') < durable_function.index(
     'run_battery_safety_fallback || true'):
     raise SystemExit("physical smoke durable-zero exhaustion is not fail-closed")
-cleanup_function = source.split("cleanup() {", 1)[1].split(
+cleanup_function = source.split("\ncleanup() {", 1)[1].split(
     "\ntrap cleanup EXIT", 1)[0]
 cleanup_contract = (
     'local status=$?',
@@ -7429,7 +7746,7 @@ if constants["DURABLE_ZERO_SCANS_PER_CYCLE"] < 10 or scheduled_span < 90:
     raise SystemExit("semantic durable-zero scan schedule is shorter than t=0..90s")
 if constants["DURABLE_ZERO_REQUIRED_STABLE_SECONDS"] < 90:
     raise SystemExit("semantic durable-zero stable-window gate is shorter than 90 seconds")
-cleanup_function = harness.split("cleanup() {", 1)[1].split("\ntrap cleanup", 1)[0]
+cleanup_function = harness.split("\ncleanup() {", 1)[1].split("\ntrap cleanup", 1)[0]
 if 'local status=$?' not in cleanup_function:
     raise SystemExit("semantic trap cleanup does not preserve the original status")
 if 'finalize_runtime || cleanup_status=1' not in cleanup_function:
