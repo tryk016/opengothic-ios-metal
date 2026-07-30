@@ -38,7 +38,7 @@ case "$MODE" in
     }
     for profile in "$@"; do
       case "$profile" in
-        off|on|tile|forward) ;;
+        off|on|tile|forward|causal-none|causal-a|causal-b) ;;
         *)
           echo "unknown verification profile: $profile" >&2
           exit 2
@@ -648,6 +648,362 @@ xcrun clang++ -std=c++20 \
   -o "$TMP_GATE/iosgpusceneplan"
 codesign -f -s - "$TMP_GATE/iosgpusceneplan"
 "$TMP_GATE/iosgpusceneplan"
+echo "### P2.1c3b3a causal NONE/A/B/HOST_TEST strict and sanitizers"
+causal_host_variants=(
+  none
+  causal-a
+  causal-b
+  host-test
+)
+for causal_variant in "${causal_host_variants[@]}"; do
+  set --
+  case "$causal_variant" in
+    none) ;;
+    causal-a)
+      set -- \
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1
+      ;;
+    causal-b)
+      set -- \
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1
+      ;;
+    host-test)
+      set -- \
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST=1
+      ;;
+  esac
+  xcrun clang++ -std=c++20 \
+    -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+    "$@" \
+    -Igame \
+    ios/tests/iosgpusceneplan.cpp \
+    -o "$TMP_GATE/iosgpusceneplan-$causal_variant"
+  codesign -f -s - "$TMP_GATE/iosgpusceneplan-$causal_variant"
+  "$TMP_GATE/iosgpusceneplan-$causal_variant"
+  xcrun clang++ -std=c++20 \
+    -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    "$@" \
+    -Igame \
+    ios/tests/iosgpusceneplan.cpp \
+    -o "$TMP_GATE/iosgpusceneplan-$causal_variant-sanitized"
+  codesign -f -s - "$TMP_GATE/iosgpusceneplan-$causal_variant-sanitized"
+  "$TMP_GATE/iosgpusceneplan-$causal_variant-sanitized"
+done
+for causal_conflict in a-b a-host b-host; do
+  causal_conflict_definitions=()
+  case "$causal_conflict" in
+    a-b)
+      causal_conflict_definitions=(
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1
+      )
+      ;;
+    a-host)
+      causal_conflict_definitions=(
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST=1
+      )
+      ;;
+    b-host)
+      causal_conflict_definitions=(
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST=1
+      )
+      ;;
+  esac
+  if xcrun clang++ -std=c++20 \
+      -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+      "${causal_conflict_definitions[@]}" \
+      -Igame -fsyntax-only ios/tests/iosgpusceneplan.cpp \
+      >/dev/null 2>&1; then
+    fail "P2.1c3b3a macro conflict survived: $causal_conflict"
+  fi
+done
+echo "### P2.1c3b3c causal runtime AppleClang and mutation oracle"
+for causal_variant in none causal-a causal-b; do
+  set --
+  case "$causal_variant" in
+    none) ;;
+    causal-a)
+      set -- \
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1
+      ;;
+    causal-b)
+      set -- \
+        -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1
+      ;;
+  esac
+  xcrun clang++ -x objective-c++ -std=c++20 \
+    -target arm64-apple-ios16.4 \
+    -isysroot "$SDK" \
+    -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+    "$@" \
+    -Igame \
+    -isystem lib/Tempest/Engine/include \
+    -isystem lib/ZenKit/include \
+    -fsyntax-only game/graphics/iosgpuscene.mm
+done
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+sources = {
+    "header": Path("game/graphics/iosgpusceneplan.h").read_text(),
+    "test": Path("ios/tests/iosgpusceneplan.cpp").read_text(),
+    "native": Path("game/graphics/iosgpuscene.mm").read_text(),
+}
+
+required_once = {
+    "header": (
+        """inline constexpr IOSGPUSceneCausalFrameResult
+    iosGPUScenePrepareCausalObservationForCompileMode(""",
+        "sequence<=candidate.lastSequence",
+        "reason!=IOSGPUSceneCausalFailureReason::TargetReused",
+        """inline constexpr IOSGPUSceneDrawDispatchResult
+    recordIOSGPUSceneDrawDispatchForRouteForCompileMode(""",
+        """inline constexpr bool
+    iosGPUSceneCausalPreparationIsValidForCompileMode(""",
+        """inline constexpr bool
+    iosGPUSceneCommitCausalPreparationForCompileMode(""",
+        "RendererIOS native causal capture: FAIL mode=%s reason=parse-%s",
+        "RendererIOS native causal capture: ARMED mode=%s nonce=%s ",
+        "RendererIOS native causal capture: ENCODED mode=%s nonce=%s ",
+        "RendererIOS native causal capture: FAIL mode=%s nonce=%s ",
+    ),
+    "test": (
+        "state,7u,299u,\n      IOSGPUSceneCausalFrameResult::SequenceNotIncreasing",
+        "state,8u,1u,route,prepared",
+        "failed,IOSGPUSceneCausalFailureReason::TargetNotObserved));",
+        "static_cast<IOSGPUSceneCausalFrameRoute>(255u)",
+        "prepared,route,targetCounts,3u,3u,false,true,true",
+    ),
+    "native": (
+        "const int* const processArgumentCountAddress = _NSGetArgc();",
+        "char*** const processArgumentVectorAddress = _NSGetArgv();",
+        """const int processArgumentCount =
+        processArgumentCountAddress!=nullptr
+          ? *processArgumentCountAddress
+          : -1;""",
+        """const char* const* processArgumentVector =
+        processArgumentVectorAddress!=nullptr
+          ? const_cast<const char* const*>(
+                *processArgumentVectorAddress)
+          : nullptr;""",
+        """iosGPUSceneParseCausalArguments(
+            processArgumentCount,processArgumentVector,
+            causalArguments);""",
+        "if(parseResult!=IOSGPUSceneCausalArgumentResult::Accepted)",
+        "iosGPUSceneCausalParseFailMarker(",
+        """if(parseResult!=IOSGPUSceneCausalArgumentResult::Accepted) {
+      const IOSGPUSceneMarker marker =
+          iosGPUSceneCausalParseFailMarker(
+              iosGPUSceneCompiledMode(),parseResult);
+      if(marker)
+        Tempest::Log::e(marker.text.data());
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+      }""",
+        "iosGPUSceneTransitionCausalFailure(causalState,reason)",
+        """if(!causalArgumentsAccepted ||
+     !iosGPUSceneTransitionCausalFailure(causalState,reason))
+    return;
+  const IOSGPUSceneMarker marker =
+      iosGPUSceneCausalFailMarker(
+          causalState,generation,sequence,reason);
+  if(marker)
+    Tempest::Log::e(marker.text.data());""",
+        """if(causalArgumentsAccepted &&
+       causalState.phase==
+           IOSGPUSceneCausalRuntimePhase::AwaitingTarget)
+      failCausal(
+          causalState.generation,causalState.lastSequence,
+          IOSGPUSceneCausalFailureReason::TargetNotObserved);""",
+        "targetDraws.emplace_back(std::move(draw));",
+        """switch(dispatch.effective) {
+          case IOSGPUScenePipelineSelector::Opaque:
+            effectivePipeline =
+                (id<MTLRenderPipelineState>)
+                    impl->opaquePipelineState;
+            break;
+          case IOSGPUScenePipelineSelector::AlphaTest:
+            effectivePipeline =
+                (id<MTLRenderPipelineState>)
+                    impl->alphaTestPipelineState;
+            break;
+          case IOSGPUScenePipelineSelector::Unsupported:
+            break;
+          }""",
+        "draw.pipelineState = effectivePipeline;",
+        """[encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+        "targetEncodedMarker = iosGPUSceneCausalEncodedMarker(",
+        "const bool encoded = Tempest::MetalApi::withActiveRenderEncoder(",
+        "Report failure = makeReport(Result::NativeEncodingFailed);",
+        "recordFailure(failure.failures.nativeEncode,failure);",
+        "IOSGPUSceneCausalFailureReason::MissingAlphaTestDraw",
+    ),
+}
+
+expected_draw_operations = [
+    "setVertexBuffer",
+    "setVertexBytes",
+    "setFragmentTexture",
+    "insertDebugSignpost",
+    "insertDebugSignpost",
+    "setRenderPipelineState",
+    "drawIndexedPrimitives",
+]
+
+
+def validate(candidate):
+    for name, snippets in required_once.items():
+        for snippet in snippets:
+            if candidate[name].count(snippet) != 1:
+                raise ValueError(name + " required-once drift: " + snippet)
+    native = candidate["native"]
+    header = candidate["header"]
+    if native.count("_NSGetArgc()") != 1 or native.count("_NSGetArgv()") != 1:
+        raise ValueError("process argv is not parsed exactly once")
+    if native.count("Tempest::Log::e(marker.text.data());") != 2:
+        raise ValueError("parse/runtime FAIL log sites drifted")
+    parse_order = (
+        native.index("_NSGetArgc()"),
+        native.index("_NSGetArgv()"),
+        native.index("iosGPUSceneParseCausalArguments("),
+        native.index("causalArgumentsAccepted = true;"),
+        native.index("Tempest::Log::i(armed.text.data());"),
+    )
+    if tuple(sorted(parse_order)) != parse_order:
+        raise ValueError("causal argv/ARMED order drifted")
+    bridge = native.index(
+        "const bool encoded = Tempest::MetalApi::withActiveRenderEncoder("
+    )
+    for token in (
+        "recordIOSGPUSceneDrawDispatchForRoute(",
+        "makeIOSGPUSceneCausalDrawIdentity(",
+        "iosGPUSceneCausalDrawIdSignpost(",
+        "iosGPUSceneCausalDrawBindSignpost(",
+        "iosGPUSceneCausalPreparationIsValid(",
+        "targetEncodedMarker = iosGPUSceneCausalEncodedMarker(",
+    ):
+        if native.index(token) > bridge:
+            raise ValueError("causal preflight occurs after native bridge: " + token)
+    target_start = native.index(
+        "if(context.route==IOSGPUSceneCausalFrameRoute::Target)"
+    )
+    target_end = native.index("#endif", target_start)
+    target_native = native[target_start:target_end]
+    loop_start = target_native.index("for(const auto& draw:")
+    loop_end = target_native.index("restoreEncoderState();", loop_start)
+    draw_loop = target_native[loop_start:loop_end]
+    operations = re.findall(r"\[encoder ([A-Za-z]+)", draw_loop)
+    if operations != expected_draw_operations:
+        raise ValueError("target native draw operation order drifted")
+    if draw_loop.index("draw.drawId.get()") > \
+       draw_loop.index("draw.drawBind.get()"):
+        raise ValueError("target draw-id/draw-bind order drifted")
+    finish = native[native.index("if(context.targetNativeException)"):]
+    finish_order = (
+        finish.index("iosGPUSceneCommitCausalPreparation("),
+        finish.index("impl->causalState = committed;"),
+        finish.index("Tempest::Log::i(targetEncodedMarker.text.data());"),
+    )
+    if tuple(sorted(finish_order)) != finish_order:
+        raise ValueError("target commit/ENCODED order drifted")
+    if "causalState.phase==" not in native or \
+       "IOSGPUSceneCausalFailureReason::TargetNotObserved" not in native:
+        raise ValueError("destructor target-not-observed closure is absent")
+    for forbidden in (
+        "MetalCaptureEnabled",
+        "MTLCaptureManager",
+        "RendererIOS native causal capture: ACQUIRED",
+        "RendererIOS native causal capture: SUBMITTED",
+        "RendererIOS native causal capture: COMPLETED",
+        "RendererIOS native causal capture: PASS",
+    ):
+        if forbidden in header or forbidden in native:
+            raise ValueError("forbidden causal lifecycle token: " + forbidden)
+
+
+validate(sources)
+mutations = []
+for name, snippets in required_once.items():
+    for snippet in snippets:
+        mutant = dict(sources)
+        mutant[name] = sources[name].replace(snippet, "", 1)
+        mutations.append(mutant)
+native = sources["native"]
+for operation in (
+    "[encoder insertDebugSignpost:(NSString*)draw.drawId.get()];",
+    "[encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];",
+    """[encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+    "[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle",
+):
+    mutant = dict(sources)
+    mutant["native"] = native.replace(operation, "", 1)
+    mutations.append(mutant)
+    mutant = dict(sources)
+    mutant["native"] = native.replace(operation, operation + "\n" + operation, 1)
+    mutations.append(mutant)
+mutant = dict(sources)
+mutant["native"] = native.replace(
+    """[encoder insertDebugSignpost:(NSString*)draw.drawId.get()];
+        [encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];""",
+    """[encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];
+        [encoder insertDebugSignpost:(NSString*)draw.drawId.get()];""",
+    1,
+)
+mutations.append(mutant)
+for old, new in (
+    ("processArgumentCount,processArgumentVector,", "0,processArgumentVector,"),
+    ("processArgumentCount,processArgumentVector,", "processArgumentCount,nullptr,"),
+    (
+        """[encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+        """[encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)context.scene->opaquePipelineState];""",
+    ),
+    (
+        """[encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+        """[encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)context.scene->alphaTestPipelineState];""",
+    ),
+):
+    mutant = dict(sources)
+    mutant["native"] = native.replace(old, new, 1)
+    mutations.append(mutant)
+mutant = dict(sources)
+mutant["native"] = native.replace(
+    "Tempest::Log::e(marker.text.data());", ""
+)
+mutations.append(mutant)
+mutant = dict(sources)
+mutant["native"] = native.replace(
+    """impl->causalState = committed;
+    Tempest::Log::i(targetEncodedMarker.text.data());""",
+    """Tempest::Log::i(targetEncodedMarker.text.data());
+    impl->causalState = committed;""",
+    1,
+)
+mutations.append(mutant)
+killed = 0
+for mutation in mutations:
+    try:
+        validate(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("P2.1c3b3c host/source mutation survived")
+if killed != len(mutations):
+    raise SystemExit("P2.1c3b3c mutation count drifted")
+print(
+    "RendererIOS P2.1c3b3c mutation oracle: mutations-killed="
+    + str(killed)
+)
+PY
 printf '#include "graphics/iosshadingprototypepipeline.h"\nint main() { return 0; }\n' |
   xcrun clang++ -x c++ -std=c++20 \
     -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
@@ -1778,14 +2134,35 @@ build_variant() {
   local tile="$2"
   local forward="$3"
   local profile="$4"
+  local causal_mode="${5:-none}"
   local build
   build="$BUILD_ROOT-$profile"
   rm -rf -- "$build"
 
-  echo "### Configure diagnostics=$diagnostics tile=$tile forward=$forward"
+  echo "### Configure diagnostics=$diagnostics tile=$tile forward=$forward causal=$causal_mode"
   cmake --preset "renderer-ios-$profile" -B "$build" \
     -DOPENGOTHIC_IOS_VERSION=1.0.9000 \
     -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$HEAD_SHA-local"
+
+  local cache="$build/CMakeCache.txt"
+  [ -f "$cache" ] || fail "brak CMakeCache.txt dla $profile"
+  grep -Fxq \
+    "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE:STRING=$causal_mode" \
+    "$cache" ||
+    fail "profil $profile ma niezgodny causal cache mode"
+  if [[ "$profile" == causal-* ]]; then
+    for entry in \
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS:BOOL=ON" \
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE:STRING=none" \
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST:BOOL=OFF"; do
+      grep -Fxq "$entry" "$cache" ||
+        fail "profil $profile ma niezgodny cache tuple: $entry"
+    done
+  fi
 
   local project="$build/Gothic2Notr.xcodeproj/project.pbxproj"
   [ -f "$project" ] || fail "brak wygenerowanego project.pbxproj"
@@ -1832,7 +2209,9 @@ build_variant() {
       "$project")" -eq 1 ] ||
       fail "$source nie ma exact jednego PBXBuildFile"
   done
-  python3 - "$project" "$diagnostics" "$tile" "$forward" <<'PY'
+  python3 - \
+    "$project" "$diagnostics" "$tile" "$forward" "$causal_mode" \
+    "$profile" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -1841,6 +2220,8 @@ project = Path(sys.argv[1]).read_text()
 diagnostics = sys.argv[2]
 tile = sys.argv[3]
 forward = sys.argv[4]
+causal_mode = sys.argv[5]
+profile = sys.argv[6]
 targets = re.findall(
     r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
     r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
@@ -1912,6 +2293,141 @@ if project.count(diagnostics_definition) != expected_diagnostics_definitions:
     raise SystemExit(
         "RendererIOS diagnostics PBX compile-definition gate nie jest exact"
     )
+
+causal_a = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1"
+causal_b = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1"
+causal_host = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST"
+list_match = re.search(
+    r'buildConfigurationList = ([A-F0-9]{24}) /\* '
+    r'Build configuration list for PBXNativeTarget "Gothic2Notr" \*/;',
+    gothic[0],
+)
+if list_match is None:
+    raise SystemExit("causal PBX nie znajduje target configuration list")
+configuration_list = re.search(
+    rf"\b{list_match.group(1)} /\* Build configuration list for "
+    r'PBXNativeTarget "Gothic2Notr" \*/ = \{\n'
+    r"\s*isa = XCConfigurationList;"
+    r"(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if configuration_list is None:
+    raise SystemExit("causal PBX nie czyta target configuration list")
+configuration_ids = re.findall(
+    r"([A-F0-9]{24}) /\* (Debug|MinSizeRel|Release|RelWithDebInfo) \*/,",
+    configuration_list.group(1),
+)
+if [name for _, name in configuration_ids] != [
+    "Debug",
+    "Release",
+    "MinSizeRel",
+    "RelWithDebInfo",
+]:
+    raise SystemExit("causal PBX target configuration set drifted")
+
+
+def validate_causal(candidate: str) -> None:
+    expected = {
+        "none": (),
+        "causal-a": (causal_a,),
+        "causal-b": (causal_b,),
+    }[causal_mode]
+    causal_token = re.compile(
+        r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_"
+        r"(?:A|B|HOST_TEST)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
+    )
+    global_entries = causal_token.findall(candidate)
+    if global_entries != list(expected) * 4:
+        raise ValueError(
+            "causal PBX global definitions drifted: "
+            + ",".join(global_entries)
+        )
+    for identifier, name in configuration_ids:
+        configuration = re.search(
+            rf"\b{identifier} /\* {name} \*/ = \{{\n"
+            r"\s*isa = XCBuildConfiguration;\n"
+            r"\s*buildSettings = \{(.*?)\n\s*\};\n"
+            rf"\s*name = {name};\n\s*\}};",
+            candidate,
+            re.S,
+        )
+        if configuration is None:
+            raise ValueError(f"causal PBX cannot read target {name}")
+        settings = configuration.group(1)
+        definitions = re.findall(
+            r"GCC_PREPROCESSOR_DEFINITIONS = \((.*?)\);",
+            settings,
+            re.S,
+        )
+        if len(definitions) != 1:
+            raise ValueError(f"causal PBX definition list drifted in {name}")
+        entries = causal_token.findall(definitions[0])
+        if entries != list(expected):
+            raise ValueError(
+                f"causal PBX exact list entries drifted in {name}: "
+                + ",".join(entries)
+            )
+
+
+validate_causal(project)
+if not profile.startswith("causal-"):
+    raise SystemExit(0)
+diagnostics_anchor = "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=1"
+if project.count(diagnostics_anchor) != 4:
+    raise SystemExit("causal PBX diagnostics mutation anchor drifted")
+mutations = []
+if causal_mode == "none":
+    mutations = [
+        project.replace(
+            diagnostics_anchor,
+            diagnostics_anchor + " " + token,
+            1,
+        )
+        for token in (causal_a, causal_b, causal_host)
+    ]
+else:
+    expected_macro = causal_a if causal_mode == "causal-a" else causal_b
+    opposite_macro = causal_b if causal_mode == "causal-a" else causal_a
+    quoted = "\"'" + expected_macro + "'\""
+    if project.count(quoted) != 4:
+        raise SystemExit("causal PBX exact mutation entry count drifted")
+    mutations.extend(
+        [
+            project.replace(quoted, "", 1),
+            project.replace(quoted, quoted + "," + quoted, 1),
+            project.replace(expected_macro, expected_macro[:-1] + "10", 1),
+            project.replace(expected_macro, "MUTANT_" + expected_macro, 1),
+            project.replace(
+                quoted,
+                quoted + ",\"'" + opposite_macro + "'\"",
+                1,
+            ),
+            project.replace(
+                quoted,
+                quoted + ",\"'" + causal_host + "=1'\"",
+                1,
+            ),
+            project.replace(quoted, "", 1) + "\n" + quoted + "\n",
+        ]
+    )
+killed = 0
+for mutation in mutations:
+    try:
+        validate_causal(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("causal PBX mutation survived")
+expected_mutations = 3 if causal_mode == "none" else 7
+if killed != expected_mutations:
+    raise SystemExit("causal PBX mutation count drifted")
+print(
+    "RendererIOS causal PBX oracle: mode="
+    + causal_mode
+    + " configurations=4 mutations-killed="
+    + str(killed)
+)
 PY
   grep -Eq '(^|[^[:alnum:]_])iosframeinput\.cpp([^[:alnum:]_]|$)' "$project" ||
     fail "brak iosframeinput.cpp w celu"
@@ -1934,7 +2450,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
 ! grep -Fq 'Shaders::inst().bink' game/ui/videowidget.cpp ||
   fail "VideoWidget zachował runtime-compiled Bink fallback"
 
-  echo "### Build diagnostics=$diagnostics tile=$tile forward=$forward"
+  echo "### Build diagnostics=$diagnostics tile=$tile forward=$forward causal=$causal_mode"
   cmake --build "$build" --config Release --parallel "$CPUS" -- \
     -sdk iphoneos \
     CODE_SIGNING_ALLOWED=NO \
@@ -2045,6 +2561,168 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
     ! grep -Fq -- '-renderer-ios-forward-self-test-nonce=' "$strings_file" ||
       fail "profil $profile zawiera FORWARD nonce argument"
   fi
+  if [[ "$profile" == causal-* ]]; then
+    python3 - "$strings_file" "$binary" "$causal_mode" <<'PY'
+from pathlib import Path
+import sys
+
+lines = set(Path(sys.argv[1]).read_text(errors="strict").splitlines())
+raw = Path(sys.argv[2]).read_bytes()
+mode = sys.argv[3]
+scene_marker = (
+    "RendererIOS native scene identity: mode=%s "
+    "generation=%llu sequence=%llu"
+)
+fault_none = "RendererIOS configured fault mode=none"
+mode_tokens = {"causal-a": "causal-a", "causal-b": "causal-b"}
+argv_tokens = (
+    "-renderer-ios-native-alpha-test-causal-mode=",
+    "-renderer-ios-native-alpha-test-causal-nonce=",
+    "-renderer-ios-native-alpha-test-causal-sequence=",
+)
+draw_formats = (
+    "RendererIOS native causal draw-id: mode=%s nonce=%s "
+    "generation=%llu sequence=%llu ordinal=%llu",
+    "RendererIOS native causal draw-bind: ordinal=%llu "
+    "logical=%s effective=%s kind=%s slot=0 "
+    "texture=%llu mesh=%llu indices=%llu",
+)
+lifecycle_formats = (
+    "RendererIOS native causal capture: FAIL mode=%s reason=parse-%s",
+    "RendererIOS native causal capture: ARMED mode=%s nonce=%s "
+    "target-sequence=%llu",
+    "RendererIOS native causal capture: ENCODED mode=%s nonce=%s "
+    "generation=%llu sequence=%llu draws=%llu alpha=%llu",
+    "RendererIOS native causal capture: FAIL mode=%s nonce=%s "
+    "generation=%llu sequence=%llu reason=%s",
+)
+forbidden_lifecycle = (
+    "ACQUIRED",
+    "SUBMITTED",
+    "COMPLETED",
+    "PASS",
+)
+competing_prefixes = (
+    "RendererIOS Bink self-test:",
+    "RendererIOS resource allocator self-test:",
+    "RendererIOS clear-only pass self-test:",
+    "RendererIOS shading prototype tile self-test:",
+    "RendererIOS shading prototype forward self-test:",
+)
+
+
+def validate(candidate: set[str], raw_candidate: bytes = raw) -> None:
+    if scene_marker not in candidate:
+        raise ValueError("production marker format is absent")
+    if fault_none not in candidate:
+        raise ValueError("fault none marker is absent")
+    if "MetalCaptureEnabled" in candidate:
+        raise ValueError("MetalCaptureEnabled leaked into causal binary")
+    for prefix in competing_prefixes:
+        if any(line.startswith(prefix) for line in candidate):
+            raise ValueError("competing self-test token leaked")
+    if mode == "none":
+        if "production" not in candidate:
+            raise ValueError("NONE production token is absent")
+        for token in ("causal-a", "causal-b"):
+            if token in candidate:
+                raise ValueError("NONE contains causal mode token")
+        for prefix in (
+            "-renderer-ios-native-alpha-test-causal-",
+            "RendererIOS native causal draw-id:",
+            "RendererIOS native causal draw-bind:",
+            "RendererIOS native causal capture",
+        ):
+            if any(prefix in line for line in candidate):
+                raise ValueError("NONE contains causal runtime token")
+    else:
+        expected = mode_tokens[mode]
+        opposite = (
+            mode_tokens["causal-b"]
+            if mode == "causal-a"
+            else mode_tokens["causal-a"]
+        )
+        if expected not in candidate:
+            raise ValueError(mode + " positive token is absent")
+        if opposite in candidate:
+            raise ValueError(mode + " contains opposite token")
+        for token in argv_tokens:
+            if token.encode() not in raw_candidate:
+                raise ValueError(mode + " required argv token is absent: " + token)
+        for token in draw_formats + lifecycle_formats:
+            if token not in candidate:
+                raise ValueError(mode + " required runtime token is absent: " + token)
+        for line in candidate:
+            if line.startswith("RendererIOS native causal capture:"):
+                if any(token in line for token in forbidden_lifecycle):
+                    raise ValueError(mode + " contains forbidden lifecycle token")
+
+
+validate(lines)
+validate(lines, b"?" + raw)
+mutations = [
+    lines - {scene_marker},
+    lines - {fault_none},
+    lines | {"MetalCaptureEnabled"},
+    lines | {competing_prefixes[0] + " MUTANT"},
+]
+if mode == "none":
+    mutations.extend(
+        (
+            lines - {"production"},
+            lines | {"causal-a"},
+            lines | {"-renderer-ios-native-alpha-test-causal-mode="},
+            lines | {"RendererIOS native causal draw-id: MUTANT"},
+            lines | {"RendererIOS native causal capture: MUTANT"},
+        )
+    )
+else:
+    expected = mode_tokens[mode]
+    opposite = (
+        mode_tokens["causal-b"]
+        if mode == "causal-a"
+        else mode_tokens["causal-a"]
+    )
+    mutations.extend((lines - {expected}, lines | {opposite}))
+    mutations.extend(lines - {token} for token in draw_formats + lifecycle_formats)
+    mutations.append(
+        lines | {"RendererIOS native causal capture: PASS mode=%s"}
+    )
+killed = 0
+for mutation in mutations:
+    try:
+        validate(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("causal binary mutation survived")
+if killed != len(mutations):
+    raise SystemExit("causal binary mutation count drifted")
+raw_mutations = (
+    []
+    if mode == "none"
+    else [
+        raw.replace(token.encode(), b"")
+        for token in argv_tokens
+    ]
+)
+for mutation in raw_mutations:
+    try:
+        validate(lines, mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("causal raw-token mutation survived")
+if killed != len(mutations) + len(raw_mutations):
+    raise SystemExit("causal binary/raw mutation count drifted")
+print(
+    "RendererIOS causal binary oracle: mode="
+    + mode
+    + " mutations-killed="
+    + str(killed)
+)
+PY
+  fi
 }
 
 expect_tile_configure_failure() {
@@ -2103,6 +2781,52 @@ expect_forward_configure_failure tile \
   -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
   -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON
 
+expect_causal_configure_failure() {
+  local mode="$1"
+  local name="$2"
+  shift 2
+  local build="$TMP_GATE/causal-invalid-$mode-$name"
+  if cmake --preset "renderer-ios-$mode" -B "$build" \
+      -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON \
+      -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=none \
+      -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$mode" \
+      -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=OFF \
+      -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=OFF \
+      -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=OFF \
+      -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=OFF \
+      -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF \
+      "$@" >/dev/null 2>&1; then
+    fail "P2.1c3b3b invalid causal CMake tuple przetrwal: $name"
+  fi
+}
+
+expect_causal_configure_failure causal-a unknown-mode \
+  -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE=unknown
+for causal_mode_under_test in causal-a causal-b; do
+  expect_causal_configure_failure "$causal_mode_under_test" diagnostics-off \
+    -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=OFF
+  expect_causal_configure_failure "$causal_mode_under_test" fault \
+    -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=post-submit-suboptimal
+  expect_causal_configure_failure "$causal_mode_under_test" bink \
+    -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=ON
+  expect_causal_configure_failure "$causal_mode_under_test" allocator \
+    -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=ON
+  expect_causal_configure_failure "$causal_mode_under_test" clear \
+    -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=ON
+  expect_causal_configure_failure "$causal_mode_under_test" tile \
+    -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON
+  expect_causal_configure_failure "$causal_mode_under_test" forward \
+    -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=ON
+done
+for causal_mode_under_test in causal-a causal-b; do
+  if cmake -S "$REPO" \
+      -B "$TMP_GATE/causal-invalid-non-ios-$causal_mode_under_test" \
+      -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$causal_mode_under_test" \
+      >/dev/null 2>&1; then
+    fail "P2.1c3b3b non-iOS causal configure przetrwal: $causal_mode_under_test"
+  fi
+done
+
 if wants_profile off; then
   build_variant OFF OFF OFF off
 fi
@@ -2114,6 +2838,15 @@ if wants_profile tile; then
 fi
 if wants_profile forward; then
   build_variant ON OFF ON forward
+fi
+if wants_profile causal-none; then
+  build_variant ON OFF OFF causal-none none
+fi
+if wants_profile causal-a; then
+  build_variant ON OFF OFF causal-a causal-a
+fi
+if wants_profile causal-b; then
+  build_variant ON OFF OFF causal-b causal-b
 fi
 
 [ "$(git -C "$REPO" rev-parse HEAD)" = "$HEAD_SHA" ] ||

@@ -8,26 +8,111 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROJECT="$ROOT/ios/device-test/ui-automation/RendererIOSUITests.xcodeproj"
 VALIDATOR="$ROOT/ios/device-test/validate-ui-automation-log.py"
+SELECTOR="$ROOT/ios/device-test/select-ui-automation-target.py"
 BASE_BUNDLE_ID="opengothic.gothic2"
 SCENARIO="new-game"
 SAVE_SLOT=20
+SELF_TEST=0
 
 fail() {
   echo "FAIL: $*" >&2
   exit 1
 }
 
+resolve_team_id() {
+  local bundle="$1" requested="$2" team
+  if [[ -n "$requested" ]]; then
+    team="$requested"
+  else
+    team="${bundle##*.}"
+  fi
+  [[ "$team" =~ ^[A-Z0-9]{10}$ ]] || return 1
+  [[ "$bundle" == "$BASE_BUNDLE_ID.$team" ]] || return 1
+  printf '%s\n' "$team"
+}
+
+run_xcodebuild_ui_test() {
+  local executable="${1:-xcodebuild}"
+  "$executable" \
+    -project "$PROJECT" \
+    -scheme RendererIOSUITests \
+    -destination "platform=iOS,id=$DEVICE" \
+    -derivedDataPath "$WORK/DerivedData" \
+    -resultBundlePath "$WORK/TestResults.xcresult" \
+    -allowProvisioningUpdates \
+    DEVELOPMENT_TEAM="$TEAM_ID" \
+    PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID.RendererIOSUITests" \
+    OPENGOTHIC_TARGET_BUNDLE_ID="$BUNDLE_ID" \
+    OPENGOTHIC_UI_SCENARIO="$SCENARIO" \
+    OPENGOTHIC_UI_SAVE_SLOT="$SAVE_SLOT" \
+    -collect-test-diagnostics never \
+    test
+}
+
+run_host_self_test() {
+  local temporary mock argv product expected_flag
+  temporary="$(mktemp -d -t opengothic-ui-xcodebuild)"
+  mock="$temporary/xcodebuild"
+  argv="$temporary/argv.txt"
+  trap 'rm -rf "$temporary"' RETURN
+  cat >"$mock" <<'MOCK'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${OPENGOTHIC_UI_XCODEBUILD_ARGV:?}"
+printf '%s\n' "$@" >"$OPENGOTHIC_UI_XCODEBUILD_ARGV"
+MOCK
+  chmod +x "$mock"
+
+  PROJECT="/tmp/RendererIOSUITests.xcodeproj"
+  DEVICE="00008101-MOCK"
+  WORK="$temporary"
+  TEAM_ID="ABCDE12345"
+  BUNDLE_ID="$BASE_BUNDLE_ID.$TEAM_ID"
+  SCENARIO="new-game"
+  SAVE_SLOT=20
+  OPENGOTHIC_UI_XCODEBUILD_ARGV="$argv" \
+    run_xcodebuild_ui_test "$mock"
+  expected_flag="-collect-"test-diagnostics
+  python3 - "$argv" "$expected_flag" <<'PY'
+import pathlib
+import sys
+
+arguments = pathlib.Path(sys.argv[1]).read_text().splitlines()
+expected = [sys.argv[2], "never", "test"]
+if arguments[-3:] != expected:
+    raise SystemExit(
+        f"xcodebuild diagnostics/action argv is not exact: {arguments[-3:]}"
+    )
+if arguments.count(expected[0]) != 1 or arguments.count(expected[1]) != 1:
+    raise SystemExit("xcodebuild diagnostics argv is missing or duplicated")
+PY
+
+  product="$BASE_BUNDLE_ID.ABCDE12345"
+  [[ "$(resolve_team_id "$product" "")" == ABCDE12345 ]] ||
+    fail "derived Team ID self-test failed"
+  if resolve_team_id "$product" ZYXWVU9876 >/dev/null; then
+    fail "explicit mismatched Team ID self-test unexpectedly passed"
+  fi
+  echo "UI automation xcodebuild argv/Team ID self-test passed"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --new-game) SCENARIO="new-game"; shift ;;
     --save-slot) SCENARIO=save; SAVE_SLOT="${2:?missing save slot}"; shift 2 ;;
-    -*) fail "usage: $0 [--new-game|--save-slot number]" ;;
+    --self-test) SELF_TEST=1; shift ;;
+    -*) fail "usage: $0 [--new-game|--save-slot number|--self-test]" ;;
     *) fail "unexpected positional argument: $1" ;;
   esac
 done
 [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be numeric"
+if ((SELF_TEST != 0)); then
+  run_host_self_test
+  exit 0
+fi
 [[ -d "$PROJECT" ]] || fail "UI automation Xcode project is missing"
 [[ -x "$VALIDATOR" ]] || fail "UI automation log validator is not executable"
+[[ -f "$SELECTOR" ]] || fail "UI automation target selector is missing"
 
 EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
@@ -35,6 +120,7 @@ EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 
 WORK="$(mktemp -d -t opengothic-device-ui)"
 DEVICE=""
+DEVICE_TRANSPORT=""
 BUNDLE_ID=""
 APP_EXECUTABLE="Gothic2Notr"
 RUNTIME_ARMED=0
@@ -117,6 +203,8 @@ preserve_evidence() {
   {
     echo "result=$result"
     echo "source_sha=$EXPECTED_SHA"
+    echo "device_udid=$DEVICE"
+    echo "device_transport=$DEVICE_TRANSPORT"
     echo "bundle_id=$BUNDLE_ID"
     echo "scenario=$SCENARIO"
     echo "save_slot=$([[ "$SCENARIO" == save ]] && echo "$SAVE_SLOT" || echo none)"
@@ -153,7 +241,7 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 select_device() {
-  local attempt xcjson corejson device
+  local attempt xcjson corejson selection device transport extra
 
   for attempt in 1 2 3 4 5; do
     xcjson="$WORK/xcdevices-$attempt.json"
@@ -161,179 +249,23 @@ select_device() {
     if xcrun xcdevice list >"$xcjson" 2>>"$WORK/device-selection.log" &&
         xcrun devicectl list devices --json-output "$corejson" \
           >/dev/null 2>>"$WORK/device-selection.log" &&
-        device="$(python3 - "$xcjson" "$corejson" \
-        "${OPENGOTHIC_IOS_DEVICE:-}" \
-        2>>"$WORK/device-selection.log" <<'PY'
-import json, sys
-devices = json.load(open(sys.argv[1]))
-core_devices = json.load(open(sys.argv[2]))["result"]["devices"]
-requested = sys.argv[3]
-
-def nonempty_string(value):
-    return isinstance(value, str) and bool(value.strip())
-
-def core_device_is_connected(device):
-    witnesses = 0
-    if "properties" in device:
-        properties = device["properties"]
-        if not isinstance(properties, dict):
-            return False
-    else:
-        properties = None
-    if properties is not None and "connection" in properties:
-        connection = properties["connection"]
-        if not isinstance(connection, dict):
-            return False
-        state = connection.get("state")
-        if not nonempty_string(state) or state != "connected":
-            return False
-        witnesses += 1
-    if "connectionProperties" in device:
-        legacy = device["connectionProperties"]
-        if not isinstance(legacy, dict) or "tunnelState" not in legacy:
-            return False
-        tunnel_state = legacy["tunnelState"]
-        if not nonempty_string(tunnel_state) or tunnel_state != "connected":
-            return False
-        witnesses += 1
-    return witnesses > 0
-
-physical_core_records = [
-    device for device in core_devices
-    if isinstance(device, dict)
-    and isinstance(device.get("hardwareProperties"), dict)
-    and device["hardwareProperties"].get("platform") == "iOS"
-    and device["hardwareProperties"].get("reality") == "physical"
-]
-
-if requested:
-    requested_records = [
-        device for device in physical_core_records
-        if requested in (
-            device.get("identifier"),
-            device["hardwareProperties"].get("udid"),
-        )
-    ]
-    if any(
-        not nonempty_string(device.get("identifier"))
-        or not nonempty_string(device["hardwareProperties"].get("udid"))
-        for device in requested_records
-    ):
-        raise SystemExit(
-            "explicit CoreDevice candidate has an empty identifier or UDID"
-        )
-    if len(requested_records) != 1:
-        raise SystemExit(
-            f"expected one physical CoreDevice for explicit selection, "
-            f"found {len(requested_records)}"
-        )
-    requested_record = requested_records[0]
-    requested_identifier = requested_record["identifier"]
-    requested_udid = requested_record["hardwareProperties"]["udid"]
-    same_identity_core_records = [
-        device for device in physical_core_records
-        if device.get("identifier") == requested_identifier
-        or device["hardwareProperties"].get("udid") == requested_udid
-    ]
-    if any(
-        not nonempty_string(device.get("identifier"))
-        or not nonempty_string(device["hardwareProperties"].get("udid"))
-        for device in same_identity_core_records
-    ):
-        raise SystemExit(
-            "matching physical CoreDevice record has an empty identifier or UDID"
-        )
-    if len(same_identity_core_records) != 1:
-        raise SystemExit(
-            f"expected one physical CoreDevice record for explicit identity, "
-            f"found {len(same_identity_core_records)}"
-        )
-    if not core_device_is_connected(requested_record):
-        raise SystemExit("explicitly selected CoreDevice is not connected")
-    exact_records = [
-        device for device in devices
-        if device.get("identifier") == requested_udid
-    ]
-    if len(exact_records) != 1:
-        raise SystemExit(
-            f"expected one xcdevice record for explicit selection, "
-            f"found {len(exact_records)}"
-        )
-    selected = exact_records[0]
-    if not (
-        selected.get("simulator") is False
-        and selected.get("available") is True
-        and selected.get("interface") in ("usb", "network")
-        and selected.get("platform") == "com.apple.platform.iphoneos"
-        and nonempty_string(selected.get("identifier"))
-    ):
-        raise SystemExit(
-            "explicitly selected xcdevice is not an available USB/network iPhone"
-        )
-    matches = [selected]
-else:
-    matches = [
-        device for device in devices
-        if device.get("simulator") is False
-        and device.get("available") is True
-        and device.get("interface") == "usb"
-        and device.get("platform") == "com.apple.platform.iphoneos"
-    ]
-    if any(not nonempty_string(device.get("identifier")) for device in matches):
-        raise SystemExit("USB xcdevice candidate has an empty identifier")
-    if len(matches) == 1:
-        selected_udid = matches[0]["identifier"]
-        exact_xc_records = [
-            device for device in devices
-            if device.get("identifier") == selected_udid
-        ]
-        if len(exact_xc_records) != 1:
-            raise SystemExit(
-                f"expected one xcdevice record for USB iPhone, "
-                f"found {len(exact_xc_records)}"
-            )
-        auto_core_records = [
-            device for device in core_devices
-            if device.get("hardwareProperties", {}).get("platform") == "iOS"
-            and device.get("hardwareProperties", {}).get("reality") == "physical"
-            and device.get("hardwareProperties", {}).get("udid")
-                == selected_udid
-        ]
-        if len(auto_core_records) != 1:
-            raise SystemExit(
-                f"expected one physical CoreDevice record for USB UDID, "
-                f"found {len(auto_core_records)}"
-            )
-        auto_core = auto_core_records[0]
-        auto_identifier = auto_core.get("identifier")
-        same_identity_core_records = [
-            device for device in physical_core_records
-            if device.get("identifier") == auto_identifier
-            or device["hardwareProperties"].get("udid") == selected_udid
-        ]
-        if len(same_identity_core_records) != 1:
-            raise SystemExit(
-                f"expected one physical CoreDevice identity for USB iPhone, "
-                f"found {len(same_identity_core_records)}"
-            )
-        if (
-            not nonempty_string(auto_identifier)
-            or not nonempty_string(
-                auto_core.get("hardwareProperties", {}).get("udid")
-            )
-            or not core_device_is_connected(auto_core)
-        ):
-            raise SystemExit(
-                "USB-selected physical CoreDevice is invalid or disconnected"
-            )
-if len(matches) != 1:
-    raise SystemExit(f"expected one available USB iPhone, found {len(matches)}")
-print(matches[0]["identifier"])
-PY
-    )"; then
-      printf 'attempt=%d result=selected\n' "$attempt" \
+        selection="$(python3 "$SELECTOR" device \
+          --xcdevice-json "$xcjson" \
+          --coredevice-json "$corejson" \
+          --requested "${OPENGOTHIC_IOS_DEVICE:-}" \
+          2>>"$WORK/device-selection.log")"; then
+      IFS=$'\t' read -r device transport extra <<<"$selection"
+      if [[ -z "$device" || ! "$transport" =~ ^(usb|network)$ ||
+          -n "$extra" || "$selection" == *$'\n'* ]]; then
+        printf 'attempt=%d result=retry reason=invalid-helper-output\n' \
+          "$attempt" >>"$WORK/device-selection.log"
+        ((attempt < 5)) && sleep 1
+        continue
+      fi
+      printf 'attempt=%d result=selected udid=%s transport=%s\n' \
+        "$attempt" "$device" "$transport" \
         >>"$WORK/device-selection.log"
-      printf '%s\n' "$device"
+      printf '%s\t%s\n' "$device" "$transport"
       return 0
     fi
     printf 'attempt=%d result=retry\n' "$attempt" \
@@ -343,29 +275,25 @@ PY
   return 1
 }
 
-if ! DEVICE="$(select_device)"; then
+if ! DEVICE_SELECTION="$(select_device)"; then
   tail -20 "$WORK/device-selection.log" >&2 || true
   fail "could not select a unique connected physical iPhone"
 fi
+IFS=$'\t' read -r DEVICE DEVICE_TRANSPORT DEVICE_SELECTION_EXTRA \
+  <<<"$DEVICE_SELECTION"
+[[ -n "$DEVICE" && "$DEVICE_TRANSPORT" =~ ^(usb|network)$ &&
+    -z "$DEVICE_SELECTION_EXTRA" && "$DEVICE_SELECTION" != *$'\n'* ]] ||
+  fail "target selector returned malformed device evidence"
 
 xcrun devicectl device info apps --device "$DEVICE" \
   --json-output "$WORK/apps.json" >/dev/null
-BUNDLE_ID="$(python3 - "$WORK/apps.json" "$BASE_BUNDLE_ID" \
-    "${OPENGOTHIC_IOS_BUNDLE_ID:-}" <<'PY'
-import json, sys
-apps = json.load(open(sys.argv[1]))["result"]["apps"]
-prefix, requested = sys.argv[2] + ".", sys.argv[3]
-matches = [app["bundleIdentifier"] for app in apps
-           if app["bundleIdentifier"].startswith(prefix)]
-if requested:
-    matches = [bundle for bundle in matches if bundle == requested]
-if len(matches) != 1:
-    raise SystemExit(f"expected one installed {prefix}* app, found {len(matches)}")
-print(matches[0])
-PY
-)" || fail "could not identify the existing OpenGothic container"
-TEAM_ID="${OPENGOTHIC_IOS_TEAM_ID:-${BUNDLE_ID##*.}}"
-[[ "$BUNDLE_ID" == "$BASE_BUNDLE_ID.$TEAM_ID" && "$TEAM_ID" =~ ^[A-Z0-9]{10}$ ]] ||
+BUNDLE_ID="$(python3 "$SELECTOR" bundle \
+  --apps-json "$WORK/apps.json" \
+  --base-bundle-id "$BASE_BUNDLE_ID" \
+  --requested "${OPENGOTHIC_IOS_BUNDLE_ID:-}")" ||
+  fail "could not identify the existing OpenGothic container"
+TEAM_ID="$(resolve_team_id \
+  "$BUNDLE_ID" "${OPENGOTHIC_IOS_TEAM_ID:-}")" ||
   fail "bundle id must preserve the existing team-id suffix"
 
 stop_running_app 1 || fail "pre-test application cleanup failed"
@@ -374,17 +302,7 @@ if [[ -f "$WORK/crash-pre-test.log" ]]; then
   PRE_CRASH_SHA="$(shasum -a 256 "$WORK/crash-pre-test.log" | awk '{print $1}')"
 fi
 RUNTIME_ARMED=1
-if ! xcodebuild -project "$PROJECT" -scheme RendererIOSUITests \
-    -destination "platform=iOS,id=$DEVICE" \
-    -derivedDataPath "$WORK/DerivedData" \
-    -resultBundlePath "$WORK/TestResults.xcresult" \
-    -allowProvisioningUpdates \
-    DEVELOPMENT_TEAM="$TEAM_ID" \
-    PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID.RendererIOSUITests" \
-    OPENGOTHIC_TARGET_BUNDLE_ID="$BUNDLE_ID" \
-    OPENGOTHIC_UI_SCENARIO="$SCENARIO" \
-    OPENGOTHIC_UI_SAVE_SLOT="$SAVE_SLOT" \
-    test >"$WORK/xcodebuild.log" 2>&1; then
+if ! run_xcodebuild_ui_test >"$WORK/xcodebuild.log" 2>&1; then
   tail -50 "$WORK/xcodebuild.log" >&2 || true
   fail "RendererIOS XCUITest failed"
 fi

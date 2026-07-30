@@ -27,6 +27,31 @@ set(CMAKE_SKIP_RPATH ON)
 
 add_executable(${PROJECT_NAME})
 
+set(_renderer_ios_native_alpha_test_causal_modes
+    none
+    causal-a
+    causal-b)
+set(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE "none"
+    CACHE STRING
+    "RendererIOS native AlphaTest diagnostics-only causal build mode")
+set_property(
+  CACHE OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+  PROPERTY STRINGS ${_renderer_ios_native_alpha_test_causal_modes})
+list(
+  FIND _renderer_ios_native_alpha_test_causal_modes
+  "${OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE}"
+  _renderer_ios_native_alpha_test_causal_mode_index)
+if(_renderer_ios_native_alpha_test_causal_mode_index EQUAL -1)
+  message(FATAL_ERROR
+    "Unsupported OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE: "
+    "${OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE}")
+endif()
+if(NOT IOS AND
+   NOT OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE STREQUAL "none")
+  message(FATAL_ERROR
+    "RendererIOS native AlphaTest causal A/B builds are available only for iOS")
+endif()
+
 if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
   message(FATAL_ERROR
     "RendererIOS resource allocator self-test is available only for iOS")
@@ -255,6 +280,28 @@ elseif(IOS)
     message(FATAL_ERROR
       "RendererIOS shading prototype Forward, Tile, Bink, resource allocator and clear-only pass self-tests are mutually exclusive")
   endif()
+  if(NOT OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+         STREQUAL "none")
+    if(NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      message(FATAL_ERROR
+        "RendererIOS native AlphaTest causal A/B builds require "
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
+    endif()
+    if(NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
+      message(FATAL_ERROR
+        "RendererIOS native AlphaTest causal A/B builds require "
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE=none")
+    endif()
+    if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+      message(FATAL_ERROR
+        "RendererIOS native AlphaTest causal A/B builds are mutually "
+        "exclusive with all other RendererIOS self-tests")
+    endif()
+  endif()
   if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=1)
@@ -274,6 +321,15 @@ elseif(IOS)
   if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+       STREQUAL "causal-a")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1)
+  elseif(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+         STREQUAL "causal-b")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1)
   endif()
 
   if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")

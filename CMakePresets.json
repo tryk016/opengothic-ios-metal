@@ -18,6 +18,7 @@
         "OPENGOTHIC_METALFX_SPATIAL": "OFF",
         "OPENGOTHIC_METALFX_TEMPORAL": "OFF",
         "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
@@ -31,6 +32,7 @@
       "binaryDir": "${sourceDir}/build/local-renderer-ios-off",
       "cacheVariables": {
         "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
       }
@@ -41,6 +43,7 @@
       "binaryDir": "${sourceDir}/build/local-renderer-ios-on",
       "cacheVariables": {
         "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
       }
@@ -51,6 +54,7 @@
       "binaryDir": "${sourceDir}/build/local-renderer-ios-tile",
       "cacheVariables": {
         "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "ON",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
       }
@@ -61,8 +65,63 @@
       "binaryDir": "${sourceDir}/build/local-renderer-ios-forward",
       "cacheVariables": {
         "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "ON"
+      }
+    },
+    {
+      "name": "renderer-ios-causal-none",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-causal-none",
+      "environment": {
+        "PACKAGE_DEVICE_IPA": "0"
+      },
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-causal-a",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-causal-a",
+      "environment": {
+        "PACKAGE_DEVICE_IPA": "0"
+      },
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "causal-a",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-causal-b",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-causal-b",
+      "environment": {
+        "PACKAGE_DEVICE_IPA": "0"
+      },
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "causal-b",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
       }
     }
   ],
@@ -106,6 +165,42 @@
     {
       "name": "renderer-ios-forward",
       "configurePreset": "renderer-ios-forward",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-causal-none",
+      "configurePreset": "renderer-ios-causal-none",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-causal-a",
+      "configurePreset": "renderer-ios-causal-a",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-causal-b",
+      "configurePreset": "renderer-ios-causal-b",
       "configuration": "Release",
       "nativeToolOptions": [
         "-sdk",

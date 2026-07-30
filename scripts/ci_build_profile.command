@@ -2,11 +2,33 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
+RAW_DIAGNOSTICS_SET="${DIAGNOSTICS+x}"
+RAW_DIAGNOSTICS="${DIAGNOSTICS-}"
+RAW_ACTIVE_FAULT_MODE_SET="${ACTIVE_FAULT_MODE+x}"
+RAW_ACTIVE_FAULT_MODE="${ACTIVE_FAULT_MODE-}"
+RAW_CAUSAL_MODE_SET="${CAUSAL_MODE+x}"
+RAW_CAUSAL_MODE="${CAUSAL_MODE-}"
+RAW_BINK_SELF_TEST_SET="${BINK_SELF_TEST+x}"
+RAW_BINK_SELF_TEST="${BINK_SELF_TEST-}"
+RAW_RESOURCE_ALLOCATOR_SELF_TEST_SET="${RESOURCE_ALLOCATOR_SELF_TEST+x}"
+RAW_RESOURCE_ALLOCATOR_SELF_TEST="${RESOURCE_ALLOCATOR_SELF_TEST-}"
+RAW_CLEAR_ONLY_PASS_SELF_TEST_SET="${CLEAR_ONLY_PASS_SELF_TEST+x}"
+RAW_CLEAR_ONLY_PASS_SELF_TEST="${CLEAR_ONLY_PASS_SELF_TEST-}"
+RAW_SHADING_PROTOTYPE_TILE_SELF_TEST_SET="${SHADING_PROTOTYPE_TILE_SELF_TEST+x}"
+RAW_SHADING_PROTOTYPE_TILE_SELF_TEST="${SHADING_PROTOTYPE_TILE_SELF_TEST-}"
+RAW_SHADING_PROTOTYPE_FORWARD_SELF_TEST_SET="${SHADING_PROTOTYPE_FORWARD_SELF_TEST+x}"
+RAW_SHADING_PROTOTYPE_FORWARD_SELF_TEST="${SHADING_PROTOTYPE_FORWARD_SELF_TEST-}"
+RAW_TEMPEST_PROFILE_SET="${TEMPEST_PROFILE+x}"
+RAW_TEMPEST_PROFILE="${TEMPEST_PROFILE-}"
+RAW_PACKAGE_DEVICE_IPA_SET="${PACKAGE_DEVICE_IPA+x}"
+RAW_PACKAGE_DEVICE_IPA="${PACKAGE_DEVICE_IPA-}"
+
 PROFILE="${1:-}"
 case "$PROFILE" in
   off)
     DIAGNOSTICS=OFF
     ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -16,6 +38,7 @@ case "$PROFILE" in
   on)
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE="${ACTIVE_FAULT_MODE:-none}"
+    CAUSAL_MODE=none
     BINK_SELF_TEST="${BINK_SELF_TEST:-OFF}"
     RESOURCE_ALLOCATOR_SELF_TEST="${RESOURCE_ALLOCATOR_SELF_TEST:-OFF}"
     CLEAR_ONLY_PASS_SELF_TEST="${CLEAR_ONLY_PASS_SELF_TEST:-OFF}"
@@ -25,6 +48,7 @@ case "$PROFILE" in
   tile)
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -36,6 +60,7 @@ case "$PROFILE" in
   forward)
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -44,11 +69,89 @@ case "$PROFILE" in
     TEMPEST_PROFILE=baseline
     PACKAGE_DEVICE_IPA=0
     ;;
+  causal-none)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
+  causal-a)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=causal-a
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
+  causal-b)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=causal-b
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
   *)
-    echo "usage: $0 off|on|tile|forward" >&2
+    echo "usage: $0 off|on|tile|forward|causal-none|causal-a|causal-b" >&2
     exit 2
     ;;
 esac
+
+reject_causal_raw_conflict() {
+  local name="$1"
+  local is_set="$2"
+  local actual="$3"
+  local expected="$4"
+  if [ "$is_set" = x ] && [ "$actual" != "$expected" ]; then
+    echo "causal profile raw input mismatch: $name=$actual expected=$expected" >&2
+    exit 2
+  fi
+}
+
+if [[ "$PROFILE" == causal-* ]]; then
+  reject_causal_raw_conflict \
+    DIAGNOSTICS "$RAW_DIAGNOSTICS_SET" "$RAW_DIAGNOSTICS" ON
+  reject_causal_raw_conflict \
+    ACTIVE_FAULT_MODE "$RAW_ACTIVE_FAULT_MODE_SET" \
+    "$RAW_ACTIVE_FAULT_MODE" none
+  reject_causal_raw_conflict \
+    CAUSAL_MODE "$RAW_CAUSAL_MODE_SET" "$RAW_CAUSAL_MODE" "$CAUSAL_MODE"
+  reject_causal_raw_conflict \
+    BINK_SELF_TEST "$RAW_BINK_SELF_TEST_SET" "$RAW_BINK_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    RESOURCE_ALLOCATOR_SELF_TEST "$RAW_RESOURCE_ALLOCATOR_SELF_TEST_SET" \
+    "$RAW_RESOURCE_ALLOCATOR_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    CLEAR_ONLY_PASS_SELF_TEST "$RAW_CLEAR_ONLY_PASS_SELF_TEST_SET" \
+    "$RAW_CLEAR_ONLY_PASS_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    SHADING_PROTOTYPE_TILE_SELF_TEST \
+    "$RAW_SHADING_PROTOTYPE_TILE_SELF_TEST_SET" \
+    "$RAW_SHADING_PROTOTYPE_TILE_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST \
+    "$RAW_SHADING_PROTOTYPE_FORWARD_SELF_TEST_SET" \
+    "$RAW_SHADING_PROTOTYPE_FORWARD_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    TEMPEST_PROFILE "$RAW_TEMPEST_PROFILE_SET" "$RAW_TEMPEST_PROFILE" baseline
+  reject_causal_raw_conflict \
+    PACKAGE_DEVICE_IPA "$RAW_PACKAGE_DEVICE_IPA_SET" \
+    "$RAW_PACKAGE_DEVICE_IPA" 0
+fi
 
 : "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
 : "${GITHUB_SHA:?GITHUB_SHA must be set}"
@@ -83,6 +186,29 @@ case "$TEMPEST_PROFILE" in
     ;;
 esac
 
+if [[ "$PROFILE" == causal-* ]]; then
+  EXPECTED_CAUSAL_MODE="${PROFILE#causal-}"
+  if [ "$EXPECTED_CAUSAL_MODE" != none ]; then
+    EXPECTED_CAUSAL_MODE="causal-$EXPECTED_CAUSAL_MODE"
+  fi
+  if [ "$DIAGNOSTICS" != ON ] ||
+     [ "$ACTIVE_FAULT_MODE" != none ] ||
+     [ "$CAUSAL_MODE" != "$EXPECTED_CAUSAL_MODE" ] ||
+     [ "$BINK_SELF_TEST" != OFF ] ||
+     [ "$RESOURCE_ALLOCATOR_SELF_TEST" != OFF ] ||
+     [ "$CLEAR_ONLY_PASS_SELF_TEST" != OFF ] ||
+     [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" != OFF ] ||
+     [ "$SHADING_PROTOTYPE_FORWARD_SELF_TEST" != OFF ] ||
+     [ "$TEMPEST_PROFILE" != baseline ] ||
+     [ "$DIRECT_DRAWABLE" != OFF ] ||
+     [ "$METALFX_SPATIAL" != OFF ] ||
+     [ "$METALFX_TEMPORAL" != OFF ] ||
+     [ "$PACKAGE_DEVICE_IPA" != 0 ]; then
+    echo "causal profile tuple mismatch: $PROFILE" >&2
+    exit 2
+  fi
+fi
+
 for value in \
     "$BINK_SELF_TEST" \
     "$RESOURCE_ALLOCATOR_SELF_TEST" \
@@ -105,6 +231,7 @@ cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios \
   -DOPENGOTHIC_METALFX_SPATIAL="$METALFX_SPATIAL" \
   -DOPENGOTHIC_METALFX_TEMPORAL="$METALFX_TEMPORAL" \
   -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE" \
+  -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$CAUSAL_MODE" \
   -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="$BINK_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST="$RESOURCE_ALLOCATOR_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST="$CLEAR_ONLY_PASS_SELF_TEST" \
@@ -112,6 +239,106 @@ cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios \
   -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST="$SHADING_PROTOTYPE_FORWARD_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA"
 # CI_PROFILE_CONFIGURE_END
+
+if [[ "$PROFILE" == causal-* ]]; then
+  python3 - \
+    build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj \
+    "$CAUSAL_MODE" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+project = Path(sys.argv[1]).read_text()
+mode = sys.argv[2]
+macro_a = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1"
+macro_b = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1"
+host = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST"
+
+target_match = re.search(
+    r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
+    r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if target_match is None:
+    raise SystemExit("causal PBX oracle cannot identify Gothic2Notr target")
+list_match = re.search(
+    r'buildConfigurationList = ([A-F0-9]{24}) /\* '
+    r'Build configuration list for PBXNativeTarget "Gothic2Notr" \*/;',
+    target_match.group(2),
+)
+if list_match is None:
+    raise SystemExit("causal PBX oracle cannot identify target configurations")
+configuration_list = re.search(
+    rf"\b{list_match.group(1)} /\* Build configuration list for "
+    r'PBXNativeTarget "Gothic2Notr" \*/ = \{\n'
+    r"\s*isa = XCConfigurationList;"
+    r"(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if configuration_list is None:
+    raise SystemExit("causal PBX oracle cannot read target configuration list")
+configuration_ids = re.findall(
+    r"([A-F0-9]{24}) /\* (Debug|MinSizeRel|Release|RelWithDebInfo) \*/,",
+    configuration_list.group(1),
+)
+if [name for _, name in configuration_ids] != [
+    "Debug",
+    "Release",
+    "MinSizeRel",
+    "RelWithDebInfo",
+]:
+    raise SystemExit("causal PBX target configuration set drifted")
+
+expected = {
+    "none": (),
+    "causal-a": (macro_a,),
+    "causal-b": (macro_b,),
+}[mode]
+causal_token = re.compile(
+    r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_"
+    r"(?:A|B|HOST_TEST)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
+)
+global_entries = causal_token.findall(project)
+expected_global = list(expected) * 4
+if global_entries != expected_global:
+    raise SystemExit(
+        "causal PBX global definitions drifted: "
+        + ",".join(global_entries)
+    )
+for identifier, name in configuration_ids:
+    configuration = re.search(
+        rf"\b{identifier} /\* {name} \*/ = \{{\n"
+        r"\s*isa = XCBuildConfiguration;\n"
+        r"\s*buildSettings = \{(.*?)\n\s*\};\n"
+        rf"\s*name = {name};\n\s*\}};",
+        project,
+        re.S,
+    )
+    if configuration is None:
+        raise SystemExit(f"causal PBX cannot read target {name} settings")
+    settings = configuration.group(1)
+    definitions = re.findall(
+        r"GCC_PREPROCESSOR_DEFINITIONS = \((.*?)\);",
+        settings,
+        re.S,
+    )
+    if len(definitions) != 1:
+        raise SystemExit(f"causal PBX definition list drifted in {name}")
+    entries = causal_token.findall(definitions[0])
+    if entries != list(expected):
+        raise SystemExit(
+            f"causal PBX exact list entries drifted in {name}: "
+            + ",".join(entries)
+        )
+print(
+    "RendererIOS causal PBX oracle: mode="
+    + mode
+    + " configurations=4"
+)
+PY
+fi
 
 # CI_PROFILE_CANDIDATE_BEGIN
 for shader in landscape bink ui inventory shading-prototypes; do
@@ -301,6 +528,175 @@ if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
 else
   ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
     "$APP_INFO" >/dev/null 2>&1
+fi
+
+if [[ "$PROFILE" == causal-* ]]; then
+  python3 - "$APP_STRINGS" "$APP_BINARY" "$CAUSAL_MODE" <<'PY'
+from pathlib import Path
+import sys
+
+strings_path = Path(sys.argv[1])
+raw = Path(sys.argv[2]).read_bytes()
+mode = sys.argv[3]
+lines = set(strings_path.read_text(errors="strict").splitlines())
+
+scene_marker = (
+    "RendererIOS native scene identity: mode=%s "
+    "generation=%llu sequence=%llu"
+)
+fault_none = "RendererIOS configured fault mode=none"
+mode_tokens = {"causal-a": "causal-a", "causal-b": "causal-b"}
+argv_tokens = (
+    "-renderer-ios-native-alpha-test-causal-mode=",
+    "-renderer-ios-native-alpha-test-causal-nonce=",
+    "-renderer-ios-native-alpha-test-causal-sequence=",
+)
+draw_formats = (
+    "RendererIOS native causal draw-id: mode=%s nonce=%s "
+    "generation=%llu sequence=%llu ordinal=%llu",
+    "RendererIOS native causal draw-bind: ordinal=%llu "
+    "logical=%s effective=%s kind=%s slot=0 "
+    "texture=%llu mesh=%llu indices=%llu",
+)
+lifecycle_formats = (
+    "RendererIOS native causal capture: FAIL mode=%s reason=parse-%s",
+    "RendererIOS native causal capture: ARMED mode=%s nonce=%s "
+    "target-sequence=%llu",
+    "RendererIOS native causal capture: ENCODED mode=%s nonce=%s "
+    "generation=%llu sequence=%llu draws=%llu alpha=%llu",
+    "RendererIOS native causal capture: FAIL mode=%s nonce=%s "
+    "generation=%llu sequence=%llu reason=%s",
+)
+forbidden_lifecycle = (
+    "ACQUIRED",
+    "SUBMITTED",
+    "COMPLETED",
+    "PASS",
+)
+competing_prefixes = (
+    "RendererIOS Bink self-test:",
+    "RendererIOS resource allocator self-test:",
+    "RendererIOS clear-only pass self-test:",
+    "RendererIOS shading prototype tile self-test:",
+    "RendererIOS shading prototype forward self-test:",
+)
+
+
+def validate(candidate: set[str], raw_candidate: bytes = raw) -> None:
+    if scene_marker not in candidate:
+        raise ValueError("production scene marker format is absent")
+    if fault_none not in candidate:
+        raise ValueError("fault none marker is absent")
+    if "MetalCaptureEnabled" in candidate:
+        raise ValueError("MetalCaptureEnabled leaked into causal binary")
+    for prefix in competing_prefixes:
+        if any(line.startswith(prefix) for line in candidate):
+            raise ValueError("competing self-test token leaked: " + prefix)
+    if mode == "none":
+        if "production" not in candidate:
+            raise ValueError("NONE production mode token is absent")
+        forbidden = (
+            "causal-a",
+            "causal-b",
+        )
+        if any(token in candidate for token in forbidden):
+            raise ValueError("NONE contains a causal mode token")
+        forbidden_prefixes = (
+            "-renderer-ios-native-alpha-test-causal-",
+            "RendererIOS native causal draw-id:",
+            "RendererIOS native causal draw-bind:",
+            "RendererIOS native causal capture",
+        )
+        for prefix in forbidden_prefixes:
+            if any(prefix in line for line in candidate):
+                raise ValueError("NONE contains causal runtime token: " + prefix)
+    else:
+        expected = mode_tokens[mode]
+        opposite = (
+            mode_tokens["causal-b"]
+            if mode == "causal-a"
+            else mode_tokens["causal-a"]
+        )
+        if expected not in candidate:
+            raise ValueError(mode + " positive token is absent")
+        if opposite in candidate:
+            raise ValueError(mode + " contains opposite mode token")
+        for token in argv_tokens:
+            if token.encode() not in raw_candidate:
+                raise ValueError(mode + " required argv token is absent: " + token)
+        for token in draw_formats + lifecycle_formats:
+            if token not in candidate:
+                raise ValueError(mode + " required runtime token is absent: " + token)
+        for line in candidate:
+            if line.startswith("RendererIOS native causal capture:"):
+                if any(token in line for token in forbidden_lifecycle):
+                    raise ValueError(mode + " contains forbidden lifecycle token")
+
+
+validate(lines)
+validate(lines, b"?" + raw)
+mutations = [
+    lines - {scene_marker},
+    lines - {fault_none},
+    lines | {"MetalCaptureEnabled"},
+    lines | {competing_prefixes[0] + " MUTANT"},
+]
+if mode == "none":
+    mutations.extend(
+        (
+            lines - {"production"},
+            lines | {"causal-a"},
+            lines | {"-renderer-ios-native-alpha-test-causal-mode="},
+            lines | {"RendererIOS native causal draw-id: MUTANT"},
+            lines | {"RendererIOS native causal capture: MUTANT"},
+        )
+    )
+else:
+    expected = mode_tokens[mode]
+    opposite = (
+        mode_tokens["causal-b"]
+        if mode == "causal-a"
+        else mode_tokens["causal-a"]
+    )
+    mutations.extend((lines - {expected}, lines | {opposite}))
+    mutations.extend(lines - {token} for token in draw_formats + lifecycle_formats)
+    mutations.append(
+        lines | {"RendererIOS native causal capture: PASS mode=%s"}
+    )
+killed = 0
+for mutation in mutations:
+    try:
+        validate(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("causal binary mutation survived")
+if killed != len(mutations):
+    raise SystemExit("causal binary mutation count drifted")
+raw_mutations = (
+    []
+    if mode == "none"
+    else [
+        raw.replace(token.encode(), b"")
+        for token in argv_tokens
+    ]
+)
+for mutation in raw_mutations:
+    try:
+        validate(lines, mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("causal raw-token mutation survived")
+if killed != len(mutations) + len(raw_mutations):
+    raise SystemExit("causal binary/raw mutation count drifted")
+print(
+    "RendererIOS causal binary oracle: mode="
+    + mode
+    + " mutations-killed="
+    + str(killed)
+)
+PY
 fi
 
 printf '\n### CI profile Verify P2.6b1 final weak MetalFX dependency\n'

@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import pathlib
+import re
 import subprocess
 import tempfile
 
@@ -17,8 +18,15 @@ WORKFLOW = REPO / ".github" / "workflows" / "renderer-ios.yml"
 CONTRACTS = REPO / "scripts" / "ci_contracts.command"
 PROFILE = REPO / "scripts" / "ci_build_profile.command"
 PRESETS = REPO / "CMakePresets.json"
+CMAKE = REPO / "CMakeLists.txt"
 GITIGNORE = REPO / ".gitignore"
 LOCAL_VERIFY = REPO / "scripts" / "verify-local-build.command"
+UI_AUTOMATION_HARNESS = (
+    REPO / "ios" / "device-test" / "run-ui-automation-test.sh"
+)
+UI_AUTOMATION_SELECTOR = (
+    REPO / "ios" / "device-test" / "select-ui-automation-target.py"
+)
 
 
 def load_module():
@@ -146,6 +154,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
             raise ValueError(f"policy oracle is duplicated outside classifier: {policy_oracle}")
     contract_names = (
         "Verify shared CMake presets",
+        "Verify P2.1c3b3b causal build isolation",
         "Verify pinned Tempest fork twice",
         "Verify neutral P2.1 scene boundary",
         "Verify neutral P2.2d frame plan",
@@ -197,6 +206,8 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     configure_contract = (
         'cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios',
         '-DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE"',
+        '-DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE='
+        '"$CAUSAL_MODE"',
         '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST='
         '"$SHADING_PROTOTYPE_TILE_SELF_TEST"',
         '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST='
@@ -270,6 +281,107 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         raise ValueError("preview-fence save-slot smoke self-test is not exact")
 
 
+def validate_ui_automation_host_contract(
+    harness: str,
+    selector: str,
+    contracts: str,
+) -> None:
+    harness_contract = (
+        'SELECTOR="$ROOT/ios/device-test/select-ui-automation-target.py"',
+        'selection="$(python3 "$SELECTOR" device \\',
+        'BUNDLE_ID="$(python3 "$SELECTOR" bundle \\',
+        'echo "device_udid=$DEVICE"',
+        'echo "device_transport=$DEVICE_TRANSPORT"',
+        'TEAM_ID="$(resolve_team_id \\',
+        "run_xcodebuild_ui_test() {",
+        "run_host_self_test() {",
+    )
+    for literal in harness_contract:
+        if harness.count(literal) != 1:
+            raise ValueError(
+                "UI automation harness contract is not exact: " + literal
+            )
+
+    selector_contract = (
+        "def select_device_target(",
+        "def _iphone_witness_records(",
+        "def _select_requested(",
+        "if identifier != core_udid:",
+        "iphone_witnesses = _iphone_witness_records(xc_records)",
+        'usb_witnesses = _transport_witnesses(iphone_witnesses, "usb")',
+        "if invalid_usb or len(valid_usb) != 1:",
+        "if usb_witnesses:",
+        'network_witnesses = _transport_witnesses(iphone_witnesses, "network")',
+        "if invalid_network or len(valid_network) != 1:",
+        "if len(target_udids) != 1:",
+        "if len(xc_matches) != 1:",
+        "if len(core_matches) != 1:",
+        "def select_product_bundle(",
+        'r"^opengothic\\.gothic2\\.[A-Z0-9]{10}$"',
+        "if product_pattern.fullmatch(bundle):",
+        "elif runner_pattern.fullmatch(bundle):",
+    )
+    for literal in selector_contract:
+        if selector.count(literal) != 1:
+            raise ValueError(
+                "UI automation selector contract is not exact: " + literal
+            )
+    prefilter_position = selector.index(
+        "iphone_witnesses = _iphone_witness_records(xc_records)"
+    )
+    usb_position = selector.index(
+        'usb_witnesses = _transport_witnesses(iphone_witnesses, "usb")'
+    )
+    network_position = selector.index(
+        'network_witnesses = _transport_witnesses(iphone_witnesses, "network")'
+    )
+    if not prefilter_position < usb_position < network_position:
+        raise ValueError(
+            "UI automation platform prefilter/USB-first order drifted"
+        )
+
+    xcodebuild_scope = exact_scope(
+        harness,
+        "run_xcodebuild_ui_test() {",
+        "\n}\n\nrun_host_self_test() {",
+        "UI automation xcodebuild invocation",
+    )
+    diagnostics = "    -collect-test-diagnostics never \\"
+    if xcodebuild_scope.splitlines().count(diagnostics) != 1:
+        raise ValueError(
+            "xcodebuild diagnostics pair is not exact and adjacent"
+        )
+    command_lines = [
+        line for line in xcodebuild_scope.splitlines()
+        if line.strip()
+    ]
+    if command_lines[-2:] != [diagnostics, "    test"]:
+        raise ValueError(
+            "xcodebuild diagnostics pair is not immediately before "
+            "terminal test"
+        )
+
+    ui_contract_scope = exact_scope(
+        contracts,
+        "printf '\\n### CI contract: "
+        "Verify RendererIOS UI automation contract\\n'",
+        "xcodebuild \\",
+        "UI automation focused host hook",
+    )
+    for line in (
+        "test -f ios/device-test/select-ui-automation-target.py",
+        "/bin/bash -n ios/device-test/run-ui-automation-test.sh",
+        "  python3 -m py_compile \\",
+        "    ios/device-test/select-ui-automation-target.py",
+        "  python3 ios/device-test/select-ui-automation-target.py self-test",
+        "/bin/bash ios/device-test/run-ui-automation-test.sh --self-test",
+    ):
+        if ui_contract_scope.splitlines().count(line) != 1:
+            raise ValueError(
+                "UI automation focused host hook drifted: " + line.strip()
+            )
+
+
 def validate_cmake_presets(
     presets: dict,
     gitignore: str,
@@ -300,6 +412,9 @@ def validate_cmake_presets(
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
+        "renderer-ios-causal-none",
+        "renderer-ios-causal-a",
+        "renderer-ios-causal-b",
     }
     if set(configure_by_name) != expected_configure_names:
         raise ValueError("configure preset names drifted")
@@ -315,6 +430,7 @@ def validate_cmake_presets(
         "OPENGOTHIC_METALFX_SPATIAL": "OFF",
         "OPENGOTHIC_METALFX_TEMPORAL": "OFF",
         "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
@@ -341,6 +457,7 @@ def validate_cmake_presets(
             raise ValueError(f"{name} public binaryDir drifted")
         expected_profile_cache = {
             "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": diagnostics,
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
             "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": tile,
             "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": forward,
         }
@@ -348,6 +465,34 @@ def validate_cmake_presets(
             raise ValueError(f"{name} profile tuple drifted")
         if tile == "ON" and forward == "ON":
             raise ValueError("Tile and Forward may not be enabled together")
+
+    causal_tuple = {
+        "causal-none": "none",
+        "causal-a": "causal-a",
+        "causal-b": "causal-b",
+    }
+    for name, mode in causal_tuple.items():
+        preset = configure_by_name[f"renderer-ios-{name}"]
+        if preset.get("inherits") != "renderer-ios-base":
+            raise ValueError(f"{name} does not inherit the shared base")
+        if preset.get("binaryDir") != (
+            "${sourceDir}/build/local-renderer-ios-" + name
+        ):
+            raise ValueError(f"{name} public binaryDir drifted")
+        if preset.get("environment") != {"PACKAGE_DEVICE_IPA": "0"}:
+            raise ValueError(f"{name} package tuple drifted")
+        expected_causal_cache = {
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+            "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": mode,
+            "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        }
+        if preset.get("cacheVariables") != expected_causal_cache:
+            raise ValueError(f"{name} causal tuple drifted")
 
     serialized = json.dumps(presets, sort_keys=True)
     for forbidden in (
@@ -366,6 +511,9 @@ def validate_cmake_presets(
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
+        "renderer-ios-causal-none",
+        "renderer-ios-causal-a",
+        "renderer-ios-causal-b",
     ]:
         raise ValueError("build preset names or order drifted")
     expected_native_options = [
@@ -426,6 +574,88 @@ def validate_cmake_presets(
             raise ValueError(f"contracts do not read actual presets: {line}")
     if "cmake -S . -B" in contracts:
         raise ValueError("contracts still duplicate preset platform tuple")
+
+
+def validate_causal_build_isolation_source(
+    cmake: str,
+    profile: str,
+    local_verify: str,
+    contracts: str,
+) -> None:
+    cmake_literals = (
+        'set(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE "none"',
+        "PROPERTY STRINGS ${_renderer_ios_native_alpha_test_causal_modes}",
+        "_renderer_ios_native_alpha_test_causal_mode_index EQUAL -1",
+        "RendererIOS native AlphaTest causal A/B builds are available only for iOS",
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE=none",
+        "exclusive with all other RendererIOS self-tests",
+        'STREQUAL "causal-a")',
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1",
+        'STREQUAL "causal-b")',
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1",
+    )
+    for literal in cmake_literals:
+        if literal not in cmake:
+            raise ValueError(f"causal CMake source contract drifted: {literal}")
+    compile_definitions = re.findall(
+        r"(?<![A-Za-z0-9_])"
+        r"OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_(A|B)="
+        r"([^)\s]+)",
+        cmake,
+    )
+    if compile_definitions != [("A", "1"), ("B", "1")]:
+        raise ValueError("causal CMake compile definitions are not exact A=1/B=1")
+    if "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST" in cmake:
+        raise ValueError("HOST_TEST leaked into product CMake")
+
+    profile_literals = (
+        'RAW_ACTIVE_FAULT_MODE_SET="${ACTIVE_FAULT_MODE+x}"',
+        "reject_causal_raw_conflict()",
+        "causal profile raw input mismatch:",
+        'CAUSAL_MODE "$RAW_CAUSAL_MODE_SET" "$RAW_CAUSAL_MODE" "$CAUSAL_MODE"',
+        '-DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$CAUSAL_MODE"',
+        r'r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_"',
+        "causal PBX global definitions drifted:",
+        "RendererIOS causal binary oracle:",
+    )
+    for literal in profile_literals:
+        if literal not in profile:
+            raise ValueError(f"causal CI profile source drifted: {literal}")
+
+    local_literals = (
+        "off|on|tile|forward|causal-none|causal-a|causal-b",
+        'local build="$TMP_GATE/causal-invalid-$mode-$name"',
+        "for causal_mode_under_test in causal-a causal-b; do",
+        "causal-invalid-non-ios-$causal_mode_under_test",
+        'project.replace(expected_macro, "MUTANT_" + expected_macro, 1)',
+        "RendererIOS causal binary oracle:",
+    )
+    for literal in local_literals:
+        if literal not in local_verify:
+            raise ValueError(f"causal local source drifted: {literal}")
+
+    marker = "### CI contract: Verify P2.1c3b3b causal build isolation"
+    next_marker = "### CI contract: Verify neutral P2.1 scene boundary"
+    causal_contract = exact_scope(
+        contracts,
+        marker,
+        next_marker,
+        "causal CI contract",
+    )
+    contract_literals = (
+        'local build="$CAUSAL_CONTRACT_ROOT/invalid-$mode-$name"',
+        "for causal_mode_under_test in causal-a causal-b; do",
+        "invalid-non-ios-$causal_mode_under_test",
+        'project.replace(expected, "MUTANT_" + expected, 1)',
+        "total_pbx_mutations != 17",
+        "total_cache_mutations != 24",
+    )
+    for literal in contract_literals:
+        if literal not in causal_contract:
+            raise ValueError(f"causal contracts source drifted: {literal}")
+    if "cmake --build" in causal_contract:
+        raise ValueError("causal contracts must not serialize Release app builds")
 
 
 def replace_once(source: str, before: str, after: str) -> str:
@@ -785,6 +1015,32 @@ def test_cmake_presets_contract() -> None:
             2, "CODE_SIGNING_ALLOWED=YES"
         )
     )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][1]["cacheVariables"].pop(
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][5]["environment"].__setitem__(
+            "PACKAGE_DEVICE_IPA", "1"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][6]["cacheVariables"].__setitem__(
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE", "none"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["configurePresets"][7]["cacheVariables"].__setitem__(
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS", "OFF"
+        )
+    )
+    mutated_presets(
+        lambda candidate: candidate["buildPresets"].__setitem__(
+            slice(5, 7),
+            list(reversed(candidate["buildPresets"][5:7])),
+        )
+    )
     mutations.extend(
         (
             (
@@ -844,7 +1100,466 @@ def test_cmake_presets_contract() -> None:
             killed += 1
         else:
             raise AssertionError("CMake presets mutation survived")
+    assert killed == 19
+
+
+def test_causal_build_isolation_source_contract() -> None:
+    cmake = CMAKE.read_text(encoding="utf-8")
+    profile = PROFILE.read_text(encoding="utf-8")
+    local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    validate_causal_build_isolation_source(
+        cmake,
+        profile,
+        local_verify,
+        contracts,
+    )
+    mutations = (
+        (
+            replace_once(
+                cmake,
+                'set(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE "none"',
+                'set(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE "causal-a"',
+            ),
+            profile,
+            local_verify,
+            contracts,
+        ),
+        (
+            replace_once(
+                cmake,
+                "_renderer_ios_native_alpha_test_causal_mode_index EQUAL -1",
+                "FALSE",
+            ),
+            profile,
+            local_verify,
+            contracts,
+        ),
+        (
+            replace_once(
+                cmake,
+                "RendererIOS native AlphaTest causal A/B builds are available only for iOS",
+                "RendererIOS causal platform unrestricted",
+            ),
+            profile,
+            local_verify,
+            contracts,
+        ),
+        (
+            replace_once(
+                cmake,
+                "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1",
+                "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=10",
+            ),
+            profile,
+            local_verify,
+            contracts,
+        ),
+        (
+            replace_once(
+                cmake,
+                "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1",
+                "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1",
+            ),
+            profile,
+            local_verify,
+            contracts,
+        ),
+        (
+            cmake,
+            replace_once(
+                profile,
+                'RAW_ACTIVE_FAULT_MODE_SET="${ACTIVE_FAULT_MODE+x}"',
+                "RAW_ACTIVE_FAULT_MODE_SET=",
+            ),
+            local_verify,
+            contracts,
+        ),
+        (
+            cmake,
+            replace_once(
+                profile,
+                "reject_causal_raw_conflict()",
+                "accept_causal_raw_conflict()",
+            ),
+            local_verify,
+            contracts,
+        ),
+        (
+            cmake,
+            replace_once(
+                profile,
+                "(?<![A-Za-z0-9_])",
+                "",
+            ),
+            local_verify,
+            contracts,
+        ),
+        (
+            cmake,
+            profile,
+            replace_once(
+                local_verify,
+                'local build="$TMP_GATE/causal-invalid-$mode-$name"',
+                'local build="$TMP_GATE/causal-invalid-$mode"',
+            ),
+            contracts,
+        ),
+        (
+            cmake,
+            profile,
+            replace_once(
+                local_verify,
+                'project.replace(expected_macro, "MUTANT_" + expected_macro, 1)',
+                "project",
+            ),
+            contracts,
+        ),
+        (
+            cmake,
+            profile,
+            local_verify,
+            replace_once(
+                contracts,
+                "### CI contract: Verify P2.1c3b3b causal build isolation",
+                "### CI contract: Verify P2.1c3b3b causal build isolation\n"
+                "cmake --build MUTANT",
+            ),
+        ),
+        (
+            cmake,
+            profile,
+            local_verify,
+            replace_once(
+                contracts,
+                'local build="$CAUSAL_CONTRACT_ROOT/invalid-$mode-$name"',
+                'local build="$CAUSAL_CONTRACT_ROOT/invalid-$mode"',
+            ),
+        ),
+        (
+            cmake,
+            profile,
+            local_verify,
+            replace_once(
+                contracts,
+                "total_pbx_mutations != 17",
+                "total_pbx_mutations != 15",
+            ),
+        ),
+        (
+            cmake,
+            profile,
+            local_verify,
+            replace_once(
+                contracts,
+                'project.replace(expected, "MUTANT_" + expected, 1)',
+                "project",
+            ),
+        ),
+    )
+    killed = 0
+    for candidate in mutations:
+        try:
+            validate_causal_build_isolation_source(*candidate)
+        except ValueError:
+            killed += 1
+        else:
+            raise AssertionError("causal build-isolation source mutation survived")
     assert killed == 14
+
+
+def test_ui_automation_host_contract() -> None:
+    harness = UI_AUTOMATION_HARNESS.read_text()
+    selector = UI_AUTOMATION_SELECTOR.read_text()
+    contracts = CONTRACTS.read_text()
+    validate_ui_automation_host_contract(harness, selector, contracts)
+
+    selector_self_test = subprocess.run(
+        ["python3", str(UI_AUTOMATION_SELECTOR), "self-test"],
+        cwd=REPO,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+    )
+    assert selector_self_test.returncode == 0, selector_self_test.stderr
+    harness_self_test = subprocess.run(
+        ["/bin/bash", str(UI_AUTOMATION_HARNESS), "--self-test"],
+        cwd=REPO,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert harness_self_test.returncode == 0, harness_self_test.stderr
+
+    def mutate_exact(
+        source: str,
+        replacements: tuple[tuple[str, str], ...],
+    ) -> str:
+        mutated = source
+        for before, after in replacements:
+            if mutated.count(before) != 1:
+                raise AssertionError(
+                    "UI automation mutation anchor is not exact: " + before
+                )
+            mutated = mutated.replace(before, after, 1)
+        return mutated
+
+    selector_mutations = (
+        (
+            "network-first",
+            (
+                (
+                    "        return valid_usb[0]\n",
+                    "        return next(\n"
+                    "            (\n"
+                    "                candidate\n"
+                    "                for witness in _transport_witnesses(\n"
+                    '                    xc_records, "network"\n'
+                    "                )\n"
+                    "                if (candidate := _validate_pair(\n"
+                    "                    witness, core_records\n"
+                    "                )[0]) is not None\n"
+                    "            ),\n"
+                    "            valid_usb[0],\n"
+                    "        )\n",
+                ),
+            ),
+        ),
+        (
+            "missing-platform-prefilter",
+            (
+                (
+                    "    iphone_witnesses = "
+                    "_iphone_witness_records(xc_records)\n",
+                    "    iphone_witnesses = xc_records\n",
+                ),
+            ),
+        ),
+        (
+            "malformed-usb-fallback",
+            (("    if usb_witnesses:\n", "    if False and usb_witnesses:\n"),),
+        ),
+        (
+            "missing-udid-cross-match",
+            (
+                (
+                    "        if _core_udid(record) == identifier\n",
+                    "        if _core_udid(record) is not None\n",
+                ),
+                ("    if len(matches) != 1:\n", "    if not matches:\n"),
+                (
+                    "    if identifier != core_udid:\n",
+                    "    if False and identifier != core_udid:\n",
+                ),
+            ),
+        ),
+        (
+            "missing-connected",
+            (
+                (
+                    "    if not _core_device_is_connected(core_record):\n",
+                    "    if False and not "
+                    "_core_device_is_connected(core_record):\n",
+                ),
+            ),
+        ),
+        (
+            "missing-physical",
+            (
+                (
+                    '    if hardware.get("reality") != PHYSICAL_REALITY:\n',
+                    '    if False and hardware.get("reality") '
+                    "!= PHYSICAL_REALITY:\n",
+                ),
+            ),
+        ),
+        (
+            "missing-simulator",
+            (
+                (
+                    '    if xc_record.get("simulator") is not False:\n',
+                    '    if False and xc_record.get("simulator") '
+                    "is not False:\n",
+                ),
+            ),
+        ),
+        (
+            "missing-available",
+            (
+                (
+                    '    if xc_record.get("available") is not True:\n',
+                    '    if False and xc_record.get("available") '
+                    "is not True:\n",
+                ),
+            ),
+        ),
+        (
+            "missing-xc-platform",
+            (
+                (
+                    '    if xc_record.get("platform") != IPHONEOS_PLATFORM:\n',
+                    '    if False and xc_record.get("platform") '
+                    "!= IPHONEOS_PLATFORM:\n",
+                ),
+            ),
+        ),
+        (
+            "missing-core-platform",
+            (
+                (
+                    '    if hardware.get("platform") != IOS_PLATFORM:\n',
+                    '    if False and hardware.get("platform") '
+                    "!= IOS_PLATFORM:\n",
+                ),
+            ),
+        ),
+        (
+            "first-of-many-usb",
+            (
+                (
+                    "        if invalid_usb or len(valid_usb) != 1:\n",
+                    "        if invalid_usb:\n",
+                ),
+            ),
+        ),
+        (
+            "ignore-requested",
+            (
+                (
+                    "    if requested:\n"
+                    "        return _select_requested("
+                    "iphone_witnesses, core_records, requested)\n",
+                    "    if False and requested:\n"
+                    "        return _select_requested("
+                    "iphone_witnesses, core_records, requested)\n",
+                ),
+            ),
+        ),
+        (
+            "first-requested",
+            (("    if len(target_udids) != 1:\n", "    if not target_udids:\n"),),
+        ),
+        (
+            "duplicate-xc-collapse",
+            (("    if len(xc_matches) != 1:\n", "    if not xc_matches:\n"),),
+        ),
+        (
+            "duplicate-core-collapse",
+            (
+                ("    if len(core_matches) != 1:\n", "    if not core_matches:\n"),
+                ("    if len(matches) != 1:\n", "    if not matches:\n"),
+            ),
+        ),
+        (
+            "prefix-only-bundle",
+            (
+                (
+                    "        if product_pattern.fullmatch(bundle):\n",
+                    "        if bundle.startswith(base_bundle_id + \".\"):\n",
+                ),
+            ),
+        ),
+        (
+            "runner-accepted",
+            (
+                (
+                    "        elif runner_pattern.fullmatch(bundle):\n"
+                    "            continue\n",
+                    "        elif runner_pattern.fullmatch(bundle):\n"
+                    "            products.append(bundle)\n",
+                ),
+            ),
+        ),
+    )
+    selector_mutations_killed = 0
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_root = pathlib.Path(temporary)
+        for label, replacements in selector_mutations:
+            mutant = temporary_root / f"selector-{label}.py"
+            mutant.write_text(mutate_exact(selector, replacements))
+            result = subprocess.run(
+                ["python3", str(mutant), "self-test"],
+                cwd=REPO,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+            )
+            assert result.returncode != 0, (
+                "UI automation selector mutation survived: " + label
+            )
+            selector_mutations_killed += 1
+    assert selector_mutations_killed == 17
+
+    diagnostics = "    -collect-test-diagnostics never \\\n"
+    harness_mutations = (
+        ("diagnostics-removed", ((diagnostics, ""),)),
+        (
+            "diagnostics-changed",
+            ((diagnostics, "    -collect-test-diagnostics always \\\n"),),
+        ),
+        (
+            "diagnostics-duplicated",
+            ((diagnostics, diagnostics + diagnostics),),
+        ),
+        (
+            "diagnostics-non-adjacent",
+            (
+                (
+                    diagnostics,
+                    "    -collect-test-diagnostics \\\n"
+                    "    -quiet \\\n"
+                    "    never \\\n",
+                ),
+            ),
+        ),
+        (
+            "diagnostics-after-action",
+            (
+                (
+                    diagnostics + "    test\n",
+                    "    test \\\n"
+                    "    -collect-test-diagnostics never\n",
+                ),
+            ),
+        ),
+        (
+            "explicit-team-id-ignored",
+            (
+                (
+                    "  if [[ -n \"$requested\" ]]; then\n"
+                    "    team=\"$requested\"\n"
+                    "  else\n"
+                    "    team=\"${bundle##*.}\"\n"
+                    "  fi\n",
+                    "  team=\"${bundle##*.}\"\n",
+                ),
+            ),
+        ),
+    )
+    harness_mutations_killed = 0
+    with tempfile.TemporaryDirectory() as temporary:
+        temporary_root = pathlib.Path(temporary)
+        for label, replacements in harness_mutations:
+            mutant = temporary_root / f"harness-{label}.sh"
+            mutant.write_text(mutate_exact(harness, replacements))
+            result = subprocess.run(
+                ["/bin/bash", str(mutant), "--self-test"],
+                cwd=REPO,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+            assert result.returncode != 0, (
+                "UI automation harness mutation survived: " + label
+            )
+            harness_mutations_killed += 1
+    assert harness_mutations_killed == 6
 
 
 def test_bash32_candidate_arguments() -> None:
@@ -940,6 +1655,98 @@ xcrun() {{
     )
 
 
+def test_bash32_causal_profile_tuple() -> None:
+    source = PROFILE.read_text(encoding="utf-8")
+    boundary = source.find("\nfor value in \\")
+    if boundary < 0:
+        raise AssertionError("CI causal profile parser boundary is missing")
+    parser = source[:boundary]
+    raw_names = (
+        "DIAGNOSTICS",
+        "ACTIVE_FAULT_MODE",
+        "CAUSAL_MODE",
+        "BINK_SELF_TEST",
+        "RESOURCE_ALLOCATOR_SELF_TEST",
+        "CLEAR_ONLY_PASS_SELF_TEST",
+        "SHADING_PROTOTYPE_TILE_SELF_TEST",
+        "SHADING_PROTOTYPE_FORWARD_SELF_TEST",
+        "TEMPEST_PROFILE",
+        "PACKAGE_DEVICE_IPA",
+    )
+    base_environment = os.environ.copy()
+    for name in raw_names:
+        base_environment.pop(name, None)
+    base_environment["RUNNER_TEMP"] = tempfile.gettempdir()
+    base_environment["GITHUB_SHA"] = "1" * 40
+
+    clean = subprocess.run(
+        ["/bin/bash", "-s", "--", "causal-a"],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        env=base_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert clean.returncode == 0, clean.stderr
+
+    matching_environment = dict(
+        base_environment,
+        DIAGNOSTICS="ON",
+        ACTIVE_FAULT_MODE="none",
+        CAUSAL_MODE="causal-b",
+        BINK_SELF_TEST="OFF",
+        RESOURCE_ALLOCATOR_SELF_TEST="OFF",
+        CLEAR_ONLY_PASS_SELF_TEST="OFF",
+        SHADING_PROTOTYPE_TILE_SELF_TEST="OFF",
+        SHADING_PROTOTYPE_FORWARD_SELF_TEST="OFF",
+        TEMPEST_PROFILE="baseline",
+        PACKAGE_DEVICE_IPA="0",
+    )
+    matching = subprocess.run(
+        ["/bin/bash", "-s", "--", "causal-b"],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        env=matching_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert matching.returncode == 0, matching.stderr
+
+    conflicts = (
+        ("DIAGNOSTICS", "OFF"),
+        ("ACTIVE_FAULT_MODE", "post-submit-suboptimal"),
+        ("CAUSAL_MODE", "causal-b"),
+        ("BINK_SELF_TEST", "ON"),
+        ("RESOURCE_ALLOCATOR_SELF_TEST", "ON"),
+        ("CLEAR_ONLY_PASS_SELF_TEST", "ON"),
+        ("SHADING_PROTOTYPE_TILE_SELF_TEST", "ON"),
+        ("SHADING_PROTOTYPE_FORWARD_SELF_TEST", "ON"),
+        ("TEMPEST_PROFILE", "metalfx-spatial"),
+        ("PACKAGE_DEVICE_IPA", "1"),
+    )
+    for name, value in conflicts:
+        environment = dict(base_environment)
+        environment[name] = value
+        rejected = subprocess.run(
+            ["/bin/bash", "-s", "--", "causal-a"],
+            input=parser,
+            text=True,
+            cwd=REPO,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert rejected.returncode == 2
+        assert rejected.stderr.startswith(
+            f"causal profile raw input mismatch: {name}="
+        )
+
+
 def test_bash32_local_profile_parser() -> None:
     source = LOCAL_VERIFY.read_text(encoding="utf-8")
     parser = source.split('\nSCRIPT_DIR="', 1)[0]
@@ -956,6 +1763,17 @@ def test_bash32_local_profile_parser() -> None:
         check=False,
     )
     assert single.returncode == 0, single.stderr
+
+    causal = subprocess.run(
+        ["/bin/bash", "-s", "--", "profiles", "causal-none", "causal-a", "causal-b"],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert causal.returncode == 0, causal.stderr
 
     duplicate = subprocess.run(
         ["/bin/bash", "-s", "--", "profiles", "on", "on"],
@@ -976,13 +1794,17 @@ def main() -> None:
     test_aggregation()
     test_workflow_contract()
     test_cmake_presets_contract()
+    test_causal_build_isolation_source_contract()
+    test_ui_automation_host_contract()
     test_bash32_candidate_arguments()
+    test_bash32_causal_profile_tuple()
     test_bash32_local_profile_parser()
     print(
         "RendererIOS CI verification tests passed: "
-        "7 groups, Bash 3.2 candidate/profile-parser smoke, "
+        "10 groups, Bash 3.2 candidate/CI-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
-        "14 CMake presets mutations"
+        "19 CMake presets mutations, 14 causal source mutations, "
+        "17 UI selector mutations, 6 UI harness mutations"
     )
 
 

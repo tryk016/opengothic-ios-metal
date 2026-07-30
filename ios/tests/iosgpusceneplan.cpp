@@ -1,8 +1,10 @@
 #include "graphics/iosgpusceneplan.h"
 
 #include <cassert>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -11,6 +13,821 @@ namespace {
 
 // Exact P2.1c2 compositional fixture, mirrored in iosscenecontract.cpp.
 constexpr uint64_t MovableSourceId = 0x21C2u;
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+constexpr std::string_view CausalNonce =
+    "0123456789abcdef0123456789abcdef";
+constexpr const char* CausalNonceArgument =
+    "-renderer-ios-native-alpha-test-causal-nonce="
+    "0123456789abcdef0123456789abcdef";
+constexpr const char* CausalSequenceArgument =
+    "-renderer-ios-native-alpha-test-causal-sequence=300";
+
+template<IOSGPUSceneMode Mode>
+void testCausalArgumentsForMode(
+    const char* modeArgument,
+    const char* otherModeArgument) {
+  const auto parse = [](
+      const auto& arguments,
+      IOSGPUSceneCausalArguments& output) {
+    return iosGPUSceneParseCausalArgumentsForCompileMode<Mode>(
+        static_cast<int>(arguments.size()),arguments.data(),output);
+    };
+  const IOSGPUSceneCausalArguments sentinel = {
+    IOSGPUSceneMode::Production,
+    {'s','e','n','t','i','n','e','l'},
+    99u,
+    };
+  {
+    const std::array arguments = {
+      "Gothic2Notr",
+      "-save",
+      CausalSequenceArgument,
+      "--unrelated",
+      CausalNonceArgument,
+      modeArgument,
+      };
+    IOSGPUSceneCausalArguments parsed = sentinel;
+    assert(parse(arguments,parsed)==
+           IOSGPUSceneCausalArgumentResult::Accepted);
+    assert(parsed.mode==Mode);
+    assert(std::string_view(parsed.nonce.data())==CausalNonce);
+    assert(parsed.sequence==300u);
+  }
+  {
+    const std::array arguments = {
+      modeArgument,
+      "-renderer-ios-native-alpha-test-causal-nonce="
+      "ffffffffffffffffffffffffffffffff",
+      "-renderer-ios-native-alpha-test-causal-sequence="
+      "18446744073709551615",
+      };
+    IOSGPUSceneCausalArguments parsed = sentinel;
+    assert(parse(arguments,parsed)==
+           IOSGPUSceneCausalArgumentResult::Accepted);
+    assert(parsed.mode==Mode);
+    assert(std::string_view(parsed.nonce.data())==
+           "ffffffffffffffffffffffffffffffff");
+    assert(parsed.sequence==std::numeric_limits<uint64_t>::max());
+  }
+
+  const auto assertRejected = [&](
+      const auto& arguments,
+      IOSGPUSceneCausalArgumentResult expected) {
+    IOSGPUSceneCausalArguments parsed = sentinel;
+    assert(parse(arguments,parsed)==expected);
+    assert(parsed==sentinel);
+    };
+  assertRejected(
+      std::array{CausalNonceArgument,CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::MissingMode);
+  assertRejected(
+      std::array{modeArgument,CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::MissingNonce);
+  assertRejected(
+      std::array{modeArgument,CausalNonceArgument},
+      IOSGPUSceneCausalArgumentResult::MissingSequence);
+  assertRejected(
+      std::array{
+        modeArgument,modeArgument,
+        CausalNonceArgument,CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::DuplicateMode);
+  assertRejected(
+      std::array{
+        modeArgument,CausalNonceArgument,CausalNonceArgument,
+        CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::DuplicateNonce);
+  assertRejected(
+      std::array{
+        modeArgument,CausalNonceArgument,
+        CausalSequenceArgument,CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::DuplicateSequence);
+  assertRejected(
+      std::array{
+        modeArgument,CausalNonceArgument,CausalSequenceArgument,
+        "-renderer-ios-native-alpha-test-causal-extra=1"},
+      IOSGPUSceneCausalArgumentResult::UnknownCausalArgument);
+  assertRejected(
+      std::array{
+        otherModeArgument,CausalNonceArgument,CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::ModeMismatch);
+  assertRejected(
+      std::array{
+        "-renderer-ios-native-alpha-test-causal-mode=unknown",
+        CausalNonceArgument,CausalSequenceArgument},
+      IOSGPUSceneCausalArgumentResult::ModeMismatch);
+
+  for(const char* nonceArgument:{
+        "-renderer-ios-native-alpha-test-causal-nonce=",
+        "-renderer-ios-native-alpha-test-causal-nonce=0",
+        "-renderer-ios-native-alpha-test-causal-nonce="
+        "0123456789abcdef0123456789abcde",
+        "-renderer-ios-native-alpha-test-causal-nonce="
+        "0123456789abcdef0123456789abcdef0",
+        "-renderer-ios-native-alpha-test-causal-nonce="
+        "0123456789abcdef0123456789abcdeF",
+        "-renderer-ios-native-alpha-test-causal-nonce="
+        "0123456789abcdef0123456789abcdeg"}) {
+    assertRejected(
+        std::array{modeArgument,nonceArgument,CausalSequenceArgument},
+        IOSGPUSceneCausalArgumentResult::InvalidNonce);
+  }
+  for(const char* sequenceArgument:{
+        "-renderer-ios-native-alpha-test-causal-sequence=",
+        "-renderer-ios-native-alpha-test-causal-sequence=0",
+        "-renderer-ios-native-alpha-test-causal-sequence=+1",
+        "-renderer-ios-native-alpha-test-causal-sequence=-1",
+        "-renderer-ios-native-alpha-test-causal-sequence=01",
+        "-renderer-ios-native-alpha-test-causal-sequence=1x",
+        "-renderer-ios-native-alpha-test-causal-sequence="
+        "18446744073709551616",
+        "-renderer-ios-native-alpha-test-causal-sequence="
+        "9999999999999999999999999999999999999999"}) {
+    assertRejected(
+        std::array{modeArgument,CausalNonceArgument,sequenceArgument},
+        IOSGPUSceneCausalArgumentResult::InvalidSequence);
+  }
+
+  IOSGPUSceneCausalArguments parsed = sentinel;
+  assert(iosGPUSceneParseCausalArgumentsForCompileMode<Mode>(
+             -1,nullptr,parsed)==
+         IOSGPUSceneCausalArgumentResult::InvalidArgumentVector);
+  assert(parsed==sentinel);
+  assert(iosGPUSceneParseCausalArgumentsForCompileMode<Mode>(
+             1,nullptr,parsed)==
+         IOSGPUSceneCausalArgumentResult::InvalidArgumentVector);
+  assert(parsed==sentinel);
+  const std::array<const char*,1> nullArgument = {nullptr};
+  assert(iosGPUSceneParseCausalArgumentsForCompileMode<Mode>(
+             1,nullArgument.data(),parsed)==
+         IOSGPUSceneCausalArgumentResult::InvalidArgumentVector);
+  assert(parsed==sentinel);
+  }
+
+void assertMarkerParts(
+    const IOSGPUSceneMarker& marker,
+    std::string_view prefix,
+    std::string_view mode,
+    std::string_view suffix);
+
+template<IOSGPUSceneMode Mode>
+void testCausalRuntimeForMode(
+    const char* modeArgument,
+    std::string_view modeName) {
+  const std::array arguments = {
+    modeArgument,CausalNonceArgument,CausalSequenceArgument,
+    };
+  IOSGPUSceneCausalArguments parsed;
+  assert(iosGPUSceneParseCausalArgumentsForCompileMode<Mode>(
+      static_cast<int>(arguments.size()),arguments.data(),parsed)==
+      IOSGPUSceneCausalArgumentResult::Accepted);
+
+  IOSGPUSceneCausalRuntimeState initialized;
+  initialized.generation = 91u;
+  initialized.lastSequence = 92u;
+  initialized.phase = IOSGPUSceneCausalRuntimePhase::Failed;
+  assert(iosGPUSceneInitializeCausalRuntimeForCompileMode<Mode>(
+      parsed,initialized));
+  assert(initialized.arguments==parsed);
+  assert(initialized.generation==0u);
+  assert(initialized.lastSequence==0u);
+  assert(initialized.phase==
+         IOSGPUSceneCausalRuntimePhase::AwaitingTarget);
+
+  assertMarkerParts(
+      iosGPUSceneCausalArmedMarker(initialized),
+      "RendererIOS native causal capture: ARMED mode=",modeName,
+      " nonce=0123456789abcdef0123456789abcdef "
+      "target-sequence=300");
+  assertMarkerParts(
+      iosGPUSceneCausalParseFailMarker(
+          Mode,IOSGPUSceneCausalArgumentResult::MissingNonce),
+      "RendererIOS native causal capture: FAIL mode=",modeName,
+      " reason=parse-missing-nonce");
+  assert(!iosGPUSceneCausalParseFailMarker(
+      Mode,IOSGPUSceneCausalArgumentResult::Accepted));
+
+  const auto makeCounts = [](
+      IOSGPUSceneCausalFrameRoute selectedRoute) {
+    IOSGPUSceneFrameCounts counts;
+    for(const auto entry:{
+          std::pair{IOSMaterialCategory::Opaque,
+                    IOSSceneMeshKind::Landscape},
+          std::pair{IOSMaterialCategory::AlphaTest,
+                    IOSSceneMeshKind::Static},
+          std::pair{IOSMaterialCategory::AlphaTest,
+                    IOSSceneMeshKind::Movable}}) {
+      assert(recordIOSGPUSceneDrawCount(
+          entry.first,entry.second,false,false,counts.planned)==
+          IOSGPUSceneCountResult::Recorded);
+      IOSGPUSceneDrawDispatch dispatch;
+      assert(recordIOSGPUSceneDrawDispatchForRouteForCompileMode<Mode>(
+          selectedRoute,entry.first,entry.second,false,true,
+          iosGPUScenePipelineSelector(entry.first),
+          counts,dispatch)==IOSGPUSceneDrawDispatchResult::Recorded);
+      assert(dispatch.logical==
+             iosGPUScenePipelineSelector(entry.first));
+      if(selectedRoute==IOSGPUSceneCausalFrameRoute::Production ||
+         entry.first==IOSMaterialCategory::Opaque)
+        assert(dispatch.effective==dispatch.logical);
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+      if constexpr(Mode==IOSGPUSceneMode::CausalB) {
+        if(selectedRoute==IOSGPUSceneCausalFrameRoute::Target &&
+           entry.first==IOSMaterialCategory::AlphaTest)
+          assert(dispatch.effective==
+                 IOSGPUScenePipelineSelector::Opaque);
+        }
+#endif
+    }
+    return counts;
+    };
+  const IOSGPUSceneFrameCounts productionCounts =
+      makeCounts(IOSGPUSceneCausalFrameRoute::Production);
+  const IOSGPUSceneFrameCounts targetCounts =
+      makeCounts(IOSGPUSceneCausalFrameRoute::Target);
+  assert(iosGPUSceneProductionFrameCountsAreConsistent(
+      productionCounts));
+  assert(iosGPUSceneFrameCountsAreConsistentForCompileMode<Mode>(
+      targetCounts));
+  {
+    IOSGPUSceneFrameCounts invalidRouteCounts = productionCounts;
+    IOSGPUSceneDrawDispatch invalidRouteDispatch = {
+      IOSGPUScenePipelineSelector::AlphaTest,
+      IOSGPUScenePipelineSelector::Opaque,
+      };
+    const auto countsBefore = invalidRouteCounts;
+    const auto dispatchBefore = invalidRouteDispatch;
+    assert(recordIOSGPUSceneDrawDispatchForRouteForCompileMode<Mode>(
+        static_cast<IOSGPUSceneCausalFrameRoute>(255u),
+        IOSMaterialCategory::AlphaTest,IOSSceneMeshKind::Static,
+        false,true,IOSGPUScenePipelineSelector::AlphaTest,
+        invalidRouteCounts,invalidRouteDispatch)==
+        IOSGPUSceneDrawDispatchResult::InvalidMode);
+    assert(invalidRouteCounts==countsBefore);
+    assert(invalidRouteDispatch==dispatchBefore);
+  }
+
+  IOSGPUSceneCausalFrameRoute route =
+      IOSGPUSceneCausalFrameRoute::Target;
+  IOSGPUSceneCausalRuntimeState prepared = initialized;
+  prepared.generation = 41u;
+  prepared.lastSequence = 42u;
+  prepared.phase = IOSGPUSceneCausalRuntimePhase::Failed;
+  const auto assertObservationRejected = [&](
+      const IOSGPUSceneCausalRuntimeState& current,
+      uint64_t generation,
+      uint64_t sequence,
+      IOSGPUSceneCausalFrameResult expected) {
+    route = IOSGPUSceneCausalFrameRoute::Target;
+    prepared = initialized;
+    prepared.generation = 41u;
+    prepared.lastSequence = 42u;
+    prepared.phase = IOSGPUSceneCausalRuntimePhase::Failed;
+    const auto outputBefore = prepared;
+    assert(iosGPUScenePrepareCausalObservationForCompileMode<Mode>(
+        current,generation,sequence,route,prepared)==expected);
+    assert(route==IOSGPUSceneCausalFrameRoute::Target);
+    assert(prepared==outputBefore);
+    };
+
+  IOSGPUSceneCausalRuntimeState state = initialized;
+  assert(iosGPUScenePrepareCausalObservationForCompileMode<Mode>(
+      state,7u,290u,route,prepared)==
+      IOSGPUSceneCausalFrameResult::Prepared);
+  assert(route==IOSGPUSceneCausalFrameRoute::Production);
+  assert(prepared.generation==7u);
+  assert(prepared.lastSequence==290u);
+  IOSGPUSceneCausalRuntimeState committed = initialized;
+  assert(iosGPUSceneCommitCausalPreparationForCompileMode<Mode>(
+      state,prepared,route,productionCounts,3u,0u,
+      false,false,true,committed));
+  state = committed;
+
+  assert(iosGPUScenePrepareCausalObservationForCompileMode<Mode>(
+      state,7u,299u,route,prepared)==
+      IOSGPUSceneCausalFrameResult::Prepared);
+  assert(route==IOSGPUSceneCausalFrameRoute::Production);
+  assert(iosGPUSceneCommitCausalPreparationForCompileMode<Mode>(
+      state,prepared,route,productionCounts,3u,0u,
+      false,false,true,committed));
+  state = committed;
+  assert(state.lastSequence==299u);
+  assertObservationRejected(
+      state,7u,299u,
+      IOSGPUSceneCausalFrameResult::SequenceNotIncreasing);
+  assertObservationRejected(
+      state,7u,298u,
+      IOSGPUSceneCausalFrameResult::SequenceNotIncreasing);
+  assertObservationRejected(
+      state,8u,300u,
+      IOSGPUSceneCausalFrameResult::GenerationChangedBeforeTarget);
+  assertObservationRejected(
+      state,7u,301u,
+      IOSGPUSceneCausalFrameResult::TargetMissed);
+  assertObservationRejected(
+      state,0u,300u,
+      IOSGPUSceneCausalFrameResult::InvalidGeneration);
+  assertObservationRejected(
+      state,7u,0u,
+      IOSGPUSceneCausalFrameResult::InvalidSequence);
+
+  assert(iosGPUScenePrepareCausalObservationForCompileMode<Mode>(
+      state,7u,300u,route,prepared)==
+      IOSGPUSceneCausalFrameResult::Prepared);
+  assert(route==IOSGPUSceneCausalFrameRoute::Target);
+  assert(prepared.phase==
+         IOSGPUSceneCausalRuntimePhase::TargetPrepared);
+  assert(!iosGPUSceneCausalPreparationIsValidForCompileMode<Mode>(
+      prepared,route,targetCounts,3u,3u,false,true,true));
+  assert(!iosGPUSceneCausalPreparationIsValidForCompileMode<Mode>(
+      prepared,route,targetCounts,3u,3u,true,false,true));
+  assert(!iosGPUSceneCausalPreparationIsValidForCompileMode<Mode>(
+      prepared,route,targetCounts,3u,3u,true,true,false));
+  assert(!iosGPUSceneCausalPreparationIsValidForCompileMode<Mode>(
+      prepared,route,targetCounts,3u,2u,true,true,true));
+  {
+    IOSGPUSceneFrameCounts opaqueOnly;
+    assert(recordIOSGPUSceneDrawCount(
+        IOSMaterialCategory::Opaque,
+        IOSSceneMeshKind::Landscape,false,false,
+        opaqueOnly.planned)==IOSGPUSceneCountResult::Recorded);
+    IOSGPUSceneDrawDispatch dispatch;
+    assert(recordIOSGPUSceneDrawDispatchForRouteForCompileMode<Mode>(
+        route,IOSMaterialCategory::Opaque,
+        IOSSceneMeshKind::Landscape,false,true,
+        IOSGPUScenePipelineSelector::Opaque,
+        opaqueOnly,dispatch)==
+        IOSGPUSceneDrawDispatchResult::Recorded);
+    assert(!iosGPUSceneCausalPreparationIsValidForCompileMode<Mode>(
+        prepared,route,opaqueOnly,1u,1u,true,true,true));
+  }
+  assert(iosGPUSceneCausalPreparationIsValidForCompileMode<Mode>(
+      prepared,route,targetCounts,3u,3u,true,true,true));
+
+  committed = initialized;
+  const auto committedSentinel = committed;
+  assert(!iosGPUSceneCommitCausalPreparationForCompileMode<Mode>(
+      state,prepared,route,targetCounts,3u,3u,
+      false,true,true,committed));
+  assert(committed==committedSentinel);
+  assert(iosGPUSceneCommitCausalPreparationForCompileMode<Mode>(
+      state,prepared,route,targetCounts,3u,3u,
+      true,true,true,committed));
+  state = committed;
+  assert(state.phase==IOSGPUSceneCausalRuntimePhase::TargetEncoded);
+  assertMarkerParts(
+      iosGPUSceneCausalEncodedMarker(state,3u,2u),
+      "RendererIOS native causal capture: ENCODED mode=",modeName,
+      " nonce=0123456789abcdef0123456789abcdef "
+      "generation=7 sequence=300 draws=3 alpha=2");
+
+  assertObservationRejected(
+      state,7u,300u,IOSGPUSceneCausalFrameResult::TargetReused);
+  assert(iosGPUScenePrepareCausalObservationForCompileMode<Mode>(
+      state,7u,301u,route,prepared)==
+      IOSGPUSceneCausalFrameResult::Prepared);
+  assert(route==IOSGPUSceneCausalFrameRoute::Production);
+  assert(prepared==state);
+  assert(iosGPUScenePrepareCausalObservationForCompileMode<Mode>(
+      state,8u,1u,route,prepared)==
+      IOSGPUSceneCausalFrameResult::Prepared);
+  assert(route==IOSGPUSceneCausalFrameRoute::Production);
+  assert(prepared==state);
+
+  {
+    auto failed = initialized;
+    assert(iosGPUSceneTransitionCausalFailure(
+        failed,IOSGPUSceneCausalFailureReason::TargetNotObserved));
+    assert(!iosGPUSceneTransitionCausalFailure(
+        failed,IOSGPUSceneCausalFailureReason::NativeEncode));
+    assertMarkerParts(
+        iosGPUSceneCausalFailMarker(
+            failed,0u,0u,
+            IOSGPUSceneCausalFailureReason::TargetNotObserved),
+        "RendererIOS native causal capture: FAIL mode=",modeName,
+        " nonce=0123456789abcdef0123456789abcdef "
+        "generation=0 sequence=0 reason=target-not-observed");
+    assertObservationRejected(
+        failed,7u,300u,IOSGPUSceneCausalFrameResult::InvalidPhase);
+  }
+  {
+    auto targetPrepared = prepared;
+    targetPrepared.phase =
+        IOSGPUSceneCausalRuntimePhase::TargetPrepared;
+    assert(iosGPUSceneTransitionCausalFailure(
+        targetPrepared,
+        IOSGPUSceneCausalFailureReason::MarkerPreflight));
+  }
+  {
+    auto encoded = state;
+    assert(!iosGPUSceneTransitionCausalFailure(
+        encoded,IOSGPUSceneCausalFailureReason::NativeEncode));
+    assert(iosGPUSceneTransitionCausalFailure(
+        encoded,IOSGPUSceneCausalFailureReason::TargetReused));
+    assert(encoded.phase==IOSGPUSceneCausalRuntimePhase::Failed);
+  }
+
+  for(const auto result:{
+        IOSGPUSceneCausalFrameResult::Prepared,
+        IOSGPUSceneCausalFrameResult::InvalidArguments,
+        IOSGPUSceneCausalFrameResult::InvalidGeneration,
+        IOSGPUSceneCausalFrameResult::InvalidSequence,
+        IOSGPUSceneCausalFrameResult::InvalidPhase,
+        IOSGPUSceneCausalFrameResult::GenerationChangedBeforeTarget,
+        IOSGPUSceneCausalFrameResult::SequenceNotIncreasing,
+        IOSGPUSceneCausalFrameResult::TargetMissed,
+        IOSGPUSceneCausalFrameResult::TargetReused})
+    assert(iosGPUSceneCausalFrameResultName(result)!=nullptr);
+  }
+
+template<IOSGPUSceneMode Mode>
+IOSGPUSceneFrameCounts makeCausalDispatchCounts() {
+  IOSGPUSceneFrameCounts counts;
+  for(const auto entry:{
+        std::pair{IOSMaterialCategory::Opaque,
+                  IOSSceneMeshKind::Landscape},
+        std::pair{IOSMaterialCategory::AlphaTest,
+                  IOSSceneMeshKind::Static},
+        std::pair{IOSMaterialCategory::AlphaTest,
+                  IOSSceneMeshKind::Movable}}) {
+    assert(recordIOSGPUSceneDrawCount(
+        entry.first,entry.second,false,false,counts.planned)==
+        IOSGPUSceneCountResult::Recorded);
+    IOSGPUSceneDrawDispatch dispatch;
+    assert(recordIOSGPUSceneDrawDispatchForCompileMode<Mode>(
+        entry.first,entry.second,false,true,
+        iosGPUScenePipelineSelector(entry.first),
+        counts,dispatch)==IOSGPUSceneDrawDispatchResult::Recorded);
+    assert(dispatch.logical==iosGPUScenePipelineSelector(entry.first));
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+    if constexpr(Mode==IOSGPUSceneMode::CausalB) {
+      assert(dispatch.effective==IOSGPUScenePipelineSelector::Opaque);
+      }
+    else
+#endif
+    {
+      assert(dispatch.effective==dispatch.logical);
+    }
+  }
+  assert(iosGPUSceneFrameCountsAreConsistentForCompileMode<Mode>(
+      counts));
+  return counts;
+  }
+
+template<IOSGPUSceneMode Mode>
+void testCausalDispatchForMode() {
+  const auto valid = makeCausalDispatchCounts<Mode>();
+  IOSGPUSceneFrameCounts counts = valid;
+  IOSGPUSceneDrawDispatch dispatch = {
+    IOSGPUScenePipelineSelector::AlphaTest,
+    IOSGPUScenePipelineSelector::Opaque,
+    };
+  const IOSGPUSceneDrawDispatch sentinel = dispatch;
+  const auto assertRejected = [&](
+      IOSMaterialCategory category,
+      IOSSceneMeshKind kind,
+      IOSGPUScenePipelineSelector logical,
+      IOSGPUSceneDrawDispatchResult expected) {
+    counts = valid;
+    dispatch = sentinel;
+    assert(recordIOSGPUSceneDrawDispatchForCompileMode<Mode>(
+        category,kind,false,true,logical,counts,dispatch)==expected);
+    assert(counts==valid);
+    assert(dispatch==sentinel);
+    };
+  assertRejected(
+      IOSMaterialCategory::Opaque,IOSSceneMeshKind::Landscape,
+      IOSGPUScenePipelineSelector::AlphaTest,
+      IOSGPUSceneDrawDispatchResult::SelectorMismatch);
+  assertRejected(
+      IOSMaterialCategory::AlphaTest,IOSSceneMeshKind::Static,
+      IOSGPUScenePipelineSelector::Opaque,
+      IOSGPUSceneDrawDispatchResult::SelectorMismatch);
+  assertRejected(
+      IOSMaterialCategory::AlphaTest,IOSSceneMeshKind::Static,
+      IOSGPUScenePipelineSelector::Unsupported,
+      IOSGPUSceneDrawDispatchResult::SelectorMismatch);
+  assertRejected(
+      IOSMaterialCategory::AlphaTest,IOSSceneMeshKind::Static,
+      static_cast<IOSGPUScenePipelineSelector>(255u),
+      IOSGPUSceneDrawDispatchResult::SelectorMismatch);
+  assertRejected(
+      static_cast<IOSMaterialCategory>(255u),
+      IOSSceneMeshKind::Landscape,
+      IOSGPUScenePipelineSelector::Opaque,
+      IOSGPUSceneDrawDispatchResult::SelectorMismatch);
+  assertRejected(
+      IOSMaterialCategory::Opaque,
+      static_cast<IOSSceneMeshKind>(255u),
+      IOSGPUScenePipelineSelector::Opaque,
+      IOSGPUSceneDrawDispatchResult::UnknownKind);
+
+  counts = valid;
+  ++counts.opaquePsoBinds;
+  const auto corrupt = counts;
+  dispatch = sentinel;
+  assert(recordIOSGPUSceneDrawDispatchForCompileMode<Mode>(
+      IOSMaterialCategory::Opaque,IOSSceneMeshKind::Landscape,
+      false,true,IOSGPUScenePipelineSelector::Opaque,
+      counts,dispatch)==IOSGPUSceneDrawDispatchResult::InconsistentCounts);
+  assert(counts==corrupt);
+  assert(dispatch==sentinel);
+
+  IOSGPUSceneFrameCounts overflow;
+  overflow.drawn.material.total =
+      std::numeric_limits<uint64_t>::max();
+  overflow.drawn.material.opaque = overflow.drawn.material.total;
+  overflow.drawn.kind.total = overflow.drawn.material.total;
+  overflow.drawn.kind.landscape = overflow.drawn.kind.total;
+  overflow.drawn.texturedDraws = overflow.drawn.material.total;
+  overflow.opaquePsoBinds = overflow.drawn.material.total;
+  const auto overflowBefore = overflow;
+  dispatch = sentinel;
+  assert(recordIOSGPUSceneDrawDispatchForCompileMode<Mode>(
+      IOSMaterialCategory::Opaque,IOSSceneMeshKind::Landscape,
+      false,true,IOSGPUScenePipelineSelector::Opaque,
+      overflow,dispatch)==IOSGPUSceneDrawDispatchResult::Overflow);
+  assert(overflow==overflowBefore);
+  assert(dispatch==sentinel);
+  }
+
+std::size_t countOccurrences(
+    std::string_view text,
+    std::string_view needle) {
+  std::size_t count = 0u;
+  std::size_t offset = 0u;
+  while(offset<=text.size()) {
+    const std::size_t found = text.find(needle,offset);
+    if(found==std::string_view::npos)
+      break;
+    ++count;
+    offset = found+needle.size();
+  }
+  return count;
+  }
+
+void assertMarkerParts(
+    const IOSGPUSceneMarker& marker,
+    std::string_view prefix,
+    std::string_view mode,
+    std::string_view suffix) {
+  assert(marker);
+  assert(marker.length<IOSGPUSceneMarkerCapacity);
+  assert(marker.text[marker.length]=='\0');
+  const std::string_view text(marker.text.data(),marker.length);
+  assert(text.size()==prefix.size()+mode.size()+suffix.size());
+  assert(text.starts_with(prefix));
+  assert(text.substr(prefix.size(),mode.size())==mode);
+  assert(text.ends_with(suffix));
+  assert(countOccurrences(text,"mode=")==1u);
+  }
+
+void testSceneMarkerGrammar(
+    std::string_view modeName,
+    const IOSGPUSceneFrameCounts& counts,
+    const IOSGPUSceneFailureCounts& failures,
+    std::string_view alphaSuffix) {
+  assertMarkerParts(
+      iosGPUSceneIdentityMarker(7u,300u),
+      "RendererIOS native scene identity: mode=",modeName,
+      " generation=7 sequence=300");
+  assertMarkerParts(
+      iosGPUSceneMaterialPlannedMarker(counts),
+      "RendererIOS native scene material-planned: mode=",modeName,
+      " total=3 opaque=1 alpha=2");
+  assertMarkerParts(
+      iosGPUSceneMaterialDrawnMarker(counts),
+      "RendererIOS native scene material-drawn: mode=",modeName,
+      " total=3 opaque=1 alpha=2 textured=3");
+  assertMarkerParts(
+      iosGPUSceneKindPlannedMarker(counts),
+      "RendererIOS native scene kind-planned: mode=",modeName,
+      " total=3 landscape=1 static=1 movable=1");
+  assertMarkerParts(
+      iosGPUSceneKindDrawnMarker(counts),
+      "RendererIOS native scene kind-drawn: mode=",modeName,
+      " total=3 landscape=1 static=1 movable=1");
+  assertMarkerParts(
+      iosGPUSceneAlphaMarker(counts),
+      "RendererIOS native scene alpha: mode=",modeName,
+      alphaSuffix);
+  assertMarkerParts(
+      iosGPUSceneFailContractMarker(failures),
+      "RendererIOS native scene fail-contract: mode=",modeName,
+      " unknown-category=0 unknown-kind=0 invalid-cutoff=0 "
+      "missing-alpha-texture=0");
+  assertMarkerParts(
+      iosGPUSceneFailSelectorMarker(failures),
+      "RendererIOS native scene fail-selector: mode=",modeName,
+      " selector-mismatch=0 pso-unavailable=0");
+  assertMarkerParts(
+      iosGPUSceneFailExecutionMarker(failures),
+      "RendererIOS native scene fail-execution: mode=",modeName,
+      " overflow=0 planned-drawn=0 native-encode=0");
+  }
+
+template<IOSGPUSceneMode Mode>
+void testCausalDrawIdentityForMode(
+    std::string_view modeName,
+    std::string_view effectiveName) {
+  IOSGPUScenePipelineSelector effective =
+      IOSGPUScenePipelineSelector::Unsupported;
+  assert(iosGPUSceneEffectivePipelineSelectorForCompileMode<Mode>(
+      IOSMaterialCategory::AlphaTest,
+      IOSGPUScenePipelineSelector::AlphaTest,effective));
+  IOSGPUSceneDrawDispatch dispatch = {
+    IOSGPUScenePipelineSelector::AlphaTest,
+    effective,
+    };
+  IOSGPUSceneCausalDrawIdentity identity;
+  assert(makeIOSGPUSceneCausalDrawIdentityForCompileMode<Mode>(
+      CausalNonce,7u,300u,2u,dispatch,IOSSceneMeshKind::Static,
+      11u,22u,36u,identity)==
+      IOSGPUSceneCausalDrawIdentityResult::Created);
+  assert(iosGPUSceneCausalDrawIdentityIsValidForCompileMode<Mode>(
+      identity));
+  assert(iosGPUSceneCausalDrawIdentityIsValid(identity));
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+  constexpr IOSGPUSceneMode oppositeMode =
+      Mode==IOSGPUSceneMode::CausalA
+        ? IOSGPUSceneMode::CausalB
+        : IOSGPUSceneMode::CausalA;
+  for(const IOSGPUSceneMode invalidMode:{
+        oppositeMode,static_cast<IOSGPUSceneMode>(255u)}) {
+    auto wrongModeIdentity = identity;
+    wrongModeIdentity.mode = invalidMode;
+    assert(!iosGPUSceneCausalDrawIdentityIsValidForCompileMode<Mode>(
+        wrongModeIdentity));
+    assert(!iosGPUSceneCausalDrawIdSignpost(wrongModeIdentity));
+    assert(!iosGPUSceneCausalDrawBindSignpost(wrongModeIdentity));
+  }
+#endif
+
+  const IOSGPUSceneMarker id =
+      iosGPUSceneCausalDrawIdSignpost(identity);
+  assertMarkerParts(
+      id,"RendererIOS native causal draw-id: mode=",modeName,
+      " nonce=0123456789abcdef0123456789abcdef "
+      "generation=7 sequence=300 ordinal=2");
+  const IOSGPUSceneMarker bind =
+      iosGPUSceneCausalDrawBindSignpost(identity);
+  assert(bind);
+  const std::string_view bindText(bind.text.data(),bind.length);
+  assert(bindText.starts_with(
+      "RendererIOS native causal draw-bind: ordinal=2 "
+      "logical=alpha-test effective="));
+  const std::string_view bindSuffix =
+      " kind=static slot=0 texture=11 mesh=22 indices=36";
+  const std::size_t effectiveOffset =
+      std::string_view(
+        "RendererIOS native causal draw-bind: ordinal=2 "
+        "logical=alpha-test effective=").size();
+  assert(bindText.substr(effectiveOffset,effectiveName.size())==
+         effectiveName);
+  assert(bindText.substr(effectiveOffset+effectiveName.size())==
+         bindSuffix);
+  assert(bind.length<IOSGPUSceneMarkerCapacity);
+  assert(bind.text[bind.length]=='\0');
+  for(const std::string_view field:{
+        "ordinal=","logical=","effective=","kind=",
+        "slot=","texture=","mesh=","indices="})
+    assert(countOccurrences(bindText,field)==1u);
+  const std::array orderedSignposts = {id,bind};
+  assert(std::string_view(
+      orderedSignposts[0].text.data(),
+      orderedSignposts[0].length).starts_with(
+          "RendererIOS native causal draw-id:"));
+  assert(std::string_view(
+      orderedSignposts[1].text.data(),
+      orderedSignposts[1].length).starts_with(
+          "RendererIOS native causal draw-bind:"));
+
+  uint64_t counter = 0u;
+  uint64_t ordinal = 99u;
+  for(uint64_t expected=1u; expected<=3u; ++expected) {
+    assert(iosGPUSceneTakeNextCausalDrawOrdinal(counter,ordinal));
+    assert(counter==expected);
+    assert(ordinal==expected);
+  }
+  counter = std::numeric_limits<uint64_t>::max();
+  ordinal = 77u;
+  assert(!iosGPUSceneTakeNextCausalDrawOrdinal(counter,ordinal));
+  assert(counter==std::numeric_limits<uint64_t>::max());
+  assert(ordinal==77u);
+
+  const IOSGPUSceneCausalDrawIdentity sentinel = identity;
+  const auto assertMakeRejected = [&](
+      std::string_view nonce,
+      uint64_t generation,
+      uint64_t sequence,
+      uint64_t ordinalValue,
+      const IOSGPUSceneDrawDispatch& candidateDispatch,
+      IOSSceneMeshKind kind,
+      uint64_t texture,
+      uint64_t mesh,
+      uint64_t indices,
+      IOSGPUSceneCausalDrawIdentityResult expected) {
+    IOSGPUSceneCausalDrawIdentity output = sentinel;
+    assert(makeIOSGPUSceneCausalDrawIdentityForCompileMode<Mode>(
+        nonce,generation,sequence,ordinalValue,candidateDispatch,
+        kind,texture,mesh,indices,output)==expected);
+    assert(output==sentinel);
+    };
+  assertMakeRejected(
+      "0123456789abcdef0123456789abcdeF",
+      7u,300u,2u,dispatch,IOSSceneMeshKind::Static,
+      11u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidNonce);
+  assertMakeRejected(
+      CausalNonce,0u,300u,2u,dispatch,IOSSceneMeshKind::Static,
+      11u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidGeneration);
+  assertMakeRejected(
+      CausalNonce,7u,0u,2u,dispatch,IOSSceneMeshKind::Static,
+      11u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidSequence);
+  assertMakeRejected(
+      CausalNonce,7u,300u,0u,dispatch,IOSSceneMeshKind::Static,
+      11u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidOrdinal);
+  auto wrongDispatch = dispatch;
+  wrongDispatch.effective =
+      effective==IOSGPUScenePipelineSelector::Opaque
+        ? IOSGPUScenePipelineSelector::AlphaTest
+        : IOSGPUScenePipelineSelector::Opaque;
+  assertMakeRejected(
+      CausalNonce,7u,300u,2u,wrongDispatch,IOSSceneMeshKind::Static,
+      11u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidDispatch);
+  auto fabricatedDispatch = dispatch;
+  fabricatedDispatch.effective =
+      static_cast<IOSGPUScenePipelineSelector>(255u);
+  assertMakeRejected(
+      CausalNonce,7u,300u,2u,fabricatedDispatch,
+      IOSSceneMeshKind::Static,11u,22u,36u,
+      IOSGPUSceneCausalDrawIdentityResult::InvalidDispatch);
+  assertMakeRejected(
+      CausalNonce,7u,300u,2u,dispatch,
+      static_cast<IOSSceneMeshKind>(255u),
+      11u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidKind);
+  assertMakeRejected(
+      CausalNonce,7u,300u,2u,dispatch,IOSSceneMeshKind::Static,
+      0u,22u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidTexture);
+  assertMakeRejected(
+      CausalNonce,7u,300u,2u,dispatch,IOSSceneMeshKind::Static,
+      11u,0u,36u,IOSGPUSceneCausalDrawIdentityResult::InvalidMesh);
+  assertMakeRejected(
+      CausalNonce,7u,300u,2u,dispatch,IOSSceneMeshKind::Static,
+      11u,22u,0u,IOSGPUSceneCausalDrawIdentityResult::InvalidIndexCount);
+
+  constexpr uint64_t maximum =
+      std::numeric_limits<uint64_t>::max();
+  IOSGPUSceneCausalDrawIdentity worst;
+  assert(makeIOSGPUSceneCausalDrawIdentityForCompileMode<Mode>(
+      CausalNonce,maximum,maximum,maximum,dispatch,
+      IOSSceneMeshKind::Landscape,maximum,maximum,maximum,worst)==
+      IOSGPUSceneCausalDrawIdentityResult::Created);
+  const IOSGPUSceneMarker worstId =
+      iosGPUSceneCausalDrawIdSignpost(worst);
+  assert(worstId);
+  assert(worstId.length<IOSGPUSceneMarkerCapacity);
+  assert(worstId.text[worstId.length]=='\0');
+  const IOSGPUSceneMarker worstBind =
+      iosGPUSceneCausalDrawBindSignpost(worst);
+  assert(worstBind);
+  assert(worstBind.length<IOSGPUSceneMarkerCapacity);
+  assert(worstBind.text[worstBind.length]=='\0');
+
+  for(std::size_t mutation=0u; mutation<11u; ++mutation) {
+    auto broken = identity;
+    switch(mutation) {
+      case 0u: broken.nonce[0] = 'F'; break;
+      case 1u: broken.generation = 0u; break;
+      case 2u: broken.sequence = 0u; break;
+      case 3u: broken.ordinal = 0u; break;
+      case 4u:
+        broken.logical = IOSGPUScenePipelineSelector::Unsupported;
+        break;
+      case 5u:
+        broken.effective = wrongDispatch.effective;
+        break;
+      case 6u:
+        broken.kind = static_cast<IOSSceneMeshKind>(255u);
+        break;
+      case 7u: broken.texture = 0u; break;
+      case 8u: broken.mesh = 0u; break;
+      case 9u: broken.indices = 0u; break;
+      case 10u:
+        broken.nonce[IOSGPUSceneCausalNonceLength] = 'x';
+        break;
+    }
+    assert(!iosGPUSceneCausalDrawIdentityIsValidForCompileMode<Mode>(
+        broken));
+    assert(!iosGPUSceneCausalDrawIdSignpost(broken));
+    assert(!iosGPUSceneCausalDrawBindSignpost(broken));
+  }
+  }
+#endif
 
 IOSMatrix4x4 movableT1() {
   IOSMatrix4x4 transform;
@@ -57,6 +874,162 @@ IOSGPUSceneMeshCandidate validCandidate() {
 int main() {
   IOSCameraState camera;
   camera.viewProjection.set(1u,2u,3.f);
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A)
+  {
+    static_assert(
+        iosGPUSceneCompiledMode()==IOSGPUSceneMode::CausalA);
+    assert(std::string_view(
+        iosGPUSceneModeName(iosGPUSceneCompiledMode()))=="causal-a");
+    assert(iosGPUSceneModeName(IOSGPUSceneMode::Production)==nullptr);
+    testCausalArgumentsForMode<IOSGPUSceneMode::CausalA>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-a",
+        "-renderer-ios-native-alpha-test-causal-mode=unknown");
+    testCausalRuntimeForMode<IOSGPUSceneMode::CausalA>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-a",
+        "causal-a");
+    testCausalDispatchForMode<IOSGPUSceneMode::CausalA>();
+    testCausalDrawIdentityForMode<IOSGPUSceneMode::CausalA>(
+        "causal-a","alpha-test");
+    const std::array arguments = {
+      "-renderer-ios-native-alpha-test-causal-mode=causal-a",
+      CausalNonceArgument,
+      CausalSequenceArgument,
+      };
+    IOSGPUSceneCausalArguments parsed;
+    assert(iosGPUSceneParseCausalArguments(
+        static_cast<int>(arguments.size()),arguments.data(),parsed)==
+        IOSGPUSceneCausalArgumentResult::Accepted);
+    assert(parsed.mode==IOSGPUSceneMode::CausalA);
+    IOSGPUSceneCausalDrawIdentity identity;
+    assert(makeIOSGPUSceneCausalDrawIdentity(
+        CausalNonce,7u,300u,1u,
+        {IOSGPUScenePipelineSelector::AlphaTest,
+         IOSGPUScenePipelineSelector::AlphaTest},
+        IOSSceneMeshKind::Landscape,11u,22u,36u,identity)==
+        IOSGPUSceneCausalDrawIdentityResult::Created);
+  }
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  {
+    static_assert(
+        iosGPUSceneCompiledMode()==IOSGPUSceneMode::CausalB);
+    assert(std::string_view(
+        iosGPUSceneModeName(iosGPUSceneCompiledMode()))=="causal-b");
+    assert(iosGPUSceneModeName(IOSGPUSceneMode::Production)==nullptr);
+    testCausalArgumentsForMode<IOSGPUSceneMode::CausalB>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-b",
+        "-renderer-ios-native-alpha-test-causal-mode=unknown");
+    testCausalRuntimeForMode<IOSGPUSceneMode::CausalB>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-b",
+        "causal-b");
+    testCausalDispatchForMode<IOSGPUSceneMode::CausalB>();
+    testCausalDrawIdentityForMode<IOSGPUSceneMode::CausalB>(
+        "causal-b","opaque");
+    const std::array arguments = {
+      "-renderer-ios-native-alpha-test-causal-mode=causal-b",
+      CausalNonceArgument,
+      CausalSequenceArgument,
+      };
+    IOSGPUSceneCausalArguments parsed;
+    assert(iosGPUSceneParseCausalArguments(
+        static_cast<int>(arguments.size()),arguments.data(),parsed)==
+        IOSGPUSceneCausalArgumentResult::Accepted);
+    assert(parsed.mode==IOSGPUSceneMode::CausalB);
+    IOSGPUSceneCausalDrawIdentity identity;
+    assert(makeIOSGPUSceneCausalDrawIdentity(
+        CausalNonce,7u,300u,1u,
+        {IOSGPUScenePipelineSelector::AlphaTest,
+         IOSGPUScenePipelineSelector::Opaque},
+        IOSSceneMeshKind::Landscape,11u,22u,36u,identity)==
+        IOSGPUSceneCausalDrawIdentityResult::Created);
+  }
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+  {
+    static_assert(
+        iosGPUSceneCompiledMode()==IOSGPUSceneMode::Production);
+    assert(std::string_view(
+        iosGPUSceneModeName(IOSGPUSceneMode::Production))=="production");
+    assert(std::string_view(
+        iosGPUSceneModeName(IOSGPUSceneMode::CausalA))=="causal-a");
+    assert(std::string_view(
+        iosGPUSceneModeName(IOSGPUSceneMode::CausalB))=="causal-b");
+    assert(iosGPUSceneModeName(
+        static_cast<IOSGPUSceneMode>(255u))==nullptr);
+    testCausalArgumentsForMode<IOSGPUSceneMode::CausalA>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-a",
+        "-renderer-ios-native-alpha-test-causal-mode=causal-b");
+    testCausalArgumentsForMode<IOSGPUSceneMode::CausalB>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-b",
+        "-renderer-ios-native-alpha-test-causal-mode=causal-a");
+    testCausalRuntimeForMode<IOSGPUSceneMode::CausalA>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-a",
+        "causal-a");
+    testCausalRuntimeForMode<IOSGPUSceneMode::CausalB>(
+        "-renderer-ios-native-alpha-test-causal-mode=causal-b",
+        "causal-b");
+    testCausalDispatchForMode<IOSGPUSceneMode::Production>();
+    testCausalDispatchForMode<IOSGPUSceneMode::CausalA>();
+    testCausalDispatchForMode<IOSGPUSceneMode::CausalB>();
+    testCausalDrawIdentityForMode<IOSGPUSceneMode::CausalA>(
+        "causal-a","alpha-test");
+    testCausalDrawIdentityForMode<IOSGPUSceneMode::CausalB>(
+        "causal-b","opaque");
+
+    IOSGPUScenePipelineSelector effective =
+        IOSGPUScenePipelineSelector::AlphaTest;
+    assert(!iosGPUSceneEffectivePipelineSelectorForMode(
+        static_cast<IOSGPUSceneMode>(255u),
+        IOSMaterialCategory::AlphaTest,
+        IOSGPUScenePipelineSelector::AlphaTest,effective));
+    assert(effective==IOSGPUScenePipelineSelector::AlphaTest);
+    IOSGPUSceneFrameCounts counts;
+    IOSGPUSceneDrawDispatch dispatch = {
+      IOSGPUScenePipelineSelector::AlphaTest,
+      IOSGPUScenePipelineSelector::Opaque,
+      };
+    IOSGPUSceneCausalDrawIdentity identitySentinel;
+    identitySentinel.mode = IOSGPUSceneMode::CausalB;
+    for(std::size_t index=0u; index<CausalNonce.size(); ++index)
+      identitySentinel.nonce[index] = CausalNonce[index];
+    identitySentinel.generation = 17u;
+    identitySentinel.sequence = 18u;
+    identitySentinel.ordinal = 19u;
+    identitySentinel.logical = IOSGPUScenePipelineSelector::AlphaTest;
+    identitySentinel.effective = IOSGPUScenePipelineSelector::Opaque;
+    identitySentinel.kind = IOSSceneMeshKind::Movable;
+    identitySentinel.texture = 20u;
+    identitySentinel.mesh = 21u;
+    identitySentinel.indices = 22u;
+    for(const IOSGPUSceneMode invalidMode:{
+          IOSGPUSceneMode::Production,
+          static_cast<IOSGPUSceneMode>(255u)}) {
+      IOSGPUSceneCausalDrawIdentity output = identitySentinel;
+      std::array<std::byte,sizeof(output)> bytesBefore = {};
+      std::memcpy(bytesBefore.data(),&output,sizeof(output));
+      assert(makeIOSGPUSceneCausalDrawIdentityForMode(
+          invalidMode,CausalNonce,7u,300u,1u,dispatch,
+          IOSSceneMeshKind::Landscape,11u,22u,36u,output)==
+          IOSGPUSceneCausalDrawIdentityResult::InvalidMode);
+      assert(output==identitySentinel);
+      std::array<std::byte,sizeof(output)> bytesAfter = {};
+      std::memcpy(bytesAfter.data(),&output,sizeof(output));
+      assert(bytesAfter==bytesBefore);
+    }
+    const auto countsBefore = counts;
+    const auto dispatchBefore = dispatch;
+    assert(recordIOSGPUSceneDrawDispatchForMode(
+        static_cast<IOSGPUSceneMode>(255u),
+        IOSMaterialCategory::AlphaTest,IOSSceneMeshKind::Landscape,
+        false,true,IOSGPUScenePipelineSelector::AlphaTest,
+        counts,dispatch)==IOSGPUSceneDrawDispatchResult::InvalidMode);
+    assert(counts==countsBefore);
+    assert(dispatch==dispatchBefore);
+    IOSGPUSceneCausalArguments parsed;
+    assert(iosGPUSceneParseCausalArguments(
+        0,nullptr,parsed)==
+        IOSGPUSceneCausalArgumentResult::InvalidCompileMode);
+  }
+#endif
 
   {
     auto source = validCandidate();
@@ -662,6 +1635,35 @@ int main() {
         }
       assert(!iosGPUSceneCausalBFrameCountsAreConsistent(broken));
       }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A)
+    assert(iosGPUSceneFrameCountsAreConsistentForMode(counts));
+    assert(iosGPUSceneReportCountsAreConsistentForMode(
+        counts,failures));
+    assert(!iosGPUSceneFrameCountsAreConsistentForMode(causalB));
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    assert(!iosGPUSceneFrameCountsAreConsistentForMode(counts));
+    assert(iosGPUSceneFrameCountsAreConsistentForMode(causalB));
+    assert(iosGPUSceneReportCountsAreConsistentForMode(
+        causalB,failures));
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+    assert(iosGPUSceneFrameCountsAreConsistentForMode(
+        IOSGPUSceneMode::Production,counts));
+    assert(iosGPUSceneFrameCountsAreConsistentForMode(
+        IOSGPUSceneMode::CausalA,counts));
+    assert(iosGPUSceneFrameCountsAreConsistentForMode(
+        IOSGPUSceneMode::CausalB,causalB));
+    assert(!iosGPUSceneFrameCountsAreConsistentForMode(
+        IOSGPUSceneMode::CausalB,counts));
+    assert(!iosGPUSceneFrameCountsAreConsistentForMode(
+        static_cast<IOSGPUSceneMode>(255u),counts));
+    assert(iosGPUSceneReportCountsAreConsistentForMode(
+        IOSGPUSceneMode::CausalB,causalB,failures));
+    auto failure = failures;
+    failure.selectorMismatch = 1u;
+    assert(!iosGPUSceneReportCountsAreConsistentForMode(
+        IOSGPUSceneMode::CausalB,causalB,failure));
+#endif
   }
 
   {
@@ -675,12 +1677,32 @@ int main() {
     counts.alphaPsoBinds = 2u;
     IOSGPUSceneFailureCounts failures;
 
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A)
+    testSceneMarkerGrammar(
+        "causal-a",counts,failures,
+        " opaque-pso=1 alpha-pso=2 control-alpha-to-opaque=0 "
+        "alpha-fallback=0");
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    counts.opaquePsoBinds = 3u;
+    counts.alphaPsoBinds = 0u;
+    counts.controlAlphaToOpaqueBinds = 2u;
+    testSceneMarkerGrammar(
+        "causal-b",counts,failures,
+        " opaque-pso=3 alpha-pso=0 control-alpha-to-opaque=2 "
+        "alpha-fallback=0");
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+    testSceneMarkerGrammar(
+        "production",counts,failures,
+        " opaque-pso=1 alpha-pso=2 control-alpha-to-opaque=0 "
+        "alpha-fallback=0");
+#else
     const auto assertMarker = [](
         const IOSGPUSceneMarker& marker,
         std::string_view expected) {
       assert(marker);
       assert(marker.length==expected.size());
       assert(marker.length<IOSGPUSceneMarkerCapacity);
+      assert(marker.text[marker.length]=='\0');
       assert(std::string_view(marker.text.data(),marker.length)==expected);
       };
     assertMarker(
@@ -721,6 +1743,7 @@ int main() {
         iosGPUSceneFailExecutionMarker(failures),
         "RendererIOS native scene fail-execution: mode=production "
         "overflow=0 planned-drawn=0 native-encode=0");
+#endif
 
     constexpr uint64_t maximum =
         std::numeric_limits<uint64_t>::max();
@@ -752,6 +1775,7 @@ int main() {
     for(const auto& marker:worstMarkers) {
       assert(marker);
       assert(marker.length<IOSGPUSceneMarkerCapacity);
+      assert(marker.text[marker.length]=='\0');
       }
   }
   return 0;

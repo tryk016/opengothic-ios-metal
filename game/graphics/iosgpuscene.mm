@@ -14,6 +14,11 @@
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
 
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+#include <crt_externs.h>
+#endif
+
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -22,6 +27,8 @@
 #include <string>
 #include <type_traits>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #if __has_feature(objc_arc)
 #error "IOSGPUScene requires the project's non-ARC Objective-C++ mode"
@@ -51,6 +58,18 @@ class OwnedObjectiveC final {
     OwnedObjectiveC(const OwnedObjectiveC&) = delete;
     OwnedObjectiveC& operator=(const OwnedObjectiveC&) = delete;
 
+    OwnedObjectiveC(OwnedObjectiveC&& other) noexcept
+      : value(other.relinquish()) {
+      }
+
+    OwnedObjectiveC& operator=(OwnedObjectiveC&& other) noexcept {
+      if(this==&other)
+        return *this;
+      [value release];
+      value = other.relinquish();
+      return *this;
+      }
+
     id get() const noexcept {
       return value;
       }
@@ -64,6 +83,17 @@ class OwnedObjectiveC final {
   private:
     id value = nil;
   };
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+__attribute__((used,retain))
+const std::array<std::string_view,3>
+    IOSGPUSceneCausalArgumentBinaryContract = {
+      IOSGPUSceneCausalModeArgument,
+      IOSGPUSceneCausalNonceArgument,
+      IOSGPUSceneCausalSequenceArgument,
+    };
+#endif
 
 std::string metalFailure(const char* operation, NSError* error) {
   std::string result(operation);
@@ -336,24 +366,122 @@ void recordPlannedDrawnFailure(IOSGPUScene::Report& report) noexcept {
 }
 
 struct IOSGPUScene::Impl final {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  struct NativeTargetDraw final {
+    IOSGPUSceneDrawPlan plan;
+    id                  pipelineState = nil;
+    id                  vertexBuffer = nil;
+    id                  indexBuffer = nil;
+    id                  baseColorTexture = nil;
+    OwnedObjectiveC     drawId;
+    OwnedObjectiveC     drawBind;
+
+    NativeTargetDraw() = default;
+    NativeTargetDraw(const NativeTargetDraw&) = delete;
+    NativeTargetDraw& operator=(const NativeTargetDraw&) = delete;
+    NativeTargetDraw(NativeTargetDraw&&) noexcept = default;
+    NativeTargetDraw& operator=(NativeTargetDraw&&) noexcept = default;
+    };
+#endif
+
   struct NativeEncodeContext final {
     Impl*                         scene = nullptr;
     const IOSSceneSnapshot*       snapshot = nullptr;
     const IOSSceneAssetRegistry*  assets = nullptr;
     IOSGPUScene::Report           report;
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    IOSGPUSceneCausalFrameRoute    route =
+        IOSGPUSceneCausalFrameRoute::Production;
+    const std::vector<NativeTargetDraw>* targetDraws = nullptr;
+    IOSGPUSceneFrameCounts         targetCounts;
+    bool                           targetNativeCompleted = false;
+    bool                           targetNativeException = false;
+#endif
     };
 
   static void encodeLandscape(void* opaque,
                               MTL::RenderCommandEncoder* nativeEncoder);
 
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  void failCausal(uint64_t generation,
+                  uint64_t sequence,
+                  IOSGPUSceneCausalFailureReason reason) noexcept;
+#endif
+
   Impl(Tempest::Device& owner, TargetLayout target)
     : owner(owner), nativeDevice(Tempest::MetalApi::borrowDevice(owner)) {
-    if(!nativeDevice)
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    const int* const processArgumentCountAddress = _NSGetArgc();
+    char*** const processArgumentVectorAddress = _NSGetArgv();
+    const int processArgumentCount =
+        processArgumentCountAddress!=nullptr
+          ? *processArgumentCountAddress
+          : -1;
+    const char* const* processArgumentVector =
+        processArgumentVectorAddress!=nullptr
+          ? const_cast<const char* const*>(
+                *processArgumentVectorAddress)
+          : nullptr;
+    IOSGPUSceneCausalArguments causalArguments;
+    const IOSGPUSceneCausalArgumentResult parseResult =
+        iosGPUSceneParseCausalArguments(
+            processArgumentCount,processArgumentVector,
+            causalArguments);
+    if(parseResult!=IOSGPUSceneCausalArgumentResult::Accepted) {
+      const IOSGPUSceneMarker marker =
+          iosGPUSceneCausalParseFailMarker(
+              iosGPUSceneCompiledMode(),parseResult);
+      if(marker)
+        Tempest::Log::e(marker.text.data());
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+      }
+    if(!iosGPUSceneInitializeCausalRuntime(
+           causalArguments,causalState)) {
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+      }
+    causalArgumentsAccepted = true;
+    const IOSGPUSceneMarker armed =
+        iosGPUSceneCausalArmedMarker(causalState);
+    if(!armed) {
+      failCausal(
+          0u,0u,
+          IOSGPUSceneCausalFailureReason::MarkerPreflight);
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+      }
+    Tempest::Log::i(armed.text.data());
+#endif
+    if(!nativeDevice) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+      failCausal(
+          0u,0u,IOSGPUSceneCausalFailureReason::NativeEncode);
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+#else
       throw std::invalid_argument(
         "RendererIOS IOSGPUScene requires the owning Tempest Metal device");
-    if(target.sampleCount!=1u)
+#endif
+      }
+    if(target.sampleCount!=1u) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+      failCausal(
+          0u,0u,
+          IOSGPUSceneCausalFailureReason::PipelinePreflight);
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+#else
       throw std::invalid_argument(
         "RendererIOS IOSGPUScene first slice supports one sample only");
+#endif
+      }
 
     @autoreleasepool {
       id<MTLDevice> device =
@@ -366,25 +494,58 @@ struct IOSGPUScene::Impl final {
               initWithBytes:RendererIOSShader::LibraryName.data()
                      length:RendererIOSShader::LibraryName.size()
                                 encoding:NSUTF8StringEncoding]);
-      if(libraryName.get()==nil)
+      if(libraryName.get()==nil) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::MarkerPreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+        return;
+#else
         throw std::runtime_error(
           "RendererIOS IOSGPUScene could not create its metallib resource name");
+#endif
+        }
 
       NSBundle* bundle = [NSBundle mainBundle];
       NSURL* libraryUrl =
           [bundle URLForResource:(NSString*)libraryName.get()
                    withExtension:@"metallib"];
-      if(libraryUrl==nil)
+      if(libraryUrl==nil) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+        return;
+#else
         throw std::runtime_error(
           "RendererIOS IOSGPUScene could not find RendererIOS.metallib");
+#endif
+        }
 
       NSError* libraryError = nil;
       OwnedObjectiveC library(
           [device newLibraryWithURL:libraryUrl error:&libraryError]);
-      if(library.get()==nil)
+      if(library.get()==nil) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+        return;
+#else
         throw std::runtime_error(
           metalFailure("RendererIOS IOSGPUScene metallib loading failed",
                        libraryError));
+#endif
+        }
       Tempest::Log::i(
         "RendererIOS shader library: source=offline-metallib resource=",
         RendererIOSShader::LibraryName,".metallib abi=",
@@ -422,6 +583,14 @@ struct IOSGPUScene::Impl final {
         Tempest::Log::e(
           "RendererIOS IOSGPUScene initialization: "
           "result=pipeline-unavailable reason=missing-shader-function");
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+#endif
         return;
         }
 
@@ -472,6 +641,14 @@ struct IOSGPUScene::Impl final {
               "RendererIOS IOSGPUScene initialization: "
               "result=pipeline-unavailable reason=opaque-pso",
               opaquePipelineError));
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+#endif
         return;
         }
 
@@ -489,6 +666,14 @@ struct IOSGPUScene::Impl final {
               "RendererIOS IOSGPUScene initialization: "
               "result=pipeline-unavailable reason=alpha-test-pso",
               alphaTestPipelineError));
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+#endif
         return;
         }
 
@@ -500,9 +685,20 @@ struct IOSGPUScene::Impl final {
       depthDesc.depthWriteEnabled    = YES;
       OwnedObjectiveC depthOwner(
           [device newDepthStencilStateWithDescriptor:depthDesc]);
-      if(depthOwner.get()==nil)
+      if(depthOwner.get()==nil) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+        return;
+#else
         throw std::runtime_error(
           "RendererIOS IOSGPUScene depth-state creation failed");
+#endif
+        }
 
       OwnedObjectiveC samplerDescriptor(
           [[MTLSamplerDescriptor alloc] init]);
@@ -521,9 +717,20 @@ struct IOSGPUScene::Impl final {
       samplerDesc.supportArgumentBuffers = NO;
       OwnedObjectiveC samplerOwner(
           [device newSamplerStateWithDescriptor:samplerDesc]);
-      if(samplerOwner.get()==nil)
+      if(samplerOwner.get()==nil) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+        return;
+#else
         throw std::runtime_error(
           "RendererIOS IOSGPUScene sampler-state creation failed");
+#endif
+        }
 
       opaquePipelineState    = opaquePipelineOwner.relinquish();
       alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
@@ -534,6 +741,15 @@ struct IOSGPUScene::Impl final {
     }
 
   ~Impl() {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    if(causalArgumentsAccepted &&
+       causalState.phase==
+           IOSGPUSceneCausalRuntimePhase::AwaitingTarget)
+      failCausal(
+          causalState.generation,causalState.lastSequence,
+          IOSGPUSceneCausalFailureReason::TargetNotObserved);
+#endif
     [samplerState release];
     [depthState release];
     [alphaTestPipelineState release];
@@ -549,7 +765,29 @@ struct IOSGPUScene::Impl final {
   IOSGPUScene::Result              initializationResult =
       IOSGPUScene::Result::PipelineUnavailable;
   NativeTextureValidationCache     textureValidation;
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  IOSGPUSceneCausalRuntimeState     causalState;
+  bool                              causalArgumentsAccepted = false;
+#endif
   };
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+void IOSGPUScene::Impl::failCausal(
+    uint64_t generation,
+    uint64_t sequence,
+    IOSGPUSceneCausalFailureReason reason) noexcept {
+  if(!causalArgumentsAccepted ||
+     !iosGPUSceneTransitionCausalFailure(causalState,reason))
+    return;
+  const IOSGPUSceneMarker marker =
+      iosGPUSceneCausalFailMarker(
+          causalState,generation,sequence,reason);
+  if(marker)
+    Tempest::Log::e(marker.text.data());
+  }
+#endif
 
 void IOSGPUScene::Impl::encodeLandscape(
     void* opaque,
@@ -567,13 +805,6 @@ void IOSGPUScene::Impl::encodeLandscape(
 
   id<MTLRenderCommandEncoder> encoder =
       (id<MTLRenderCommandEncoder>)(void*)nativeEncoder;
-  [encoder setDepthStencilState:
-      (id<MTLDepthStencilState>)context.scene->depthState];
-  [encoder setFrontFacingWinding:MTLWindingClockwise];
-  [encoder setCullMode:MTLCullModeFront];
-  [encoder setFragmentSamplerState:
-      (id<MTLSamplerState>)context.scene->samplerState
-                          atIndex:0u];
 
   const auto restoreEncoderState = [&]() {
     [encoder setFragmentTexture:nil atIndex:0u];
@@ -582,6 +813,74 @@ void IOSGPUScene::Impl::encodeLandscape(
     [encoder setCullMode:MTLCullModeNone];
     [encoder setFrontFacingWinding:MTLWindingClockwise];
     };
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  if(context.route==IOSGPUSceneCausalFrameRoute::Target) {
+    if(context.targetDraws==nullptr ||
+       context.targetDraws->empty()) {
+      context.report.result =
+          IOSGPUScene::Result::NativeEncodingFailed;
+      return;
+      }
+    @try {
+      [encoder setDepthStencilState:
+          (id<MTLDepthStencilState>)context.scene->depthState];
+      [encoder setFrontFacingWinding:MTLWindingClockwise];
+      [encoder setCullMode:MTLCullModeFront];
+      [encoder setFragmentSamplerState:
+          (id<MTLSamplerState>)context.scene->samplerState
+                              atIndex:0u];
+      for(const auto& draw:*context.targetDraws) {
+        [encoder setVertexBuffer:
+            (id<MTLBuffer>)draw.vertexBuffer
+                         offset:0u
+                        atIndex:0u];
+        [encoder setVertexBytes:&draw.plan.constants
+                         length:sizeof(draw.plan.constants)
+                        atIndex:1u];
+        [encoder setFragmentTexture:
+            (id<MTLTexture>)draw.baseColorTexture
+                               atIndex:0u];
+        [encoder insertDebugSignpost:(NSString*)draw.drawId.get()];
+        [encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];
+        [encoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)draw.pipelineState];
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                            indexCount:draw.plan.indexCount
+                             indexType:MTLIndexTypeUInt32
+                           indexBuffer:(id<MTLBuffer>)draw.indexBuffer
+                     indexBufferOffset:draw.plan.indexBufferOffset
+                         instanceCount:1u
+                            baseVertex:0
+                          baseInstance:0u];
+        }
+      restoreEncoderState();
+      context.report.counts = context.targetCounts;
+      context.report.drawCount =
+          context.targetCounts.drawn.material.total;
+      context.report.texturedDrawCount =
+          context.targetCounts.drawn.texturedDraws;
+      context.report.result = IOSGPUScene::Result::Success;
+      context.targetNativeCompleted = true;
+      }
+    @catch(NSException* exception) {
+      (void)exception;
+      context.targetNativeException = true;
+      context.report.result =
+          IOSGPUScene::Result::NativeEncodingFailed;
+      }
+    return;
+    }
+#endif
+
+  [encoder setDepthStencilState:
+      (id<MTLDepthStencilState>)context.scene->depthState];
+  [encoder setFrontFacingWinding:MTLWindingClockwise];
+  [encoder setCullMode:MTLCullModeFront];
+  [encoder setFragmentSamplerState:
+      (id<MTLSamplerState>)context.scene->samplerState
+                          atIndex:0u];
 
   for(const auto& entity:context.snapshot->entities) {
     const auto source = candidate(
@@ -745,18 +1044,61 @@ IOSGPUScene::Report IOSGPUScene::encode(
     return report;
     }
   if(impl->initializationResult!=Result::Success) {
-    report.result = Result::PipelineUnavailable;
-    recordFailure(report.failures.psoUnavailable,report);
+    report.result = impl->initializationResult;
+    if(report.result==Result::NativeEncodingFailed)
+      recordFailure(report.failures.nativeEncode,report);
+    else
+      recordFailure(report.failures.psoUnavailable,report);
     return report;
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  const uint64_t causalGeneration = snapshot.generation.value;
+  const uint64_t causalSequence = snapshot.sequence.value;
+  const auto causalFailure = [&](
+      IOSGPUSceneCausalFailureReason reason) {
+    Report failure = makeReport(Result::NativeEncodingFailed);
+    recordFailure(failure.failures.nativeEncode,failure);
+    impl->failCausal(causalGeneration,causalSequence,reason);
+    return failure;
+    };
+  IOSGPUSceneCausalFrameRoute causalRoute =
+      IOSGPUSceneCausalFrameRoute::Production;
+  IOSGPUSceneCausalRuntimeState causalPrepared =
+      impl->causalState;
+  const IOSGPUSceneCausalFrameResult causalObservation =
+      iosGPUScenePrepareCausalObservation(
+          impl->causalState,causalGeneration,causalSequence,
+          causalRoute,causalPrepared);
+  if(causalObservation!=IOSGPUSceneCausalFrameResult::Prepared)
+    return causalFailure(
+        iosGPUSceneCausalFailureReasonForFrameResult(
+            causalObservation));
+#endif
+
   if(!assets.isInitialized() ||
      assets.state()!=IOSSceneAssetRegistryState::Active ||
      !assets.nativeDevice() ||
-     assets.nativeDevice().get()!=impl->nativeDevice.get())
+     assets.nativeDevice().get()!=impl->nativeDevice.get()) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::AssetPreflight);
+#endif
     return makeReport(Result::RegistryUnavailable);
+    }
   if(!snapshot.generation ||
-     snapshot.generation!=assets.generation())
+     snapshot.generation!=assets.generation()) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::AssetPreflight);
+#endif
     return makeReport(Result::GenerationMismatch);
+    }
 
   try {
     for(const auto& entity:snapshot.entities) {
@@ -768,6 +1110,12 @@ IOSGPUScene::Report IOSGPUScene::encode(
       if(planned==IOSGPUSceneDrawPlanResult::SkippedVisibility)
         continue;
       if(planned!=IOSGPUSceneDrawPlanResult::Draw) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::PlanPreflight);
+#endif
         recordPlanFailure(report,planned,source);
         return report;
         }
@@ -775,38 +1123,229 @@ IOSGPUScene::Report IOSGPUScene::encode(
              recordIOSGPUSceneDrawCount(
                  plan.materialCategory,plan.kind,
                  plan.usesFallbackTexture,false,report.counts.planned),
-             report))
+             report)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::PlanPreflight);
+#endif
         return report;
+        }
       }
     }
   catch(...) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::PlanPreflight);
+#endif
     report.result = Result::NativeEncodingFailed;
     recordFailure(report.failures.nativeEncode,report);
     return report;
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  if(causalRoute==IOSGPUSceneCausalFrameRoute::Target &&
+     report.counts.planned.material.alphaTest==0u)
+    return causalFailure(
+        IOSGPUSceneCausalFailureReason::MissingAlphaTestDraw);
+#endif
+
   if(report.counts.planned.material.total==0u) {
     report.result = Result::Empty;
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    IOSGPUSceneCausalRuntimeState committed;
+    if(!iosGPUSceneCommitCausalPreparation(
+           impl->causalState,causalPrepared,causalRoute,
+           report.counts,0u,0u,false,false,true,committed))
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::EquationsPreflight);
+    impl->causalState = committed;
+#endif
     return report;
     }
   if(impl->opaquePipelineState==nil ||
      impl->alphaTestPipelineState==nil ||
      impl->depthState==nil ||
      impl->samplerState==nil) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::PipelinePreflight);
+#endif
     report.result = Result::PipelineUnavailable;
     recordFailure(report.failures.psoUnavailable,report);
     recordPlannedDrawnFailure(report);
     return report;
     }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  std::vector<Impl::NativeTargetDraw> targetDraws;
+  IOSGPUSceneFrameCounts targetCounts = report.counts;
+  uint64_t targetOrdinal = 0u;
+  IOSGPUSceneMarker targetEncodedMarker;
+  if(causalRoute==IOSGPUSceneCausalFrameRoute::Target) {
+    try {
+      if(report.counts.planned.material.total>
+         std::numeric_limits<std::size_t>::max())
+        return causalFailure(
+            IOSGPUSceneCausalFailureReason::OrdinalPreflight);
+      targetDraws.reserve(
+          static_cast<std::size_t>(
+              report.counts.planned.material.total));
+      for(const auto& entity:snapshot.entities) {
+        const auto source = candidate(
+            snapshot,assets,impl->textureValidation,entity);
+        IOSGPUSceneDrawPlan plan;
+        const IOSGPUSceneDrawPlanResult planned =
+            planIOSGPUSceneDraw(
+                snapshot.currentCamera,source,plan);
+        if(planned==IOSGPUSceneDrawPlanResult::SkippedVisibility)
+          continue;
+        if(planned!=IOSGPUSceneDrawPlanResult::Draw)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::PlanPreflight);
+
+        const auto* mesh = assets.lookupMesh(entity.mesh);
+        const auto* texture =
+            assets.lookupTexture(plan.baseColorTexture);
+        if(mesh==nullptr || texture==nullptr ||
+           !mesh->vertexBuffer || !mesh->indexBuffer ||
+           !texture->texture)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::AssetPreflight);
+
+        IOSGPUSceneDrawDispatch dispatch;
+        if(recordIOSGPUSceneDrawDispatchForRoute(
+               causalRoute,plan.materialCategory,plan.kind,
+               plan.usesFallbackTexture,true,plan.pipeline,
+               targetCounts,dispatch)!=
+           IOSGPUSceneDrawDispatchResult::Recorded)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::DispatchPreflight);
+
+        id<MTLRenderPipelineState> effectivePipeline = nil;
+        switch(dispatch.effective) {
+          case IOSGPUScenePipelineSelector::Opaque:
+            effectivePipeline =
+                (id<MTLRenderPipelineState>)
+                    impl->opaquePipelineState;
+            break;
+          case IOSGPUScenePipelineSelector::AlphaTest:
+            effectivePipeline =
+                (id<MTLRenderPipelineState>)
+                    impl->alphaTestPipelineState;
+            break;
+          case IOSGPUScenePipelineSelector::Unsupported:
+            break;
+          }
+        id<MTLBuffer> vertexBuffer =
+            (id<MTLBuffer>)(void*)mesh->vertexBuffer.get();
+        id<MTLBuffer> indexBuffer =
+            (id<MTLBuffer>)(void*)mesh->indexBuffer.get();
+        id<MTLTexture> baseColorTexture =
+            (id<MTLTexture>)(void*)texture->texture.get();
+        if(effectivePipeline==nil || vertexBuffer==nil ||
+           indexBuffer==nil || baseColorTexture==nil)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::PipelinePreflight);
+
+        uint64_t ordinal = 0u;
+        if(!iosGPUSceneTakeNextCausalDrawOrdinal(
+               targetOrdinal,ordinal))
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::OrdinalPreflight);
+        IOSGPUSceneCausalDrawIdentity identity;
+        if(makeIOSGPUSceneCausalDrawIdentity(
+               causalPrepared.arguments.nonce.data(),
+               causalGeneration,causalSequence,ordinal,dispatch,
+               plan.kind,plan.baseColorTexture.value,
+               entity.mesh.value,plan.indexCount,identity)!=
+           IOSGPUSceneCausalDrawIdentityResult::Created)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::IdentityPreflight);
+        const IOSGPUSceneMarker drawId =
+            iosGPUSceneCausalDrawIdSignpost(identity);
+        const IOSGPUSceneMarker drawBind =
+            iosGPUSceneCausalDrawBindSignpost(identity);
+        if(!drawId || !drawBind)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::MarkerPreflight);
+
+        Impl::NativeTargetDraw draw;
+        draw.plan = plan;
+        draw.pipelineState = effectivePipeline;
+        draw.vertexBuffer = vertexBuffer;
+        draw.indexBuffer = indexBuffer;
+        draw.baseColorTexture = baseColorTexture;
+        draw.drawId = OwnedObjectiveC(
+            [[NSString alloc]
+                initWithBytes:drawId.text.data()
+                       length:drawId.length
+                     encoding:NSUTF8StringEncoding]);
+        draw.drawBind = OwnedObjectiveC(
+            [[NSString alloc]
+                initWithBytes:drawBind.text.data()
+                       length:drawBind.length
+                     encoding:NSUTF8StringEncoding]);
+        if(draw.drawId.get()==nil || draw.drawBind.get()==nil)
+          return causalFailure(
+              IOSGPUSceneCausalFailureReason::MarkerPreflight);
+        targetDraws.emplace_back(std::move(draw));
+        }
+      }
+    catch(...) {
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::NativeException);
+      }
+    if(!iosGPUSceneCausalPreparationIsValid(
+           causalPrepared,causalRoute,targetCounts,
+           static_cast<uint64_t>(targetDraws.size()),
+           targetOrdinal,true,true,true))
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::EquationsPreflight);
+    IOSGPUSceneCausalRuntimeState encodedPreview =
+        causalPrepared;
+    encodedPreview.phase =
+        IOSGPUSceneCausalRuntimePhase::TargetEncoded;
+    targetEncodedMarker = iosGPUSceneCausalEncodedMarker(
+        encodedPreview,targetCounts.drawn.material.total,
+        targetCounts.drawn.material.alphaTest);
+    if(!targetEncodedMarker)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::MarkerPreflight);
+    }
+#endif
+
   Impl::NativeEncodeContext context;
   context.scene    = impl.get();
   context.snapshot = &snapshot;
   context.assets   = &assets;
   context.report   = report;
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  context.route = causalRoute;
+  if(causalRoute==IOSGPUSceneCausalFrameRoute::Target) {
+    context.targetDraws = &targetDraws;
+    context.targetCounts = targetCounts;
+    }
+#endif
   try {
     const bool encoded = Tempest::MetalApi::withActiveRenderEncoder(
         impl->owner,encoder,&context,&Impl::encodeLandscape);
     if(!encoded) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+      if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+        return causalFailure(
+            IOSGPUSceneCausalFailureReason::NoActiveRenderEncoder);
+#endif
       context.report.result = Result::NoActiveRenderEncoder;
       recordFailure(
           context.report.failures.nativeEncode,context.report);
@@ -815,12 +1354,60 @@ IOSGPUScene::Report IOSGPUScene::encode(
       }
     }
   catch(...) {
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    if(causalRoute==IOSGPUSceneCausalFrameRoute::Target)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::NativeException);
+#endif
     context.report.result = Result::NativeEncodingFailed;
     recordFailure(
         context.report.failures.nativeEncode,context.report);
     recordPlannedDrawnFailure(context.report);
     return context.report;
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  if(causalRoute==IOSGPUSceneCausalFrameRoute::Target) {
+    if(context.targetNativeException)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::NativeException);
+    if(!context.targetNativeCompleted ||
+       context.report.result!=Result::Success)
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::NativeEncode);
+    IOSGPUSceneCausalRuntimeState committed;
+    if(!iosGPUSceneCommitCausalPreparation(
+           impl->causalState,causalPrepared,causalRoute,
+           context.report.counts,
+           static_cast<uint64_t>(targetDraws.size()),
+           targetOrdinal,true,true,
+           iosGPUSceneFailureCountsAreClear(
+               context.report.failures),
+           committed))
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::EquationsPreflight);
+    impl->causalState = committed;
+    Tempest::Log::i(targetEncodedMarker.text.data());
+    return context.report;
+    }
+  if(context.report.result==Result::Success ||
+     context.report.result==Result::Empty) {
+    IOSGPUSceneCausalRuntimeState committed;
+    if(!iosGPUSceneCommitCausalPreparation(
+           impl->causalState,causalPrepared,causalRoute,
+           context.report.counts,
+           context.report.counts.drawn.material.total,
+           0u,false,false,
+           iosGPUSceneFailureCountsAreClear(
+               context.report.failures),
+           committed))
+      return causalFailure(
+          IOSGPUSceneCausalFailureReason::EquationsPreflight);
+    impl->causalState = committed;
+    }
+#endif
   return context.report;
   }
 
