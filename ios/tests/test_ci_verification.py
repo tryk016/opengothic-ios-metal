@@ -690,11 +690,22 @@ def validate_causal_device_harness_source(
         "CAUSAL_BINARY_SHA256",
         "CAUSAL_METALLIB_SHA256",
         "len(causal) != 2",
-        "shell[0][0] < armed[0][0]",
-        "fault[0][0] < armed[0][0]",
-        "armed[0][0] < encoded[0][0]",
-        "alpha <= 0 or draws < alpha",
+        "len(shell) != 1 or shell[0][1] != expected_build",
         'len(fault) != 1 or fault[0][1] != "none"',
+        "shell[0][0] < encoded[0][0]",
+        "fault[0][0] < encoded[0][0]",
+        "armed[0][0] < encoded[0][0]",
+        '"missing-shell": current.replace(shell_line, "")',
+        '"duplicate-shell": current.replace(shell_line, shell_line + shell_line)',
+        '"wrong-shell": current.replace(build, "f" * 40)',
+        '"missing-fault": current.replace(fault_line, "")',
+        '"duplicate-fault": current.replace(fault_line, fault_line + fault_line)',
+        '"wrong-fault": current.replace("fault mode=none", "fault mode=unexpected")',
+        '"shell-after-encoded": armed_line + fault_line + encoded_line + shell_line',
+        '"fault-after-encoded": armed_line + shell_line + encoded_line + fault_line',
+        '"encoded-before-armed": identity_lines + encoded_line + armed_line',
+        '"encoded-before-identity": armed_line + encoded_line + identity_lines',
+        "alpha <= 0 or draws < alpha",
         "fatal.search(segment) or fatal.search(stderr_segment)",
         "type(payload[\"targetSequence\"]) is not int",
         "run_native_alpha_test_causal_host_self_test",
@@ -1638,8 +1649,28 @@ def test_causal_device_harness_source_contract() -> None:
         replace_once(harness, "len(causal) != 2", "len(causal) < 2"),
         replace_once(
             harness,
-            "shell[0][0] < armed[0][0]",
-            "shell[0][0] > armed[0][0]",
+            "len(shell) != 1 or shell[0][1] != expected_build",
+            "len(shell) < 1 or shell[0][1] != expected_build",
+        ),
+        replace_once(
+            harness,
+            'len(fault) != 1 or fault[0][1] != "none"',
+            'len(fault) < 1 or fault[0][1] != "none"',
+        ),
+        replace_once(
+            harness,
+            "shell[0][0] < encoded[0][0]",
+            "shell[0][0] > encoded[0][0]",
+        ),
+        replace_once(
+            harness,
+            "fault[0][0] < encoded[0][0]",
+            "fault[0][0] > encoded[0][0]",
+        ),
+        replace_once(
+            harness,
+            "armed[0][0] < encoded[0][0]",
+            "armed[0][0] > encoded[0][0]",
         ),
         replace_once(
             harness,
@@ -2330,7 +2361,7 @@ def main() -> None:
         "11 groups, Bash 3.2 candidate/CI-causal/device-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
         "19 CMake presets mutations, 14 causal source mutations, "
-        "21 causal device harness mutations, "
+        "25 causal device harness mutations, "
         "17 UI selector mutations, 6 UI harness mutations"
     )
 

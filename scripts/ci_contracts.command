@@ -6204,9 +6204,21 @@ def validate(candidate):
         'write_native_alpha_test_causal_contract FAIL "$cleanup_result"',
         "causal-contract.json",
         "len(causal) != 2",
-        "shell[0][0] < armed[0][0]",
-        "fault[0][0] < armed[0][0]",
+        "len(shell) != 1 or shell[0][1] != expected_build",
+        'len(fault) != 1 or fault[0][1] != "none"',
+        "shell[0][0] < encoded[0][0]",
+        "fault[0][0] < encoded[0][0]",
         "armed[0][0] < encoded[0][0]",
+        '"missing-shell": current.replace(shell_line, "")',
+        '"duplicate-shell": current.replace(shell_line, shell_line + shell_line)',
+        '"wrong-shell": current.replace(build, "f" * 40)',
+        '"missing-fault": current.replace(fault_line, "")',
+        '"duplicate-fault": current.replace(fault_line, fault_line + fault_line)',
+        '"wrong-fault": current.replace("fault mode=none", "fault mode=unexpected")',
+        '"shell-after-encoded": armed_line + fault_line + encoded_line + shell_line',
+        '"fault-after-encoded": armed_line + shell_line + encoded_line + fault_line',
+        '"encoded-before-armed": identity_lines + encoded_line + armed_line',
+        '"encoded-before-identity": armed_line + encoded_line + identity_lines',
         "alpha <= 0 or draws < alpha",
         "fatal.search(segment) or fatal.search(stderr_segment)",
         'if injected_fault == "copy":',
@@ -6314,8 +6326,28 @@ mutations = (
     replace_once(source, "len(causal) != 2", "len(causal) < 2"),
     replace_once(
         source,
-        "shell[0][0] < armed[0][0]",
-        "shell[0][0] > armed[0][0]",
+        "len(shell) != 1 or shell[0][1] != expected_build",
+        "len(shell) < 1 or shell[0][1] != expected_build",
+    ),
+    replace_once(
+        source,
+        'len(fault) != 1 or fault[0][1] != "none"',
+        'len(fault) < 1 or fault[0][1] != "none"',
+    ),
+    replace_once(
+        source,
+        "shell[0][0] < encoded[0][0]",
+        "shell[0][0] > encoded[0][0]",
+    ),
+    replace_once(
+        source,
+        "fault[0][0] < encoded[0][0]",
+        "fault[0][0] > encoded[0][0]",
+    ),
+    replace_once(
+        source,
+        "armed[0][0] < encoded[0][0]",
+        "armed[0][0] > encoded[0][0]",
     ),
     replace_once(
         source,
@@ -6408,7 +6440,7 @@ for mutation in mutations:
         killed += 1
     else:
         raise SystemExit("causal harness source mutation survived")
-if killed != 18:
+if killed != 22:
     raise SystemExit("causal harness mutation count drifted")
 print(f"causal device harness source oracle: mutations-killed={killed}")
 PY

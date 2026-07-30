@@ -1111,11 +1111,11 @@ if len(shell) != 1 or shell[0][1] != expected_build:
 if len(fault) != 1 or fault[0][1] != "none":
     raise SystemExit("current launch fault identity is missing or inconsistent")
 if not (
-    shell[0][0] < armed[0][0]
-    and fault[0][0] < armed[0][0]
-    and armed[0][0] < encoded[0][0]
+    armed[0][0] < encoded[0][0]
+    and shell[0][0] < encoded[0][0]
+    and fault[0][0] < encoded[0][0]
 ):
-    raise SystemExit("current launch identity and causal markers are reordered")
+    raise SystemExit("current launch identity or ARMED follows ENCODED")
 draws, alpha = encoded[0][2:4]
 if alpha <= 0 or draws < alpha:
     raise SystemExit("causal draw counts are invalid")
@@ -1281,20 +1281,6 @@ old_armed = (
     "nonce=ffffffffffffffffffffffffffffffff target-sequence=1\n"
 )
 pre = ("old launch\n" + old_armed).encode()
-current = (
-    f"RendererIOS shell: version=fixture build={build} gpu=fixture\n"
-    "RendererIOS configured fault mode=none\n"
-    f"RendererIOS native causal capture: ARMED mode=causal-a "
-    f"nonce={nonce} target-sequence={sequence}\n"
-    f"RendererIOS native causal capture: ENCODED mode=causal-a "
-    f"nonce={nonce} generation=7 sequence={sequence} draws=9 alpha=3\n"
-)
-pathlib.Path(pre_path).write_bytes(pre)
-pathlib.Path(good_path).write_bytes(pre + current.encode())
-pathlib.Path(good_replaced_path).write_text(current)
-stderr_pre = b"old launch: SIGABRT libc++abi: terminating\n"
-pathlib.Path(pre_stderr_path).write_bytes(stderr_pre)
-pathlib.Path(good_stderr_path).write_bytes(stderr_pre + b"current warning only\n")
 armed_line = (
     f"RendererIOS native causal capture: ARMED mode=causal-a "
     f"nonce={nonce} target-sequence={sequence}\n"
@@ -1303,6 +1289,16 @@ encoded_line = (
     f"RendererIOS native causal capture: ENCODED mode=causal-a "
     f"nonce={nonce} generation=7 sequence={sequence} draws=9 alpha=3\n"
 )
+fault_line = "RendererIOS configured fault mode=none\n"
+shell_line = f"RendererIOS shell: version=fixture build={build} gpu=fixture\n"
+identity_lines = fault_line + shell_line
+current = armed_line + identity_lines + encoded_line
+pathlib.Path(pre_path).write_bytes(pre)
+pathlib.Path(good_path).write_bytes(pre + current.encode())
+pathlib.Path(good_replaced_path).write_text(current)
+stderr_pre = b"old launch: SIGABRT libc++abi: terminating\n"
+pathlib.Path(pre_stderr_path).write_bytes(stderr_pre)
+pathlib.Path(good_stderr_path).write_bytes(stderr_pre + b"current warning only\n")
 mutations = {
     "missing-armed": current.replace(armed_line, ""),
     "missing-encoded": current.replace(encoded_line, ""),
@@ -1326,11 +1322,16 @@ mutations = {
         "generation=7 sequence=1",
         1,
     ),
-    "reordered": "\n".join(current.rstrip().splitlines()[:2]
-                            + list(reversed(current.rstrip().splitlines()[2:])))
-                 + "\n",
-    "markers-after-snapshot-before-shell": armed_line + encoded_line
-        + "\n".join(current.rstrip().splitlines()[:2]) + "\n",
+    "missing-shell": current.replace(shell_line, ""),
+    "duplicate-shell": current.replace(shell_line, shell_line + shell_line),
+    "wrong-shell": current.replace(build, "f" * 40),
+    "missing-fault": current.replace(fault_line, ""),
+    "duplicate-fault": current.replace(fault_line, fault_line + fault_line),
+    "wrong-fault": current.replace("fault mode=none", "fault mode=unexpected"),
+    "shell-after-encoded": armed_line + fault_line + encoded_line + shell_line,
+    "fault-after-encoded": armed_line + shell_line + encoded_line + fault_line,
+    "encoded-before-armed": identity_lines + encoded_line + armed_line,
+    "encoded-before-identity": armed_line + encoded_line + identity_lines,
     "extra": current + "RendererIOS native causal capture: ACQUIRED\n",
     "post-encoded": current + (
         f"RendererIOS native causal capture: FAIL mode=causal-a nonce={nonce} "
@@ -1345,10 +1346,7 @@ directory = pathlib.Path(good_path).parent
 for name, text in mutations.items():
     (directory / f"causal-log-{name}.txt").write_bytes(pre + text.encode())
 (directory / "causal-log-replaced-markers-before-shell.txt").write_text(
-    armed_line
-    + encoded_line
-    + "\n".join(current.rstrip().splitlines()[:2])
-    + "\n"
+    armed_line + encoded_line + identity_lines
 )
 for name, text in {
     "sigabrt": "current SIGABRT\n",
