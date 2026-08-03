@@ -38,7 +38,20 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   if(context.report.result!=IOSSceneExtractionResult::Success)
     return;
 
-  ++context.report.stats.visited;
+  const std::optional<Material::AlphaFunc> rawMaterial =
+      source.material!=nullptr
+        ? std::optional<Material::AlphaFunc>{source.material->alpha}
+        : std::nullopt;
+  const bool hasFrameAnimation =
+      source.material!=nullptr && source.material->hasFrameAnimation();
+  const bool hasUvAnimation =
+      source.material!=nullptr && source.material->hasUvAnimation();
+  if(!recordIOSSceneRawSource(
+       source.kind,rawMaterial,hasFrameAnimation,hasUvAnimation,
+       context.report.stats)) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return;
+    }
   IOSSceneOpaqueMeshCandidate candidate;
   candidate.sourceId       = source.sourceId;
   candidate.kind           = iosSceneOpaqueMeshKind(source.kind);
@@ -56,10 +69,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       materialMapping==IOSSceneMaterialMapping{
           IOSMaterialCategory::Opaque,true} &&
       !candidate.hasBaseColorTexture;
-  candidate.hasFrameAnimation =
-      source.material!=nullptr && source.material->hasFrameAnimation();
-  candidate.hasUvAnimation =
-      source.material!=nullptr && source.material->hasUvAnimation();
+  candidate.hasFrameAnimation = hasFrameAnimation;
+  candidate.hasUvAnimation = hasUvAnimation;
   candidate.hasLocalBounds = source.hasLocalBounds;
   candidate.transform      = IOSSceneConversion::matrix(source.transform);
   candidate.localBounds    = bounds(source);
@@ -172,7 +183,7 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
   source.visit(&context,&visitSource);
   if(context.report.result!=IOSSceneExtractionResult::Success)
     return context.report;
-  if(!context.report.stats.hasConsistentPlannedCounts()) {
+  if(!context.report.stats.hasConsistentSuccessfulCensus()) {
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return context.report;
     }

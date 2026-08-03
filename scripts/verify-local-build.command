@@ -273,6 +273,9 @@ xcrun clang++ -std=c++20 \
   -o "$TMP_GATE/iossceneextractorplan"
 codesign -f -s - "$TMP_GATE/iossceneextractorplan"
 "$TMP_GATE/iossceneextractorplan"
+[ -x scripts/validate-scene-source-census-log.py ]
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  scripts/validate-scene-source-census-log.py --self-test
 if grep -Eq 'DrawCommands|DrawBuckets|cmdId|clusterId|std::function' \
     game/graphics/iossceneextractorplan.h \
     game/graphics/iossceneextractor.h; then
@@ -310,16 +313,50 @@ required = (
         """  candidate.usesFallbackTexture = false;""",
     ),
     (
-        "frame-animation",
-        """  candidate.hasFrameAnimation =
+        "frame-animation-source",
+        """  const bool hasFrameAnimation =
       source.material!=nullptr && source.material->hasFrameAnimation();""",
-        """  candidate.hasFrameAnimation = false;""",
+        """  const bool hasFrameAnimation = false;""",
     ),
     (
-        "uv-animation",
-        """  candidate.hasUvAnimation =
+        "uv-animation-source",
+        """  const bool hasUvAnimation =
       source.material!=nullptr && source.material->hasUvAnimation();""",
+        """  const bool hasUvAnimation = false;""",
+    ),
+    (
+        "frame-animation-candidate",
+        "  candidate.hasFrameAnimation = hasFrameAnimation;",
+        "  candidate.hasFrameAnimation = false;",
+    ),
+    (
+        "uv-animation-candidate",
+        "  candidate.hasUvAnimation = hasUvAnimation;",
         """  candidate.hasUvAnimation = false;""",
+    ),
+    (
+        "raw-source-census",
+        """  if(!recordIOSSceneRawSource(
+       source.kind,rawMaterial,hasFrameAnimation,hasUvAnimation,
+       context.report.stats)) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return;
+    }""",
+        """  if(false) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return;
+    }""",
+    ),
+    (
+        "successful-census-final-gate",
+        """  if(!context.report.stats.hasConsistentSuccessfulCensus()) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }""",
+        """  if(false) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }""",
     ),
     (
         "snapshot-fallback-provenance",
@@ -359,9 +396,9 @@ for label, snippet, replacement in required:
                 + operation
             )
         mutations_killed += 1
-if mutations_killed != 16:
+if mutations_killed != 24:
     raise SystemExit("RendererIOS extractor adapter mutation count drifted")
-print("RendererIOS extractor adapter oracle: mutations-killed=16")
+print("RendererIOS extractor adapter oracle: mutations-killed=24")
 PY
 python3 - <<'PY'
 from pathlib import Path

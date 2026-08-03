@@ -1,7 +1,9 @@
 #include "graphics/iossceneextractor.h"
 
+#include <array>
 #include <cassert>
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <vector>
 
@@ -60,6 +62,35 @@ IOSMaterial material(uint64_t value) {
   result.id = {{7},value};
   result.baseColorTexture = {{7},value+1u};
   return result;
+  }
+
+IOSSceneOpaqueMeshPlan acceptedPlan(
+    IOSSceneSourceKind kind,
+    Material::AlphaFunc alpha = Material::Solid) {
+  const auto mapping = iosSceneMaterialMapping(alpha);
+  assert(mapping.mapped);
+  IOSSceneOpaqueMeshPlan plan;
+  assert(planIOSOpaqueMeshSource(
+           candidate(iosSceneOpaqueMeshKind(kind),mapping.category),plan)==
+         IOSSceneSourcePlanResult::Planned);
+  return plan;
+  }
+
+void recordRawOutcome(
+    IOSSceneSourceKind kind,
+    std::optional<Material::AlphaFunc> alpha,
+    bool frameAnimated,
+    bool uvAnimated,
+    IOSSceneSourcePlanResult outcome,
+    IOSSceneExtractionStats& stats) {
+  assert(recordIOSSceneRawSource(
+      kind,alpha,frameAnimated,uvAnimated,stats));
+  IOSSceneOpaqueMeshPlan plan;
+  if(outcome==IOSSceneSourcePlanResult::Planned) {
+    assert(alpha.has_value());
+    plan = acceptedPlan(kind,*alpha);
+    }
+  assert(recordIOSScenePlanResult(outcome,plan,stats));
   }
 
 bool sameFrame(const IOSSceneFrameState& lhs,
@@ -308,6 +339,316 @@ void validateFallbackAndMixedCounters() {
   assert(stats.hasConsistentPlannedCounts());
   }
 
+void validateRawKindCensus() {
+  IOSSceneExtractionStats stats;
+  recordRawOutcome(
+      IOSSceneSourceKind::Landscape,Material::Solid,false,false,
+      IOSSceneSourcePlanResult::Planned,stats);
+  recordRawOutcome(
+      IOSSceneSourceKind::Static,Material::Solid,false,false,
+      IOSSceneSourcePlanResult::Planned,stats);
+  recordRawOutcome(
+      IOSSceneSourceKind::Movable,Material::Solid,false,false,
+      IOSSceneSourcePlanResult::Planned,stats);
+  for(const auto kind:{
+        IOSSceneSourceKind::Animated,
+        IOSSceneSourceKind::Particle,
+        IOSSceneSourceKind::Morph,
+        IOSSceneSourceKind::Unsupported}) {
+    recordRawOutcome(
+        kind,Material::Solid,false,false,
+        IOSSceneSourcePlanResult::SkippedKind,stats);
+    }
+
+  assert(stats.visited==7u);
+  assert(stats.census.kinds.landscape==1u);
+  assert(stats.census.kinds.staticMesh==1u);
+  assert(stats.census.kinds.movable==1u);
+  assert(stats.census.kinds.animated==1u);
+  assert(stats.census.kinds.particle==1u);
+  assert(stats.census.kinds.morph==1u);
+  assert(stats.census.kinds.unsupported==1u);
+  assert(stats.census.kinds.unknown==0u);
+  assert(stats.census.materials.solid==7u);
+  assert(stats.planned==3u);
+  assert(stats.skippedKind==4u);
+  assert(stats.hasConsistentSuccessfulCensus());
+  }
+
+void validateRawMaterialCensus() {
+  IOSSceneExtractionStats stats;
+  for(const auto alpha:{Material::Solid,Material::AlphaTest}) {
+    recordRawOutcome(
+        IOSSceneSourceKind::Static,alpha,false,false,
+        IOSSceneSourcePlanResult::Planned,stats);
+    }
+  for(const auto alpha:{
+        Material::Water,
+        Material::Ghost,
+        Material::Multiply,
+        Material::Multiply2,
+        Material::Transparent,
+        Material::AdditiveLight}) {
+    recordRawOutcome(
+        IOSSceneSourceKind::Static,alpha,false,false,
+        IOSSceneSourcePlanResult::SkippedMaterial,stats);
+    }
+
+  assert(stats.visited==8u);
+  assert(stats.census.kinds.staticMesh==8u);
+  assert(stats.census.materials.solid==1u);
+  assert(stats.census.materials.alphaTest==1u);
+  assert(stats.census.materials.water==1u);
+  assert(stats.census.materials.ghost==1u);
+  assert(stats.census.materials.multiply==1u);
+  assert(stats.census.materials.multiply2==1u);
+  assert(stats.census.materials.transparent==1u);
+  assert(stats.census.materials.additiveLight==1u);
+  assert(stats.census.materials.missing==0u);
+  assert(stats.census.materials.unknown==0u);
+  assert(stats.planned==2u);
+  assert(stats.skippedMaterial==6u);
+  assert(stats.hasConsistentSuccessfulCensus());
+  }
+
+void validateMissingAndInvalidRawSources() {
+  IOSSceneExtractionStats skippedMissing;
+  recordRawOutcome(
+      IOSSceneSourceKind::Unsupported,std::nullopt,false,false,
+      IOSSceneSourcePlanResult::SkippedKind,skippedMissing);
+  assert(skippedMissing.census.kinds.unsupported==1u);
+  assert(skippedMissing.census.materials.missing==1u);
+  assert(skippedMissing.census.materials.unknown==0u);
+  assert(skippedMissing.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats missing;
+  assert(recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,std::nullopt,false,false,missing));
+  assert(missing.visited==1u);
+  assert(missing.census.kinds.staticMesh==1u);
+  assert(missing.census.materials.missing==1u);
+  assert(missing.census.materials.unknown==0u);
+  IOSSceneOpaqueMeshPlan plan;
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::InvalidSource,plan,missing));
+  assert(missing.invalidSource==1u);
+
+  IOSSceneExtractionStats invalidMaterial;
+  assert(!recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,
+      static_cast<Material::AlphaFunc>(255u),false,false,
+      invalidMaterial));
+  assert(invalidMaterial.visited==1u);
+  assert(invalidMaterial.census.kinds.staticMesh==1u);
+  assert(invalidMaterial.census.materials.missing==0u);
+  assert(invalidMaterial.census.materials.unknown==1u);
+  assert(invalidMaterial.invalidSource==1u);
+
+  IOSSceneExtractionStats invalidKind;
+  assert(!recordIOSSceneRawSource(
+      static_cast<IOSSceneSourceKind>(255u),Material::Solid,false,false,
+      invalidKind));
+  assert(invalidKind.visited==1u);
+  assert(invalidKind.census.kinds.unknown==1u);
+  assert(invalidKind.census.materials.solid==1u);
+  assert(invalidKind.invalidSource==1u);
+  }
+
+void validateOverlappingAnimationCensus() {
+  IOSSceneExtractionStats stats;
+  recordRawOutcome(
+      IOSSceneSourceKind::Movable,Material::AlphaTest,true,true,
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
+  assert(stats.census.frameAnimated==1u);
+  assert(stats.census.uvAnimated==1u);
+  assert(stats.skippedTextureAnimation==1u);
+  assert(stats.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats frameOverflow = stats;
+  frameOverflow.census.frameAnimated = frameOverflow.visited+1u;
+  assert(!frameOverflow.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats uvOverflow = stats;
+  uvOverflow.census.uvAnimated = uvOverflow.visited+1u;
+  assert(!uvOverflow.hasConsistentSuccessfulCensus());
+  }
+
+IOSSceneExtractionStats permutationStats(bool reverse) {
+  struct Source final {
+    IOSSceneSourceKind kind;
+    Material::AlphaFunc alpha;
+    bool frameAnimated;
+    bool uvAnimated;
+    IOSSceneSourcePlanResult outcome;
+    };
+  const std::array<Source,4> sources = {{
+    {IOSSceneSourceKind::Landscape,Material::Solid,false,false,
+     IOSSceneSourcePlanResult::Planned},
+    {IOSSceneSourceKind::Animated,Material::Water,false,false,
+     IOSSceneSourcePlanResult::SkippedKind},
+    {IOSSceneSourceKind::Static,Material::Ghost,false,false,
+     IOSSceneSourcePlanResult::SkippedMaterial},
+    {IOSSceneSourceKind::Movable,Material::AlphaTest,true,true,
+     IOSSceneSourcePlanResult::SkippedTextureAnimation},
+    }};
+  IOSSceneExtractionStats stats;
+  for(std::size_t index = 0; index<sources.size(); ++index) {
+    const std::size_t selected = reverse ? sources.size()-1u-index : index;
+    const auto& source = sources[selected];
+    recordRawOutcome(
+        source.kind,source.alpha,source.frameAnimated,source.uvAnimated,
+        source.outcome,stats);
+    }
+  assert(stats.hasConsistentSuccessfulCensus());
+  return stats;
+  }
+
+void validateCensusPermutationInvariance() {
+  assert(permutationStats(false)==permutationStats(true));
+  }
+
+void validateKindCounterOverflow(
+    IOSSceneSourceKind kind,
+    std::size_t IOSSceneSourceKindCensus::* member) {
+  IOSSceneExtractionStats stats;
+  stats.census.kinds.*member = std::numeric_limits<std::size_t>::max();
+  const IOSSceneExtractionStats before = stats;
+  assert(!recordIOSSceneRawSource(
+      kind,Material::Solid,false,false,stats));
+  IOSSceneExtractionStats expected = before;
+  expected.invalidSource = 1u;
+  assert(stats==expected);
+  }
+
+void validateMaterialCounterOverflow(
+    std::optional<Material::AlphaFunc> alpha,
+    std::size_t IOSSceneMaterialCensus::* member) {
+  IOSSceneExtractionStats stats;
+  stats.census.materials.*member =
+      std::numeric_limits<std::size_t>::max();
+  const IOSSceneExtractionStats before = stats;
+  assert(!recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,alpha,false,false,stats));
+  IOSSceneExtractionStats expected = before;
+  expected.invalidSource = 1u;
+  assert(stats==expected);
+  }
+
+void validateOutcomeCounterOverflow(
+    IOSSceneSourcePlanResult result,
+    std::size_t IOSSceneExtractionStats::* member) {
+  IOSSceneExtractionStats stats;
+  stats.*member = std::numeric_limits<std::size_t>::max();
+  const IOSSceneExtractionStats before = stats;
+  IOSSceneOpaqueMeshPlan plan;
+  assert(!recordIOSScenePlanResult(result,plan,stats));
+  IOSSceneExtractionStats expected = before;
+  expected.invalidSource = 1u;
+  assert(stats==expected);
+  }
+
+void validateCheckedCensusCounters() {
+  IOSSceneExtractionStats visitedOverflow;
+  visitedOverflow.visited = std::numeric_limits<std::size_t>::max();
+  assert(!recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,Material::Solid,false,false,
+      visitedOverflow));
+  assert(visitedOverflow.visited==
+         std::numeric_limits<std::size_t>::max());
+  assert(visitedOverflow.invalidSource==1u);
+
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Landscape,&IOSSceneSourceKindCensus::landscape);
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Static,&IOSSceneSourceKindCensus::staticMesh);
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Movable,&IOSSceneSourceKindCensus::movable);
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Animated,&IOSSceneSourceKindCensus::animated);
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Particle,&IOSSceneSourceKindCensus::particle);
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Morph,&IOSSceneSourceKindCensus::morph);
+  validateKindCounterOverflow(
+      IOSSceneSourceKind::Unsupported,&IOSSceneSourceKindCensus::unsupported);
+  validateKindCounterOverflow(
+      static_cast<IOSSceneSourceKind>(255u),
+      &IOSSceneSourceKindCensus::unknown);
+
+  validateMaterialCounterOverflow(
+      Material::Solid,&IOSSceneMaterialCensus::solid);
+  validateMaterialCounterOverflow(
+      Material::AlphaTest,&IOSSceneMaterialCensus::alphaTest);
+  validateMaterialCounterOverflow(
+      Material::Water,&IOSSceneMaterialCensus::water);
+  validateMaterialCounterOverflow(
+      Material::Ghost,&IOSSceneMaterialCensus::ghost);
+  validateMaterialCounterOverflow(
+      Material::Multiply,&IOSSceneMaterialCensus::multiply);
+  validateMaterialCounterOverflow(
+      Material::Multiply2,&IOSSceneMaterialCensus::multiply2);
+  validateMaterialCounterOverflow(
+      Material::Transparent,&IOSSceneMaterialCensus::transparent);
+  validateMaterialCounterOverflow(
+      Material::AdditiveLight,&IOSSceneMaterialCensus::additiveLight);
+  validateMaterialCounterOverflow(
+      std::nullopt,&IOSSceneMaterialCensus::missing);
+  validateMaterialCounterOverflow(
+      static_cast<Material::AlphaFunc>(255u),
+      &IOSSceneMaterialCensus::unknown);
+
+  for(const auto animated:{true,false}) {
+    IOSSceneExtractionStats stats;
+    std::size_t& counter = animated
+        ? stats.census.frameAnimated
+        : stats.census.uvAnimated;
+    counter = std::numeric_limits<std::size_t>::max();
+    const IOSSceneExtractionStats before = stats;
+    assert(!recordIOSSceneRawSource(
+        IOSSceneSourceKind::Static,Material::Solid,
+        animated,!animated,stats));
+    IOSSceneExtractionStats expected = before;
+    expected.invalidSource = 1u;
+    assert(stats==expected);
+    }
+
+  validateOutcomeCounterOverflow(
+      IOSSceneSourcePlanResult::SkippedKind,
+      &IOSSceneExtractionStats::skippedKind);
+  validateOutcomeCounterOverflow(
+      IOSSceneSourcePlanResult::SkippedMaterial,
+      &IOSSceneExtractionStats::skippedMaterial);
+  validateOutcomeCounterOverflow(
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,
+      &IOSSceneExtractionStats::skippedTextureAnimation);
+
+  IOSSceneExtractionStats invalidOverflow;
+  invalidOverflow.invalidSource = std::numeric_limits<std::size_t>::max();
+  assert(!recordIOSSceneInvalidSource(invalidOverflow));
+  assert(invalidOverflow.invalidSource==
+         std::numeric_limits<std::size_t>::max());
+
+  IOSSceneExtractionStats kindSumOverflow;
+  kindSumOverflow.census.kinds.landscape =
+      std::numeric_limits<std::size_t>::max();
+  kindSumOverflow.census.kinds.staticMesh = 1u;
+  assert(!kindSumOverflow.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats materialSumOverflow;
+  materialSumOverflow.census.materials.solid =
+      std::numeric_limits<std::size_t>::max();
+  materialSumOverflow.census.materials.alphaTest = 1u;
+  assert(!materialSumOverflow.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats outcomeSumOverflow;
+  outcomeSumOverflow.planned = std::numeric_limits<std::size_t>::max();
+  outcomeSumOverflow.plannedOpaque = outcomeSumOverflow.planned;
+  outcomeSumOverflow.plannedLandscape = outcomeSumOverflow.planned;
+  outcomeSumOverflow.skippedKind = 1u;
+  assert(outcomeSumOverflow.hasConsistentPlannedCounts());
+  assert(!outcomeSumOverflow.hasConsistentSuccessfulCensus());
+  }
+
 void validateStableKeysArePerLiveSlot() {
   auto first = candidate(IOSSceneMeshKind::Movable);
   first.sourceId = 501u;
@@ -487,6 +828,33 @@ void validateAtomicPublication() {
     assert(staging.materials.size()==1u);
     }
 
+  IOSSceneFrameState rejectedFrame;
+  rejectedFrame.camera.position.x = 23.f;
+  rejectedFrame.featureMask = IOSSceneFeatureFog;
+  const IOSSceneFrameState rejectedBefore = rejectedFrame;
+  IOSSceneFrameState rejectedStaging;
+  rejectedStaging.entities.push_back(entity(25u));
+  rejectedStaging.materials.push_back(material(26u));
+  IOSSceneExtractionStats rejectedStats;
+  assert(recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,Material::Solid,false,false,
+      rejectedStats));
+  rejectedStats.planned = std::numeric_limits<std::size_t>::max();
+  rejectedStats.plannedOpaque = rejectedStats.planned;
+  rejectedStats.plannedStatic = rejectedStats.planned;
+  const auto plan = acceptedPlan(IOSSceneSourceKind::Static);
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,plan,rejectedStats));
+  assert(rejectedStats.invalidSource==1u);
+  assert(!publishIOSSceneExtraction(
+      IOSSceneExtractionResult::InvalidSource,
+      rejectedStaging,rejectedFrame));
+  assert(sameFrame(rejectedFrame,rejectedBefore));
+  assert(rejectedFrame.entities.empty());
+  assert(rejectedFrame.materials.empty());
+  assert(rejectedStaging.entities.size()==1u);
+  assert(rejectedStaging.materials.size()==1u);
+
   IOSSceneFrameState destination;
   destination.camera.position.x = 17.f;
   destination.featureMask = IOSSceneFeatureLights;
@@ -522,6 +890,12 @@ int main() {
   validateSkippedSources();
   validateMalformedAcceptedKinds();
   validateFallbackAndMixedCounters();
+  validateRawKindCensus();
+  validateRawMaterialCensus();
+  validateMissingAndInvalidRawSources();
+  validateOverlappingAnimationCensus();
+  validateCensusPermutationInvariance();
+  validateCheckedCensusCounters();
   validateStableKeysArePerLiveSlot();
   validateRecordRejectsBrokenPlannedInvariant();
   validatePlanProvenanceAndCounterMutations();

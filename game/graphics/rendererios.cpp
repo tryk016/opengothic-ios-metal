@@ -13,6 +13,10 @@
 #include "iossceneassetregistry.h"
 #include "iossceneextractor.h"
 
+#if !defined(OPENGOTHIC_RENDERER_IOS_BUILD_SHA)
+#define OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local"
+#endif
+
 using namespace Tempest;
 
 namespace {
@@ -146,6 +150,59 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
         impl->renderWorld.lastAcceptedSequence().value+1u;
     if(nextSequence==1u || nextSequence%300u==0u) {
       try {
+        Log::d("RendererIOS source census: build=",
+               OPENGOTHIC_RENDERER_IOS_BUILD_SHA,
+               " generation=",impl->renderWorld.generation().value,
+               " sequence=",nextSequence,
+               " kind-landscape=",
+               uint64_t(extraction.stats.census.kinds.landscape),
+               " kind-static=",
+               uint64_t(extraction.stats.census.kinds.staticMesh),
+               " kind-movable=",
+               uint64_t(extraction.stats.census.kinds.movable),
+               " kind-animated=",
+               uint64_t(extraction.stats.census.kinds.animated),
+               " kind-particle=",
+               uint64_t(extraction.stats.census.kinds.particle),
+               " kind-morph=",
+               uint64_t(extraction.stats.census.kinds.morph),
+               " kind-unsupported=",
+               uint64_t(extraction.stats.census.kinds.unsupported),
+               " kind-unknown=",
+               uint64_t(extraction.stats.census.kinds.unknown),
+               " material-solid=",
+               uint64_t(extraction.stats.census.materials.solid),
+               " material-alpha-test=",
+               uint64_t(extraction.stats.census.materials.alphaTest),
+               " material-water=",
+               uint64_t(extraction.stats.census.materials.water),
+               " material-ghost=",
+               uint64_t(extraction.stats.census.materials.ghost),
+               " material-multiply=",
+               uint64_t(extraction.stats.census.materials.multiply),
+               " material-multiply2=",
+               uint64_t(extraction.stats.census.materials.multiply2),
+               " material-transparent=",
+               uint64_t(extraction.stats.census.materials.transparent),
+               " material-additive-light=",
+               uint64_t(extraction.stats.census.materials.additiveLight),
+               " material-missing=",
+               uint64_t(extraction.stats.census.materials.missing),
+               " material-unknown=",
+               uint64_t(extraction.stats.census.materials.unknown),
+               " frame-animated=",
+               uint64_t(extraction.stats.census.frameAnimated),
+               " uv-animated=",
+               uint64_t(extraction.stats.census.uvAnimated),
+               " visited=",uint64_t(extraction.stats.visited),
+               " planned=",uint64_t(extraction.stats.planned),
+               " skipped-kind=",uint64_t(extraction.stats.skippedKind),
+               " skipped-material=",
+               uint64_t(extraction.stats.skippedMaterial),
+               " skipped-texture-animation=",
+               uint64_t(extraction.stats.skippedTextureAnimation),
+               " invalid-source=",
+               uint64_t(extraction.stats.invalidSource));
         Log::d("RendererIOS opaque mesh extraction: visited=",
                uint64_t(extraction.stats.visited),
                " planned=",uint64_t(extraction.stats.planned),
