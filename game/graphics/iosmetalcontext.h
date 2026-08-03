@@ -23,6 +23,8 @@ class InventoryMenu;
 class IOSFeaturePolicyProvenance;
 class IOSSceneAssetRegistry;
 class VideoWidget;
+struct IOSFrameAnimationEvidence;
+struct IOSGPUSceneFrameAnimationDrawReport;
 
 class IOSMetalContext final {
   public:
@@ -35,7 +37,8 @@ class IOSMetalContext final {
       bool savePreviewQueued = false;
       };
 
-    using CompleteFrame = bool (*)(void*,bool) noexcept;
+    using CompleteFrame = bool (*)(
+        void*,bool,const IOSGPUSceneFrameAnimationDrawReport*) noexcept;
 
     IOSMetalContext(Tempest::Device& device, Tempest::SystemApi::Window* window);
     ~IOSMetalContext();
@@ -56,6 +59,9 @@ class IOSMetalContext final {
     SubmitResult              submitFrame(const FrameLease& frame,
                                           const IOSFrameInput& input,
                                           const IOSSceneAssetRegistry& assets,
+                                          const IOSFrameAnimationEvidence*
+                                              frameAnimation,
+                                          bool forceNativeSceneMarkers,
                                           void* completion,
                                           CompleteFrame completeFrame);
     void                      cancelFrame(uint64_t serial) noexcept;

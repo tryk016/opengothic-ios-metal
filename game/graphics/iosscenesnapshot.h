@@ -333,6 +333,7 @@ struct IOSEffectRequest final {
   };
 
 struct IOSSceneFrameState final {
+  uint64_t                         sceneTimeMs = 0;
   IOSCameraState                   camera;
   IOSSkyState                      sky;
   std::vector<IOSRenderEntityState> entities;

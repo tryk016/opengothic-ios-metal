@@ -19,6 +19,18 @@ uint64_t nextNonZero(uint64_t& value) noexcept {
   return result;
   }
 
+std::size_t appendHashWord(std::size_t hash, uint64_t value) noexcept {
+  constexpr std::size_t Prime = sizeof(std::size_t)>=sizeof(uint64_t) ?
+                                std::size_t(1099511628211ull) :
+                                std::size_t(16777619u);
+  for(unsigned byte=0; byte<sizeof(value); ++byte) {
+    hash += std::size_t(value & 0xffu);
+    hash *= Prime;
+    value >>= 8u;
+    }
+  return hash;
+  }
+
 void advanceNonZero(uint64_t& value) noexcept {
   ++value;
   if(value==0)
@@ -73,6 +85,14 @@ bool compatibleRange(IOSIndexRange current, IOSIndexRange previous,
 
 }
 
+std::size_t IOSRenderWorld::FrameTextureKeyHash::operator()(
+    const FrameTextureKey& key) const noexcept {
+  constexpr std::size_t Offset = sizeof(std::size_t)>=sizeof(uint64_t) ?
+                                 std::size_t(1469598103934665603ull) :
+                                 std::size_t(2166136261u);
+  return appendHashWord(appendHashWord(Offset,key.sourceId),key.frameOrdinal);
+  }
+
 IOSRenderWorld::IOSRenderWorld()
   : worldGeneration(allocateGeneration()) {
   }
@@ -99,6 +119,31 @@ IOSMaterialHandle IOSRenderWorld::resolveMaterial(uint64_t stableKey) {
 IOSTextureHandle IOSRenderWorld::resolveTexture(uint64_t stableKey) {
   return resolveStableHandle(textureRegistry,issuedTextureIds,stableKey,
                              worldGeneration,nextTextureId);
+  }
+
+IOSTextureHandle IOSRenderWorld::resolveFrameTexture(
+    uint64_t sourceId, uint64_t frameOrdinal) {
+  if(sourceId==0)
+    throw std::invalid_argument("RendererIOS frame texture source ID must be non-zero");
+
+  const FrameTextureKey key = {sourceId,frameOrdinal};
+  if(const auto found=frameTextureRegistry.find(key);
+     found!=frameTextureRegistry.end())
+    return found->second;
+
+  const IOSTextureHandle handle = {worldGeneration,nextNonZero(nextTextureId)};
+  const auto inserted = frameTextureRegistry.emplace(key,handle);
+  if(!inserted.second)
+    return inserted.first->second;
+  try {
+    if(!issuedTextureIds.emplace(handle.value).second)
+      throw std::overflow_error("RendererIOS exhausted stable scene handle IDs");
+    }
+  catch(...) {
+    frameTextureRegistry.erase(inserted.first);
+    throw;
+    }
+  return handle;
   }
 
 IOSLightHandle IOSRenderWorld::resolveLight(uint64_t stableKey) {
@@ -292,6 +337,7 @@ void IOSRenderWorld::resetWorld() noexcept {
   meshRegistry.clear();
   materialRegistry.clear();
   textureRegistry.clear();
+  frameTextureRegistry.clear();
   lightRegistry.clear();
   particleRegistry.clear();
   issuedEntityIds.clear();

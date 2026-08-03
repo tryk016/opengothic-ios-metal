@@ -4329,12 +4329,17 @@ IOSVideoPacket IOSMetalContext::prepareVideo(const FrameLease& frame,
 IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     const FrameLease& frame, const IOSFrameInput& input,
     const IOSSceneAssetRegistry& assets,
+    const IOSFrameAnimationEvidence* frameAnimation,
+    bool forceNativeSceneMarkers,
     void* completion, CompleteFrame completeFrame) {
+#if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  (void)forceNativeSceneMarkers;
+#endif
   if(completeFrame==nullptr)
     throw std::logic_error("RendererIOS received an empty frame completion");
   if(impl->lifecycleState!=Impl::LifecycleState::Active) {
     cancelFrame(frame.serial);
-    (void)completeFrame(completion,false);
+    (void)completeFrame(completion,false,nullptr);
     return {};
     }
   if(!impl->frameActive || frame.serial!=impl->activeSerial ||
@@ -4345,17 +4350,17 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   auto& frameContext = impl->frames[slot];
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")) {
     cancelFrame(frame.serial);
-    (void)completeFrame(completion,false);
+    (void)completeFrame(completion,false,nullptr);
     return {};
     }
 
   const auto abandonFrame = [&]() noexcept {
     cancelFrame(frame.serial);
-    (void)completeFrame(completion,false);
+    (void)completeFrame(completion,false,nullptr);
     };
   const auto abandonFrameKeepingSlotResources = [&]() noexcept {
     impl->cancelActiveFrameKeepingSlotResources(frameContext);
-    (void)completeFrame(completion,false);
+    (void)completeFrame(completion,false,nullptr);
     };
 
   InventoryMenu* inventoryOwner = nullptr;
@@ -4401,6 +4406,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool previewAccepted = false;
   bool previewFallback = false;
   bool submissionAttempted = false;
+  IOSGPUSceneFrameAnimationDrawReport frameAnimationDrawn;
+  bool frameAnimationDrawnReady = false;
 
   try {
     if(input.capture.kind==IOSCaptureRequest::Kind::SavePreview &&
@@ -4498,9 +4505,11 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           {{drawable,OpaqueBlack,Tempest::Preserve}},
           {impl->overlayDepth,1.f,Tempest::Preserve});
         const auto report =
-          impl->gpuScene->encode(encoder,*input.snapshot,assets);
+          impl->gpuScene->encode(
+              encoder,*input.snapshot,assets,frameAnimation);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(report.result!=IOSGPUScene::Result::Success ||
+           forceNativeSceneMarkers ||
            input.snapshot->sequence.value==1u ||
            input.snapshot->sequence.value%300u==0u) {
           const IOSGPUSceneMarker markers[] = {
@@ -4537,6 +4546,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
               "RendererIOS native Landscape texture coverage failed: draws=")+
             std::to_string(report.drawCount)+
             " textured="+std::to_string(report.texturedDrawCount));
+          }
+        if(frameAnimation!=nullptr) {
+          if(!report.frameAnimation.valid)
+            throw std::runtime_error(
+                "RendererIOS native Landscape frame-animation evidence was not finalized");
+          frameAnimationDrawn = report.frameAnimation;
+          frameAnimationDrawnReady = true;
           }
         encoder.setDebugMarker("RendererIOS UI over native Landscape");
         encoder.setFramebuffer(
@@ -4611,7 +4627,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     // operation in this block is noexcept and the slot owns all keep-alives.
     impl->frameActive  = false;
     impl->activeSerial = 0;
-    if(!completeFrame(completion,true)) {
+    if(!completeFrame(
+           completion,true,
+           frameAnimationDrawnReady ? &frameAnimationDrawn : nullptr)) {
       impl->fail("RendererIOS accepted frame could not commit scene history");
       return {};
       }

@@ -1,3 +1,4 @@
+#define OPENGOTHIC_RENDERER_IOS_FRAME_ANIMATION_HOST_TEST 1
 #include "graphics/iosgpusceneplan.h"
 
 #include <cassert>
@@ -869,9 +870,233 @@ IOSGPUSceneMeshCandidate validCandidate() {
   return source;
   }
 
+IOSFrameAnimationEvidence frameAnimationEvidence(
+    uint64_t firstOrdinal,
+    uint64_t firstHandle,
+    uint64_t secondOrdinal = 0u,
+    uint64_t secondHandle = 22u,
+    IOSWorldGeneration generation = {7u}) {
+  IOSFrameAnimationEvidence evidence;
+  evidence.selections = {
+    {2u,secondOrdinal,{generation,secondHandle}},
+    {1u,firstOrdinal,{generation,firstHandle}},
+    };
+  assert(finalizeIOSFrameAnimationEvidence(evidence));
+  return evidence;
+  }
+
+void testFrameAnimationDownstreamEvidence() {
+  const IOSWorldGeneration generation = {7u};
+  const auto baseline = frameAnimationEvidence(0u,11u);
+
+  IOSGPUSceneFrameAnimationTracker missing;
+  assert(prepareIOSGPUSceneFrameAnimationTracker(
+      baseline,generation,missing));
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      missing,{generation,99u})==
+      IOSGPUSceneFrameAnimationRecordResult::IgnoredStatic);
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      missing,{generation,11u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  IOSGPUSceneFrameAnimationDrawReport missingReport;
+  assert(!finalizeIOSGPUSceneFrameAnimationDrawReport(
+      missing,missingReport));
+  assert(!missingReport.valid);
+
+  IOSGPUSceneFrameAnimationTracker complete;
+  assert(prepareIOSGPUSceneFrameAnimationTracker(
+      baseline,generation,complete));
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      complete,{generation,22u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      complete,{generation,11u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      complete,{generation,11u})==
+      IOSGPUSceneFrameAnimationRecordResult::DuplicateAnimated);
+  IOSGPUSceneFrameAnimationDrawReport baselineDrawn;
+  assert(finalizeIOSGPUSceneFrameAnimationDrawReport(
+      complete,baselineDrawn));
+  assert(baselineDrawn.valid);
+  assert(baselineDrawn.drawnAnimated==2u);
+  uint64_t expectedDigest = IOSFrameAnimationFNV1aOffset;
+  expectedDigest = iosFrameAnimationFNV1aAppendWord(expectedDigest,1u);
+  expectedDigest = iosFrameAnimationFNV1aAppendWord(expectedDigest,11u);
+  expectedDigest = iosFrameAnimationFNV1aAppendWord(expectedDigest,2u);
+  expectedDigest = iosFrameAnimationFNV1aAppendWord(expectedDigest,22u);
+  assert(baselineDrawn.drawnDigest==expectedDigest);
+
+  auto duplicateHandle = baseline;
+  duplicateHandle.selections[1].selectedHandle =
+      duplicateHandle.selections[0].selectedHandle;
+  assert(!finalizeIOSFrameAnimationEvidence(duplicateHandle));
+  IOSGPUSceneFrameAnimationTracker rejected;
+  assert(!prepareIOSGPUSceneFrameAnimationTracker(
+      duplicateHandle,generation,rejected));
+  assert(!prepareIOSGPUSceneFrameAnimationTracker(
+      baseline,{8u},rejected));
+
+  IOSFrameAnimationDiagnosticState state;
+  const auto baselineCandidate =
+      prepareIOSFrameAnimationDiagnosticCandidate(
+          state,generation.value,1u,baseline);
+  assert(baselineCandidate.valid);
+  assert(baselineCandidate.phase==
+         IOSFrameAnimationDiagnosticPhase::Baseline);
+  assert(baselineCandidate.changedSource==0u);
+  assert(baselineCandidate.fromOrdinal==0u);
+  assert(baselineCandidate.toOrdinal==0u);
+  assert(iosFrameAnimationDiagnosticCandidateAcceptsDrawn(
+      state,baselineCandidate,baseline,baselineDrawn));
+
+  const auto initialState = state;
+  auto canceledEvidence = baseline;
+  assert(!commitIOSFrameAnimationDiagnosticState(
+      false,baselineCandidate,std::move(canceledEvidence),
+      baselineDrawn,state));
+  assert(state==initialState);
+  auto acceptedEvidence = baseline;
+  assert(commitIOSFrameAnimationDiagnosticState(
+      true,baselineCandidate,std::move(acceptedEvidence),
+      baselineDrawn,state));
+  assert(state.generation==generation.value);
+  assert(state.baseline==baseline);
+  assert(state.baselineDrawnAnimated==baselineDrawn.drawnAnimated);
+  assert(state.baselineDrawnDigest==baselineDrawn.drawnDigest);
+  assert(state.baselineCommitted);
+  assert(!state.transitionCommitted);
+
+  const auto unchangedCandidate =
+      prepareIOSFrameAnimationDiagnosticCandidate(
+          state,generation.value,2u,baseline);
+  assert(!unchangedCandidate.valid);
+
+  const auto transition = frameAnimationEvidence(1u,12u);
+  const auto transitionCandidate =
+      prepareIOSFrameAnimationDiagnosticCandidate(
+          state,generation.value,2u,transition);
+  assert(transitionCandidate.valid);
+  assert(transitionCandidate.phase==
+         IOSFrameAnimationDiagnosticPhase::Transition);
+  assert(transitionCandidate.changedSource==1u);
+  assert(transitionCandidate.fromOrdinal==0u);
+  assert(transitionCandidate.toOrdinal==1u);
+
+  IOSGPUSceneFrameAnimationTracker transitionTracker;
+  assert(prepareIOSGPUSceneFrameAnimationTracker(
+      transition,generation,transitionTracker));
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      transitionTracker,{generation,12u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      transitionTracker,{generation,22u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  IOSGPUSceneFrameAnimationDrawReport transitionDrawn;
+  assert(finalizeIOSGPUSceneFrameAnimationDrawReport(
+      transitionTracker,transitionDrawn));
+  assert(transitionDrawn.drawnDigest!=baselineDrawn.drawnDigest);
+  assert(iosFrameAnimationDiagnosticCandidateAcceptsDrawn(
+      state,transitionCandidate,transition,transitionDrawn));
+  const auto beforeRejectedTransition = state;
+  auto constantDrawn = transitionDrawn;
+  constantDrawn.drawnDigest = baselineDrawn.drawnDigest;
+  assert(!iosFrameAnimationDiagnosticCandidateAcceptsDrawn(
+      state,transitionCandidate,transition,constantDrawn));
+  auto rejectedTransition = transition;
+  assert(!commitIOSFrameAnimationDiagnosticState(
+      true,transitionCandidate,std::move(rejectedTransition),
+      constantDrawn,state));
+  assert(state==beforeRejectedTransition);
+  auto acceptedTransition = transition;
+  assert(commitIOSFrameAnimationDiagnosticState(
+      true,transitionCandidate,std::move(acceptedTransition),
+      transitionDrawn,state));
+  assert(state.transitionCommitted);
+  const auto laterTransition = frameAnimationEvidence(2u,13u);
+  assert(!prepareIOSFrameAnimationDiagnosticCandidate(
+      state,generation.value,3u,laterTransition).valid);
+
+  auto otherCohort = transition;
+  otherCohort.selections[1].sourceId = 3u;
+  assert(finalizeIOSFrameAnimationEvidence(otherCohort));
+  assert(!prepareIOSFrameAnimationDiagnosticCandidate(
+      state,generation.value,2u,otherCohort).valid);
+
+  const IOSWorldGeneration nextGeneration = {8u};
+  const auto nextBaseline = frameAnimationEvidence(
+      0u,31u,0u,42u,nextGeneration);
+  const auto nextBaselineCandidate =
+      prepareIOSFrameAnimationDiagnosticCandidate(
+          state,nextGeneration.value,1u,nextBaseline);
+  assert(nextBaselineCandidate.valid);
+  assert(nextBaselineCandidate.phase==
+         IOSFrameAnimationDiagnosticPhase::Baseline);
+  IOSGPUSceneFrameAnimationTracker nextTracker;
+  assert(prepareIOSGPUSceneFrameAnimationTracker(
+      nextBaseline,nextGeneration,nextTracker));
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      nextTracker,{nextGeneration,31u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  assert(recordIOSGPUSceneFrameAnimationDraw(
+      nextTracker,{nextGeneration,42u})==
+      IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated);
+  IOSGPUSceneFrameAnimationDrawReport nextDrawn;
+  assert(finalizeIOSGPUSceneFrameAnimationDrawReport(
+      nextTracker,nextDrawn));
+  auto nextAccepted = nextBaseline;
+  assert(commitIOSFrameAnimationDiagnosticState(
+      true,nextBaselineCandidate,std::move(nextAccepted),nextDrawn,state));
+  assert(state.generation==nextGeneration.value);
+  assert(state.baseline==nextBaseline);
+  assert(state.baselineCommitted);
+  assert(!state.transitionCommitted);
+
+  const auto assertMarker = [](
+      const IOSGPUSceneMarker& marker,
+      std::string_view expected) {
+    assert(marker);
+    assert(marker.length==expected.size());
+    assert(std::string_view(marker.text.data(),marker.length)==expected);
+    };
+  assertMarker(
+      iosFrameAnimationMarker(
+          baselineCandidate,baseline,"abc"),
+      "RendererIOS frame animation: v=1 p=B b=abc g=7 s=1 "
+      "a=2 n=0 sd=7717980363c8e066 pd=a5258921d0bee5a6");
+  assertMarker(
+      iosFrameAnimationDetailMarker(
+          baselineCandidate,baselineDrawn),
+      "RendererIOS frame animation detail: v=1 p=B g=7 s=1 "
+      "d=2 dd=c4185a11410da49b c=0 f=0 t=0");
+  assertMarker(
+      iosFrameAnimationMarker(
+          transitionCandidate,transition,"abc"),
+      "RendererIOS frame animation: v=1 p=T b=abc g=7 s=2 "
+      "a=2 n=1 sd=7717980363c8e066 pd=cbcd325d8e28d007");
+  assertMarker(
+      iosFrameAnimationDetailMarker(
+          transitionCandidate,transitionDrawn),
+      "RendererIOS frame animation detail: v=1 p=T g=7 s=2 "
+      "d=2 dd=6d662cb38b39c57c c=1 f=0 t=1");
+
+  constexpr uint64_t maximum = std::numeric_limits<uint64_t>::max();
+  const auto worstPrimary = iosFrameAnimationFormatMarker(
+      IOSFrameAnimationDiagnosticPhase::Transition,
+      maximum,maximum,maximum,maximum,maximum,maximum,
+      "0123456789abcdef0123456789abcdef01234567");
+  const auto worstDetail = iosFrameAnimationFormatDetailMarker(
+      IOSFrameAnimationDiagnosticPhase::Transition,
+      maximum,maximum,maximum,maximum,maximum,maximum,maximum);
+  assert(worstPrimary && worstPrimary.length==211u);
+  assert(worstDetail && worstDetail.length==201u);
+  assert(worstPrimary.length<=254u && worstDetail.length<=254u);
+  }
+
 }
 
 int main() {
+  testFrameAnimationDownstreamEvidence();
   IOSCameraState camera;
   camera.viewProjection.set(1u,2u,3.f);
 

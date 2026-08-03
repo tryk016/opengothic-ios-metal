@@ -3,6 +3,7 @@
 #include "iossceneassetregistry.h"
 #include "iossceneextractorplan.h"
 #include "iosscenesource.h"
+#include "iosframeanimationevidence.h"
 #include "material.h"
 
 #include <cstddef>
@@ -95,6 +96,8 @@ struct IOSSceneExtractionStats final {
   std::size_t skippedTextureFrameOnly = 0;
   std::size_t skippedTextureUvOnly = 0;
   std::size_t skippedTextureFrameAndUv = 0;
+  std::size_t admittedFrameOnly = 0;
+  std::size_t nonzeroFrameOrdinals = 0;
   std::size_t fallbackTexture = 0;
   std::size_t alphaFallback = 0;
   std::size_t invalidSource = 0;
@@ -142,10 +145,15 @@ struct IOSSceneExtractionStats final {
             uvAnimationTotal,skippedTextureUvOnly) &&
         addIOSSceneCounter(
             uvAnimationTotal,skippedTextureFrameAndUv);
+    const bool admittedFrameTotalValid =
+        addIOSSceneCounter(frameAnimationTotal,admittedFrameOnly);
     return totalValid && frameTotalValid && uvTotalValid &&
+        admittedFrameTotalValid &&
         textureAnimationTotal==skippedTextureAnimation &&
         frameAnimationTotal<=census.frameAnimated &&
-        uvAnimationTotal<=census.uvAnimated;
+        uvAnimationTotal<=census.uvAnimated &&
+        admittedFrameOnly<=planned &&
+        nonzeroFrameOrdinals<=admittedFrameOnly;
     }
 
   constexpr bool hasConsistentSuccessfulCensus() const noexcept {
@@ -191,6 +199,7 @@ struct IOSSceneExtractionReport final {
   IOSSceneExtractionResult result = IOSSceneExtractionResult::Success;
   IOSSceneExtractionStats  stats;
   std::optional<IOSSceneAssetBindResult> bindFailure;
+  IOSFrameAnimationEvidence frameAnimation;
   };
 
 struct IOSSceneMaterialMapping final {
@@ -241,6 +250,22 @@ inline constexpr bool isIOSSceneAssetBindSuccess(
     IOSSceneAssetBindResult result) noexcept {
   return result==IOSSceneAssetBindResult::Bound ||
          result==IOSSceneAssetBindResult::AlreadyBound;
+  }
+
+inline IOSSceneExtractionResult selectIOSSceneFrameTextureForExtraction(
+    const Material* source,
+    const IOSSceneOpaqueMeshPlan& plan,
+    const Tempest::Texture2d*& outTexture) noexcept {
+  if(source==nullptr ||
+     plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly ||
+     plan.frameOrdinal>=static_cast<uint64_t>(source->frames.size()))
+    return IOSSceneExtractionResult::InvalidSource;
+  const auto* selected =
+      source->frames[static_cast<std::size_t>(plan.frameOrdinal)];
+  if(selected==nullptr)
+    return IOSSceneExtractionResult::InvalidSource;
+  outTexture = selected;
+  return IOSSceneExtractionResult::Success;
   }
 
 inline bool recordIOSSceneInvalidSource(
@@ -362,6 +387,8 @@ inline bool recordIOSScenePlanResult(
         return recordIOSSceneInvalidSource(stats);
         }
       IOSSceneExtractionStats next = stats;
+      if(textureAnimation!=plan.textureAnimation)
+        return recordIOSSceneInvalidSource(stats);
       if(!incrementIOSSceneCounter(next.planned))
         return recordIOSSceneInvalidSource(stats);
       if(plan.materialCategory==IOSMaterialCategory::Opaque) {
@@ -393,7 +420,23 @@ inline bool recordIOSScenePlanResult(
          plan.usesFallbackTexture &&
          !incrementIOSSceneCounter(next.alphaFallback))
         return recordIOSSceneInvalidSource(stats);
-      if(!next.hasConsistentPlannedCounts()) {
+      switch(textureAnimation) {
+        case IOSSceneTextureAnimationMode::None:
+          if(plan.frameOrdinal!=0)
+            return recordIOSSceneInvalidSource(stats);
+          break;
+        case IOSSceneTextureAnimationMode::FrameOnly:
+          if(!incrementIOSSceneCounter(next.admittedFrameOnly) ||
+             (plan.frameOrdinal!=0 &&
+              !incrementIOSSceneCounter(next.nonzeroFrameOrdinals)))
+            return recordIOSSceneInvalidSource(stats);
+          break;
+        case IOSSceneTextureAnimationMode::UvOnly:
+        case IOSSceneTextureAnimationMode::FrameAndUv:
+          return recordIOSSceneInvalidSource(stats);
+        }
+      if(!next.hasConsistentPlannedCounts() ||
+         !next.hasConsistentTextureAnimationCounts()) {
         return recordIOSSceneInvalidSource(stats);
         }
       stats = next;

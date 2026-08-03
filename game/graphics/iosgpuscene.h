@@ -51,6 +51,7 @@ class IOSGPUScene final {
       SelectorMismatch,
       CountOverflow,
       CountMismatch,
+      AnimationEvidenceMismatch,
       NativeEncodingFailed,
       };
 
@@ -61,6 +62,7 @@ class IOSGPUScene final {
       uint64_t                     failingHandle = 0;
       IOSGPUSceneFrameCounts       counts;
       IOSGPUSceneFailureCounts     failures;
+      IOSGPUSceneFrameAnimationDrawReport frameAnimation;
       };
 
     IOSGPUScene(Tempest::Device& device, TargetLayout target);
@@ -73,7 +75,8 @@ class IOSGPUScene final {
     // layout exactly matches the TargetLayout used to construct this scene.
     Report encode(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
                   const IOSSceneSnapshot& snapshot,
-                  const IOSSceneAssetRegistry& assets) noexcept;
+                  const IOSSceneAssetRegistry& assets,
+                  const IOSFrameAnimationEvidence* frameAnimation) noexcept;
 
   private:
     struct Impl;

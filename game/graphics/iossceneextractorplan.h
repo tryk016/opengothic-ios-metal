@@ -21,6 +21,25 @@ enum class IOSSceneTextureAnimationMode : uint8_t {
   FrameAndUv,
   };
 
+enum class IOSSceneFrameSelectionResult : uint8_t {
+  Selected,
+  InvalidFrameCount,
+  InvalidFramePeriod,
+  };
+
+inline constexpr IOSSceneFrameSelectionResult selectIOSSceneTextureFrame(
+    uint64_t sceneTimeMs,
+    uint64_t framePeriodMs,
+    uint64_t frameCount,
+    uint64_t& outFrameOrdinal) noexcept {
+  if(frameCount==0)
+    return IOSSceneFrameSelectionResult::InvalidFrameCount;
+  if(framePeriodMs==0)
+    return IOSSceneFrameSelectionResult::InvalidFramePeriod;
+  outFrameOrdinal = (sceneTimeMs/framePeriodMs)%frameCount;
+  return IOSSceneFrameSelectionResult::Selected;
+  }
+
 inline constexpr IOSSceneTextureAnimationMode iosSceneTextureAnimationMode(
     bool hasFrameAnimation, bool hasUvAnimation) noexcept {
   if(hasFrameAnimation)
@@ -43,6 +62,9 @@ struct IOSSceneOpaqueMeshCandidate final {
   bool           usesFallbackTexture = false;
   bool           hasFrameAnimation = false;
   bool           hasUvAnimation = false;
+  uint64_t       sceneTimeMs = 0;
+  uint64_t       frameCount = 0;
+  uint64_t       framePeriodMs = 0;
   bool           hasLocalBounds = false;
   IOSMatrix4x4   transform;
   IOSBounds      localBounds;
@@ -62,6 +84,9 @@ struct IOSSceneOpaqueMeshPlan final {
   IOSIndexRange       indices;
   IOSMaterialCategory materialCategory = IOSMaterialCategory::Opaque;
   uint64_t            visibilityMask = IOSSceneVisibilityMain;
+  IOSSceneTextureAnimationMode textureAnimation =
+      IOSSceneTextureAnimationMode::None;
+  uint64_t            frameOrdinal = 0;
   bool                usesFallbackTexture = false;
   };
 
@@ -69,6 +94,9 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     const IOSSceneOpaqueMeshCandidate& source,
     IOSSceneOpaqueMeshPlan& out) noexcept {
   out = IOSSceneOpaqueMeshPlan();
+  const IOSSceneTextureAnimationMode textureAnimation =
+      iosSceneTextureAnimationMode(
+          source.hasFrameAnimation,source.hasUvAnimation);
   switch(source.kind) {
     case IOSSceneMeshKind::Landscape:
     case IOSSceneMeshKind::Static:
@@ -88,13 +116,25 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   if(source.materialCategory!=IOSMaterialCategory::Opaque &&
      source.materialCategory!=IOSMaterialCategory::AlphaTest)
     return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
-     (!source.hasBaseColorTexture || source.usesFallbackTexture))
-    return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(source.hasFrameAnimation || source.hasUvAnimation)
+  if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;
+  if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
+     ((!source.hasBaseColorTexture &&
+       textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly) ||
+      source.usesFallbackTexture))
+    return IOSSceneSourcePlanResult::SkippedMaterial;
+  uint64_t frameOrdinal = 0;
+  if(textureAnimation==IOSSceneTextureAnimationMode::FrameOnly &&
+     selectIOSSceneTextureFrame(
+         source.sceneTimeMs,source.framePeriodMs,source.frameCount,
+         frameOrdinal)!=IOSSceneFrameSelectionResult::Selected)
+    return IOSSceneSourcePlanResult::InvalidSource;
+  const bool hasEffectiveBaseColorTexture =
+      source.hasBaseColorTexture ||
+      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly;
   if(source.materialCategory==IOSMaterialCategory::Opaque &&
-     source.hasBaseColorTexture==source.usesFallbackTexture)
+     hasEffectiveBaseColorTexture==source.usesFallbackTexture)
     return IOSSceneSourcePlanResult::InvalidSource;
   if(source.sourceId==0 || !source.hasStaticMesh || !source.hasLocalBounds ||
      source.indices.count==0 ||
@@ -130,6 +170,8 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.indices           = source.indices;
   out.materialCategory  = source.materialCategory;
   out.visibilityMask    = IOSSceneVisibilityMain;
+  out.textureAnimation  = textureAnimation;
+  out.frameOrdinal      = frameOrdinal;
   out.usesFallbackTexture = source.usesFallbackTexture;
   return IOSSceneSourcePlanResult::Planned;
   }

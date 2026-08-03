@@ -4039,6 +4039,14 @@ xcrun clang++ -std=c++20 \
 test -x scripts/validate-scene-source-census-log.py
 PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/validate-scene-source-census-log.py --self-test
+test -x scripts/test-p21d2a-frame-animation-contract.py
+test -x scripts/test-p21d2-frame-animation-vertical.py
+test -x scripts/test-p21d2-frame-animation-device-parser.py
+test -x ios/device-test/validate-frame-animation-log.py
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  scripts/test-p21d2-frame-animation-vertical.py
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  scripts/test-p21d2-frame-animation-device-parser.py
 
 if grep -Eq 'DrawCommands|DrawBuckets|cmdId|clusterId|std::function' \
     game/graphics/iossceneextractorplan.h \
@@ -4074,13 +4082,14 @@ required = (
         """  candidate.usesFallbackTexture =
       materialMapping==IOSSceneMaterialMapping{
           IOSMaterialCategory::Opaque,true} &&
+      !hasFrameAnimation &&
       !candidate.hasBaseColorTexture;""",
         """  candidate.usesFallbackTexture = false;""",
     ),
     (
         "frame-animation-source",
         """  const bool hasFrameAnimation =
-      source.material!=nullptr && source.material->hasFrameAnimation();""",
+      source.material!=nullptr && !source.material->frames.empty();""",
         """  const bool hasFrameAnimation = false;""",
     ),
     (
@@ -4229,10 +4238,13 @@ required = (
     ("extractor-alpha-texture-provenance",
      "game/graphics/iossceneextractorplan.h",
      """source.materialCategory==IOSMaterialCategory::AlphaTest &&
-     (!source.hasBaseColorTexture || source.usesFallbackTexture)"""),
+     ((!source.hasBaseColorTexture &&
+       textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly) ||
+      source.usesFallbackTexture)"""),
     ("extractor-animation-rejection",
      "game/graphics/iossceneextractorplan.h",
-     "source.hasFrameAnimation || source.hasUvAnimation"),
+     """textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv"""),
     ("snapshot-alpha-category",
      "game/graphics/iosscenesnapshot.cpp",
      """case IOSMaterialCategory::AlphaTest:
@@ -4327,6 +4339,7 @@ required = (
     ("failure-marker-before-fatal",
      "game/graphics/iosmetalcontext.cpp",
      """report.result!=IOSGPUScene::Result::Success ||
+           forceNativeSceneMarkers ||
            input.snapshot->sequence.value==1u"""),
 )
 marker_order = (

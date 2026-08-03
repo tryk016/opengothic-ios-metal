@@ -1,5 +1,6 @@
 #pragma once
 
+#include "iosframeanimationevidence.h"
 #include "iosscenesnapshot.h"
 
 #include <array>
@@ -10,6 +11,8 @@
 #include <limits>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) && \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -737,6 +740,120 @@ struct IOSGPUSceneFailureCounts final {
       default;
   };
 
+enum class IOSGPUSceneFrameAnimationRecordResult : uint8_t {
+  IgnoredStatic,
+  RecordedAnimated,
+  InvalidEvidence,
+  DuplicateAnimated,
+  CountOverflow,
+  };
+
+struct IOSGPUSceneFrameAnimationDrawReport final {
+  std::size_t drawnAnimated = 0;
+  uint64_t    drawnDigest = IOSFrameAnimationFNV1aOffset;
+  bool        valid = false;
+
+  constexpr bool operator==(
+      const IOSGPUSceneFrameAnimationDrawReport&) const noexcept = default;
+  };
+
+struct IOSGPUSceneFrameAnimationTracker final {
+  const IOSFrameAnimationEvidence* evidence = nullptr;
+  std::vector<uint64_t>             actuallyDrawnHandles;
+  std::size_t                       drawnAnimated = 0;
+  bool                              valid = false;
+  };
+
+inline bool prepareIOSGPUSceneFrameAnimationTracker(
+    const IOSFrameAnimationEvidence& evidence,
+    IOSWorldGeneration expectedGeneration,
+    IOSGPUSceneFrameAnimationTracker& output) noexcept {
+  if(!expectedGeneration ||
+     !isCanonicalIOSFrameAnimationEvidence(evidence))
+    return false;
+  for(std::size_t lhs=0; lhs<evidence.selections.size(); ++lhs) {
+    if(evidence.selections[lhs].selectedHandle.generation!=
+       expectedGeneration)
+      return false;
+    for(std::size_t rhs=lhs+1u; rhs<evidence.selections.size(); ++rhs)
+      if(evidence.selections[lhs].selectedHandle==
+         evidence.selections[rhs].selectedHandle)
+        return false;
+    }
+
+  try {
+    IOSGPUSceneFrameAnimationTracker prepared;
+    prepared.evidence = &evidence;
+    prepared.actuallyDrawnHandles.assign(
+        evidence.selections.size(),uint64_t(0u));
+    prepared.valid = true;
+    output = std::move(prepared);
+    return true;
+    }
+  catch(...) {
+    return false;
+    }
+  }
+
+inline IOSGPUSceneFrameAnimationRecordResult
+    recordIOSGPUSceneFrameAnimationDraw(
+        IOSGPUSceneFrameAnimationTracker& tracker,
+        IOSTextureHandle actuallyDrawnHandle) noexcept {
+  if(!tracker.valid || tracker.evidence==nullptr ||
+     tracker.actuallyDrawnHandles.size()!=
+         tracker.evidence->selections.size() ||
+     !actuallyDrawnHandle)
+    return IOSGPUSceneFrameAnimationRecordResult::InvalidEvidence;
+
+  const auto& selections = tracker.evidence->selections;
+  std::size_t selected = selections.size();
+  for(std::size_t index=0; index<selections.size(); ++index) {
+    if(selections[index].selectedHandle!=actuallyDrawnHandle)
+      continue;
+    if(selected!=selections.size())
+      return IOSGPUSceneFrameAnimationRecordResult::InvalidEvidence;
+    selected = index;
+    }
+  if(selected==selections.size())
+    return IOSGPUSceneFrameAnimationRecordResult::IgnoredStatic;
+  if(tracker.actuallyDrawnHandles[selected]!=0u)
+    return IOSGPUSceneFrameAnimationRecordResult::DuplicateAnimated;
+  if(tracker.drawnAnimated==std::numeric_limits<std::size_t>::max())
+    return IOSGPUSceneFrameAnimationRecordResult::CountOverflow;
+  tracker.actuallyDrawnHandles[selected] = actuallyDrawnHandle.value;
+  ++tracker.drawnAnimated;
+  return IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated;
+  }
+
+inline bool finalizeIOSGPUSceneFrameAnimationDrawReport(
+    const IOSGPUSceneFrameAnimationTracker& tracker,
+    IOSGPUSceneFrameAnimationDrawReport& output) noexcept {
+  if(!tracker.valid || tracker.evidence==nullptr ||
+     !isCanonicalIOSFrameAnimationEvidence(*tracker.evidence) ||
+     tracker.actuallyDrawnHandles.size()!=
+         tracker.evidence->selections.size() ||
+     tracker.drawnAnimated!=tracker.evidence->admittedFrameOnly ||
+     tracker.drawnAnimated!=tracker.actuallyDrawnHandles.size())
+    return false;
+
+  uint64_t digest = IOSFrameAnimationFNV1aOffset;
+  for(std::size_t index=0;
+      index<tracker.actuallyDrawnHandles.size();
+      ++index) {
+    if(tracker.actuallyDrawnHandles[index]==0u)
+      return false;
+    const auto& selection = tracker.evidence->selections[index];
+    digest = iosFrameAnimationFNV1aAppendWord(digest,selection.sourceId);
+    digest = iosFrameAnimationFNV1aAppendWord(
+        digest,tracker.actuallyDrawnHandles[index]);
+    }
+
+  output.drawnAnimated = tracker.drawnAnimated;
+  output.drawnDigest = digest;
+  output.valid = true;
+  return true;
+  }
+
 enum class IOSGPUSceneCountResult : uint8_t {
   Recorded,
   UnknownCategory,
@@ -913,6 +1030,218 @@ inline IOSGPUSceneMarker iosGPUSceneFormatMarker(
   marker.valid  = true;
   return marker;
   }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) || \
+    defined(OPENGOTHIC_RENDERER_IOS_FRAME_ANIMATION_HOST_TEST)
+enum class IOSFrameAnimationDiagnosticPhase : uint8_t {
+  Baseline,
+  Transition,
+  };
+
+struct IOSFrameAnimationDiagnosticState final {
+  uint64_t                  generation = 0;
+  IOSFrameAnimationEvidence baseline;
+  std::size_t               baselineDrawnAnimated = 0;
+  uint64_t                  baselineDrawnDigest =
+      IOSFrameAnimationFNV1aOffset;
+  bool                      baselineCommitted = false;
+  bool                      transitionCommitted = false;
+
+  bool operator==(
+      const IOSFrameAnimationDiagnosticState&) const = default;
+  };
+
+struct IOSFrameAnimationDiagnosticCandidate final {
+  IOSFrameAnimationDiagnosticPhase phase =
+      IOSFrameAnimationDiagnosticPhase::Baseline;
+  uint64_t generation = 0;
+  uint64_t sequence = 0;
+  uint64_t changedSource = 0;
+  uint64_t fromOrdinal = 0;
+  uint64_t toOrdinal = 0;
+  bool     valid = false;
+  };
+
+inline bool iosFrameAnimationEvidenceHasSameCohort(
+    const IOSFrameAnimationEvidence& lhs,
+    const IOSFrameAnimationEvidence& rhs) noexcept {
+  if(!isCanonicalIOSFrameAnimationEvidence(lhs) ||
+     !isCanonicalIOSFrameAnimationEvidence(rhs) ||
+     lhs.sourceDigest!=rhs.sourceDigest ||
+     lhs.selections.size()!=rhs.selections.size())
+    return false;
+  for(std::size_t index=0; index<lhs.selections.size(); ++index)
+    if(lhs.selections[index].sourceId!=rhs.selections[index].sourceId)
+      return false;
+  return true;
+  }
+
+inline IOSFrameAnimationDiagnosticCandidate
+    prepareIOSFrameAnimationDiagnosticCandidate(
+        const IOSFrameAnimationDiagnosticState& state,
+        uint64_t generation,
+        uint64_t sequence,
+        const IOSFrameAnimationEvidence& evidence) noexcept {
+  IOSFrameAnimationDiagnosticCandidate candidate;
+  if(generation==0u || sequence==0u ||
+     !isCanonicalIOSFrameAnimationEvidence(evidence) ||
+     evidence.selections.empty())
+    return candidate;
+
+  candidate.generation = generation;
+  candidate.sequence = sequence;
+  if(state.generation!=generation || !state.baselineCommitted) {
+    candidate.phase = IOSFrameAnimationDiagnosticPhase::Baseline;
+    candidate.valid = true;
+    return candidate;
+    }
+  if(state.transitionCommitted || state.baseline.selections.empty() ||
+     !iosFrameAnimationEvidenceHasSameCohort(
+         state.baseline,evidence) ||
+     state.baseline.pairDigest==evidence.pairDigest)
+    return candidate;
+
+  for(std::size_t index=0; index<evidence.selections.size(); ++index) {
+    const auto& before = state.baseline.selections[index];
+    const auto& after = evidence.selections[index];
+    if(before.frameOrdinal==after.frameOrdinal)
+      continue;
+    candidate.phase = IOSFrameAnimationDiagnosticPhase::Transition;
+    candidate.changedSource = after.sourceId;
+    candidate.fromOrdinal = before.frameOrdinal;
+    candidate.toOrdinal = after.frameOrdinal;
+    candidate.valid = true;
+    return candidate;
+    }
+  return {};
+  }
+
+inline bool iosFrameAnimationDiagnosticCandidateAcceptsDrawn(
+    const IOSFrameAnimationDiagnosticState& state,
+    const IOSFrameAnimationDiagnosticCandidate& candidate,
+    const IOSFrameAnimationEvidence& evidence,
+    const IOSGPUSceneFrameAnimationDrawReport& drawn) noexcept {
+  if(!candidate.valid || !drawn.valid ||
+     !isCanonicalIOSFrameAnimationEvidence(evidence) ||
+     evidence.selections.empty() ||
+     candidate.generation==0u || candidate.sequence==0u ||
+     drawn.drawnAnimated!=evidence.admittedFrameOnly ||
+     drawn.drawnAnimated!=evidence.selections.size())
+    return false;
+  if(candidate.phase==IOSFrameAnimationDiagnosticPhase::Baseline)
+    return state.generation!=candidate.generation ||
+           !state.baselineCommitted;
+  return state.generation==candidate.generation &&
+         state.baselineCommitted && !state.transitionCommitted &&
+         iosFrameAnimationEvidenceHasSameCohort(
+             state.baseline,evidence) &&
+         candidate.changedSource!=0u &&
+         candidate.fromOrdinal!=candidate.toOrdinal &&
+         drawn.drawnDigest!=state.baselineDrawnDigest;
+  }
+
+inline bool commitIOSFrameAnimationDiagnosticState(
+    bool submitAccepted,
+    const IOSFrameAnimationDiagnosticCandidate& candidate,
+    IOSFrameAnimationEvidence&& evidence,
+    const IOSGPUSceneFrameAnimationDrawReport& drawn,
+    IOSFrameAnimationDiagnosticState& state) noexcept {
+  if(!submitAccepted ||
+     !iosFrameAnimationDiagnosticCandidateAcceptsDrawn(
+         state,candidate,evidence,drawn))
+    return false;
+  if(candidate.phase==IOSFrameAnimationDiagnosticPhase::Baseline) {
+    state.generation = candidate.generation;
+    state.baseline = std::move(evidence);
+    state.baselineDrawnAnimated = drawn.drawnAnimated;
+    state.baselineDrawnDigest = drawn.drawnDigest;
+    state.baselineCommitted = true;
+    state.transitionCommitted = false;
+    }
+  else {
+    state.transitionCommitted = true;
+    }
+  return true;
+  }
+
+inline constexpr char iosFrameAnimationDiagnosticPhaseName(
+    IOSFrameAnimationDiagnosticPhase phase) noexcept {
+  return phase==IOSFrameAnimationDiagnosticPhase::Baseline ? 'B' : 'T';
+  }
+
+inline IOSGPUSceneMarker iosFrameAnimationFormatMarker(
+    IOSFrameAnimationDiagnosticPhase phase,
+    uint64_t generation,
+    uint64_t sequence,
+    std::size_t admitted,
+    std::size_t nonzero,
+    uint64_t sourceDigest,
+    uint64_t pairDigest,
+    const char* buildSha) noexcept {
+  if(generation==0u || sequence==0u || admitted==0u ||
+     nonzero>admitted || buildSha==nullptr || buildSha[0]=='\0')
+    return {};
+  return iosGPUSceneFormatMarker(
+      "RendererIOS frame animation: v=1 p=%c b=%s g=%llu s=%llu "
+      "a=%llu n=%llu sd=%016llx pd=%016llx",
+      iosFrameAnimationDiagnosticPhaseName(phase),buildSha,
+      static_cast<unsigned long long>(generation),
+      static_cast<unsigned long long>(sequence),
+      static_cast<unsigned long long>(admitted),
+      static_cast<unsigned long long>(nonzero),
+      static_cast<unsigned long long>(sourceDigest),
+      static_cast<unsigned long long>(pairDigest));
+  }
+
+inline IOSGPUSceneMarker iosFrameAnimationFormatDetailMarker(
+    IOSFrameAnimationDiagnosticPhase phase,
+    uint64_t generation,
+    uint64_t sequence,
+    std::size_t drawnAnimated,
+    uint64_t drawnDigest,
+    uint64_t changedSource,
+    uint64_t fromOrdinal,
+    uint64_t toOrdinal) noexcept {
+  if(generation==0u || sequence==0u || drawnAnimated==0u)
+    return {};
+  return iosGPUSceneFormatMarker(
+      "RendererIOS frame animation detail: v=1 p=%c g=%llu s=%llu "
+      "d=%llu dd=%016llx c=%llu f=%llu t=%llu",
+      iosFrameAnimationDiagnosticPhaseName(phase),
+      static_cast<unsigned long long>(generation),
+      static_cast<unsigned long long>(sequence),
+      static_cast<unsigned long long>(drawnAnimated),
+      static_cast<unsigned long long>(drawnDigest),
+      static_cast<unsigned long long>(changedSource),
+      static_cast<unsigned long long>(fromOrdinal),
+      static_cast<unsigned long long>(toOrdinal));
+  }
+
+inline IOSGPUSceneMarker iosFrameAnimationMarker(
+    const IOSFrameAnimationDiagnosticCandidate& candidate,
+    const IOSFrameAnimationEvidence& evidence,
+    const char* buildSha) noexcept {
+  if(!candidate.valid ||
+     !isCanonicalIOSFrameAnimationEvidence(evidence) ||
+     evidence.selections.empty())
+    return {};
+  return iosFrameAnimationFormatMarker(
+      candidate.phase,candidate.generation,candidate.sequence,
+      evidence.admittedFrameOnly,evidence.nonzeroFrameOrdinals,
+      evidence.sourceDigest,evidence.pairDigest,buildSha);
+  }
+
+inline IOSGPUSceneMarker iosFrameAnimationDetailMarker(
+    const IOSFrameAnimationDiagnosticCandidate& candidate,
+    const IOSGPUSceneFrameAnimationDrawReport& drawn) noexcept {
+  if(!candidate.valid || !drawn.valid)
+    return {};
+  return iosFrameAnimationFormatDetailMarker(
+      candidate.phase,candidate.generation,candidate.sequence,
+      drawn.drawnAnimated,drawn.drawnDigest,
+      candidate.changedSource,candidate.fromOrdinal,candidate.toOrdinal);
+  }
+#endif
 
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \

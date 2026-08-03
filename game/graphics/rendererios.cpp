@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "iosmetalcontext.h"
+#include "iosgpusceneplan.h"
 #include "iosrenderworld.h"
 #include "iossceneassetregistry.h"
 #include "iossceneextractor.h"
@@ -51,6 +52,11 @@ struct RendererIOS::Impl final {
   bool            worldOwnersDetached = false;
   uint64_t        preparedSceneSerial  = 0;
   IOSSceneSnapshotPtr preparedScene;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  uint64_t preparedFrameAnimationSerial = 0;
+  IOSFrameAnimationEvidence preparedFrameAnimation;
+  IOSFrameAnimationDiagnosticState frameAnimationDiagnostics;
+#endif
 
   bool matchesPreparedScene(uint64_t serial,
                             const IOSSceneSnapshotPtr& scene) const noexcept {
@@ -65,7 +71,58 @@ struct RendererIOS::Impl final {
       return;
     preparedScene.reset();
     preparedSceneSerial = 0;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    preparedFrameAnimation = {};
+    preparedFrameAnimationSerial = 0;
+#endif
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  void acceptFrameAnimationGeneration(uint64_t generation) noexcept {
+    if(frameAnimationDiagnostics.generation==generation)
+      return;
+    frameAnimationDiagnostics = {};
+    frameAnimationDiagnostics.generation = generation;
+    }
+
+  void resetFrameAnimationDiagnostics() noexcept {
+    frameAnimationDiagnostics = {};
+    }
+
+  void commitFrameAnimationDiagnostics(
+      const IOSFrameAnimationDiagnosticCandidate& candidate,
+      const IOSGPUSceneFrameAnimationDrawReport* drawn,
+      uint64_t serial,
+      uint64_t generation,
+      uint64_t sequence) noexcept {
+    if(serial==0u || preparedFrameAnimationSerial!=serial ||
+       candidate.generation!=generation ||
+       candidate.sequence!=sequence ||
+       drawn==nullptr ||
+       !iosFrameAnimationDiagnosticCandidateAcceptsDrawn(
+           frameAnimationDiagnostics,candidate,
+           preparedFrameAnimation,*drawn))
+      return;
+    const IOSGPUSceneMarker primary = iosFrameAnimationMarker(
+        candidate,preparedFrameAnimation,
+        OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+    const IOSGPUSceneMarker detail =
+        iosFrameAnimationDetailMarker(candidate,*drawn);
+    if(!primary || !detail || primary.length>254u || detail.length>254u)
+      return;
+    try {
+      Log::i(primary.text.data());
+      Log::i(detail.text.data());
+      }
+    catch(...) {
+      return;
+      }
+
+    (void)commitIOSFrameAnimationDiagnosticState(
+        true,candidate,std::move(preparedFrameAnimation),
+        *drawn,frameAnimationDiagnostics);
+    }
+#endif
   };
 
 RendererIOS::FrameTicket::FrameTicket(const std::shared_ptr<TicketControl>& control,
@@ -139,8 +196,12 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
     throw std::logic_error(
       "RendererIOS cannot extract an attached world while its owners are detached");
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  IOSFrameAnimationEvidence frameAnimation;
+#endif
+
   if(bool(source)) {
-    const auto extraction = impl->extractor.extractOpaqueMeshes(
+    auto extraction = impl->extractor.extractOpaqueMeshes(
       source,impl->device,impl->renderWorld,impl->assets,scene);
     if(extraction.result!=IOSSceneExtractionResult::Success)
       throw std::runtime_error(
@@ -205,11 +266,18 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
         }
       }
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    frameAnimation = std::move(extraction.frameAnimation);
+#endif
     }
 
   auto snapshot = impl->renderWorld.buildSnapshot(std::move(scene));
   impl->preparedScene       = snapshot;
   impl->preparedSceneSerial = frame.serial;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  impl->preparedFrameAnimation = std::move(frameAnimation);
+  impl->preparedFrameAnimationSerial = frame.serial;
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   if(impl->renderWorld.lastAcceptedSequence().value==0u ||
      snapshot->sequence.value%300u==0u) {
@@ -271,12 +339,32 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     }
   input.transportSerial = frame.serial;
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  const auto frameAnimationCandidate =
+      prepareIOSFrameAnimationDiagnosticCandidate(
+          impl->frameAnimationDiagnostics,
+          input.snapshot->generation.value,
+          input.snapshot->sequence.value,
+          impl->preparedFrameAnimation);
+  const IOSFrameAnimationEvidence* const frameAnimation =
+      frameAnimationCandidate.valid
+        ? &impl->preparedFrameAnimation
+        : nullptr;
+  const bool forceNativeSceneMarkers = frameAnimationCandidate.valid;
+#else
+  const IOSFrameAnimationEvidence* const frameAnimation = nullptr;
+  const bool forceNativeSceneMarkers = false;
+#endif
+
   struct FrameCompletion final {
     FrameTicket*               ticket = nullptr;
     Impl*                      renderer = nullptr;
     IOSRenderWorld*            world  = nullptr;
     const IOSSceneSnapshotPtr* scene  = nullptr;
     uint64_t                   serial = 0;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    IOSFrameAnimationDiagnosticCandidate frameAnimationCandidate;
+#endif
     };
 
   const IOSMetalContext::FrameLease lease = {frame.frameSlot,frame.serial};
@@ -286,16 +374,37 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     &impl->renderWorld,
     &input.sceneSnapshot(),
     frame.serial,
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    frameAnimationCandidate,
+#endif
     };
-  const auto completeFrame = [](void* opaque, bool submitted) noexcept -> bool {
+  const auto completeFrame = [](
+      void* opaque,
+      bool submitted,
+      const IOSGPUSceneFrameAnimationDrawReport* frameAnimationDrawn)
+      noexcept -> bool {
     auto& state = *static_cast<FrameCompletion*>(opaque);
     const bool accepted = !submitted || state.world->commitAccepted(*state.scene);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    if(submitted && accepted) {
+      state.renderer->acceptFrameAnimationGeneration(
+          (*state.scene)->generation.value);
+      state.renderer->commitFrameAnimationDiagnostics(
+          state.frameAnimationCandidate,frameAnimationDrawn,
+          state.serial,(*state.scene)->generation.value,
+          (*state.scene)->sequence.value);
+      }
+#else
+    (void)frameAnimationDrawn;
+#endif
     state.renderer->clearPreparedScene(state.serial);
     state.ticket->disarm();
     return accepted;
     };
   const auto result = impl->context.submitFrame(
-    lease,input,impl->assets,&completion,completeFrame);
+    lease,input,impl->assets,
+    frameAnimation,forceNativeSceneMarkers,
+    &completion,completeFrame);
   return SubmitResult{result.savePreviewQueued};
   }
 
@@ -367,6 +476,9 @@ void RendererIOS::prepareForOwnerRelease() noexcept {
 #endif
   impl->assets.clearAfterConfirmedIdle();
   impl->renderWorld.resetWorld();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  impl->resetFrameAnimationDiagnostics();
+#endif
   impl->worldOwnersDetached = true;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   try {
@@ -411,6 +523,9 @@ void RendererIOS::onWorldChanged() {
   impl->clearPreparedScene();
   impl->assets.clearAfterConfirmedIdle();
   impl->renderWorld.resetWorld();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  impl->resetFrameAnimationDiagnostics();
+#endif
   impl->worldOwnersDetached = true;
   if(!impl->context.failureReason().empty())
     return;

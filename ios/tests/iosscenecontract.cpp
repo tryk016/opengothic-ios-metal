@@ -255,6 +255,64 @@ int main() {
   assert(handles.light==populatedWorld.resolveLight(1005u));
   assert(handles.particle==populatedWorld.resolveParticle(1006u));
 
+  IOSRenderWorld frameTextureWorld;
+  const auto frameZero = frameTextureWorld.resolveFrameTexture(0x1001u,0u);
+  assert(frameZero==frameTextureWorld.resolveFrameTexture(0x1001u,0u));
+  const auto frameOne = frameTextureWorld.resolveFrameTexture(0x1001u,1u);
+  const auto freshSource =
+      frameTextureWorld.resolveFrameTexture(0x1002u,0u);
+  assert(frameOne!=frameZero);
+  assert(freshSource!=frameZero);
+  assert(freshSource!=frameOne);
+
+  // These pairs alias under common lossy XOR, swapping, or 32-bit packing.
+  const auto xorA = frameTextureWorld.resolveFrameTexture(1u,2u);
+  const auto xorB = frameTextureWorld.resolveFrameTexture(3u,0u);
+  const auto swapped = frameTextureWorld.resolveFrameTexture(2u,1u);
+  const auto lowSource = frameTextureWorld.resolveFrameTexture(5u,7u);
+  const auto highSource = frameTextureWorld.resolveFrameTexture(
+      (uint64_t(1u)<<32u) | 5u,7u);
+  const auto lowOrdinal = frameTextureWorld.resolveFrameTexture(7u,8u);
+  const auto highOrdinal = frameTextureWorld.resolveFrameTexture(
+      7u,(uint64_t(1u)<<32u) | 8u);
+  assert(xorA!=xorB);
+  assert(xorA!=swapped);
+  assert(lowSource!=highSource);
+  assert(lowOrdinal!=highOrdinal);
+
+  const auto maximumFrameTexture = frameTextureWorld.resolveFrameTexture(
+      std::numeric_limits<uint64_t>::max(),
+      std::numeric_limits<uint64_t>::max());
+  assert(maximumFrameTexture);
+  assert(maximumFrameTexture==frameTextureWorld.resolveFrameTexture(
+      std::numeric_limits<uint64_t>::max(),
+      std::numeric_limits<uint64_t>::max()));
+
+  IOSRenderWorld rejectedFrameTextureWorld;
+  const auto beforeRejectedSource =
+      rejectedFrameTextureWorld.resolveTexture(1u);
+  assert(rejectsFrame([&]() {
+    (void)rejectedFrameTextureWorld.resolveFrameTexture(
+        0u,std::numeric_limits<uint64_t>::max());
+    }));
+  const auto afterRejectedSource =
+      rejectedFrameTextureWorld.resolveFrameTexture(1u,0u);
+  assert(afterRejectedSource.value==beforeRejectedSource.value+1u);
+
+  const auto frameTextureGeneration = frameTextureWorld.generation();
+  const auto frameTextureBeforeReset =
+      frameTextureWorld.resolveFrameTexture(0x2001u,9u);
+  frameTextureWorld.resetWorld();
+  assert(frameTextureWorld.generation()!=frameTextureGeneration);
+  const auto frameTextureAfterReset =
+      frameTextureWorld.resolveFrameTexture(0x2001u,9u);
+  assert(frameTextureAfterReset.generation==frameTextureWorld.generation());
+  assert(frameTextureAfterReset.generation!=
+         frameTextureBeforeReset.generation);
+  assert(frameTextureAfterReset.value>frameTextureBeforeReset.value);
+  assert(frameTextureAfterReset==
+         frameTextureWorld.resolveFrameTexture(0x2001u,9u));
+
   const auto populatedFirst =
     populatedWorld.buildSnapshot(populatedFrame(handles,10.f,1.f));
   assert(populatedFirst->isStructurallyValid());

@@ -56,8 +56,11 @@ using namespace Tempest;
 
 namespace {
 
-IOSSceneFrameState iosSceneFrameState(const Camera* camera, Size drawable) {
+IOSSceneFrameState iosSceneFrameState(const World* world,
+                                      const Camera* camera,
+                                      Size drawable) {
   IOSSceneFrameState frame;
+  frame.sceneTimeMs            = world!=nullptr ? world->tickCount() : 0u;
   frame.camera.viewport.width  = uint32_t(std::max(drawable.w,1));
   frame.camera.viewport.height = uint32_t(std::max(drawable.h,1));
   if(camera==nullptr)
@@ -2569,7 +2572,8 @@ void MainWindow::render(){
 
     auto scene = renderer.buildSceneSnapshot(
       *frame,iosSceneSourceProvider(Gothic::inst().worldView()),
-      iosSceneFrameState(Gothic::inst().camera(),renderer.drawableSize()));
+      iosSceneFrameState(Gothic::inst().world(),Gothic::inst().camera(),
+                         renderer.drawableSize()));
 
     const bool videoActive = video.isActive();
     IOSVideoPacket videoPacket;

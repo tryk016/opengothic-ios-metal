@@ -200,7 +200,10 @@
       "risk": "shared-runtime",
       "paths": [
         "ios/tests/ios*",
-        "scripts/validate-scene-source-census-log.py"
+        "scripts/validate-scene-source-census-log.py",
+        "scripts/test-p21d2a-frame-animation-contract.py",
+        "scripts/test-p21d2-frame-animation-vertical.py",
+        "scripts/test-p21d2-frame-animation-device-parser.py"
       ],
       "excludePaths": [
         "ios/tests/iosdevicecapabilities.cpp",

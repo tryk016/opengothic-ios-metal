@@ -2,6 +2,7 @@
 
 #include "iosscenesnapshot.h"
 
+#include <cstddef>
 #include <cstdint>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,6 +21,8 @@ class IOSRenderWorld final {
     IOSMeshHandle     resolveMesh(uint64_t stableKey);
     IOSMaterialHandle resolveMaterial(uint64_t stableKey);
     IOSTextureHandle  resolveTexture(uint64_t stableKey);
+    IOSTextureHandle  resolveFrameTexture(uint64_t sourceId,
+                                          uint64_t frameOrdinal);
     IOSLightHandle    resolveLight(uint64_t stableKey);
     IOSParticleHandle resolveParticle(uint64_t stableKey);
 
@@ -33,6 +36,20 @@ class IOSRenderWorld final {
     IOSSceneSequence lastAcceptedSequence() const noexcept;
 
   private:
+    struct FrameTextureKey final {
+      uint64_t sourceId = 0;
+      uint64_t frameOrdinal = 0;
+
+      bool operator==(const FrameTextureKey& other) const noexcept {
+        return sourceId==other.sourceId &&
+               frameOrdinal==other.frameOrdinal;
+        }
+      };
+
+    struct FrameTextureKeyHash final {
+      std::size_t operator()(const FrameTextureKey& key) const noexcept;
+      };
+
     IOSWorldGeneration allocateGeneration() noexcept;
 
     IOSWorldGeneration worldGeneration;
@@ -51,6 +68,8 @@ class IOSRenderWorld final {
     std::unordered_map<uint64_t,IOSMeshHandle>     meshRegistry;
     std::unordered_map<uint64_t,IOSMaterialHandle> materialRegistry;
     std::unordered_map<uint64_t,IOSTextureHandle>  textureRegistry;
+    std::unordered_map<FrameTextureKey,IOSTextureHandle,
+                       FrameTextureKeyHash> frameTextureRegistry;
     std::unordered_map<uint64_t,IOSLightHandle>    lightRegistry;
     std::unordered_map<uint64_t,IOSParticleHandle> particleRegistry;
 

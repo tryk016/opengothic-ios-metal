@@ -389,6 +389,7 @@ struct IOSGPUScene::Impl final {
     Impl*                         scene = nullptr;
     const IOSSceneSnapshot*       snapshot = nullptr;
     const IOSSceneAssetRegistry*  assets = nullptr;
+    IOSGPUSceneFrameAnimationTracker* frameAnimation = nullptr;
     IOSGPUScene::Report           report;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -854,8 +855,33 @@ void IOSGPUScene::Impl::encodeLandscape(
                          instanceCount:1u
                             baseVertex:0
                           baseInstance:0u];
+        if(context.frameAnimation!=nullptr) {
+          const auto animationRecorded =
+              recordIOSGPUSceneFrameAnimationDraw(
+                  *context.frameAnimation,
+                  draw.plan.baseColorTexture);
+          if(animationRecorded!=
+                 IOSGPUSceneFrameAnimationRecordResult::IgnoredStatic &&
+             animationRecorded!=
+                 IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated) {
+            restoreEncoderState();
+            context.report.result =
+                IOSGPUScene::Result::AnimationEvidenceMismatch;
+            context.report.failingHandle =
+                draw.plan.baseColorTexture.value;
+            return;
+            }
+          }
         }
       restoreEncoderState();
+      if(context.frameAnimation!=nullptr &&
+         !finalizeIOSGPUSceneFrameAnimationDrawReport(
+             *context.frameAnimation,
+             context.report.frameAnimation)) {
+        context.report.result =
+            IOSGPUScene::Result::AnimationEvidenceMismatch;
+        return;
+        }
       context.report.counts = context.targetCounts;
       context.report.drawCount =
           context.targetCounts.drawn.material.total;
@@ -1007,6 +1033,21 @@ void IOSGPUScene::Impl::encodeLandscape(
                      instanceCount:1u
                         baseVertex:0
                         baseInstance:0u];
+    if(context.frameAnimation!=nullptr) {
+      const auto animationRecorded =
+          recordIOSGPUSceneFrameAnimationDraw(
+              *context.frameAnimation,plan.baseColorTexture);
+      if(animationRecorded!=
+             IOSGPUSceneFrameAnimationRecordResult::IgnoredStatic &&
+         animationRecorded!=
+             IOSGPUSceneFrameAnimationRecordResult::RecordedAnimated) {
+        context.report.result =
+            IOSGPUScene::Result::AnimationEvidenceMismatch;
+        context.report.failingHandle = plan.baseColorTexture.value;
+        restoreEncoderState();
+        return;
+        }
+      }
     context.report.counts = nextCounts;
     context.report.drawCount =
         context.report.counts.drawn.material.total;
@@ -1019,6 +1060,13 @@ void IOSGPUScene::Impl::encodeLandscape(
          context.report.counts,context.report.failures)) {
     context.report.result = IOSGPUScene::Result::CountMismatch;
     recordFailure(context.report.failures.plannedDrawn,context.report);
+    return;
+    }
+  if(context.frameAnimation!=nullptr &&
+     !finalizeIOSGPUSceneFrameAnimationDrawReport(
+         *context.frameAnimation,context.report.frameAnimation)) {
+    context.report.result =
+        IOSGPUScene::Result::AnimationEvidenceMismatch;
     return;
     }
   context.report.result =
@@ -1036,7 +1084,8 @@ IOSGPUScene::~IOSGPUScene() = default;
 IOSGPUScene::Report IOSGPUScene::encode(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,
     const IOSSceneSnapshot& snapshot,
-    const IOSSceneAssetRegistry& assets) noexcept {
+    const IOSSceneAssetRegistry& assets,
+    const IOSFrameAnimationEvidence* frameAnimation) noexcept {
   Report report = makeReport(Result::NativeEncodingFailed);
   if(impl==nullptr) {
     report.result = Result::PipelineUnavailable;
@@ -1100,6 +1149,14 @@ IOSGPUScene::Report IOSGPUScene::encode(
     return makeReport(Result::GenerationMismatch);
     }
 
+  IOSGPUSceneFrameAnimationTracker frameAnimationTracker;
+  const bool trackFrameAnimation = frameAnimation!=nullptr;
+  if(trackFrameAnimation &&
+     !prepareIOSGPUSceneFrameAnimationTracker(
+         *frameAnimation,snapshot.generation,
+         frameAnimationTracker))
+    return makeReport(Result::AnimationEvidenceMismatch);
+
   try {
     for(const auto& entity:snapshot.entities) {
       const auto source = candidate(
@@ -1155,6 +1212,12 @@ IOSGPUScene::Report IOSGPUScene::encode(
 #endif
 
   if(report.counts.planned.material.total==0u) {
+    if(trackFrameAnimation &&
+       !finalizeIOSGPUSceneFrameAnimationDrawReport(
+           frameAnimationTracker,report.frameAnimation)) {
+      report.result = Result::AnimationEvidenceMismatch;
+      return report;
+      }
     report.result = Result::Empty;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -1327,6 +1390,8 @@ IOSGPUScene::Report IOSGPUScene::encode(
   context.scene    = impl.get();
   context.snapshot = &snapshot;
   context.assets   = &assets;
+  context.frameAnimation =
+      trackFrameAnimation ? &frameAnimationTracker : nullptr;
   context.report   = report;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -1449,6 +1514,8 @@ const char* iosGPUSceneResultName(IOSGPUScene::Result result) noexcept {
       return "count-overflow";
     case IOSGPUScene::Result::CountMismatch:
       return "count-mismatch";
+    case IOSGPUScene::Result::AnimationEvidenceMismatch:
+      return "animation-evidence-mismatch";
     case IOSGPUScene::Result::NativeEncodingFailed:
       return "native-encoding-failed";
     }

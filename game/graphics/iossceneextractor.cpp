@@ -17,6 +17,7 @@ struct ExtractionContext final {
   const Tempest::Device* device = nullptr;
   IOSRenderWorld*        renderWorld = nullptr;
   IOSSceneAssetRegistry* assets = nullptr;
+  uint64_t               sceneTimeMs = 0;
 
   IOSSceneFrameState               staging;
   IOSSceneExtractionReport          report;
@@ -43,7 +44,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
         ? std::optional<Material::AlphaFunc>{source.material->alpha}
         : std::nullopt;
   const bool hasFrameAnimation =
-      source.material!=nullptr && source.material->hasFrameAnimation();
+      source.material!=nullptr && !source.material->frames.empty();
   const bool hasUvAnimation =
       source.material!=nullptr && source.material->hasUvAnimation();
   const IOSSceneTextureAnimationMode textureAnimation =
@@ -70,9 +71,17 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.usesFallbackTexture =
       materialMapping==IOSSceneMaterialMapping{
           IOSMaterialCategory::Opaque,true} &&
+      !hasFrameAnimation &&
       !candidate.hasBaseColorTexture;
   candidate.hasFrameAnimation = hasFrameAnimation;
   candidate.hasUvAnimation = hasUvAnimation;
+  candidate.sceneTimeMs = context.sceneTimeMs;
+  candidate.frameCount = source.material!=nullptr
+      ? static_cast<uint64_t>(source.material->frames.size())
+      : 0u;
+  candidate.framePeriodMs = source.material!=nullptr
+      ? source.material->texAniFPSInv
+      : 0u;
   candidate.hasLocalBounds = source.hasLocalBounds;
   candidate.transform      = IOSSceneConversion::matrix(source.transform);
   candidate.localBounds    = bounds(source);
@@ -96,6 +105,17 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       break;
     }
 
+  const Tempest::Texture2d* selectedTexture = nullptr;
+  if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly) {
+    if(selectIOSSceneFrameTextureForExtraction(
+           source.material,plan,selectedTexture)!=
+       IOSSceneExtractionResult::Success) {
+      (void)recordIOSSceneInvalidSource(context.report.stats);
+      context.report.result = IOSSceneExtractionResult::InvalidSource;
+      return;
+      }
+    }
+
   const IOSRenderEntityId entity =
       context.renderWorld->resolveEntity(plan.entityStableKey);
   const IOSMeshHandle mesh =
@@ -103,7 +123,10 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   const IOSMaterialHandle material =
       context.renderWorld->resolveMaterial(plan.materialStableKey);
   const IOSTextureHandle texture =
-      context.renderWorld->resolveTexture(plan.textureStableKey);
+      plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly
+        ? context.renderWorld->resolveFrameTexture(
+              plan.textureStableKey,plan.frameOrdinal)
+        : context.renderWorld->resolveTexture(plan.textureStableKey);
 
   const auto bound = context.assets->bindMesh(
       *context.device,
@@ -121,7 +144,9 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     }
 
   const Tempest::Texture2d& baseColorTexture =
-      source.material->tex!=nullptr
+      selectedTexture!=nullptr
+        ? *selectedTexture
+        : source.material->tex!=nullptr
         ? *source.material->tex
         : Resources::fallbackTexture();
   const auto textureBound = context.assets->bindTexture(
@@ -131,6 +156,10 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     context.report.bindFailure = textureBound;
     return;
     }
+
+  if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly)
+    context.report.frameAnimation.selections.push_back(
+        {plan.textureStableKey,plan.frameOrdinal,texture});
 
   IOSMaterial materialRecord;
   materialRecord.id               = material;
@@ -184,10 +213,20 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
   context.device      = &device;
   context.renderWorld = &renderWorld;
   context.assets      = &assets;
+  context.sceneTimeMs = frame.sceneTimeMs;
   source.visit(&context,&visitSource);
   if(context.report.result!=IOSSceneExtractionResult::Success)
     return context.report;
   if(!context.report.stats.hasConsistentSuccessfulCensus()) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }
+  if(!finalizeIOSFrameAnimationEvidence(context.report.frameAnimation) ||
+     context.report.frameAnimation.admittedFrameOnly!=
+         context.report.stats.admittedFrameOnly ||
+     context.report.frameAnimation.nonzeroFrameOrdinals!=
+         context.report.stats.nonzeroFrameOrdinals) {
+    (void)recordIOSSceneInvalidSource(context.report.stats);
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return context.report;
     }
