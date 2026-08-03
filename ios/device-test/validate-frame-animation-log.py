@@ -535,8 +535,6 @@ def parse_census(index: int, line: str, expected_sha: str) -> dict[str, int | st
         **parse_list(raw["x"], TEXTURE_OUTCOME_NAMES, "D2 texture outcomes"),
         **parse_list(raw["o"], OUTCOME_NAMES, "D2 outcomes"),
     }
-    for name, expected in EXPECTED_D2_BREAKDOWN.items():
-        require(values[name] == expected, f"D2 census {name} differs")
     require(
         checked_sum([int(values[name]) for name in KIND_NAMES], "D2 kinds")
         == values["visited"],
@@ -554,7 +552,44 @@ def parse_census(index: int, line: str, expected_sha: str) -> dict[str, int | st
         ) == values["visited"],
         "D2 outcomes do not conserve",
     )
+    require(values["invalid-source"] == 0,
+            "D2 census invalid-source must be zero")
+    require(values["kind-unknown"] == 0,
+            "D2 census unknown kind must be zero")
+    require(values["material-unknown"] == 0,
+            "D2 census unknown material must be zero")
+    require(values["frame-animated"] <= values["visited"],
+            "D2 frame animation count exceeds visited")
+    require(values["uv-animated"] <= values["visited"],
+            "D2 UV animation count exceeds visited")
+    texture_outcomes = [
+        int(values[name]) for name in TEXTURE_OUTCOME_NAMES
+    ]
+    require(
+        checked_sum(texture_outcomes, "D2 texture outcomes")
+        == values["skipped-texture-animation"],
+        "D2 texture outcomes do not match the texture-animation skip total",
+    )
+    require(
+        checked_sum(
+            [texture_outcomes[0], texture_outcomes[2]],
+            "D2 frame texture outcomes",
+        ) <= values["frame-animated"],
+        "D2 frame texture outcomes exceed the frame-animation census",
+    )
+    require(
+        checked_sum(
+            [texture_outcomes[1], texture_outcomes[2]],
+            "D2 UV texture outcomes",
+        ) <= values["uv-animated"],
+        "D2 UV texture outcomes exceed the UV-animation census",
+    )
     return values
+
+
+def validate_expected_d2_breakdown(values: dict[str, int | str]) -> None:
+    for name, expected in EXPECTED_D2_BREAKDOWN.items():
+        require(values[name] == expected, f"D2 census {name} differs")
 
 
 FATAL_RE = re.compile(
@@ -607,6 +642,12 @@ def validate(log: str, expected_sha: str, d1_path: pathlib.Path) -> dict[str, An
         if line.startswith(CENSUS_PREFIX)
     ]
     require(census, "D2 census marker is missing")
+    census_keys: set[tuple[int, int]] = set()
+    for marker in census:
+        key = (int(marker["generation"]), int(marker["sequence"]))
+        require(key not in census_keys,
+                "D2 census duplicates generation/sequence")
+        census_keys.add(key)
     baseline = pairs["B"][0]
     baseline_census = [
         marker for marker in census
@@ -615,6 +656,7 @@ def validate(log: str, expected_sha: str, d1_path: pathlib.Path) -> dict[str, An
     ]
     require(len(baseline_census) == 1,
             "baseline has no unique same-generation/sequence D2 census")
+    validate_expected_d2_breakdown(baseline_census[0])
     baseline_identity = [
         index for index, generation, sequence in identities
         if (generation, sequence) == (baseline.generation, baseline.sequence)

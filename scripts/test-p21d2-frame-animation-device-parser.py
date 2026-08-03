@@ -63,6 +63,16 @@ def census_line(build: str = BUILD) -> str:
     )
 
 
+def periodic_census_line(build: str = BUILD) -> str:
+    return (
+        "RendererIOS source census: v=2 "
+        f"b={build} g=7 s=300 "
+        "k=338,22075,8464,1563,0,1137,0,0 "
+        "m=21426,11001,4,0,0,1,962,183,0,0 "
+        "a=38,3 x=0,0,2 o=33577,29725,2700,1150,2,0"
+    )
+
+
 def native_block(generation: int, sequence: int) -> list[str]:
     return [
         "RendererIOS native scene identity: mode=production "
@@ -504,6 +514,15 @@ def main() -> int:
         result = module.validate(good, BUILD, d1)
         require(result["result"] == "PASS", "valid fixture did not pass")
         require(result["planned"] == 29724, "D1+22 total differs")
+        long_good = good + periodic_census_line() + "\n"
+        long_result = module.validate(long_good, BUILD, d1)
+        require(long_result["result"] == "PASS",
+                "valid dynamic periodic census was rejected")
+        wrong_baseline_later_exact = replace_once(
+            good,
+            census_line(),
+            periodic_census_line().replace(" s=300 ", " s=1 "),
+        ) + census_line().replace(" s=1 ", " s=300 ") + "\n"
 
         b_primary = primary("B", 1)
         b_detail = detail("B", 1)
@@ -615,6 +634,80 @@ def main() -> int:
             "mode-skips": replace_once(good, "x=0,0,2", "x=1,0,1"),
             "skip-total": replace_once(good, "1150,2,0", "1150,3,0"),
             "census-planned": replace_once(good, "33576,29724", "33576,29723"),
+            "periodic-census-foreign-build": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line("f" * 40),
+            ),
+            "periodic-census-duplicate-key": (
+                long_good + periodic_census_line() + "\n"
+            ),
+            "periodic-census-reordered-fields": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line().replace(
+                    "k=338,22075,8464,1563,0,1137,0,0 "
+                    "m=21426,11001,4,0,0,1,962,183,0,0",
+                    "m=21426,11001,4,0,0,1,962,183,0,0 "
+                    "k=338,22075,8464,1563,0,1137,0,0",
+                ),
+            ),
+            "periodic-census-nonconservation": replace_once(
+                long_good,
+                "o=33577,29725,2700,1150,2,0",
+                "o=33577,29724,2700,1150,2,0",
+            ),
+            "periodic-census-invalid-source": replace_once(
+                long_good,
+                "o=33577,29725,2700,1150,2,0",
+                "o=33577,29725,2700,1150,2,1",
+            ),
+            "periodic-census-unknown-kind": replace_once(
+                long_good,
+                "k=338,22075,8464,1563,0,1137,0,0",
+                "k=338,22075,8463,1563,0,1137,0,1",
+            ),
+            "periodic-census-unknown-material": replace_once(
+                long_good,
+                "m=21426,11001,4,0,0,1,962,183,0,0",
+                "m=21425,11001,4,0,0,1,962,183,0,1",
+            ),
+            "periodic-census-frame-exceeds-visited": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line().replace(
+                    "a=38,3 x=0,0,2", "a=33578,3 x=0,0,2"
+                ),
+            ),
+            "periodic-census-uv-exceeds-visited": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line().replace(
+                    "a=38,3 x=0,0,2", "a=38,33578 x=0,0,2"
+                ),
+            ),
+            "periodic-census-texture-outcome-total": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line().replace(
+                    "a=38,3 x=0,0,2", "a=38,3 x=0,0,0"
+                ),
+            ),
+            "periodic-census-frame-outcome-bound": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line().replace(
+                    "a=38,3 x=0,0,2", "a=1,3 x=0,0,2"
+                ),
+            ),
+            "periodic-census-uv-outcome-bound": replace_once(
+                long_good,
+                periodic_census_line(),
+                periodic_census_line().replace(
+                    "a=38,3 x=0,0,2", "a=38,1 x=0,0,2"
+                ),
+            ),
+            "baseline-wrong-later-exact": wrong_baseline_later_exact,
             "fatal": good + "RendererIOS fatal fixture\n",
             "sigabrt": good + "libc++abi: terminating after SIGABRT\n",
             "plain-fatal": good + "fatal: uncaught exception\n",
