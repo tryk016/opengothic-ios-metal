@@ -14,6 +14,24 @@ enum class IOSSceneSourcePlanResult : uint8_t {
   InvalidSource,
   };
 
+enum class IOSSceneTextureAnimationMode : uint8_t {
+  None,
+  FrameOnly,
+  UvOnly,
+  FrameAndUv,
+  };
+
+inline constexpr IOSSceneTextureAnimationMode iosSceneTextureAnimationMode(
+    bool hasFrameAnimation, bool hasUvAnimation) noexcept {
+  if(hasFrameAnimation)
+    return hasUvAnimation
+        ? IOSSceneTextureAnimationMode::FrameAndUv
+        : IOSSceneTextureAnimationMode::FrameOnly;
+  return hasUvAnimation
+      ? IOSSceneTextureAnimationMode::UvOnly
+      : IOSSceneTextureAnimationMode::None;
+  }
+
 struct IOSSceneOpaqueMeshCandidate final {
   uint64_t       sourceId = 0;
   IOSSceneMeshKind kind = IOSSceneMeshKind::Unsupported;

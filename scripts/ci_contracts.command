@@ -4090,6 +4090,13 @@ required = (
         """  const bool hasUvAnimation = false;""",
     ),
     (
+        "texture-animation-mode-source",
+        """  const IOSSceneTextureAnimationMode textureAnimation =
+      iosSceneTextureAnimationMode(hasFrameAnimation,hasUvAnimation);""",
+        """  const IOSSceneTextureAnimationMode textureAnimation =
+      IOSSceneTextureAnimationMode::FrameOnly;""",
+    ),
+    (
         "frame-animation-candidate",
         "  candidate.hasFrameAnimation = hasFrameAnimation;",
         "  candidate.hasFrameAnimation = false;",
@@ -4111,6 +4118,16 @@ required = (
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return;
     }""",
+    ),
+    (
+        "texture-animation-outcome-wiring",
+        """    case IOSSceneSourcePlanResult::SkippedTextureAnimation:
+      if(!recordIOSScenePlanResult(
+           planned,plan,context.report.stats,textureAnimation))""",
+        """    case IOSSceneSourcePlanResult::SkippedTextureAnimation:
+      if(!recordIOSScenePlanResult(
+           planned,plan,context.report.stats,
+           IOSSceneTextureAnimationMode::FrameOnly))""",
     ),
     (
         "successful-census-final-gate",
@@ -4161,9 +4178,35 @@ for label, snippet, replacement in required:
                 + operation
             )
         mutations_killed += 1
-if mutations_killed != 24:
+marker_source = Path("game/graphics/rendererios.cpp").read_text()
+marker_outcome = """               " x=",uint64_t(extraction.stats.skippedTextureFrameOnly),",",
+               uint64_t(extraction.stats.skippedTextureUvOnly),",",
+               uint64_t(extraction.stats.skippedTextureFrameAndUv),"""
+if marker_source.count(marker_outcome) != 1:
+    raise SystemExit(
+        "RendererIOS texture animation outcome marker is missing or duplicated"
+    )
+for operation, mutant in (
+    ("removed", marker_source.replace(marker_outcome, "", 1)),
+    (
+        "collapsed",
+        marker_source.replace(
+            marker_outcome,
+            """               " x=",uint64_t(extraction.stats.skippedTextureAnimation),",0,0",""",
+            1,
+        ),
+    ),
+):
+    if mutant.count(marker_outcome) == 1:
+        raise SystemExit(
+            "RendererIOS texture animation marker mutation survived: "
+            + operation
+        )
+    mutations_killed += 1
+
+if mutations_killed != 30:
     raise SystemExit("RendererIOS extractor adapter mutation count drifted")
-print("RendererIOS extractor adapter oracle: mutations-killed=24")
+print("RendererIOS extractor adapter oracle: mutations-killed=30")
 PY
 python3 - <<'PY'
 from pathlib import Path

@@ -150,7 +150,7 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
         impl->renderWorld.lastAcceptedSequence().value+1u;
     if(nextSequence==1u || nextSequence%300u==0u) {
       try {
-        Log::d("RendererIOS source census: v=1 b=",
+        Log::d("RendererIOS source census: v=2 b=",
                OPENGOTHIC_RENDERER_IOS_BUILD_SHA,
                " g=",impl->renderWorld.generation().value,
                " s=",nextSequence,
@@ -174,6 +174,9 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
                uint64_t(extraction.stats.census.materials.unknown),
                " a=",uint64_t(extraction.stats.census.frameAnimated),",",
                uint64_t(extraction.stats.census.uvAnimated),
+               " x=",uint64_t(extraction.stats.skippedTextureFrameOnly),",",
+               uint64_t(extraction.stats.skippedTextureUvOnly),",",
+               uint64_t(extraction.stats.skippedTextureFrameAndUv),
                " o=",uint64_t(extraction.stats.visited),",",
                uint64_t(extraction.stats.planned),",",
                uint64_t(extraction.stats.skippedKind),",",

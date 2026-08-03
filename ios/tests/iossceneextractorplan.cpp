@@ -90,7 +90,9 @@ void recordRawOutcome(
     assert(alpha.has_value());
     plan = acceptedPlan(kind,*alpha);
     }
-  assert(recordIOSScenePlanResult(outcome,plan,stats));
+  assert(recordIOSScenePlanResult(
+      outcome,plan,stats,
+      iosSceneTextureAnimationMode(frameAnimated,uvAnimated)));
   }
 
 bool sameFrame(const IOSSceneFrameState& lhs,
@@ -110,9 +112,20 @@ bool sameFrame(const IOSSceneFrameState& lhs,
 
 void validatePublicContract() {
   static_assert(std::is_trivially_copyable_v<IOSSceneMeshKind>);
+  static_assert(
+      std::is_trivially_copyable_v<IOSSceneTextureAnimationMode>);
   static_assert(std::is_trivially_copyable_v<IOSSceneMaterialMapping>);
   static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshCandidate>);
   static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshPlan>);
+
+  assert(iosSceneTextureAnimationMode(false,false)==
+         IOSSceneTextureAnimationMode::None);
+  assert(iosSceneTextureAnimationMode(true,false)==
+         IOSSceneTextureAnimationMode::FrameOnly);
+  assert(iosSceneTextureAnimationMode(false,true)==
+         IOSSceneTextureAnimationMode::UvOnly);
+  assert(iosSceneTextureAnimationMode(true,true)==
+         IOSSceneTextureAnimationMode::FrameAndUv);
 
   using Extract = IOSSceneExtractionReport (IOSSceneExtractor::*)(
       const IOSSceneSourceProvider&,const Tempest::Device&,IOSRenderWorld&,
@@ -315,11 +328,15 @@ void validateFallbackAndMixedCounters() {
     };
 
   IOSSceneExtractionStats stats;
+  stats.census.frameAnimated = 1u;
   for(const auto& source:sources) {
     ++stats.visited;
     IOSSceneOpaqueMeshPlan plan;
     const auto result = planIOSOpaqueMeshSource(source,plan);
-    const bool accepted = recordIOSScenePlanResult(result,plan,stats);
+    const bool accepted = recordIOSScenePlanResult(
+        result,plan,stats,
+        iosSceneTextureAnimationMode(
+            source.hasFrameAnimation,source.hasUvAnimation));
     assert(accepted==(result!=IOSSceneSourcePlanResult::InvalidSource));
     }
 
@@ -333,6 +350,9 @@ void validateFallbackAndMixedCounters() {
   assert(stats.skippedKind==1u);
   assert(stats.skippedMaterial==1u);
   assert(stats.skippedTextureAnimation==1u);
+  assert(stats.skippedTextureFrameOnly==1u);
+  assert(stats.skippedTextureUvOnly==0u);
+  assert(stats.skippedTextureFrameAndUv==0u);
   assert(stats.fallbackTexture==1u);
   assert(stats.alphaFallback==0u);
   assert(stats.invalidSource==1u);
@@ -457,11 +477,29 @@ void validateMissingAndInvalidRawSources() {
 void validateOverlappingAnimationCensus() {
   IOSSceneExtractionStats stats;
   recordRawOutcome(
-      IOSSceneSourceKind::Movable,Material::AlphaTest,true,true,
+      IOSSceneSourceKind::Static,Material::Solid,true,false,
       IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
-  assert(stats.census.frameAnimated==1u);
-  assert(stats.census.uvAnimated==1u);
-  assert(stats.skippedTextureAnimation==1u);
+  recordRawOutcome(
+      IOSSceneSourceKind::Movable,Material::AlphaTest,false,true,
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
+  recordRawOutcome(
+      IOSSceneSourceKind::Landscape,Material::AlphaTest,true,true,
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
+  recordRawOutcome(
+      IOSSceneSourceKind::Animated,Material::Solid,true,false,
+      IOSSceneSourcePlanResult::SkippedKind,stats);
+  recordRawOutcome(
+      IOSSceneSourceKind::Static,Material::Water,false,true,
+      IOSSceneSourcePlanResult::SkippedMaterial,stats);
+
+  assert(stats.census.frameAnimated==3u);
+  assert(stats.census.uvAnimated==3u);
+  assert(stats.skippedTextureAnimation==3u);
+  assert(stats.skippedTextureFrameOnly==1u);
+  assert(stats.skippedTextureUvOnly==1u);
+  assert(stats.skippedTextureFrameAndUv==1u);
+  assert(stats.skippedKind==1u);
+  assert(stats.skippedMaterial==1u);
   assert(stats.hasConsistentSuccessfulCensus());
 
   IOSSceneExtractionStats frameOverflow = stats;
@@ -471,6 +509,39 @@ void validateOverlappingAnimationCensus() {
   IOSSceneExtractionStats uvOverflow = stats;
   uvOverflow.census.uvAnimated = uvOverflow.visited+1u;
   assert(!uvOverflow.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats frameBound = stats;
+  frameBound.census.frameAnimated = 2u;
+  frameBound.skippedTextureFrameOnly = 2u;
+  frameBound.skippedTextureUvOnly = 0u;
+  assert(!frameBound.hasConsistentTextureAnimationCounts());
+  assert(!frameBound.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats uvBound = stats;
+  uvBound.census.uvAnimated = 2u;
+  uvBound.skippedTextureFrameOnly = 0u;
+  uvBound.skippedTextureUvOnly = 2u;
+  assert(!uvBound.hasConsistentTextureAnimationCounts());
+  assert(!uvBound.hasConsistentSuccessfulCensus());
+
+  IOSSceneExtractionStats modeSumOverflow;
+  modeSumOverflow.skippedTextureAnimation =
+      std::numeric_limits<std::size_t>::max();
+  modeSumOverflow.skippedTextureFrameOnly =
+      std::numeric_limits<std::size_t>::max();
+  modeSumOverflow.skippedTextureUvOnly = 1u;
+  assert(!modeSumOverflow.hasConsistentTextureAnimationCounts());
+
+  IOSSceneExtractionStats impossibleNone;
+  assert(recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,Material::Solid,false,false,
+      impossibleNone));
+  IOSSceneOpaqueMeshPlan plan;
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,plan,
+      impossibleNone,IOSSceneTextureAnimationMode::None));
+  assert(impossibleNone.skippedTextureAnimation==0u);
+  assert(impossibleNone.invalidSource==1u);
   }
 
 IOSSceneExtractionStats permutationStats(bool reverse) {
@@ -536,12 +607,23 @@ void validateMaterialCounterOverflow(
 
 void validateOutcomeCounterOverflow(
     IOSSceneSourcePlanResult result,
-    std::size_t IOSSceneExtractionStats::* member) {
+    std::size_t IOSSceneExtractionStats::* member,
+    IOSSceneTextureAnimationMode textureAnimation =
+        IOSSceneTextureAnimationMode::None) {
   IOSSceneExtractionStats stats;
   stats.*member = std::numeric_limits<std::size_t>::max();
+  if(textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
+    stats.census.frameAnimated =
+        std::numeric_limits<std::size_t>::max();
+  if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
+    stats.census.uvAnimated =
+        std::numeric_limits<std::size_t>::max();
   const IOSSceneExtractionStats before = stats;
   IOSSceneOpaqueMeshPlan plan;
-  assert(!recordIOSScenePlanResult(result,plan,stats));
+  assert(!recordIOSScenePlanResult(
+      result,plan,stats,textureAnimation));
   IOSSceneExtractionStats expected = before;
   expected.invalidSource = 1u;
   assert(stats==expected);
@@ -620,7 +702,20 @@ void validateCheckedCensusCounters() {
       &IOSSceneExtractionStats::skippedMaterial);
   validateOutcomeCounterOverflow(
       IOSSceneSourcePlanResult::SkippedTextureAnimation,
-      &IOSSceneExtractionStats::skippedTextureAnimation);
+      &IOSSceneExtractionStats::skippedTextureAnimation,
+      IOSSceneTextureAnimationMode::FrameOnly);
+  validateOutcomeCounterOverflow(
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,
+      &IOSSceneExtractionStats::skippedTextureFrameOnly,
+      IOSSceneTextureAnimationMode::FrameOnly);
+  validateOutcomeCounterOverflow(
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,
+      &IOSSceneExtractionStats::skippedTextureUvOnly,
+      IOSSceneTextureAnimationMode::UvOnly);
+  validateOutcomeCounterOverflow(
+      IOSSceneSourcePlanResult::SkippedTextureAnimation,
+      &IOSSceneExtractionStats::skippedTextureFrameAndUv,
+      IOSSceneTextureAnimationMode::FrameAndUv);
 
   IOSSceneExtractionStats invalidOverflow;
   invalidOverflow.invalidSource = std::numeric_limits<std::size_t>::max();
@@ -683,7 +778,12 @@ void validateRecordRejectsBrokenPlannedInvariant() {
     IOSSceneExtractionStats stats;
     stats.planned = 1u;
     assert(!stats.hasConsistentPlannedCounts());
-    assert(!recordIOSScenePlanResult(result,movablePlan,stats));
+    const auto animation =
+        result==IOSSceneSourcePlanResult::SkippedTextureAnimation
+          ? IOSSceneTextureAnimationMode::FrameOnly
+          : IOSSceneTextureAnimationMode::None;
+    assert(!recordIOSScenePlanResult(
+        result,movablePlan,stats,animation));
     assert(!stats.hasConsistentPlannedCounts());
     }
   }

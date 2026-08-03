@@ -92,6 +92,9 @@ struct IOSSceneExtractionStats final {
   std::size_t skippedKind = 0;
   std::size_t skippedMaterial = 0;
   std::size_t skippedTextureAnimation = 0;
+  std::size_t skippedTextureFrameOnly = 0;
+  std::size_t skippedTextureUvOnly = 0;
+  std::size_t skippedTextureFrameAndUv = 0;
   std::size_t fallbackTexture = 0;
   std::size_t alphaFallback = 0;
   std::size_t invalidSource = 0;
@@ -116,6 +119,33 @@ struct IOSSceneExtractionStats final {
         planned==plannedOpaque+plannedAlphaTest &&
         planned==firstKindSum+plannedMovable &&
         alphaFallback<=plannedAlphaTest;
+    }
+
+  constexpr bool hasConsistentTextureAnimationCounts() const noexcept {
+    std::size_t textureAnimationTotal = 0;
+    const bool totalValid =
+        addIOSSceneCounter(
+            textureAnimationTotal,skippedTextureFrameOnly) &&
+        addIOSSceneCounter(
+            textureAnimationTotal,skippedTextureUvOnly) &&
+        addIOSSceneCounter(
+            textureAnimationTotal,skippedTextureFrameAndUv);
+    std::size_t frameAnimationTotal = 0;
+    const bool frameTotalValid =
+        addIOSSceneCounter(
+            frameAnimationTotal,skippedTextureFrameOnly) &&
+        addIOSSceneCounter(
+            frameAnimationTotal,skippedTextureFrameAndUv);
+    std::size_t uvAnimationTotal = 0;
+    const bool uvTotalValid =
+        addIOSSceneCounter(
+            uvAnimationTotal,skippedTextureUvOnly) &&
+        addIOSSceneCounter(
+            uvAnimationTotal,skippedTextureFrameAndUv);
+    return totalValid && frameTotalValid && uvTotalValid &&
+        textureAnimationTotal==skippedTextureAnimation &&
+        frameAnimationTotal<=census.frameAnimated &&
+        uvAnimationTotal<=census.uvAnimated;
     }
 
   constexpr bool hasConsistentSuccessfulCensus() const noexcept {
@@ -148,6 +178,7 @@ struct IOSSceneExtractionStats final {
         addIOSSceneCounter(outcomeTotal,skippedMaterial) &&
         addIOSSceneCounter(outcomeTotal,skippedTextureAnimation);
     return hasConsistentPlannedCounts() &&
+        hasConsistentTextureAnimationCounts() &&
         kindSumValid && materialSumValid && outcomeSumValid &&
         kindTotal==visited && materialTotal==visited &&
         outcomeTotal==visited && invalidSource==0u &&
@@ -316,7 +347,9 @@ inline bool recordIOSSceneRawSource(
 inline bool recordIOSScenePlanResult(
     IOSSceneSourcePlanResult result,
     const IOSSceneOpaqueMeshPlan& plan,
-    IOSSceneExtractionStats& stats) noexcept {
+    IOSSceneExtractionStats& stats,
+    IOSSceneTextureAnimationMode textureAnimation =
+        IOSSceneTextureAnimationMode::None) noexcept {
   switch(result) {
     case IOSSceneSourcePlanResult::Planned: {
       if(plan.materialCategory!=IOSMaterialCategory::Opaque &&
@@ -384,8 +417,26 @@ inline bool recordIOSScenePlanResult(
       }
     case IOSSceneSourcePlanResult::SkippedTextureAnimation: {
       IOSSceneExtractionStats next = stats;
+      std::size_t* modeCounter = nullptr;
+      switch(textureAnimation) {
+        case IOSSceneTextureAnimationMode::FrameOnly:
+          modeCounter = &next.skippedTextureFrameOnly;
+          break;
+        case IOSSceneTextureAnimationMode::UvOnly:
+          modeCounter = &next.skippedTextureUvOnly;
+          break;
+        case IOSSceneTextureAnimationMode::FrameAndUv:
+          modeCounter = &next.skippedTextureFrameAndUv;
+          break;
+        case IOSSceneTextureAnimationMode::None:
+          return recordIOSSceneInvalidSource(stats);
+        default:
+          return recordIOSSceneInvalidSource(stats);
+        }
       if(!incrementIOSSceneCounter(next.skippedTextureAnimation) ||
-         !next.hasConsistentPlannedCounts())
+         !incrementIOSSceneCounter(*modeCounter) ||
+         !next.hasConsistentPlannedCounts() ||
+         !next.hasConsistentTextureAnimationCounts())
         return recordIOSSceneInvalidSource(stats);
       stats = next;
       return true;

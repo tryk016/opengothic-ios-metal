@@ -46,6 +46,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       source.material!=nullptr && source.material->hasFrameAnimation();
   const bool hasUvAnimation =
       source.material!=nullptr && source.material->hasUvAnimation();
+  const IOSSceneTextureAnimationMode textureAnimation =
+      iosSceneTextureAnimationMode(hasFrameAnimation,hasUvAnimation);
   if(!recordIOSSceneRawSource(
        source.kind,rawMaterial,hasFrameAnimation,hasUvAnimation,
        context.report.stats)) {
@@ -82,7 +84,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     case IOSSceneSourcePlanResult::SkippedKind:
     case IOSSceneSourcePlanResult::SkippedMaterial:
     case IOSSceneSourcePlanResult::SkippedTextureAnimation:
-      if(!recordIOSScenePlanResult(planned,plan,context.report.stats))
+      if(!recordIOSScenePlanResult(
+           planned,plan,context.report.stats,textureAnimation))
         context.report.result = IOSSceneExtractionResult::InvalidSource;
       return;
     case IOSSceneSourcePlanResult::InvalidSource:
@@ -146,7 +149,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   entityRecord.visibilityMask = plan.visibilityMask;
   context.staging.entities.push_back(entityRecord);
   if(!recordIOSScenePlanResult(
-       IOSSceneSourcePlanResult::Planned,plan,context.report.stats))
+       IOSSceneSourcePlanResult::Planned,plan,context.report.stats,
+       textureAnimation))
     context.report.result = IOSSceneExtractionResult::InvalidSource;
   }
 

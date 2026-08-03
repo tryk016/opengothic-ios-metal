@@ -199,7 +199,8 @@
       "id": "renderer-ios-contract-tests",
       "risk": "shared-runtime",
       "paths": [
-        "ios/tests/ios*"
+        "ios/tests/ios*",
+        "scripts/validate-scene-source-census-log.py"
       ],
       "excludePaths": [
         "ios/tests/iosdevicecapabilities.cpp",
