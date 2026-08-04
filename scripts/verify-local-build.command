@@ -302,6 +302,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 [ -x scripts/test-p21d2-frame-animation-device-parser.py ]
 [ -x ios/device-test/validate-frame-animation-log.py ]
 [ -x ios/device-test/validate-uv-animation-log.py ]
+python3 scripts/test-device-file-query-bounds.py
+python3 -OO scripts/test-device-file-query-bounds.py
 PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/test-p21d2-frame-animation-vertical.py
 PYTHONDONTWRITEBYTECODE=1 python3 \

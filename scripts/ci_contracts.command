@@ -4071,6 +4071,8 @@ test -x scripts/test-p21d2-frame-animation-vertical.py
 test -x scripts/test-p21d2-frame-animation-device-parser.py
 test -x ios/device-test/validate-frame-animation-log.py
 test -x ios/device-test/validate-uv-animation-log.py
+python3 scripts/test-device-file-query-bounds.py
+python3 -OO scripts/test-device-file-query-bounds.py
 PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/test-p21d2-frame-animation-vertical.py
 PYTHONDONTWRITEBYTECODE=1 python3 \
@@ -7036,7 +7038,7 @@ crash_function = source.split('capture_crash_state() {', 1)[1].split(
     '\npreserve_failure_evidence() {', 1
 )[0]
 crash_contract = (
-    'if ! xcrun devicectl device info files --device "$DEVICE"',
+    'if ! run_bounded_device_file_query --device "$DEVICE"',
     'state="$(crash_listing_state "$listing")"',
     'if [[ "$state" == missing ]]',
     'if ! xcrun devicectl device copy from --device "$DEVICE"',

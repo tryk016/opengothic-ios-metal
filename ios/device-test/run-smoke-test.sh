@@ -55,6 +55,7 @@ readonly DURABLE_ZERO_INTERVAL_SECONDS=10
 readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
 readonly DEVICECTL_PROCESS_QUERY_TIMEOUT_SECONDS=30
 readonly DEVICECTL_TERMINATE_TIMEOUT_SECONDS=30
+readonly DEVICECTL_FILE_QUERY_TIMEOUT_SECONDS=30
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PREFIX='RendererIOS resource allocator self-test:'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_ARMED='RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PASS='RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2'
@@ -217,6 +218,11 @@ if group_exists() and not terminate_group():
     raise SystemExit(125)
 raise SystemExit(returncode)
 PY
+}
+
+run_bounded_device_file_query() {
+  run_bounded_command "$DEVICECTL_FILE_QUERY_TIMEOUT_SECONDS" \
+    xcrun devicectl device info files "$@"
 }
 
 secure_private_evidence() {
@@ -1615,16 +1621,16 @@ verify_game_container_resources() {
   [[ "$phase" == preinstall || "$phase" == postinstall ||
      "$phase" == postruntime ]] || return 1
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$documents" >/dev/null || return 1
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile \
     --subdirectory "Documents/_work/Data/Scripts/_compiled" --no-recurse \
     --json-output "$scripts" >/dev/null || return 1
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory "Documents/system" --no-recurse \
     --json-output "$system" >/dev/null || return 1
@@ -2901,7 +2907,7 @@ capture_crash_state() {
   local state sha
 
   rm -f "$listing" "$destination"
-  if ! xcrun devicectl device info files --device "$DEVICE" \
+  if ! run_bounded_device_file_query --device "$DEVICE" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
       --username mobile --subdirectory Documents --no-recurse \
       --json-output "$listing" >/dev/null; then
@@ -2954,7 +2960,7 @@ capture_clear_only_capture_artifact() {
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
 
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3049,7 +3055,7 @@ capture_shading_prototype_tile_artifact() {
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
 
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3147,7 +3153,7 @@ capture_shading_prototype_forward_artifact() {
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
 
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3244,7 +3250,7 @@ capture_shading_prototype_forward_saves() {
   [[ "$phase" == before || "$phase" == after ]] || return 1
   ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3439,7 +3445,7 @@ capture_id3_save_preflight() {
   local slot destination manifest="$WORK/id3-protected-before.sha256"
 
   [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3534,7 +3540,7 @@ capture_id3_save_postflight_raw() {
   ((ID3_DESTINATION_EXISTED == 0 || ID3_DESTINATION_RESTORED == 0)) || return 1
   rm -f "$listing" "$manifest" "$WORK/save_slot_20.sav" \
     "$WORK"/id3-after-save_slot_*.sav
-  xcrun devicectl device info files --device "$DEVICE" \
+  run_bounded_device_file_query --device "$DEVICE" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
