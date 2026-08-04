@@ -219,12 +219,10 @@ if group_exists() and not terminate_group():
 raise SystemExit(returncode)
 PY
 }
-
 run_bounded_device_file_query() {
   run_bounded_command "$DEVICECTL_FILE_QUERY_TIMEOUT_SECONDS" \
     xcrun devicectl device info files "$@"
 }
-
 secure_private_evidence() {
   local directory="$1"
 
@@ -5628,9 +5626,7 @@ summary.write_text(
 PY
   fail "runtime compilation counter evidence is incomplete or inconsistent"
 if [[ "$SCENARIO" != new-game || -z "$PIPELINE_ARCHIVE_TEST_MODE" ]]; then
-  rg 'RendererIOS native Landscape: .*draws=[1-9][0-9]* textured=[1-9][0-9]*' \
-    "$WORK/log.txt" >/dev/null ||
-    fail "no native textured Landscape frame was proven"
+  python3 "$ROOT/ios/device-test/validate-native-textured-draw-log.py" --log "$WORK/log.txt" >/dev/null || fail "no native textured draw was proven"
 fi
 if rg -i 'RendererIOS (fatal|GPU shutdown failed|native Landscape encode failed|IOSGPUScene metallib loading failed)|libc\\+\\+abi: terminating|SIGABRT' \
     "$WORK/log.txt" "$WORK/stderr.log" >/dev/null 2>&1; then
