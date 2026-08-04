@@ -850,6 +850,7 @@ IOSGPUSceneMeshCandidate validCandidate() {
   source.material.id           = source.entity.material;
   source.material.category     = IOSMaterialCategory::Opaque;
   source.material.baseColor    = {0.25f,0.5f,0.75f,1.f};
+  source.material.uvOffset     = {0.125f,-0.25f};
   source.material.baseColorTexture = {source.snapshotGeneration,4};
   source.hasMaterial           = true;
   source.hasTexture            = true;
@@ -1093,10 +1094,136 @@ void testFrameAnimationDownstreamEvidence() {
   assert(worstPrimary.length<=254u && worstDetail.length<=254u);
   }
 
+IOSUVAnimationEvidence uvAnimationEvidence() {
+  const IOSWorldGeneration generation = {7u};
+  IOSUVAnimationEvidence evidence;
+  evidence.selections = {
+    {20u,IOSSceneTextureAnimationMode::FrameAndUv,3u,
+     {generation,22u},{-0.5f,0.25f}},
+    {10u,IOSSceneTextureAnimationMode::UvOnly,0u,
+     {generation,11u},{0.125f,0.f}},
+    };
+  assert(finalizeIOSUVAnimationEvidence(evidence));
+  return evidence;
+  }
+
+IOSGPUSceneDrawPlan uvAnimationPlan(
+    IOSTextureHandle texture, IOSFloat2 offset) {
+  IOSGPUSceneDrawPlan plan;
+  plan.baseColorTexture = texture;
+  plan.constants.uvOffset = offset;
+  return plan;
+  }
+
+void testUVAnimationDownstreamEvidence() {
+  const IOSWorldGeneration generation = {7u};
+  const auto evidence = uvAnimationEvidence();
+  assert(evidence.admittedUvOnly==1u);
+  assert(evidence.admittedFrameAndUv==1u);
+
+  IOSUVAnimationEvidence emptyEvidence;
+  assert(finalizeIOSUVAnimationEvidence(emptyEvidence));
+  IOSGPUSceneUVAnimationTracker emptyTracker;
+  assert(prepareIOSGPUSceneUVAnimationTracker(
+      emptyEvidence,generation,emptyTracker));
+  IOSGPUSceneUVAnimationDrawReport emptyReport;
+  assert(finalizeIOSGPUSceneUVAnimationDrawReport(
+      emptyTracker,emptyReport));
+  assert(emptyReport.valid && emptyReport.encodedCount==0u);
+  assert(emptyReport.encodedTextureDigest==IOSUVAnimationFNV1aOffset);
+  assert(emptyReport.encodedUVDigest==IOSUVAnimationFNV1aOffset);
+
+  IOSGPUSceneUVAnimationTracker rejected;
+  assert(!prepareIOSGPUSceneUVAnimationTracker(
+      evidence,{8u},rejected));
+  auto duplicateHandle = evidence;
+  duplicateHandle.selections[1].selectedHandle =
+      duplicateHandle.selections[0].selectedHandle;
+  assert(!prepareIOSGPUSceneUVAnimationTracker(
+      duplicateHandle,generation,rejected));
+
+  IOSGPUSceneUVAnimationTracker missing;
+  assert(prepareIOSGPUSceneUVAnimationTracker(
+      evidence,generation,missing));
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      missing,uvAnimationPlan({generation,99u},{0.f,0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::IgnoredStatic);
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      missing,uvAnimationPlan({generation,11u},{0.125f,0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::RecordedUvOnly);
+  IOSGPUSceneUVAnimationDrawReport unchanged;
+  unchanged.valid = true;
+  unchanged.encodedCount = 99u;
+  const auto unchangedBefore = unchanged;
+  assert(!finalizeIOSGPUSceneUVAnimationDrawReport(missing,unchanged));
+  assert(unchanged==unchangedBefore);
+
+  IOSGPUSceneUVAnimationTracker mismatch;
+  assert(prepareIOSGPUSceneUVAnimationTracker(
+      evidence,generation,mismatch));
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      mismatch,
+      uvAnimationPlan(
+          {generation,11u},{std::nextafter(0.125f,1.f),0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::InvalidEvidence);
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      mismatch,
+      uvAnimationPlan(
+          {generation,11u},
+          {0.125f,std::numeric_limits<float>::infinity()}))==
+      IOSGPUSceneUVAnimationRecordResult::InvalidEvidence);
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      mismatch,
+      uvAnimationPlan({generation,11u},{0.125f,-0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::InvalidEvidence);
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      mismatch,uvAnimationPlan({generation,22u},{0.125f,0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::InvalidEvidence);
+
+  IOSGPUSceneUVAnimationTracker complete;
+  assert(prepareIOSGPUSceneUVAnimationTracker(
+      evidence,generation,complete));
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      complete,uvAnimationPlan({generation,22u},{-0.5f,0.25f}))==
+      IOSGPUSceneUVAnimationRecordResult::RecordedFrameAndUv);
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      complete,uvAnimationPlan({generation,11u},{0.125f,0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::RecordedUvOnly);
+  assert(recordIOSGPUSceneUVAnimationDraw(
+      complete,uvAnimationPlan({generation,11u},{0.125f,0.f}))==
+      IOSGPUSceneUVAnimationRecordResult::DuplicateAnimated);
+
+  IOSGPUSceneUVAnimationDrawReport encoded;
+  assert(finalizeIOSGPUSceneUVAnimationDrawReport(complete,encoded));
+  assert(encoded.valid);
+  assert(encoded.drawnUvOnly==1u);
+  assert(encoded.drawnFrameAndUv==1u);
+  assert(encoded.encodedCount==2u);
+  assert(encoded.encodedEntries==evidence.selections);
+  assert(encoded.encodedEntries[0].sourceId==10u);
+  assert(encoded.encodedEntries[1].sourceId==20u);
+  assert(encoded.encodedTextureDigest==
+         evidence.textureSelectionDigest);
+  assert(encoded.encodedUVDigest==evidence.plannedUVDigest);
+
+  auto corrupted = complete;
+  corrupted.actuallyEncodedOffsets[0].x = 0.25f;
+  IOSGPUSceneUVAnimationDrawReport corruptedReport;
+  assert(!finalizeIOSGPUSceneUVAnimationDrawReport(
+      corrupted,corruptedReport));
+  assert(!corruptedReport.valid);
+  corrupted = complete;
+  corrupted.actuallyEncodedHandles[0].value = 99u;
+  assert(!finalizeIOSGPUSceneUVAnimationDrawReport(
+      corrupted,corruptedReport));
+  assert(!corruptedReport.valid);
+  }
+
 }
 
 int main() {
   testFrameAnimationDownstreamEvidence();
+  testUVAnimationDownstreamEvidence();
   IOSCameraState camera;
   camera.viewProjection.set(1u,2u,3.f);
 
@@ -1269,6 +1396,7 @@ int main() {
     assert(plan.constants.viewProjection.at(1u,2u)==3.f);
     assert(plan.constants.model==movableT1());
     assert(plan.constants.baseColor==source.material.baseColor);
+    assert(plan.constants.uvOffset==source.material.uvOffset);
     assert(plan.baseColorTexture==source.material.baseColorTexture);
     assert(plan.materialCategory==IOSMaterialCategory::Opaque);
     assert(plan.kind==IOSSceneMeshKind::Movable);
@@ -1628,12 +1756,14 @@ int main() {
     plan.indexBufferOffset = 99u;
     plan.indexCount        = 88u;
     plan.constants.baseColor = {1.f,1.f,1.f,1.f};
+    plan.constants.uvOffset = {1.f,1.f};
     source.hasMesh = false;
     assert(planIOSGPUSceneDraw(camera,source,plan)==
            IOSGPUSceneDrawPlanResult::MissingMesh);
     assert(plan.indexBufferOffset==0u);
     assert(plan.indexCount==0u);
     assert(plan.constants.baseColor==IOSFloat4{});
+    assert(plan.constants.uvOffset==IOSFloat2{});
     assert(plan.baseColorTexture==IOSTextureHandle{});
     assert(plan.materialCategory==IOSMaterialCategory::Opaque);
     assert(plan.kind==IOSSceneMeshKind::Unsupported);
@@ -1667,6 +1797,20 @@ int main() {
     IOSGPUSceneDrawPlan plan;
     assert(planIOSGPUSceneDraw(camera,source,plan)==
            IOSGPUSceneDrawPlanResult::InvalidMesh);
+  }
+
+  for(const bool invalidateX:{false,true}) {
+    auto source = validCandidate();
+    if(invalidateX)
+      source.material.uvOffset.x =
+          std::numeric_limits<float>::quiet_NaN();
+    else
+      source.material.uvOffset.y =
+          std::numeric_limits<float>::infinity();
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::InvalidMesh);
+    assert(plan.constants.uvOffset==IOSFloat2{});
   }
 
   {

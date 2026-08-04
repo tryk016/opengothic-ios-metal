@@ -136,6 +136,7 @@ IOSSceneFrameState movableFrame(const SceneHandles& handles,
   material.baseColorTexture = handles.texture;
   material.usesFallbackTexture = plan.usesFallbackTexture;
   material.category         = plan.materialCategory;
+  material.uvOffset         = plan.uvOffset;
   frame.materials.push_back(material);
 
   IOSRenderEntityState entity;
@@ -500,6 +501,19 @@ int main() {
     (void)invalidWorld.buildSnapshot(std::move(nonFinite));
     }));
 
+  auto nonFiniteUV = populatedFrame(invalidHandles,1.f,1.f);
+  nonFiniteUV.materials[0].uvOffset.x =
+      std::numeric_limits<float>::quiet_NaN();
+  assert(rejectsFrame([&]() {
+    (void)invalidWorld.buildSnapshot(std::move(nonFiniteUV));
+    }));
+
+  auto negativeZeroUV = populatedFrame(invalidHandles,1.f,1.f);
+  negativeZeroUV.materials[0].uvOffset.y = -0.f;
+  assert(rejectsFrame([&]() {
+    (void)invalidWorld.buildSnapshot(std::move(negativeZeroUV));
+    }));
+
   auto foreignTexture = populatedFrame(invalidHandles,1.f,1.f);
   foreignTexture.materials[0].baseColorTexture =
     secondWorld.resolveTexture(3000u);
@@ -520,6 +534,12 @@ int main() {
     invalidWorld.buildSnapshot(populatedFrame(invalidHandles,1.f,1.f));
   assert(firstValidAfterRejects->sequence.value==1u);
   assert(firstValidAfterRejects->isStructurallyValid());
+
+  auto uvFrame = populatedFrame(invalidHandles,1.f,1.f);
+  uvFrame.materials[0].uvOffset = {0.25f,-0.5f};
+  const auto uvSnapshot = invalidWorld.buildSnapshot(std::move(uvFrame));
+  assert(uvSnapshot->isStructurallyValid());
+  assert((uvSnapshot->materials[0].uvOffset==IOSFloat2{0.25f,-0.5f}));
 
   for(const auto kind:{
         IOSSceneMeshKind::Landscape,

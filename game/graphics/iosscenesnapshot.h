@@ -259,6 +259,7 @@ struct IOSMaterial final {
   IOSTextureHandle   normalTexture;
   IOSTextureHandle   emissiveTexture;
   IOSFloat4          baseColor = {1.f,1.f,1.f,1.f};
+  IOSFloat2          uvOffset;
   IOSFloat3          emissive;
   float              roughness  = 1.f;
   float              metallic   = 0.f;

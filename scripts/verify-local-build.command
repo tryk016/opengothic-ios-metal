@@ -273,6 +273,27 @@ xcrun clang++ -std=c++20 \
   -o "$TMP_GATE/iossceneextractorplan"
 codesign -f -s - "$TMP_GATE/iossceneextractorplan"
 "$TMP_GATE/iossceneextractorplan"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=address -fno-omit-frame-pointer \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  ios/tests/iossceneextractorplan.cpp \
+  -o "$TMP_GATE/iossceneextractorplan-asan"
+codesign -f -s - "$TMP_GATE/iossceneextractorplan-asan"
+"$TMP_GATE/iossceneextractorplan-asan"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=undefined -fno-sanitize-recover=undefined \
+  -fno-omit-frame-pointer \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  ios/tests/iossceneextractorplan.cpp \
+  -o "$TMP_GATE/iossceneextractorplan-ubsan"
+codesign -f -s - "$TMP_GATE/iossceneextractorplan-ubsan"
+"$TMP_GATE/iossceneextractorplan-ubsan"
 [ -x scripts/validate-scene-source-census-log.py ]
 PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/validate-scene-source-census-log.py --self-test
@@ -280,10 +301,13 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 [ -x scripts/test-p21d2-frame-animation-vertical.py ]
 [ -x scripts/test-p21d2-frame-animation-device-parser.py ]
 [ -x ios/device-test/validate-frame-animation-log.py ]
+[ -x ios/device-test/validate-uv-animation-log.py ]
 PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/test-p21d2-frame-animation-vertical.py
 PYTHONDONTWRITEBYTECODE=1 python3 \
   scripts/test-p21d2-frame-animation-device-parser.py
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/device-test/validate-uv-animation-log.py --self-test
 if grep -Eq 'DrawCommands|DrawBuckets|cmdId|clusterId|std::function' \
     game/graphics/iossceneextractorplan.h \
     game/graphics/iossceneextractor.h; then
@@ -459,6 +483,7 @@ paths = {
     path: Path(path).read_text()
     for path in (
         "game/graphics/iossceneextractorplan.h",
+        "game/graphics/iossceneextractor.cpp",
         "game/graphics/iosscenesnapshot.cpp",
         "game/graphics/iosgpusceneplan.h",
         "game/graphics/iosgpuscene.mm",
@@ -470,16 +495,70 @@ required = (
      "game/graphics/iossceneextractorplan.h",
      """source.materialCategory!=IOSMaterialCategory::Opaque &&
      source.materialCategory!=IOSMaterialCategory::AlphaTest"""),
+    ("extractor-uv-period-provenance",
+     "game/graphics/iossceneextractorplan.h",
+     """const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
+  if(source.hasUvAnimation!=periodsHaveUv)
+    return IOSSceneSourcePlanResult::InvalidSource;"""),
+    ("extractor-uv-only-texture-provenance",
+     "game/graphics/iossceneextractorplan.h",
+     """if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&
+     (!source.hasBaseColorTexture || source.usesFallbackTexture))
+    return IOSSceneSourcePlanResult::InvalidSource;"""),
+    ("extractor-frame-and-uv-texture-provenance",
+     "game/graphics/iossceneextractorplan.h",
+     """if(textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv &&
+     (!source.hasValidFrameSequence || source.usesFallbackTexture))
+    return IOSSceneSourcePlanResult::InvalidSource;"""),
     ("extractor-alpha-texture-provenance",
      "game/graphics/iossceneextractorplan.h",
-     """source.materialCategory==IOSMaterialCategory::AlphaTest &&
+     """const bool selectsFrame =
+      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv;
+  if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
      ((!source.hasBaseColorTexture &&
-       textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly) ||
-      source.usesFallbackTexture)"""),
-    ("extractor-animation-rejection",
+       !selectsFrame) ||
+      source.usesFallbackTexture))"""),
+    ("extractor-uv-evaluation",
      "game/graphics/iossceneextractorplan.h",
-     """textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
-     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv"""),
+     """if((textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) &&
+     evaluateIOSSceneUVOffset(
+         source.sceneTimeMs,source.uvPeriodX,source.uvPeriodY,
+         uvOffset)!=IOSSceneUVOffsetResult::Evaluated)
+    return IOSSceneSourcePlanResult::InvalidSource;"""),
+    ("extractor-uv-plan-publication",
+     "game/graphics/iossceneextractorplan.h",
+     """out.uvPeriodX         = source.uvPeriodX;
+  out.uvPeriodY         = source.uvPeriodY;
+  out.uvOffset          = uvOffset;"""),
+    ("extractor-animation-sidecar-partition",
+     "game/graphics/iossceneextractor.cpp",
+     """if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly)
+    context.report.frameAnimation.selections.push_back(
+        {plan.textureStableKey,plan.frameOrdinal,texture});
+  else if(plan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+          plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
+    context.report.uvAnimation.selections.push_back(
+        {plan.textureStableKey,plan.textureAnimation,plan.frameOrdinal,
+         texture,plan.uvOffset});"""),
+    ("extractor-snapshot-uv-publication",
+     "game/graphics/iossceneextractor.cpp",
+     "materialRecord.uvOffset         = plan.uvOffset;"),
+    ("extractor-uv-sidecar-validation",
+     "game/graphics/iossceneextractor.cpp",
+     """!finalizeIOSUVAnimationEvidence(context.report.uvAnimation) ||
+     context.report.uvAnimation.admittedUvOnly!=
+         context.report.stats.admittedUvOnly ||
+     context.report.uvAnimation.admittedFrameAndUv!=
+         context.report.stats.admittedFrameAndUv ||
+     context.report.uvAnimation.plannedCount!=
+         context.report.stats.admittedUvOnly+
+             context.report.stats.admittedFrameAndUv) {
+    (void)recordIOSSceneInvalidSource(context.report.stats);
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }"""),
     ("snapshot-alpha-category",
      "game/graphics/iosscenesnapshot.cpp",
      """case IOSMaterialCategory::AlphaTest:
@@ -713,6 +792,8 @@ grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
 [ -f shader/ios-metal/inventory.metal ]
 [ -f shader/ios-metal/shading-prototypes.metal ]
 [ -f ios/tests/iosgpusceneplan.cpp ]
+[ -f game/graphics/iosuvanimationdiagnostics.h ]
+[ -f ios/tests/iosuvanimationdiagnostics.cpp ]
 [ -f ios/tests/ioslandscapeshader.cpp ]
 [ -f ios/tests/iosbuiltinshader.cpp ]
 [ -f ios/tests/iosinventoryshader.cpp ]
@@ -741,6 +822,27 @@ xcrun clang++ -std=c++20 \
   -o "$TMP_GATE/iosgpusceneplan"
 codesign -f -s - "$TMP_GATE/iosgpusceneplan"
 "$TMP_GATE/iosgpusceneplan"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -Igame ios/tests/iosuvanimationdiagnostics.cpp \
+  -o "$TMP_GATE/iosuvanimationdiagnostics"
+codesign -f -s - "$TMP_GATE/iosuvanimationdiagnostics"
+"$TMP_GATE/iosuvanimationdiagnostics"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=address -fno-omit-frame-pointer \
+  -Igame ios/tests/iosuvanimationdiagnostics.cpp \
+  -o "$TMP_GATE/iosuvanimationdiagnostics-asan"
+codesign -f -s - "$TMP_GATE/iosuvanimationdiagnostics-asan"
+"$TMP_GATE/iosuvanimationdiagnostics-asan"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=undefined -fno-sanitize-recover=undefined \
+  -fno-omit-frame-pointer \
+  -Igame ios/tests/iosuvanimationdiagnostics.cpp \
+  -o "$TMP_GATE/iosuvanimationdiagnostics-ubsan"
+codesign -f -s - "$TMP_GATE/iosuvanimationdiagnostics-ubsan"
+"$TMP_GATE/iosuvanimationdiagnostics-ubsan"
 echo "### P2.1c3b3a causal NONE/A/B/HOST_TEST strict and sanitizers"
 causal_host_variants=(
   none
@@ -775,13 +877,23 @@ for causal_variant in "${causal_host_variants[@]}"; do
   "$TMP_GATE/iosgpusceneplan-$causal_variant"
   xcrun clang++ -std=c++20 \
     -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-    -fsanitize=address,undefined -fno-omit-frame-pointer \
+    -fsanitize=address -fno-omit-frame-pointer \
     "$@" \
     -Igame \
     ios/tests/iosgpusceneplan.cpp \
-    -o "$TMP_GATE/iosgpusceneplan-$causal_variant-sanitized"
-  codesign -f -s - "$TMP_GATE/iosgpusceneplan-$causal_variant-sanitized"
-  "$TMP_GATE/iosgpusceneplan-$causal_variant-sanitized"
+    -o "$TMP_GATE/iosgpusceneplan-$causal_variant-asan"
+  codesign -f -s - "$TMP_GATE/iosgpusceneplan-$causal_variant-asan"
+  "$TMP_GATE/iosgpusceneplan-$causal_variant-asan"
+  xcrun clang++ -std=c++20 \
+    -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+    -fsanitize=undefined -fno-sanitize-recover=undefined \
+    -fno-omit-frame-pointer \
+    "$@" \
+    -Igame \
+    ios/tests/iosgpusceneplan.cpp \
+    -o "$TMP_GATE/iosgpusceneplan-$causal_variant-ubsan"
+  codesign -f -s - "$TMP_GATE/iosgpusceneplan-$causal_variant-ubsan"
+  "$TMP_GATE/iosgpusceneplan-$causal_variant-ubsan"
 done
 for causal_conflict in a-b a-host b-host; do
   causal_conflict_definitions=()
@@ -1398,12 +1510,22 @@ codesign -f -s - "$TMP_GATE/ioslandscapeshader"
 "$TMP_GATE/ioslandscapeshader" shader/ios-metal/landscape.metal "$REPO"
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  -fsanitize=address -fno-omit-frame-pointer \
   -Igame \
   ios/tests/ioslandscapeshader.cpp \
-  -o "$TMP_GATE/ioslandscapeshader-sanitized"
-codesign -f -s - "$TMP_GATE/ioslandscapeshader-sanitized"
-"$TMP_GATE/ioslandscapeshader-sanitized" \
+  -o "$TMP_GATE/ioslandscapeshader-asan"
+codesign -f -s - "$TMP_GATE/ioslandscapeshader-asan"
+"$TMP_GATE/ioslandscapeshader-asan" \
+  shader/ios-metal/landscape.metal "$REPO"
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=undefined -fno-sanitize-recover=undefined \
+  -fno-omit-frame-pointer \
+  -Igame \
+  ios/tests/ioslandscapeshader.cpp \
+  -o "$TMP_GATE/ioslandscapeshader-ubsan"
+codesign -f -s - "$TMP_GATE/ioslandscapeshader-ubsan"
+"$TMP_GATE/ioslandscapeshader-ubsan" \
   shader/ios-metal/landscape.metal "$REPO"
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
@@ -1525,7 +1647,7 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 16-export ABI6"
+  fail "RendererIOS.metallib nie ma exact 16-export ABI7"
 [ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 16 ] ||
   fail "RendererIOS.metallib export count nie wynosi 16"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
@@ -1880,7 +2002,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -2616,7 +2738,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

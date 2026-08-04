@@ -4,6 +4,7 @@
 #include "iossceneextractorplan.h"
 #include "iosscenesource.h"
 #include "iosframeanimationevidence.h"
+#include "iosuvanimationevidence.h"
 #include "material.h"
 
 #include <cstddef>
@@ -97,6 +98,8 @@ struct IOSSceneExtractionStats final {
   std::size_t skippedTextureUvOnly = 0;
   std::size_t skippedTextureFrameAndUv = 0;
   std::size_t admittedFrameOnly = 0;
+  std::size_t admittedUvOnly = 0;
+  std::size_t admittedFrameAndUv = 0;
   std::size_t nonzeroFrameOrdinals = 0;
   std::size_t fallbackTexture = 0;
   std::size_t alphaFallback = 0;
@@ -146,13 +149,23 @@ struct IOSSceneExtractionStats final {
         addIOSSceneCounter(
             uvAnimationTotal,skippedTextureFrameAndUv);
     const bool admittedFrameTotalValid =
-        addIOSSceneCounter(frameAnimationTotal,admittedFrameOnly);
+        addIOSSceneCounter(frameAnimationTotal,admittedFrameOnly) &&
+        addIOSSceneCounter(frameAnimationTotal,admittedFrameAndUv);
+    const bool admittedUvTotalValid =
+        addIOSSceneCounter(uvAnimationTotal,admittedUvOnly) &&
+        addIOSSceneCounter(uvAnimationTotal,admittedFrameAndUv);
+    std::size_t admittedAnimationTotal = 0;
+    const bool admittedTotalValid =
+        addIOSSceneCounter(admittedAnimationTotal,admittedFrameOnly) &&
+        addIOSSceneCounter(admittedAnimationTotal,admittedUvOnly) &&
+        addIOSSceneCounter(admittedAnimationTotal,admittedFrameAndUv);
     return totalValid && frameTotalValid && uvTotalValid &&
-        admittedFrameTotalValid &&
+        admittedFrameTotalValid && admittedUvTotalValid &&
+        admittedTotalValid &&
         textureAnimationTotal==skippedTextureAnimation &&
         frameAnimationTotal<=census.frameAnimated &&
         uvAnimationTotal<=census.uvAnimated &&
-        admittedFrameOnly<=planned &&
+        admittedAnimationTotal<=planned &&
         nonzeroFrameOrdinals<=admittedFrameOnly;
     }
 
@@ -200,6 +213,7 @@ struct IOSSceneExtractionReport final {
   IOSSceneExtractionStats  stats;
   std::optional<IOSSceneAssetBindResult> bindFailure;
   IOSFrameAnimationEvidence frameAnimation;
+  IOSUVAnimationEvidence    uvAnimation;
   };
 
 struct IOSSceneMaterialMapping final {
@@ -257,7 +271,8 @@ inline IOSSceneExtractionResult selectIOSSceneFrameTextureForExtraction(
     const IOSSceneOpaqueMeshPlan& plan,
     const Tempest::Texture2d*& outTexture) noexcept {
   if(source==nullptr ||
-     plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly ||
+     (plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly &&
+      plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameAndUv) ||
      plan.frameOrdinal>=static_cast<uint64_t>(source->frames.size()))
     return IOSSceneExtractionResult::InvalidSource;
   const auto* selected =
@@ -266,6 +281,15 @@ inline IOSSceneExtractionResult selectIOSSceneFrameTextureForExtraction(
     return IOSSceneExtractionResult::InvalidSource;
   outTexture = selected;
   return IOSSceneExtractionResult::Success;
+  }
+
+inline bool hasValidIOSSceneFrameSequence(const Material* source) noexcept {
+  if(source==nullptr || source->frames.empty())
+    return false;
+  for(const auto* frame:source->frames)
+    if(frame==nullptr)
+      return false;
+  return true;
   }
 
 inline bool recordIOSSceneInvalidSource(
@@ -422,17 +446,33 @@ inline bool recordIOSScenePlanResult(
         return recordIOSSceneInvalidSource(stats);
       switch(textureAnimation) {
         case IOSSceneTextureAnimationMode::None:
-          if(plan.frameOrdinal!=0)
+          if(plan.frameOrdinal!=0 || plan.uvPeriodX!=0 ||
+             plan.uvPeriodY!=0 || plan.uvOffset!=IOSFloat2{})
             return recordIOSSceneInvalidSource(stats);
           break;
         case IOSSceneTextureAnimationMode::FrameOnly:
-          if(!incrementIOSSceneCounter(next.admittedFrameOnly) ||
+          if(plan.uvPeriodX!=0 || plan.uvPeriodY!=0 ||
+             plan.uvOffset!=IOSFloat2{} ||
+             !incrementIOSSceneCounter(next.admittedFrameOnly) ||
              (plan.frameOrdinal!=0 &&
               !incrementIOSSceneCounter(next.nonzeroFrameOrdinals)))
             return recordIOSSceneInvalidSource(stats);
           break;
         case IOSSceneTextureAnimationMode::UvOnly:
+          if(plan.frameOrdinal!=0 || plan.usesFallbackTexture ||
+             (plan.uvPeriodX==0 && plan.uvPeriodY==0) ||
+             !isCanonicalIOSUVAnimationOffset(plan.uvOffset) ||
+             !incrementIOSSceneCounter(next.admittedUvOnly))
+            return recordIOSSceneInvalidSource(stats);
+          break;
         case IOSSceneTextureAnimationMode::FrameAndUv:
+          if(plan.usesFallbackTexture ||
+             (plan.uvPeriodX==0 && plan.uvPeriodY==0) ||
+             !isCanonicalIOSUVAnimationOffset(plan.uvOffset) ||
+             !incrementIOSSceneCounter(next.admittedFrameAndUv))
+            return recordIOSSceneInvalidSource(stats);
+          break;
+        default:
           return recordIOSSceneInvalidSource(stats);
         }
       if(!next.hasConsistentPlannedCounts() ||

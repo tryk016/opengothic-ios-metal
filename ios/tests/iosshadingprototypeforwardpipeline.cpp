@@ -415,7 +415,7 @@ int main() {
   using namespace RendererIOSShadingPrototypeForwardPipeline;
 
   static_assert(ContractVersion==1u);
-  static_assert(OfflineMetallibAbi==6u);
+  static_assert(OfflineMetallibAbi==7u);
   static_assert(MinimumAppleGPUFamily==4u);
   static_assert(ResolvedFunctionCount==3u);
   static_assert(SpecializationCount==2u);

@@ -8,10 +8,17 @@
 
 #include <Tempest/Device>
 
+#include <cstdint>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace {
+
+using MaterialUVPeriod = std::remove_cvref_t<decltype(
+    std::declval<Material>().texAniMapDirPeriod.x)>;
+static_assert(std::is_signed_v<MaterialUVPeriod>);
+static_assert(sizeof(MaterialUVPeriod)==sizeof(int32_t));
 
 struct ExtractionContext final {
   const Tempest::Device* device = nullptr;
@@ -75,6 +82,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       !candidate.hasBaseColorTexture;
   candidate.hasFrameAnimation = hasFrameAnimation;
   candidate.hasUvAnimation = hasUvAnimation;
+  candidate.hasValidFrameSequence =
+      hasFrameAnimation && hasValidIOSSceneFrameSequence(source.material);
   candidate.sceneTimeMs = context.sceneTimeMs;
   candidate.frameCount = source.material!=nullptr
       ? static_cast<uint64_t>(source.material->frames.size())
@@ -82,6 +91,12 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.framePeriodMs = source.material!=nullptr
       ? source.material->texAniFPSInv
       : 0u;
+  candidate.uvPeriodX = source.material!=nullptr
+      ? static_cast<int32_t>(source.material->texAniMapDirPeriod.x)
+      : 0;
+  candidate.uvPeriodY = source.material!=nullptr
+      ? static_cast<int32_t>(source.material->texAniMapDirPeriod.y)
+      : 0;
   candidate.hasLocalBounds = source.hasLocalBounds;
   candidate.transform      = IOSSceneConversion::matrix(source.transform);
   candidate.localBounds    = bounds(source);
@@ -106,7 +121,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
     }
 
   const Tempest::Texture2d* selectedTexture = nullptr;
-  if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly) {
+  if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+     plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) {
     if(selectIOSSceneFrameTextureForExtraction(
            source.material,plan,selectedTexture)!=
        IOSSceneExtractionResult::Success) {
@@ -123,7 +139,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   const IOSMaterialHandle material =
       context.renderWorld->resolveMaterial(plan.materialStableKey);
   const IOSTextureHandle texture =
-      plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly
+      plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+      plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv
         ? context.renderWorld->resolveFrameTexture(
               plan.textureStableKey,plan.frameOrdinal)
         : context.renderWorld->resolveTexture(plan.textureStableKey);
@@ -160,12 +177,18 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly)
     context.report.frameAnimation.selections.push_back(
         {plan.textureStableKey,plan.frameOrdinal,texture});
+  else if(plan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+          plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
+    context.report.uvAnimation.selections.push_back(
+        {plan.textureStableKey,plan.textureAnimation,plan.frameOrdinal,
+         texture,plan.uvOffset});
 
   IOSMaterial materialRecord;
   materialRecord.id               = material;
   materialRecord.baseColorTexture = texture;
   materialRecord.usesFallbackTexture = plan.usesFallbackTexture;
   materialRecord.category         = plan.materialCategory;
+  materialRecord.uvOffset         = plan.uvOffset;
   context.staging.materials.push_back(materialRecord);
 
   IOSRenderEntityState entityRecord;
@@ -225,7 +248,15 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
      context.report.frameAnimation.admittedFrameOnly!=
          context.report.stats.admittedFrameOnly ||
      context.report.frameAnimation.nonzeroFrameOrdinals!=
-         context.report.stats.nonzeroFrameOrdinals) {
+         context.report.stats.nonzeroFrameOrdinals ||
+     !finalizeIOSUVAnimationEvidence(context.report.uvAnimation) ||
+     context.report.uvAnimation.admittedUvOnly!=
+         context.report.stats.admittedUvOnly ||
+     context.report.uvAnimation.admittedFrameAndUv!=
+         context.report.stats.admittedFrameAndUv ||
+     context.report.uvAnimation.plannedCount!=
+         context.report.stats.admittedUvOnly+
+             context.report.stats.admittedFrameAndUv) {
     (void)recordIOSSceneInvalidSource(context.report.stats);
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return context.report;

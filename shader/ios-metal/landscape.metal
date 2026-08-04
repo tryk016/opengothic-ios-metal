@@ -5,6 +5,7 @@ struct IOSLandscapeDrawConstants {
   float4x4 viewProjection;
   float4x4 model;
   float4   baseColor;
+  float2   uvOffset;
 };
 
 struct IOSLandscapeVertexIn {
@@ -29,7 +30,7 @@ vertex IOSLandscapeVertexOut riosLandscapeVertex(
   clip.y = -clip.y;
   out.position = clip;
   out.color = in.color*draw.baseColor;
-  out.uv = in.uv;
+  out.uv = in.uv + draw.uvOffset;
   return out;
 }
 

@@ -25,6 +25,8 @@ class IOSSceneAssetRegistry;
 class VideoWidget;
 struct IOSFrameAnimationEvidence;
 struct IOSGPUSceneFrameAnimationDrawReport;
+struct IOSGPUSceneUVAnimationDrawReport;
+struct IOSUVAnimationEvidence;
 
 class IOSMetalContext final {
   public:
@@ -38,7 +40,8 @@ class IOSMetalContext final {
       };
 
     using CompleteFrame = bool (*)(
-        void*,bool,const IOSGPUSceneFrameAnimationDrawReport*) noexcept;
+        void*,bool,const IOSGPUSceneFrameAnimationDrawReport*,
+        const IOSGPUSceneUVAnimationDrawReport*) noexcept;
 
     IOSMetalContext(Tempest::Device& device, Tempest::SystemApi::Window* window);
     ~IOSMetalContext();
@@ -61,6 +64,8 @@ class IOSMetalContext final {
                                           const IOSSceneAssetRegistry& assets,
                                           const IOSFrameAnimationEvidence*
                                               frameAnimation,
+                                          const IOSUVAnimationEvidence*
+                                              uvAnimation,
                                           bool forceNativeSceneMarkers,
                                           void* completion,
                                           CompleteFrame completeFrame);

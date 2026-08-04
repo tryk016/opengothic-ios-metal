@@ -28,6 +28,12 @@ bool isFinite(const IOSFloat2& value) noexcept {
   return isFinite(value.x) && isFinite(value.y);
   }
 
+bool isCanonicalUVOffset(const IOSFloat2& value) noexcept {
+  return isFinite(value) &&
+         (value.x!=0.f || !std::signbit(value.x)) &&
+         (value.y!=0.f || !std::signbit(value.y));
+  }
+
 bool isFinite(const IOSFloat3& value) noexcept {
   return isFinite(value.x) && isFinite(value.y) && isFinite(value.z);
   }
@@ -207,7 +213,9 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !validHandle(material.baseColorTexture,generation,true) ||
        !validHandle(material.normalTexture,generation,true) ||
        !validHandle(material.emissiveTexture,generation,true) ||
-       !isFinite(material.baseColor) || !isFinite(material.emissive) ||
+       !isFinite(material.baseColor) ||
+       !isCanonicalUVOffset(material.uvOffset) ||
+       !isFinite(material.emissive) ||
        !isFinite(material.roughness) || !isFinite(material.metallic) ||
        !isFinite(material.alphaCutoff) ||
        material.roughness<0.f || material.roughness>1.f ||

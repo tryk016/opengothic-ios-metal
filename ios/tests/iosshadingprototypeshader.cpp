@@ -492,7 +492,7 @@ void runMutationTests(const std::string& source) {
 
 int main(int argc, char** argv) {
   if(argc!=2 ||
-     RendererIOSShader::AbiVersion!=6u ||
+     RendererIOSShader::AbiVersion!=7u ||
      Prototype::ManifestVersion!=1u)
     return 1;
   std::ifstream input(argv[1],std::ios::binary);

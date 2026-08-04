@@ -27,6 +27,12 @@ enum class IOSSceneFrameSelectionResult : uint8_t {
   InvalidFramePeriod,
   };
 
+enum class IOSSceneUVOffsetResult : uint8_t {
+  Evaluated,
+  InvalidPeriods,
+  NonFinite,
+  };
+
 inline constexpr IOSSceneFrameSelectionResult selectIOSSceneTextureFrame(
     uint64_t sceneTimeMs,
     uint64_t framePeriodMs,
@@ -51,6 +57,40 @@ inline constexpr IOSSceneTextureAnimationMode iosSceneTextureAnimationMode(
       : IOSSceneTextureAnimationMode::None;
   }
 
+inline IOSSceneUVOffsetResult evaluateIOSSceneUVOffset(
+    uint64_t sceneTimeMs,
+    int32_t periodX,
+    int32_t periodY,
+    IOSFloat2& outOffset) noexcept {
+  outOffset = {};
+  if((periodX==0 && periodY==0) ||
+     periodX==std::numeric_limits<int32_t>::min() ||
+     periodY==std::numeric_limits<int32_t>::min())
+    return IOSSceneUVOffsetResult::InvalidPeriods;
+
+  const uint32_t sceneTimeLow = static_cast<uint32_t>(sceneTimeMs);
+  const auto evaluateAxis = [sceneTimeLow](int32_t period) noexcept {
+    if(period==0)
+      return 0.f;
+    const int64_t widened = static_cast<int64_t>(period);
+    const uint32_t magnitude = static_cast<uint32_t>(
+        widened<0 ? -widened : widened);
+    const float value =
+        static_cast<float>(sceneTimeLow%magnitude)/
+        static_cast<float>(period);
+    return value==0.f ? 0.f : value;
+    };
+
+  const IOSFloat2 evaluated = {
+    evaluateAxis(periodX),
+    evaluateAxis(periodY),
+    };
+  if(!std::isfinite(evaluated.x) || !std::isfinite(evaluated.y))
+    return IOSSceneUVOffsetResult::NonFinite;
+  outOffset = evaluated;
+  return IOSSceneUVOffsetResult::Evaluated;
+  }
+
 struct IOSSceneOpaqueMeshCandidate final {
   uint64_t       sourceId = 0;
   IOSSceneMeshKind kind = IOSSceneMeshKind::Unsupported;
@@ -62,9 +102,12 @@ struct IOSSceneOpaqueMeshCandidate final {
   bool           usesFallbackTexture = false;
   bool           hasFrameAnimation = false;
   bool           hasUvAnimation = false;
+  bool           hasValidFrameSequence = false;
   uint64_t       sceneTimeMs = 0;
   uint64_t       frameCount = 0;
   uint64_t       framePeriodMs = 0;
+  int32_t        uvPeriodX = 0;
+  int32_t        uvPeriodY = 0;
   bool           hasLocalBounds = false;
   IOSMatrix4x4   transform;
   IOSBounds      localBounds;
@@ -87,6 +130,9 @@ struct IOSSceneOpaqueMeshPlan final {
   IOSSceneTextureAnimationMode textureAnimation =
       IOSSceneTextureAnimationMode::None;
   uint64_t            frameOrdinal = 0;
+  int32_t             uvPeriodX = 0;
+  int32_t             uvPeriodY = 0;
+  IOSFloat2           uvOffset;
   bool                usesFallbackTexture = false;
   };
 
@@ -116,23 +162,38 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   if(source.materialCategory!=IOSMaterialCategory::Opaque &&
      source.materialCategory!=IOSMaterialCategory::AlphaTest)
     return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
-     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
-    return IOSSceneSourcePlanResult::SkippedTextureAnimation;
+  const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
+  if(source.hasUvAnimation!=periodsHaveUv)
+    return IOSSceneSourcePlanResult::InvalidSource;
+  if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&
+     (!source.hasBaseColorTexture || source.usesFallbackTexture))
+    return IOSSceneSourcePlanResult::InvalidSource;
+  if(textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv &&
+     (!source.hasValidFrameSequence || source.usesFallbackTexture))
+    return IOSSceneSourcePlanResult::InvalidSource;
+  const bool selectsFrame =
+      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv;
   if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
      ((!source.hasBaseColorTexture &&
-       textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly) ||
+       !selectsFrame) ||
       source.usesFallbackTexture))
     return IOSSceneSourcePlanResult::SkippedMaterial;
   uint64_t frameOrdinal = 0;
-  if(textureAnimation==IOSSceneTextureAnimationMode::FrameOnly &&
+  if(selectsFrame &&
      selectIOSSceneTextureFrame(
          source.sceneTimeMs,source.framePeriodMs,source.frameCount,
          frameOrdinal)!=IOSSceneFrameSelectionResult::Selected)
     return IOSSceneSourcePlanResult::InvalidSource;
+  IOSFloat2 uvOffset;
+  if((textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) &&
+     evaluateIOSSceneUVOffset(
+         source.sceneTimeMs,source.uvPeriodX,source.uvPeriodY,
+         uvOffset)!=IOSSceneUVOffsetResult::Evaluated)
+    return IOSSceneSourcePlanResult::InvalidSource;
   const bool hasEffectiveBaseColorTexture =
-      source.hasBaseColorTexture ||
-      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly;
+      source.hasBaseColorTexture || selectsFrame;
   if(source.materialCategory==IOSMaterialCategory::Opaque &&
      hasEffectiveBaseColorTexture==source.usesFallbackTexture)
     return IOSSceneSourcePlanResult::InvalidSource;
@@ -172,6 +233,9 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.visibilityMask    = IOSSceneVisibilityMain;
   out.textureAnimation  = textureAnimation;
   out.frameOrdinal      = frameOrdinal;
+  out.uvPeriodX         = source.uvPeriodX;
+  out.uvPeriodY         = source.uvPeriodY;
+  out.uvOffset          = uvOffset;
   out.usesFallbackTexture = source.usesFallbackTexture;
   return IOSSceneSourcePlanResult::Planned;
   }

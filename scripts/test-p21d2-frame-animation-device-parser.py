@@ -384,6 +384,7 @@ def off_source_errors(renderer: str, generic_smoke: str) -> list[str]:
         "OFF null evidence branch": (
             "#else\n"
             "  const IOSFrameAnimationEvidence* const frameAnimation = nullptr;\n"
+            "  const IOSUVAnimationEvidence* const uvAnimation = nullptr;\n"
             "  const bool forceNativeSceneMarkers = false;\n"
             "#endif"
         ),
@@ -424,6 +425,12 @@ def validate_off_source_oracle() -> None:
             "  const IOSFrameAnimationEvidence* const frameAnimation = nullptr;",
             "  const IOSFrameAnimationEvidence* const frameAnimation = "
             "&impl->preparedFrameAnimation;",
+            1,
+        ),
+        "OFF-forces-UV-evidence": renderer.replace(
+            "  const IOSUVAnimationEvidence* const uvAnimation = nullptr;",
+            "  const IOSUVAnimationEvidence* const uvAnimation = "
+            "&impl->preparedUVAnimation;",
             1,
         ),
         "unguarded-commit": renderer.replace(

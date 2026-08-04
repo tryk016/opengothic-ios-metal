@@ -181,6 +181,16 @@ bool validLandscapeSource(std::string_view rawSource) {
   if(!vertex || !fragment || !alphaTest)
     return false;
 
+  constexpr std::string_view ExpectedDrawConstants = R"(
+struct IOSLandscapeDrawConstants {
+  float4x4 viewProjection;
+  float4x4 model;
+  float4   baseColor;
+  float2   uvOffset;
+})";
+  if(countOccurrences(compact(source),compact(ExpectedDrawConstants))!=1u)
+    return false;
+
   constexpr std::string_view ExpectedVertex = R"(
 vertex IOSLandscapeVertexOut riosLandscapeVertex(
     IOSLandscapeVertexIn in [[stage_in]],
@@ -191,7 +201,7 @@ vertex IOSLandscapeVertexOut riosLandscapeVertex(
   clip.y = -clip.y;
   out.position = clip;
   out.color = in.color*draw.baseColor;
-  out.uv = in.uv;
+  out.uv = in.uv + draw.uvOffset;
   return out;
 })";
   constexpr std::string_view ExpectedFragment = R"(
@@ -262,7 +272,7 @@ bool mutationsAreRejected(const std::string& source) {
       stripComments(source),"fragment",AlphaTestFunctionName);
   if(!alphaTest)
     return false;
-  const std::array<std::string,17> mutations = {
+  const std::array<std::string,19> mutations = {
     eraseAlphaTestFunction(source),
     replaceOnce(source,"    discard_fragment();",""),
     replaceOnce(source,"if(texel.a<0.5)","if(texel.a<=0.5)"),
@@ -304,6 +314,9 @@ bool mutationsAreRejected(const std::string& source) {
     source+"\nnewLibraryWithSource\n",
     source+"\n"+*alphaTest+"\n",
     replaceOnce(source,"clip.y = -clip.y;","clip.y = clip.y;"),
+    replaceOnce(source,"  float2   uvOffset;","  float4   uvOffset;"),
+    replaceOnce(
+        source,"out.uv = in.uv + draw.uvOffset;","out.uv = in.uv;"),
     replaceLastOnce(
         source,
         "return float4(texel.rgb*in.color.rgb,1.0);",
@@ -394,11 +407,91 @@ bool symbolAllowlistMatches(const std::filesystem::path& repository) {
          actualAbiReferences==expectedAbiReferences;
 }
 
+bool runtimeReflectionContractMatches(
+    const std::filesystem::path& repository) {
+  const auto runtime = readFile(
+      repository/"game/graphics/iosgpuscene.mm");
+  if(!runtime)
+    return false;
+  const std::string source = compact(stripComments(*runtime));
+  if(source.empty())
+    return false;
+
+  constexpr std::string_view ReflectionOptions =
+      "options:(MTLPipelineOptionBindingInfo|"
+      "MTLPipelineOptionBufferTypeInfo)";
+  return countOccurrences(source,ReflectionOptions)==2u &&
+      countOccurrences(source,"reflection:&opaquePipelineReflection")==1u &&
+      countOccurrences(source,"reflection:&alphaTestPipelineReflection")==1u &&
+      countOccurrences(
+          source,"drawConstantsReflectionMatches(opaquePipelineReflection)")==
+          1u &&
+      countOccurrences(
+          source,
+          "drawConstantsReflectionMatches(alphaTestPipelineReflection)")==1u &&
+      countOccurrences(source,"binding.index!=NSUInteger(1u)")==1u &&
+      countOccurrences(source,"!binding.used")==1u &&
+      countOccurrences(source,"!binding.argument")==1u &&
+      countOccurrences(source,"binding.type!=MTLBindingTypeBuffer")==1u &&
+      countOccurrences(
+          source,
+          "buffer.bufferDataSize!=sizeof(IOSGPUSceneDrawConstants)")==1u &&
+      countOccurrences(
+          source,
+          "buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants)")==1u;
+}
+
+bool runtimeUVAnimationEvidenceContractMatches(
+    const std::filesystem::path& repository) {
+  const auto sceneRuntime = readFile(
+      repository/"game/graphics/iosgpuscene.mm");
+  const auto contextHeader = readFile(
+      repository/"game/graphics/iosmetalcontext.h");
+  const auto contextRuntime = readFile(
+      repository/"game/graphics/iosmetalcontext.cpp");
+  if(!sceneRuntime || !contextHeader || !contextRuntime)
+    return false;
+  const std::string scene = compact(stripComments(*sceneRuntime));
+  const std::string header = compact(stripComments(*contextHeader));
+  const std::string context = compact(stripComments(*contextRuntime));
+  if(scene.empty() || header.empty() || context.empty())
+    return false;
+
+  return countOccurrences(
+             scene,
+             "recordIOSGPUSceneUVAnimationDraw("
+             "*context.uvAnimation,draw.plan)")==1u &&
+      countOccurrences(
+          scene,
+          "recordIOSGPUSceneUVAnimationDraw("
+          "*context.uvAnimation,plan)")==1u &&
+      countOccurrences(
+          scene,"finalizeIOSGPUSceneUVAnimationDrawReport(")==3u &&
+      countOccurrences(
+          scene,
+          "context.uvAnimation="
+          "trackUVAnimation?&uvAnimationTracker:nullptr;")==1u &&
+      countOccurrences(
+          header,
+          "void*,bool,constIOSGPUSceneFrameAnimationDrawReport*,"
+          "constIOSGPUSceneUVAnimationDrawReport*)noexcept;")==1u &&
+      countOccurrences(
+          context,
+          "completeFrame(completion,false,nullptr,nullptr)")==4u &&
+      countOccurrences(
+          context,"frameAnimation,uvAnimation);")==1u &&
+      countOccurrences(
+          context,"uvAnimationDrawn=report.uvAnimation;")==1u &&
+      countOccurrences(
+          context,
+          "uvAnimationDrawnReady?&uvAnimationDrawn:nullptr")==1u;
+}
+
 }
 
 int main(int argc, char** argv) {
   if(argc!=3 ||
-     RendererIOSShader::AbiVersion!=6u ||
+     RendererIOSShader::AbiVersion!=7u ||
      RendererIOSShader::AlphaTestFragmentFunction!=AlphaTestFunctionName)
     return 1;
 
@@ -409,14 +502,20 @@ int main(int argc, char** argv) {
     return 3;
   if(!mutationsAreRejected(*source))
     return 4;
-  if(!symbolAllowlistMatches(argv[2]))
+  if(!runtimeReflectionContractMatches(argv[2]))
     return 5;
+  if(!runtimeUVAnimationEvidenceContractMatches(argv[2]))
+    return 6;
+  if(!symbolAllowlistMatches(argv[2]))
+    return 7;
 
   static_assert(IOSLandscapeVertexStride==36u);
+  static_assert(sizeof(IOSFloat2)==8u);
   static_assert(offsetof(IOSGPUSceneDrawConstants,viewProjection)==0u);
   static_assert(offsetof(IOSGPUSceneDrawConstants,model)==64u);
   static_assert(offsetof(IOSGPUSceneDrawConstants,baseColor)==128u);
-  static_assert(sizeof(IOSGPUSceneDrawConstants)==144u);
+  static_assert(offsetof(IOSGPUSceneDrawConstants,uvOffset)==144u);
+  static_assert(sizeof(IOSGPUSceneDrawConstants)==160u);
   static_assert(alignof(IOSGPUSceneDrawConstants)==16u);
   return 0;
   }

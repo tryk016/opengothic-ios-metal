@@ -180,6 +180,27 @@ bool validNativeTexture(const IOSSceneTextureAsset& asset,
          texture.pixelFormat==expectedFormat;
   }
 
+bool drawConstantsReflectionMatches(
+    MTLRenderPipelineReflection* reflection) noexcept {
+  if(reflection==nil || reflection.vertexBindings==nil)
+    return false;
+
+  NSUInteger matchingArguments = 0u;
+  for(id<MTLBinding> binding in reflection.vertexBindings) {
+    if(binding.index!=NSUInteger(1u))
+      continue;
+    ++matchingArguments;
+    if(!binding.used || !binding.argument ||
+       binding.type!=MTLBindingTypeBuffer)
+      return false;
+    id<MTLBufferBinding> buffer = (id<MTLBufferBinding>)binding;
+    if(buffer.bufferDataSize!=sizeof(IOSGPUSceneDrawConstants) ||
+       buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants))
+      return false;
+    }
+  return matchingArguments==NSUInteger(1u);
+  }
+
 struct NativeTextureValidationCache final {
   IOSWorldGeneration         generation;
   std::unordered_set<uint64_t> validatedHandles;
@@ -390,6 +411,7 @@ struct IOSGPUScene::Impl final {
     const IOSSceneSnapshot*       snapshot = nullptr;
     const IOSSceneAssetRegistry*  assets = nullptr;
     IOSGPUSceneFrameAnimationTracker* frameAnimation = nullptr;
+    IOSGPUSceneUVAnimationTracker* uvAnimation = nullptr;
     IOSGPUScene::Report           report;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -633,15 +655,28 @@ struct IOSGPUScene::Impl final {
       pipelineDesc.alphaToOneEnabled      = NO;
 
       NSError* opaquePipelineError = nil;
+      MTLRenderPipelineReflection* opaquePipelineReflection = nil;
       OwnedObjectiveC opaquePipelineOwner(
           [device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                               options:(
+              MTLPipelineOptionBindingInfo |
+              MTLPipelineOptionBufferTypeInfo)
+                                            reflection:&opaquePipelineReflection
                                                  error:&opaquePipelineError]);
-      if(opaquePipelineOwner.get()==nil) {
-        Tempest::Log::e(
-          metalFailure(
+      const bool opaqueReflectionMatches =
+          drawConstantsReflectionMatches(opaquePipelineReflection);
+      if(opaquePipelineOwner.get()==nil || !opaqueReflectionMatches) {
+        if(opaquePipelineOwner.get()==nil)
+          Tempest::Log::e(
+            metalFailure(
+                "RendererIOS IOSGPUScene initialization: "
+                "result=pipeline-unavailable reason=opaque-pso",
+                opaquePipelineError));
+        else
+          Tempest::Log::e(
               "RendererIOS IOSGPUScene initialization: "
-              "result=pipeline-unavailable reason=opaque-pso",
-              opaquePipelineError));
+              "result=pipeline-unavailable "
+              "reason=opaque-draw-constants-reflection");
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
         failCausal(
@@ -656,17 +691,29 @@ struct IOSGPUScene::Impl final {
       pipelineDesc.fragmentFunction =
           (id<MTLFunction>)alphaTestFragmentFunction.get();
       NSError* alphaTestPipelineError = nil;
+      MTLRenderPipelineReflection* alphaTestPipelineReflection = nil;
       OwnedObjectiveC alphaTestPipelineOwner(
           [device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                               options:(
+              MTLPipelineOptionBindingInfo |
+              MTLPipelineOptionBufferTypeInfo)
+                                            reflection:&alphaTestPipelineReflection
                                                  error:&alphaTestPipelineError]);
       if(!iosGPUSceneProductionPipelineStatesAreAvailable(
              opaquePipelineOwner.get()!=nil,
-             alphaTestPipelineOwner.get()!=nil)) {
-        Tempest::Log::e(
-          metalFailure(
+             alphaTestPipelineOwner.get()!=nil) ||
+         !drawConstantsReflectionMatches(alphaTestPipelineReflection)) {
+        if(alphaTestPipelineOwner.get()==nil)
+          Tempest::Log::e(
+            metalFailure(
+                "RendererIOS IOSGPUScene initialization: "
+                "result=pipeline-unavailable reason=alpha-test-pso",
+                alphaTestPipelineError));
+        else
+          Tempest::Log::e(
               "RendererIOS IOSGPUScene initialization: "
-              "result=pipeline-unavailable reason=alpha-test-pso",
-              alphaTestPipelineError));
+              "result=pipeline-unavailable "
+              "reason=alpha-test-draw-constants-reflection");
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
         failCausal(
@@ -872,12 +919,38 @@ void IOSGPUScene::Impl::encodeLandscape(
             return;
             }
           }
+        if(context.uvAnimation!=nullptr) {
+          const auto uvAnimationRecorded =
+              recordIOSGPUSceneUVAnimationDraw(
+                  *context.uvAnimation,draw.plan);
+          if(uvAnimationRecorded!=
+                 IOSGPUSceneUVAnimationRecordResult::IgnoredStatic &&
+             uvAnimationRecorded!=
+                 IOSGPUSceneUVAnimationRecordResult::RecordedUvOnly &&
+             uvAnimationRecorded!=
+                 IOSGPUSceneUVAnimationRecordResult::RecordedFrameAndUv) {
+            restoreEncoderState();
+            context.report.result =
+                IOSGPUScene::Result::AnimationEvidenceMismatch;
+            context.report.failingHandle =
+                draw.plan.baseColorTexture.value;
+            return;
+            }
+          }
         }
       restoreEncoderState();
       if(context.frameAnimation!=nullptr &&
          !finalizeIOSGPUSceneFrameAnimationDrawReport(
              *context.frameAnimation,
              context.report.frameAnimation)) {
+        context.report.result =
+            IOSGPUScene::Result::AnimationEvidenceMismatch;
+        return;
+        }
+      if(context.uvAnimation!=nullptr &&
+         !finalizeIOSGPUSceneUVAnimationDrawReport(
+             *context.uvAnimation,
+             context.report.uvAnimation)) {
         context.report.result =
             IOSGPUScene::Result::AnimationEvidenceMismatch;
         return;
@@ -1048,6 +1121,23 @@ void IOSGPUScene::Impl::encodeLandscape(
         return;
         }
       }
+    if(context.uvAnimation!=nullptr) {
+      const auto uvAnimationRecorded =
+          recordIOSGPUSceneUVAnimationDraw(
+              *context.uvAnimation,plan);
+      if(uvAnimationRecorded!=
+             IOSGPUSceneUVAnimationRecordResult::IgnoredStatic &&
+         uvAnimationRecorded!=
+             IOSGPUSceneUVAnimationRecordResult::RecordedUvOnly &&
+         uvAnimationRecorded!=
+             IOSGPUSceneUVAnimationRecordResult::RecordedFrameAndUv) {
+        context.report.result =
+            IOSGPUScene::Result::AnimationEvidenceMismatch;
+        context.report.failingHandle = plan.baseColorTexture.value;
+        restoreEncoderState();
+        return;
+        }
+      }
     context.report.counts = nextCounts;
     context.report.drawCount =
         context.report.counts.drawn.material.total;
@@ -1060,6 +1150,13 @@ void IOSGPUScene::Impl::encodeLandscape(
          context.report.counts,context.report.failures)) {
     context.report.result = IOSGPUScene::Result::CountMismatch;
     recordFailure(context.report.failures.plannedDrawn,context.report);
+    return;
+    }
+  if(context.uvAnimation!=nullptr &&
+     !finalizeIOSGPUSceneUVAnimationDrawReport(
+         *context.uvAnimation,context.report.uvAnimation)) {
+    context.report.result =
+        IOSGPUScene::Result::AnimationEvidenceMismatch;
     return;
     }
   if(context.frameAnimation!=nullptr &&
@@ -1085,7 +1182,8 @@ IOSGPUScene::Report IOSGPUScene::encode(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,
     const IOSSceneSnapshot& snapshot,
     const IOSSceneAssetRegistry& assets,
-    const IOSFrameAnimationEvidence* frameAnimation) noexcept {
+    const IOSFrameAnimationEvidence* frameAnimation,
+    const IOSUVAnimationEvidence* uvAnimation) noexcept {
   Report report = makeReport(Result::NativeEncodingFailed);
   if(impl==nullptr) {
     report.result = Result::PipelineUnavailable;
@@ -1156,6 +1254,12 @@ IOSGPUScene::Report IOSGPUScene::encode(
          *frameAnimation,snapshot.generation,
          frameAnimationTracker))
     return makeReport(Result::AnimationEvidenceMismatch);
+  IOSGPUSceneUVAnimationTracker uvAnimationTracker;
+  const bool trackUVAnimation = uvAnimation!=nullptr;
+  if(trackUVAnimation &&
+     !prepareIOSGPUSceneUVAnimationTracker(
+         *uvAnimation,snapshot.generation,uvAnimationTracker))
+    return makeReport(Result::AnimationEvidenceMismatch);
 
   try {
     for(const auto& entity:snapshot.entities) {
@@ -1215,6 +1319,12 @@ IOSGPUScene::Report IOSGPUScene::encode(
     if(trackFrameAnimation &&
        !finalizeIOSGPUSceneFrameAnimationDrawReport(
            frameAnimationTracker,report.frameAnimation)) {
+      report.result = Result::AnimationEvidenceMismatch;
+      return report;
+      }
+    if(trackUVAnimation &&
+       !finalizeIOSGPUSceneUVAnimationDrawReport(
+           uvAnimationTracker,report.uvAnimation)) {
       report.result = Result::AnimationEvidenceMismatch;
       return report;
       }
@@ -1392,6 +1502,8 @@ IOSGPUScene::Report IOSGPUScene::encode(
   context.assets   = &assets;
   context.frameAnimation =
       trackFrameAnimation ? &frameAnimationTracker : nullptr;
+  context.uvAnimation =
+      trackUVAnimation ? &uvAnimationTracker : nullptr;
   context.report   = report;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)

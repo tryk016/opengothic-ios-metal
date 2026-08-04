@@ -610,7 +610,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=6 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1764,7 +1764,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==6u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==7u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2553,12 +2553,12 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==6u);
+    static_assert(Pipeline::OfflineMetallibAbi==7u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
                  RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=6 minimum-apple=4");
+             " contract=1 metallib-abi=7 minimum-apple=4");
       }
     catch(...) {
       }
@@ -4330,6 +4330,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     const FrameLease& frame, const IOSFrameInput& input,
     const IOSSceneAssetRegistry& assets,
     const IOSFrameAnimationEvidence* frameAnimation,
+    const IOSUVAnimationEvidence* uvAnimation,
     bool forceNativeSceneMarkers,
     void* completion, CompleteFrame completeFrame) {
 #if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -4339,7 +4340,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     throw std::logic_error("RendererIOS received an empty frame completion");
   if(impl->lifecycleState!=Impl::LifecycleState::Active) {
     cancelFrame(frame.serial);
-    (void)completeFrame(completion,false,nullptr);
+    (void)completeFrame(completion,false,nullptr,nullptr);
     return {};
     }
   if(!impl->frameActive || frame.serial!=impl->activeSerial ||
@@ -4350,17 +4351,17 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   auto& frameContext = impl->frames[slot];
   if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")) {
     cancelFrame(frame.serial);
-    (void)completeFrame(completion,false,nullptr);
+    (void)completeFrame(completion,false,nullptr,nullptr);
     return {};
     }
 
   const auto abandonFrame = [&]() noexcept {
     cancelFrame(frame.serial);
-    (void)completeFrame(completion,false,nullptr);
+    (void)completeFrame(completion,false,nullptr,nullptr);
     };
   const auto abandonFrameKeepingSlotResources = [&]() noexcept {
     impl->cancelActiveFrameKeepingSlotResources(frameContext);
-    (void)completeFrame(completion,false,nullptr);
+    (void)completeFrame(completion,false,nullptr,nullptr);
     };
 
   InventoryMenu* inventoryOwner = nullptr;
@@ -4408,6 +4409,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool submissionAttempted = false;
   IOSGPUSceneFrameAnimationDrawReport frameAnimationDrawn;
   bool frameAnimationDrawnReady = false;
+  IOSGPUSceneUVAnimationDrawReport uvAnimationDrawn;
+  bool uvAnimationDrawnReady = false;
 
   try {
     if(input.capture.kind==IOSCaptureRequest::Kind::SavePreview &&
@@ -4506,7 +4509,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           {impl->overlayDepth,1.f,Tempest::Preserve});
         const auto report =
           impl->gpuScene->encode(
-              encoder,*input.snapshot,assets,frameAnimation);
+              encoder,*input.snapshot,assets,
+              frameAnimation,uvAnimation);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(report.result!=IOSGPUScene::Result::Success ||
            forceNativeSceneMarkers ||
@@ -4553,6 +4557,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
                 "RendererIOS native Landscape frame-animation evidence was not finalized");
           frameAnimationDrawn = report.frameAnimation;
           frameAnimationDrawnReady = true;
+          }
+        if(uvAnimation!=nullptr) {
+          if(!report.uvAnimation.valid)
+            throw std::runtime_error(
+                "RendererIOS native Landscape UV-animation evidence was not finalized");
+          uvAnimationDrawn = report.uvAnimation;
+          uvAnimationDrawnReady = true;
           }
         encoder.setDebugMarker("RendererIOS UI over native Landscape");
         encoder.setFramebuffer(
@@ -4629,7 +4640,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     impl->activeSerial = 0;
     if(!completeFrame(
            completion,true,
-           frameAnimationDrawnReady ? &frameAnimationDrawn : nullptr)) {
+           frameAnimationDrawnReady ? &frameAnimationDrawn : nullptr,
+           uvAnimationDrawnReady ? &uvAnimationDrawn : nullptr)) {
       impl->fail("RendererIOS accepted frame could not commit scene history");
       return {};
       }

@@ -7,12 +7,14 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "iosmetalcontext.h"
 #include "iosgpusceneplan.h"
 #include "iosrenderworld.h"
 #include "iossceneassetregistry.h"
 #include "iossceneextractor.h"
+#include "iosuvanimationdiagnostics.h"
 
 #if !defined(OPENGOTHIC_RENDERER_IOS_BUILD_SHA)
 #define OPENGOTHIC_RENDERER_IOS_BUILD_SHA "local"
@@ -56,6 +58,9 @@ struct RendererIOS::Impl final {
   uint64_t preparedFrameAnimationSerial = 0;
   IOSFrameAnimationEvidence preparedFrameAnimation;
   IOSFrameAnimationDiagnosticState frameAnimationDiagnostics;
+  uint64_t preparedUVAnimationSerial = 0;
+  IOSUVAnimationEvidence preparedUVAnimation;
+  IOSUVAnimationDiagnosticState uvAnimationDiagnostics;
 #endif
 
   bool matchesPreparedScene(uint64_t serial,
@@ -74,6 +79,8 @@ struct RendererIOS::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     preparedFrameAnimation = {};
     preparedFrameAnimationSerial = 0;
+    preparedUVAnimation = {};
+    preparedUVAnimationSerial = 0;
 #endif
     }
 
@@ -87,6 +94,17 @@ struct RendererIOS::Impl final {
 
   void resetFrameAnimationDiagnostics() noexcept {
     frameAnimationDiagnostics = {};
+    }
+
+  void acceptUVAnimationGeneration(uint64_t generation) noexcept {
+    if(uvAnimationDiagnostics.generation==generation)
+      return;
+    uvAnimationDiagnostics = {};
+    uvAnimationDiagnostics.generation = generation;
+    }
+
+  void resetUVAnimationDiagnostics() noexcept {
+    uvAnimationDiagnostics = {};
     }
 
   void commitFrameAnimationDiagnostics(
@@ -121,6 +139,55 @@ struct RendererIOS::Impl final {
     (void)commitIOSFrameAnimationDiagnosticState(
         true,candidate,std::move(preparedFrameAnimation),
         *drawn,frameAnimationDiagnostics);
+    }
+
+  void commitUVAnimationDiagnostics(
+      const IOSUVAnimationDiagnosticCandidate& candidate,
+      const IOSGPUSceneUVAnimationDrawReport* drawn,
+      uint64_t serial,
+      uint64_t generation,
+      uint64_t sequence) noexcept {
+    if(serial==0u || preparedUVAnimationSerial!=serial ||
+       candidate.generation!=generation ||
+       candidate.sequence!=sequence || drawn==nullptr ||
+       !iosUVAnimationDiagnosticCandidateAcceptsDrawn(
+           uvAnimationDiagnostics,candidate,
+           preparedUVAnimation,*drawn))
+      return;
+
+    try {
+      const IOSGPUSceneMarker primary = iosUVAnimationMarker(
+          candidate,preparedUVAnimation,*drawn,
+          OPENGOTHIC_RENDERER_IOS_BUILD_SHA);
+      const IOSGPUSceneMarker detail = iosUVAnimationDetailMarker(
+          candidate,preparedUVAnimation,*drawn);
+      if(!primary || !detail || primary.length>254u || detail.length>254u)
+        return;
+
+      std::vector<IOSGPUSceneMarker> sources;
+      sources.reserve(preparedUVAnimation.selections.size());
+      for(std::size_t index=0;
+          index<preparedUVAnimation.selections.size();
+          ++index) {
+        IOSGPUSceneMarker marker = iosUVAnimationSourceMarker(
+            candidate,preparedUVAnimation,*drawn,index);
+        if(!marker || marker.length>254u)
+          return;
+        sources.emplace_back(std::move(marker));
+        }
+
+      Log::i(primary.text.data());
+      Log::i(detail.text.data());
+      for(const auto& marker:sources)
+        Log::i(marker.text.data());
+      }
+    catch(...) {
+      return;
+      }
+
+    (void)commitIOSUVAnimationDiagnosticState(
+        true,candidate,std::move(preparedUVAnimation),
+        *drawn,uvAnimationDiagnostics);
     }
 #endif
   };
@@ -198,6 +265,7 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   IOSFrameAnimationEvidence frameAnimation;
+  IOSUVAnimationEvidence uvAnimation;
 #endif
 
   if(bool(source)) {
@@ -268,6 +336,7 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     frameAnimation = std::move(extraction.frameAnimation);
+    uvAnimation = std::move(extraction.uvAnimation);
 #endif
     }
 
@@ -277,6 +346,8 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   impl->preparedFrameAnimation = std::move(frameAnimation);
   impl->preparedFrameAnimationSerial = frame.serial;
+  impl->preparedUVAnimation = std::move(uvAnimation);
+  impl->preparedUVAnimationSerial = frame.serial;
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   if(impl->renderWorld.lastAcceptedSequence().value==0u ||
@@ -350,9 +421,21 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
       frameAnimationCandidate.valid
         ? &impl->preparedFrameAnimation
         : nullptr;
-  const bool forceNativeSceneMarkers = frameAnimationCandidate.valid;
+  const auto uvAnimationCandidate =
+      prepareIOSUVAnimationDiagnosticCandidate(
+          impl->uvAnimationDiagnostics,
+          input.snapshot->generation.value,
+          input.snapshot->sequence.value,
+          impl->preparedUVAnimation);
+  const IOSUVAnimationEvidence* const uvAnimation =
+      uvAnimationCandidate.valid
+        ? &impl->preparedUVAnimation
+        : nullptr;
+  const bool forceNativeSceneMarkers =
+      frameAnimationCandidate.valid || uvAnimationCandidate.valid;
 #else
   const IOSFrameAnimationEvidence* const frameAnimation = nullptr;
+  const IOSUVAnimationEvidence* const uvAnimation = nullptr;
   const bool forceNativeSceneMarkers = false;
 #endif
 
@@ -364,6 +447,7 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     uint64_t                   serial = 0;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     IOSFrameAnimationDiagnosticCandidate frameAnimationCandidate;
+    IOSUVAnimationDiagnosticCandidate uvAnimationCandidate;
 #endif
     };
 
@@ -376,12 +460,14 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     frame.serial,
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     frameAnimationCandidate,
+    uvAnimationCandidate,
 #endif
     };
   const auto completeFrame = [](
       void* opaque,
       bool submitted,
-      const IOSGPUSceneFrameAnimationDrawReport* frameAnimationDrawn)
+      const IOSGPUSceneFrameAnimationDrawReport* frameAnimationDrawn,
+      const IOSGPUSceneUVAnimationDrawReport* uvAnimationDrawn)
       noexcept -> bool {
     auto& state = *static_cast<FrameCompletion*>(opaque);
     const bool accepted = !submitted || state.world->commitAccepted(*state.scene);
@@ -393,9 +479,16 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
           state.frameAnimationCandidate,frameAnimationDrawn,
           state.serial,(*state.scene)->generation.value,
           (*state.scene)->sequence.value);
+      state.renderer->acceptUVAnimationGeneration(
+          (*state.scene)->generation.value);
+      state.renderer->commitUVAnimationDiagnostics(
+          state.uvAnimationCandidate,uvAnimationDrawn,
+          state.serial,(*state.scene)->generation.value,
+          (*state.scene)->sequence.value);
       }
 #else
     (void)frameAnimationDrawn;
+    (void)uvAnimationDrawn;
 #endif
     state.renderer->clearPreparedScene(state.serial);
     state.ticket->disarm();
@@ -403,7 +496,7 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     };
   const auto result = impl->context.submitFrame(
     lease,input,impl->assets,
-    frameAnimation,forceNativeSceneMarkers,
+    frameAnimation,uvAnimation,forceNativeSceneMarkers,
     &completion,completeFrame);
   return SubmitResult{result.savePreviewQueued};
   }
@@ -478,6 +571,7 @@ void RendererIOS::prepareForOwnerRelease() noexcept {
   impl->renderWorld.resetWorld();
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   impl->resetFrameAnimationDiagnostics();
+  impl->resetUVAnimationDiagnostics();
 #endif
   impl->worldOwnersDetached = true;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -525,6 +619,7 @@ void RendererIOS::onWorldChanged() {
   impl->renderWorld.resetWorld();
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   impl->resetFrameAnimationDiagnostics();
+  impl->resetUVAnimationDiagnostics();
 #endif
   impl->worldOwnersDetached = true;
   if(!impl->context.failureReason().empty())

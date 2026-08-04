@@ -63,6 +63,7 @@ class IOSGPUScene final {
       IOSGPUSceneFrameCounts       counts;
       IOSGPUSceneFailureCounts     failures;
       IOSGPUSceneFrameAnimationDrawReport frameAnimation;
+      IOSGPUSceneUVAnimationDrawReport uvAnimation;
       };
 
     IOSGPUScene(Tempest::Device& device, TargetLayout target);
@@ -76,7 +77,8 @@ class IOSGPUScene final {
     Report encode(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
                   const IOSSceneSnapshot& snapshot,
                   const IOSSceneAssetRegistry& assets,
-                  const IOSFrameAnimationEvidence* frameAnimation) noexcept;
+                  const IOSFrameAnimationEvidence* frameAnimation,
+                  const IOSUVAnimationEvidence* uvAnimation = nullptr) noexcept;
 
   private:
     struct Impl;

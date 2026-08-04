@@ -167,13 +167,32 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
         "frame period",
     )
     require_exact_statement(
+        errors, extractor, "candidate.hasValidFrameSequence",
+        "candidate.hasValidFrameSequence = hasFrameAnimation && "
+        "hasValidIOSSceneFrameSequence(source.material);",
+        "combined frame sequence",
+    )
+    require_exact_statement(
+        errors, extractor, "candidate.uvPeriodX",
+        "candidate.uvPeriodX = source.material!=nullptr ? "
+        "static_cast<int32_t>(source.material->texAniMapDirPeriod.x) : 0;",
+        "UV period X",
+    )
+    require_exact_statement(
+        errors, extractor, "candidate.uvPeriodY",
+        "candidate.uvPeriodY = source.material!=nullptr ? "
+        "static_cast<int32_t>(source.material->texAniMapDirPeriod.y) : 0;",
+        "UV period Y",
+    )
+    require_exact_statement(
         errors, extractor, "const IOSTextureHandle texture",
         "const IOSTextureHandle texture = "
-        "plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ? "
+        "plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly || "
+        "plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv ? "
         "context.renderWorld->resolveFrameTexture("
         " plan.textureStableKey,plan.frameOrdinal) : "
         "context.renderWorld->resolveTexture(plan.textureStableKey);",
-        "frame-pair resolver",
+        "frame-or-combined resolver",
     )
     require_exact_statement(
         errors, extractor, "const Tempest::Texture2d& baseColorTexture",
@@ -199,7 +218,8 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     )
     expected_selector_block = normalized("""
       const Tempest::Texture2d* selectedTexture = nullptr;
-      if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly) {
+      if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+         plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) {
         if(selectIOSSceneFrameTextureForExtraction(
                source.material,plan,selectedTexture)!=
            IOSSceneExtractionResult::Success) {
@@ -239,9 +259,14 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
       if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly)
         context.report.frameAnimation.selections.push_back(
             {plan.textureStableKey,plan.frameOrdinal,texture});
+      else if(plan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+              plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)
+        context.report.uvAnimation.selections.push_back(
+            {plan.textureStableKey,plan.textureAnimation,plan.frameOrdinal,
+             texture,plan.uvOffset});
     """)
     if sidecar_block is None or normalized(sidecar_block) != expected_sidecar_block:
-        errors.append("post-bind frame sidecar control flow differs")
+        errors.append("post-bind mode-exclusive sidecar control flow differs")
 
     visit = function_body(extractor, "void visitSource(void* opaque, const IOSSceneSource& source)")
     if visit is None:
@@ -251,11 +276,16 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
             errors, visit,
             (
                 "const bool hasFrameAnimation",
+                "candidate.hasValidFrameSequence",
+                "candidate.uvPeriodX",
+                "candidate.uvPeriodY",
+                "planIOSOpaqueMeshSource(candidate,plan)",
                 "selectIOSSceneFrameTextureForExtraction(",
                 "resolveFrameTexture(",
                 "context.assets->bindTexture(",
                 "if(!isIOSSceneAssetBindSuccess(textureBound))",
                 "context.report.frameAnimation.selections.push_back(",
+                "context.report.uvAnimation.selections.push_back(",
                 "context.staging.materials.push_back(",
                 "context.staging.entities.push_back(",
                 "recordIOSScenePlanResult(\n       IOSSceneSourcePlanResult::Planned",
@@ -291,7 +321,8 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     )
     expected_adapter = normalized("""
       if(source==nullptr ||
-         plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly ||
+         (plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameOnly &&
+          plan.textureAnimation!=IOSSceneTextureAnimationMode::FrameAndUv) ||
          plan.frameOrdinal>=static_cast<uint64_t>(source->frames.size()))
         return IOSSceneExtractionResult::InvalidSource;
       const auto* selected =
@@ -315,15 +346,45 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     if publisher is None or normalized(publisher) != expected_publisher:
         errors.append("atomic destination publisher body differs")
 
-    uv_skip = plan.find(
-        "textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||\n"
-        "     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv"
+    uv_admission = region(
+        plan,
+        "const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;",
+        "const bool hasEffectiveBaseColorTexture =",
     )
-    alpha_gate = plan.find("source.materialCategory==IOSMaterialCategory::AlphaTest")
-    if uv_skip < 0 or alpha_gate < 0 or uv_skip > alpha_gate:
-        errors.append("UV/both rejection must precede AlphaTest texture admission")
-    if "selectIOSSceneTextureFrame(" not in plan:
-        errors.append("FrameOnly plan must use checked selector")
+    expected_uv_admission = normalized("""
+      const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
+      if(source.hasUvAnimation!=periodsHaveUv)
+        return IOSSceneSourcePlanResult::InvalidSource;
+      if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&
+         (!source.hasBaseColorTexture || source.usesFallbackTexture))
+        return IOSSceneSourcePlanResult::InvalidSource;
+      if(textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv &&
+         (!source.hasValidFrameSequence || source.usesFallbackTexture))
+        return IOSSceneSourcePlanResult::InvalidSource;
+      const bool selectsFrame =
+          textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
+          textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv;
+      if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
+         ((!source.hasBaseColorTexture &&
+           !selectsFrame) ||
+          source.usesFallbackTexture))
+        return IOSSceneSourcePlanResult::SkippedMaterial;
+      uint64_t frameOrdinal = 0;
+      if(selectsFrame &&
+         selectIOSSceneTextureFrame(
+             source.sceneTimeMs,source.framePeriodMs,source.frameCount,
+             frameOrdinal)!=IOSSceneFrameSelectionResult::Selected)
+        return IOSSceneSourcePlanResult::InvalidSource;
+      IOSFloat2 uvOffset;
+      if((textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
+          textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) &&
+         evaluateIOSSceneUVOffset(
+             source.sceneTimeMs,source.uvPeriodX,source.uvPeriodY,
+             uvOffset)!=IOSSceneUVOffsetResult::Evaluated)
+        return IOSSceneSourcePlanResult::InvalidSource;
+    """)
+    if uv_admission is None or normalized(uv_admission) != expected_uv_admission:
+        errors.append("checked frame/UV admission control flow differs")
     return errors
 
 
@@ -462,16 +523,71 @@ def require_production_oracle(extractor: str, header: str, plan: str) -> None:
             ),
             plan,
         ),
-        "uv-after-alpha": (
+        "uv-evaluator-no-op": (
             extractor,
             header,
             plan.replace(
-                "  if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||\n"
-                "     textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)\n"
-                "    return IOSSceneSourcePlanResult::SkippedTextureAnimation;\n",
-                "",
+                "     evaluateIOSSceneUVOffset(\n"
+                "         source.sceneTimeMs,source.uvPeriodX,source.uvPeriodY,\n"
+                "         uvOffset)!=IOSSceneUVOffsetResult::Evaluated)",
+                "     (uvOffset = IOSFloat2{}, "
+                "IOSSceneUVOffsetResult::Evaluated)!=\n"
+                "         IOSSceneUVOffsetResult::Evaluated)",
                 1,
             ),
+        ),
+        "drop-frame-from-combined": (
+            extractor,
+            header,
+            plan.replace(
+                "const bool selectsFrame =\n"
+                "      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||\n"
+                "      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv;",
+                "const bool selectsFrame =\n"
+                "      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly;",
+                1,
+            ),
+        ),
+        "drop-uv-from-combined": (
+            extractor,
+            header,
+            plan.replace(
+                "if((textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||\n"
+                "      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) &&",
+                "if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&",
+                1,
+            ),
+        ),
+        "partial-combined-sequence": (
+            extractor,
+            header,
+            plan.replace(
+                "(!source.hasValidFrameSequence || source.usesFallbackTexture)",
+                "source.usesFallbackTexture",
+                1,
+            ),
+        ),
+        "combined-leaks-to-frame-sidecar": (
+            extractor.replace(
+                "if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly)\n"
+                "    context.report.frameAnimation.selections.push_back(",
+                "if(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||\n"
+                "   plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)\n"
+                "    context.report.frameAnimation.selections.push_back(",
+                1,
+            ),
+            header,
+            plan,
+        ),
+        "drop-combined-uv-sidecar": (
+            extractor.replace(
+                "else if(plan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||\n"
+                "          plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv)",
+                "else if(plan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly)",
+                1,
+            ),
+            header,
+            plan,
         ),
     }
     for name, (mutated_extractor, mutated_header, mutated_plan) in mutations.items():

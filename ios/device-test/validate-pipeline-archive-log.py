@@ -280,7 +280,7 @@ def expected_snapshot(
         ),
         "schema": 1,
         "key": 1,
-        "metallib": 6,
+        "metallib": 7,
         "cfg": 1,
         "available": 1,
         "loaded": 0 if cold_like else 1,
@@ -509,7 +509,7 @@ def validate_provenance(log: str, metallib_sha256: str) -> None:
         "configured": "1",
         "schema": "1",
         "key": "1",
-        "metallib": "6",
+        "metallib": "7",
         "digest": metallib_sha256,
         "stale-reset": "0",
     }
@@ -770,8 +770,8 @@ def validate_log(
     )
     require(
         "RendererIOS shader library: source=offline-metallib "
-        "resource=RendererIOS.metallib abi=6" in log,
-        "offline metallib ABI 6 marker is missing",
+        "resource=RendererIOS.metallib abi=7" in log,
+        "offline metallib ABI 7 marker is missing",
     )
     require(
         "Shader compilation took:" not in log,
@@ -941,9 +941,9 @@ def synthetic_log(
         f"build={source_sha}-local gpu=synthetic",
         "RendererIOS diagnostics: ON",
         "RendererIOS shader library: source=offline-metallib "
-        "resource=RendererIOS.metallib abi=6",
+        "resource=RendererIOS.metallib abi=7",
         PROVENANCE_PREFIX
-        + "configured=1 schema=1 key=1 metallib=6 "
+        + "configured=1 schema=1 key=1 metallib=7 "
         + f"digest={metallib_sha256} stale-reset=0",
         "RendererIOS runtime compilation: point=legacy-bridge available=1 "
         "source-before=0 source-after=0 source-delta=0 "

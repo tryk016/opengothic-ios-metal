@@ -1,11 +1,46 @@
 #include "graphics/iossceneextractor.h"
 
 #include <array>
+#include <bit>
 #include <cassert>
+#include <cstdlib>
 #include <limits>
+#include <new>
 #include <optional>
 #include <type_traits>
 #include <vector>
+
+namespace AllocationProbe {
+bool forbidden = false;
+}
+
+void* operator new(std::size_t size) {
+  if(AllocationProbe::forbidden)
+    throw std::bad_alloc();
+  if(void* memory=std::malloc(size==0u ? 1u : size))
+    return memory;
+  throw std::bad_alloc();
+  }
+
+void* operator new[](std::size_t size) {
+  return ::operator new(size);
+  }
+
+void operator delete(void* memory) noexcept {
+  std::free(memory);
+  }
+
+void operator delete[](void* memory) noexcept {
+  ::operator delete(memory);
+  }
+
+void operator delete(void* memory, std::size_t) noexcept {
+  ::operator delete(memory);
+  }
+
+void operator delete[](void* memory, std::size_t) noexcept {
+  ::operator delete[](memory);
+  }
 
 namespace {
 
@@ -117,6 +152,7 @@ void validatePublicContract() {
       std::is_trivially_copyable_v<IOSSceneTextureAnimationMode>);
   static_assert(
       std::is_trivially_copyable_v<IOSSceneFrameSelectionResult>);
+  static_assert(std::is_trivially_copyable_v<IOSSceneUVOffsetResult>);
   static_assert(std::is_trivially_copyable_v<IOSSceneMaterialMapping>);
   static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshCandidate>);
   static_assert(std::is_trivially_copyable_v<IOSSceneOpaqueMeshPlan>);
@@ -168,6 +204,38 @@ void validatePublicContract() {
         static_cast<Material::AlphaFunc>(255u)}) {
     assert(iosSceneMaterialMapping(alpha)==IOSSceneMaterialMapping{});
     }
+  }
+
+void validateUVOffsetEvaluation() {
+  using Result = IOSSceneUVOffsetResult;
+  IOSFloat2 offset = {9.f,10.f};
+  assert(evaluateIOSSceneUVOffset(7u,4,-5,offset)==Result::Evaluated);
+  assert((offset==IOSFloat2{0.75f,-0.4f}));
+
+  const uint64_t wrapped = (uint64_t(1u)<<32u)+2u;
+  assert(evaluateIOSSceneUVOffset(wrapped,3,0,offset)==Result::Evaluated);
+  assert((offset==IOSFloat2{2.f/3.f,0.f}));
+  assert(std::bit_cast<uint32_t>(offset.y)==0u);
+
+  assert(evaluateIOSSceneUVOffset(
+      std::numeric_limits<uint64_t>::max(),-1,1,offset)==Result::Evaluated);
+  assert(offset==IOSFloat2{});
+  assert(std::bit_cast<uint32_t>(offset.x)==0u);
+  assert(std::bit_cast<uint32_t>(offset.y)==0u);
+
+  offset = {9.f,10.f};
+  assert(evaluateIOSSceneUVOffset(1u,0,0,offset)==Result::InvalidPeriods);
+  assert(offset==IOSFloat2{});
+  offset = {9.f,10.f};
+  assert(evaluateIOSSceneUVOffset(
+      1u,std::numeric_limits<int32_t>::min(),1,offset)==
+      Result::InvalidPeriods);
+  assert(offset==IOSFloat2{});
+  offset = {9.f,10.f};
+  assert(evaluateIOSSceneUVOffset(
+      1u,1,std::numeric_limits<int32_t>::min(),offset)==
+      Result::InvalidPeriods);
+  assert(offset==IOSFloat2{});
   }
 
 void validateFrameSelection() {
@@ -263,6 +331,187 @@ void validateFrameAnimationEvidence() {
   assert(!finalizeIOSFrameAnimationEvidence(emptyHandle));
   }
 
+void validateUVAnimationEvidence() {
+  IOSUVAnimationEvidence evidence;
+  evidence.selections = {
+    {9u,IOSSceneTextureAnimationMode::FrameAndUv,2u,{{7u},31u},
+     {0.75f,-0.4f}},
+    {3u,IOSSceneTextureAnimationMode::UvOnly,0u,{{7u},29u},
+     {0.f,0.5f}},
+    };
+  assert(finalizeIOSUVAnimationEvidence(evidence));
+  assert(evidence.selections[0].sourceId==3u);
+  assert(evidence.selections[1].sourceId==9u);
+  assert(evidence.admittedUvOnly==1u);
+  assert(evidence.admittedFrameAndUv==1u);
+  assert(evidence.plannedCount==2u);
+
+  uint64_t sourceDigest = IOSUVAnimationFNV1aOffset;
+  sourceDigest = iosUVAnimationFNV1aAppendUint64(sourceDigest,3u);
+  sourceDigest = iosUVAnimationFNV1aAppendUint64(sourceDigest,9u);
+  assert(evidence.sourceDigest==sourceDigest);
+
+  uint64_t uvDigest = IOSUVAnimationFNV1aOffset;
+  uvDigest = iosUVAnimationFNV1aAppendUint64(uvDigest,3u);
+  uvDigest = iosUVAnimationFNV1aAppendUint32(
+      uvDigest,std::bit_cast<uint32_t>(0.f));
+  uvDigest = iosUVAnimationFNV1aAppendUint32(
+      uvDigest,std::bit_cast<uint32_t>(0.5f));
+  uvDigest = iosUVAnimationFNV1aAppendUint64(uvDigest,9u);
+  uvDigest = iosUVAnimationFNV1aAppendUint32(
+      uvDigest,std::bit_cast<uint32_t>(0.75f));
+  uvDigest = iosUVAnimationFNV1aAppendUint32(
+      uvDigest,std::bit_cast<uint32_t>(-0.4f));
+  assert(evidence.plannedUVDigest==uvDigest);
+  assert(isCanonicalIOSUVAnimationEvidence(evidence));
+  static_assert(noexcept(isCanonicalIOSUVAnimationEvidence(evidence)));
+  const auto* const selectionStorage = evidence.selections.data();
+  const std::size_t selectionCapacity = evidence.selections.capacity();
+  AllocationProbe::forbidden = true;
+  const bool canonicalWithoutAllocation =
+      isCanonicalIOSUVAnimationEvidence(evidence);
+  AllocationProbe::forbidden = false;
+  assert(canonicalWithoutAllocation);
+  assert(evidence.selections.data()==selectionStorage);
+  assert(evidence.selections.capacity()==selectionCapacity);
+
+  auto reordered = evidence;
+  std::swap(reordered.selections[0],reordered.selections[1]);
+  assert(!isCanonicalIOSUVAnimationEvidence(reordered));
+  auto duplicateSource = evidence;
+  duplicateSource.selections[1].sourceId =
+      duplicateSource.selections[0].sourceId;
+  assert(!finalizeIOSUVAnimationEvidence(duplicateSource));
+  auto duplicateHandle = evidence;
+  duplicateHandle.selections[1].selectedHandle =
+      duplicateHandle.selections[0].selectedHandle;
+  assert(!finalizeIOSUVAnimationEvidence(duplicateHandle));
+  auto wrongMode = evidence;
+  wrongMode.selections[0].mode = IOSSceneTextureAnimationMode::FrameOnly;
+  assert(!finalizeIOSUVAnimationEvidence(wrongMode));
+  auto uvOnlyOrdinal = evidence;
+  uvOnlyOrdinal.selections[0].frameOrdinal = 1u;
+  assert(!finalizeIOSUVAnimationEvidence(uvOnlyOrdinal));
+  auto negativeZero = evidence;
+  negativeZero.selections[0].uvOffset.x = -0.f;
+  assert(!finalizeIOSUVAnimationEvidence(negativeZero));
+  auto nonFinite = evidence;
+  nonFinite.selections[0].uvOffset.y =
+      std::numeric_limits<float>::infinity();
+  assert(!finalizeIOSUVAnimationEvidence(nonFinite));
+  }
+
+void validateUVAdmission() {
+  for(const auto category:{
+        IOSMaterialCategory::Opaque,
+        IOSMaterialCategory::AlphaTest}) {
+    for(const auto kind:{
+          IOSSceneMeshKind::Landscape,
+          IOSSceneMeshKind::Static,
+          IOSSceneMeshKind::Movable}) {
+      auto uvOnly = candidate(kind,category);
+      uvOnly.hasUvAnimation = true;
+      uvOnly.uvPeriodX = 4;
+      uvOnly.uvPeriodY = -5;
+      uvOnly.sceneTimeMs = 7u;
+      IOSSceneOpaqueMeshPlan uvPlan;
+      assert(planIOSOpaqueMeshSource(uvOnly,uvPlan)==
+             IOSSceneSourcePlanResult::Planned);
+      assert(uvPlan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly);
+      assert(uvPlan.frameOrdinal==0u);
+      assert(uvPlan.uvPeriodX==4);
+      assert(uvPlan.uvPeriodY==-5);
+      assert((uvPlan.uvOffset==IOSFloat2{0.75f,-0.4f}));
+      assert(!uvPlan.usesFallbackTexture);
+
+      auto combined = candidate(kind,category);
+      combined.hasBaseColorTexture = false;
+      combined.hasFrameAnimation = true;
+      combined.hasUvAnimation = true;
+      combined.hasValidFrameSequence = true;
+      combined.frameCount = 3u;
+      combined.framePeriodMs = 10u;
+      combined.uvPeriodX = -4;
+      combined.uvPeriodY = 5;
+      combined.sceneTimeMs = 29u;
+      IOSSceneOpaqueMeshPlan combinedPlan;
+      assert(planIOSOpaqueMeshSource(combined,combinedPlan)==
+             IOSSceneSourcePlanResult::Planned);
+      assert(combinedPlan.textureAnimation==
+             IOSSceneTextureAnimationMode::FrameAndUv);
+      assert(combinedPlan.frameOrdinal==2u);
+      assert((combinedPlan.uvOffset==IOSFloat2{-0.25f,0.8f}));
+      assert(!combinedPlan.usesFallbackTexture);
+
+      IOSSceneExtractionStats stats;
+      stats.visited = 2u;
+      if(kind==IOSSceneMeshKind::Landscape)
+        stats.census.kinds.landscape = 2u;
+      else if(kind==IOSSceneMeshKind::Static)
+        stats.census.kinds.staticMesh = 2u;
+      else
+        stats.census.kinds.movable = 2u;
+      if(category==IOSMaterialCategory::Opaque)
+        stats.census.materials.solid = 2u;
+      else
+        stats.census.materials.alphaTest = 2u;
+      stats.census.frameAnimated = 1u;
+      stats.census.uvAnimated = 2u;
+      assert(recordIOSScenePlanResult(
+          IOSSceneSourcePlanResult::Planned,uvPlan,stats,
+          IOSSceneTextureAnimationMode::UvOnly));
+      assert(recordIOSScenePlanResult(
+          IOSSceneSourcePlanResult::Planned,combinedPlan,stats,
+          IOSSceneTextureAnimationMode::FrameAndUv));
+      assert(stats.admittedFrameOnly==0u);
+      assert(stats.admittedUvOnly==1u);
+      assert(stats.admittedFrameAndUv==1u);
+      assert(stats.hasConsistentSuccessfulCensus());
+      }
+    }
+
+  IOSSceneOpaqueMeshPlan plan;
+  auto missingBase = candidate();
+  missingBase.hasBaseColorTexture = false;
+  missingBase.hasUvAnimation = true;
+  missingBase.uvPeriodX = 2;
+  assert(planIOSOpaqueMeshSource(missingBase,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  assert(plan.kind==IOSSceneMeshKind::Unsupported);
+  assert(plan.entityStableKey==0u);
+  assert(plan.textureAnimation==IOSSceneTextureAnimationMode::None);
+  assert(plan.uvOffset==IOSFloat2{});
+
+  auto fallback = candidate();
+  fallback.hasUvAnimation = true;
+  fallback.uvPeriodX = 2;
+  fallback.usesFallbackTexture = true;
+  assert(planIOSOpaqueMeshSource(fallback,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+
+  auto invalidSequence = candidate();
+  invalidSequence.hasFrameAnimation = true;
+  invalidSequence.hasUvAnimation = true;
+  invalidSequence.frameCount = 2u;
+  invalidSequence.framePeriodMs = 10u;
+  invalidSequence.uvPeriodY = 3;
+  assert(planIOSOpaqueMeshSource(invalidSequence,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  invalidSequence.hasValidFrameSequence = true;
+  invalidSequence.framePeriodMs = 0u;
+  assert(planIOSOpaqueMeshSource(invalidSequence,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  invalidSequence.framePeriodMs = 10u;
+  invalidSequence.uvPeriodY = std::numeric_limits<int32_t>::min();
+  assert(planIOSOpaqueMeshSource(invalidSequence,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+
+  auto mismatchedFlag = candidate();
+  mismatchedFlag.hasUvAnimation = true;
+  assert(planIOSOpaqueMeshSource(mismatchedFlag,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  }
+
 void validateFrameOnlyAdmission() {
   for(const auto category:{
         IOSMaterialCategory::Opaque,
@@ -333,11 +582,16 @@ void validateFrameTextureAdapter() {
   const auto* frame1 = reinterpret_cast<const Tempest::Texture2d*>(
       std::uintptr_t(0x2000u));
   material.frames = {frame0,frame1};
+  assert(hasValidIOSSceneFrameSequence(&material));
 
   IOSSceneOpaqueMeshPlan plan;
   plan.textureAnimation = IOSSceneTextureAnimationMode::FrameOnly;
   plan.frameOrdinal = 1u;
   const Tempest::Texture2d* selected = frame0;
+  assert(selectIOSSceneFrameTextureForExtraction(
+      &material,plan,selected)==IOSSceneExtractionResult::Success);
+  assert(selected==frame1);
+  plan.textureAnimation = IOSSceneTextureAnimationMode::FrameAndUv;
   assert(selectIOSSceneFrameTextureForExtraction(
       &material,plan,selected)==IOSSceneExtractionResult::Success);
   assert(selected==frame1);
@@ -351,12 +605,16 @@ void validateFrameTextureAdapter() {
   assert(selected==sentinel);
   plan.frameOrdinal = 1u;
   material.frames[1] = nullptr;
+  assert(!hasValidIOSSceneFrameSequence(&material));
   assert(selectIOSSceneFrameTextureForExtraction(
       &material,plan,selected)==IOSSceneExtractionResult::InvalidSource);
   assert(selected==sentinel);
   assert(selectIOSSceneFrameTextureForExtraction(
       nullptr,plan,selected)==IOSSceneExtractionResult::InvalidSource);
   assert(selected==sentinel);
+  material.frames.clear();
+  assert(!hasValidIOSSceneFrameSequence(&material));
+  assert(!hasValidIOSSceneFrameSequence(nullptr));
   plan.textureAnimation = IOSSceneTextureAnimationMode::None;
   assert(selectIOSSceneFrameTextureForExtraction(
       &material,plan,selected)==IOSSceneExtractionResult::InvalidSource);
@@ -429,8 +687,9 @@ void validateSkippedSources() {
     auto alphaUvAnimated = alphaTest;
     alphaUvAnimated.hasBaseColorTexture = false;
     alphaUvAnimated.hasUvAnimation = true;
+    alphaUvAnimated.uvPeriodX = 10;
     assert(planIOSOpaqueMeshSource(alphaUvAnimated,plan)==
-           IOSSceneSourcePlanResult::SkippedTextureAnimation);
+           IOSSceneSourcePlanResult::InvalidSource);
 
     auto frameAnimated = candidate(kind);
     frameAnimated.hasFrameAnimation = true;
@@ -440,18 +699,21 @@ void validateSkippedSources() {
            IOSSceneSourcePlanResult::Planned);
     auto uvAnimated = candidate(kind);
     uvAnimated.hasUvAnimation = true;
+    uvAnimated.uvPeriodY = -10;
     assert(planIOSOpaqueMeshSource(uvAnimated,plan)==
-           IOSSceneSourcePlanResult::SkippedTextureAnimation);
+           IOSSceneSourcePlanResult::Planned);
+    assert(plan.textureAnimation==IOSSceneTextureAnimationMode::UvOnly);
     auto frameAndUvAnimated = candidate(kind);
     frameAndUvAnimated.hasBaseColorTexture = false;
     frameAndUvAnimated.hasFrameAnimation = true;
     frameAndUvAnimated.hasUvAnimation = true;
+    frameAndUvAnimated.hasValidFrameSequence = true;
+    frameAndUvAnimated.frameCount = 3u;
+    frameAndUvAnimated.framePeriodMs = 10u;
+    frameAndUvAnimated.uvPeriodX = 10;
     assert(planIOSOpaqueMeshSource(frameAndUvAnimated,plan)==
-           IOSSceneSourcePlanResult::SkippedTextureAnimation);
-    assert(plan.kind==IOSSceneMeshKind::Unsupported);
-    assert(plan.entityStableKey==0u);
-    assert(plan.textureStableKey==0u);
-    assert(plan.indices==IOSIndexRange{});
+           IOSSceneSourcePlanResult::Planned);
+    assert(plan.textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv);
     }
   }
 
@@ -523,6 +785,10 @@ void validateFallbackAndMixedCounters() {
   auto animationSkip = candidate(IOSSceneMeshKind::Landscape);
   animationSkip.hasFrameAnimation = true;
   animationSkip.hasUvAnimation = true;
+  animationSkip.hasValidFrameSequence = true;
+  animationSkip.frameCount = 2u;
+  animationSkip.framePeriodMs = 10u;
+  animationSkip.uvPeriodX = 4;
   auto malformed = candidate(IOSSceneMeshKind::Static);
   malformed.hasStaticMesh = false;
 
@@ -551,18 +817,19 @@ void validateFallbackAndMixedCounters() {
     }
 
   assert(stats.visited==7u);
-  assert(stats.planned==3u);
-  assert(stats.plannedOpaque==2u);
+  assert(stats.planned==4u);
+  assert(stats.plannedOpaque==3u);
   assert(stats.plannedAlphaTest==1u);
-  assert(stats.plannedLandscape==1u);
+  assert(stats.plannedLandscape==2u);
   assert(stats.plannedStatic==1u);
   assert(stats.plannedMovable==1u);
   assert(stats.skippedKind==1u);
   assert(stats.skippedMaterial==1u);
-  assert(stats.skippedTextureAnimation==1u);
+  assert(stats.skippedTextureAnimation==0u);
   assert(stats.skippedTextureFrameOnly==0u);
   assert(stats.skippedTextureUvOnly==0u);
-  assert(stats.skippedTextureFrameAndUv==1u);
+  assert(stats.skippedTextureFrameAndUv==0u);
+  assert(stats.admittedFrameAndUv==1u);
   assert(stats.fallbackTexture==1u);
   assert(stats.alphaFallback==0u);
   assert(stats.invalidSource==1u);
@@ -686,15 +953,41 @@ void validateMissingAndInvalidRawSources() {
 
 void validateOverlappingAnimationCensus() {
   IOSSceneExtractionStats stats;
-  recordRawOutcome(
-      IOSSceneSourceKind::Static,Material::Solid,true,false,
-      IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
-  recordRawOutcome(
-      IOSSceneSourceKind::Movable,Material::AlphaTest,false,true,
-      IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
-  recordRawOutcome(
-      IOSSceneSourceKind::Landscape,Material::AlphaTest,true,true,
-      IOSSceneSourcePlanResult::SkippedTextureAnimation,stats);
+  auto frameOnly = candidate(IOSSceneMeshKind::Static);
+  frameOnly.hasFrameAnimation = true;
+  frameOnly.frameCount = 2u;
+  frameOnly.framePeriodMs = 10u;
+  auto uvOnly = candidate(
+      IOSSceneMeshKind::Movable,IOSMaterialCategory::AlphaTest);
+  uvOnly.hasUvAnimation = true;
+  uvOnly.uvPeriodX = 4;
+  auto combined = candidate(
+      IOSSceneMeshKind::Landscape,IOSMaterialCategory::AlphaTest);
+  combined.hasFrameAnimation = true;
+  combined.hasUvAnimation = true;
+  combined.hasValidFrameSequence = true;
+  combined.frameCount = 2u;
+  combined.framePeriodMs = 10u;
+  combined.uvPeriodY = -4;
+  for(const auto& source:{frameOnly,uvOnly,combined}) {
+    assert(recordIOSSceneRawSource(
+        source.kind==IOSSceneMeshKind::Static
+            ? IOSSceneSourceKind::Static
+            : source.kind==IOSSceneMeshKind::Movable
+            ? IOSSceneSourceKind::Movable
+            : IOSSceneSourceKind::Landscape,
+        source.materialCategory==IOSMaterialCategory::Opaque
+            ? Material::Solid
+            : Material::AlphaTest,
+        source.hasFrameAnimation,source.hasUvAnimation,stats));
+    IOSSceneOpaqueMeshPlan plan;
+    assert(planIOSOpaqueMeshSource(source,plan)==
+           IOSSceneSourcePlanResult::Planned);
+    assert(recordIOSScenePlanResult(
+        IOSSceneSourcePlanResult::Planned,plan,stats,
+        iosSceneTextureAnimationMode(
+            source.hasFrameAnimation,source.hasUvAnimation)));
+    }
   recordRawOutcome(
       IOSSceneSourceKind::Animated,Material::Solid,true,false,
       IOSSceneSourcePlanResult::SkippedKind,stats);
@@ -704,10 +997,13 @@ void validateOverlappingAnimationCensus() {
 
   assert(stats.census.frameAnimated==3u);
   assert(stats.census.uvAnimated==3u);
-  assert(stats.skippedTextureAnimation==3u);
-  assert(stats.skippedTextureFrameOnly==1u);
-  assert(stats.skippedTextureUvOnly==1u);
-  assert(stats.skippedTextureFrameAndUv==1u);
+  assert(stats.skippedTextureAnimation==0u);
+  assert(stats.skippedTextureFrameOnly==0u);
+  assert(stats.skippedTextureUvOnly==0u);
+  assert(stats.skippedTextureFrameAndUv==0u);
+  assert(stats.admittedFrameOnly==1u);
+  assert(stats.admittedUvOnly==1u);
+  assert(stats.admittedFrameAndUv==1u);
   assert(stats.skippedKind==1u);
   assert(stats.skippedMaterial==1u);
   assert(stats.hasConsistentSuccessfulCensus());
@@ -721,16 +1017,12 @@ void validateOverlappingAnimationCensus() {
   assert(!uvOverflow.hasConsistentSuccessfulCensus());
 
   IOSSceneExtractionStats frameBound = stats;
-  frameBound.census.frameAnimated = 2u;
-  frameBound.skippedTextureFrameOnly = 2u;
-  frameBound.skippedTextureUvOnly = 0u;
+  frameBound.census.frameAnimated = 1u;
   assert(!frameBound.hasConsistentTextureAnimationCounts());
   assert(!frameBound.hasConsistentSuccessfulCensus());
 
   IOSSceneExtractionStats uvBound = stats;
-  uvBound.census.uvAnimated = 2u;
-  uvBound.skippedTextureFrameOnly = 0u;
-  uvBound.skippedTextureUvOnly = 2u;
+  uvBound.census.uvAnimated = 1u;
   assert(!uvBound.hasConsistentTextureAnimationCounts());
   assert(!uvBound.hasConsistentSuccessfulCensus());
 
@@ -926,6 +1218,43 @@ void validateCheckedCensusCounters() {
       IOSSceneSourcePlanResult::SkippedTextureAnimation,
       &IOSSceneExtractionStats::skippedTextureFrameAndUv,
       IOSSceneTextureAnimationMode::FrameAndUv);
+
+  for(const auto mode:{
+        IOSSceneTextureAnimationMode::UvOnly,
+        IOSSceneTextureAnimationMode::FrameAndUv}) {
+    auto source = candidate();
+    source.hasUvAnimation = true;
+    source.uvPeriodX = 4;
+    if(mode==IOSSceneTextureAnimationMode::FrameAndUv) {
+      source.hasFrameAnimation = true;
+      source.hasValidFrameSequence = true;
+      source.frameCount = 2u;
+      source.framePeriodMs = 10u;
+      }
+    IOSSceneOpaqueMeshPlan plan;
+    assert(planIOSOpaqueMeshSource(source,plan)==
+           IOSSceneSourcePlanResult::Planned);
+    IOSSceneExtractionStats stats;
+    std::size_t& admitted =
+        mode==IOSSceneTextureAnimationMode::UvOnly
+          ? stats.admittedUvOnly
+          : stats.admittedFrameAndUv;
+    admitted = std::numeric_limits<std::size_t>::max();
+    assert(!recordIOSScenePlanResult(
+        IOSSceneSourcePlanResult::Planned,plan,stats,mode));
+    assert(admitted==std::numeric_limits<std::size_t>::max());
+    assert(stats.planned==0u);
+    assert(stats.invalidSource==1u);
+    }
+
+  IOSSceneExtractionStats fabricatedModeStats;
+  IOSSceneOpaqueMeshPlan staticPlan;
+  assert(planIOSOpaqueMeshSource(candidate(),staticPlan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,staticPlan,fabricatedModeStats,
+      static_cast<IOSSceneTextureAnimationMode>(255u)));
+  assert(fabricatedModeStats.invalidSource==1u);
 
   IOSSceneExtractionStats invalidOverflow;
   invalidOverflow.invalidSource = std::numeric_limits<std::size_t>::max();
@@ -1201,8 +1530,11 @@ void validateAtomicPublication() {
 int main() {
   validatePublicContract();
   validateFrameSelection();
+  validateUVOffsetEvaluation();
   validateFrameAnimationEvidence();
+  validateUVAnimationEvidence();
   validateFrameOnlyAdmission();
+  validateUVAdmission();
   validateFrameTextureAdapter();
   validateAcceptedKinds();
   validateSkippedSources();

@@ -2,6 +2,7 @@
 
 #include "iosframeanimationevidence.h"
 #include "iosscenesnapshot.h"
+#include "iosuvanimationevidence.h"
 
 #include <array>
 #include <cmath>
@@ -2294,6 +2295,7 @@ struct alignas(16) IOSGPUSceneDrawConstants final {
   IOSMatrix4x4 viewProjection;
   IOSMatrix4x4 model;
   IOSFloat4    baseColor;
+  IOSFloat2    uvOffset;
   };
 
 struct IOSGPUSceneDrawPlan final {
@@ -2399,12 +2401,15 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
   if(!std::isfinite(source.material.baseColor.x) ||
      !std::isfinite(source.material.baseColor.y) ||
      !std::isfinite(source.material.baseColor.z) ||
-     !std::isfinite(source.material.baseColor.w))
+     !std::isfinite(source.material.baseColor.w) ||
+     !std::isfinite(source.material.uvOffset.x) ||
+     !std::isfinite(source.material.uvOffset.y))
     return IOSGPUSceneDrawPlanResult::InvalidMesh;
 
   out.constants.viewProjection = camera.viewProjection;
   out.constants.model          = source.entity.currentTransform;
   out.constants.baseColor      = source.material.baseColor;
+  out.constants.uvOffset       = source.material.uvOffset;
   out.baseColorTexture         = source.material.baseColorTexture;
   out.materialCategory         = source.material.category;
   out.kind                     = source.entity.kind;
@@ -2417,10 +2422,207 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
   }
 
 static_assert(sizeof(IOSMatrix4x4)==64u);
+static_assert(sizeof(IOSFloat2)==8u);
 static_assert(sizeof(IOSFloat4)==16u);
 static_assert(offsetof(IOSGPUSceneDrawConstants,viewProjection)==0u);
 static_assert(offsetof(IOSGPUSceneDrawConstants,model)==64u);
 static_assert(offsetof(IOSGPUSceneDrawConstants,baseColor)==128u);
-static_assert(sizeof(IOSGPUSceneDrawConstants)==144u);
+static_assert(offsetof(IOSGPUSceneDrawConstants,uvOffset)==144u);
+static_assert(sizeof(IOSGPUSceneDrawConstants)==160u);
 static_assert(alignof(IOSGPUSceneDrawConstants)==16u);
 static_assert(std::is_trivially_copyable_v<IOSGPUSceneDrawConstants>);
+
+enum class IOSGPUSceneUVAnimationRecordResult : uint8_t {
+  IgnoredStatic,
+  RecordedUvOnly,
+  RecordedFrameAndUv,
+  InvalidEvidence,
+  DuplicateAnimated,
+  CountOverflow,
+  };
+
+struct IOSGPUSceneUVAnimationDrawReport final {
+  std::vector<IOSUVAnimationSelection> encodedEntries;
+  std::size_t                          drawnUvOnly = 0;
+  std::size_t                          drawnFrameAndUv = 0;
+  std::size_t                          encodedCount = 0;
+  uint64_t encodedTextureDigest = IOSUVAnimationFNV1aOffset;
+  uint64_t encodedUVDigest = IOSUVAnimationFNV1aOffset;
+  bool     valid = false;
+
+  bool operator==(const IOSGPUSceneUVAnimationDrawReport&) const = default;
+  };
+
+struct IOSGPUSceneUVAnimationTracker final {
+  const IOSUVAnimationEvidence* evidence = nullptr;
+  std::vector<IOSTextureHandle> actuallyEncodedHandles;
+  std::vector<IOSFloat2>        actuallyEncodedOffsets;
+  std::vector<uint8_t>          recorded;
+  std::size_t                   drawnUvOnly = 0;
+  std::size_t                   drawnFrameAndUv = 0;
+  bool                          valid = false;
+  };
+
+inline bool prepareIOSGPUSceneUVAnimationTracker(
+    const IOSUVAnimationEvidence& evidence,
+    IOSWorldGeneration expectedGeneration,
+    IOSGPUSceneUVAnimationTracker& output) noexcept {
+  if(!expectedGeneration || !isCanonicalIOSUVAnimationEvidence(evidence))
+    return false;
+  for(const auto& selection:evidence.selections)
+    if(selection.selectedHandle.generation!=expectedGeneration)
+      return false;
+
+  try {
+    IOSGPUSceneUVAnimationTracker prepared;
+    prepared.evidence = &evidence;
+    prepared.actuallyEncodedHandles.assign(
+        evidence.selections.size(),IOSTextureHandle{});
+    prepared.actuallyEncodedOffsets.assign(
+        evidence.selections.size(),IOSFloat2{});
+    prepared.recorded.assign(evidence.selections.size(),uint8_t(0u));
+    prepared.valid = true;
+    output = std::move(prepared);
+    return true;
+    }
+  catch(...) {
+    return false;
+    }
+  }
+
+inline IOSGPUSceneUVAnimationRecordResult recordIOSGPUSceneUVAnimationDraw(
+    IOSGPUSceneUVAnimationTracker& tracker,
+    const IOSGPUSceneDrawPlan& plan) noexcept {
+  if(!tracker.valid || tracker.evidence==nullptr ||
+     tracker.actuallyEncodedHandles.size()!=
+         tracker.evidence->selections.size() ||
+     tracker.actuallyEncodedOffsets.size()!=
+         tracker.evidence->selections.size() ||
+     tracker.recorded.size()!=tracker.evidence->selections.size() ||
+     !plan.baseColorTexture ||
+     !isCanonicalIOSUVAnimationOffset(plan.constants.uvOffset))
+    return IOSGPUSceneUVAnimationRecordResult::InvalidEvidence;
+
+  const auto& selections = tracker.evidence->selections;
+  std::size_t selected = selections.size();
+  for(std::size_t index=0; index<selections.size(); ++index) {
+    if(selections[index].selectedHandle!=plan.baseColorTexture)
+      continue;
+    if(selected!=selections.size())
+      return IOSGPUSceneUVAnimationRecordResult::InvalidEvidence;
+    selected = index;
+    }
+  if(selected==selections.size())
+    return IOSGPUSceneUVAnimationRecordResult::IgnoredStatic;
+  if(tracker.recorded[selected]!=0u ||
+     tracker.actuallyEncodedHandles[selected])
+    return IOSGPUSceneUVAnimationRecordResult::DuplicateAnimated;
+
+  const auto& expected = selections[selected];
+  if(iosUVAnimationFloatBits(plan.constants.uvOffset.x)!=
+         iosUVAnimationFloatBits(expected.uvOffset.x) ||
+     iosUVAnimationFloatBits(plan.constants.uvOffset.y)!=
+         iosUVAnimationFloatBits(expected.uvOffset.y))
+    return IOSGPUSceneUVAnimationRecordResult::InvalidEvidence;
+
+  IOSGPUSceneUVAnimationRecordResult result;
+  if(expected.mode==IOSSceneTextureAnimationMode::UvOnly) {
+    if(tracker.drawnUvOnly==std::numeric_limits<std::size_t>::max())
+      return IOSGPUSceneUVAnimationRecordResult::CountOverflow;
+    ++tracker.drawnUvOnly;
+    result = IOSGPUSceneUVAnimationRecordResult::RecordedUvOnly;
+    }
+  else if(expected.mode==IOSSceneTextureAnimationMode::FrameAndUv) {
+    if(tracker.drawnFrameAndUv==std::numeric_limits<std::size_t>::max())
+      return IOSGPUSceneUVAnimationRecordResult::CountOverflow;
+    ++tracker.drawnFrameAndUv;
+    result = IOSGPUSceneUVAnimationRecordResult::RecordedFrameAndUv;
+    }
+  else {
+    return IOSGPUSceneUVAnimationRecordResult::InvalidEvidence;
+    }
+
+  tracker.actuallyEncodedHandles[selected] = plan.baseColorTexture;
+  tracker.actuallyEncodedOffsets[selected] = plan.constants.uvOffset;
+  tracker.recorded[selected] = uint8_t(1u);
+  return result;
+  }
+
+inline bool finalizeIOSGPUSceneUVAnimationDrawReport(
+    const IOSGPUSceneUVAnimationTracker& tracker,
+    IOSGPUSceneUVAnimationDrawReport& output) noexcept {
+  if(!tracker.valid || tracker.evidence==nullptr ||
+     !isCanonicalIOSUVAnimationEvidence(*tracker.evidence) ||
+     tracker.actuallyEncodedHandles.size()!=
+         tracker.evidence->selections.size() ||
+     tracker.actuallyEncodedOffsets.size()!=
+         tracker.evidence->selections.size() ||
+     tracker.recorded.size()!=tracker.evidence->selections.size() ||
+     tracker.drawnUvOnly!=tracker.evidence->admittedUvOnly ||
+     tracker.drawnFrameAndUv!=tracker.evidence->admittedFrameAndUv ||
+     tracker.evidence->plannedCount!=tracker.evidence->selections.size() ||
+     tracker.drawnUvOnly>tracker.evidence->selections.size() ||
+     tracker.drawnFrameAndUv>
+         tracker.evidence->selections.size()-tracker.drawnUvOnly)
+    return false;
+
+  try {
+    IOSGPUSceneUVAnimationDrawReport finalized;
+    finalized.encodedEntries.reserve(tracker.evidence->selections.size());
+    uint64_t textureDigest = IOSUVAnimationFNV1aOffset;
+    uint64_t uvDigest = IOSUVAnimationFNV1aOffset;
+    for(std::size_t index=0;
+        index<tracker.evidence->selections.size();
+        ++index) {
+      if(tracker.recorded[index]!=uint8_t(1u) ||
+         !tracker.actuallyEncodedHandles[index] ||
+         !isCanonicalIOSUVAnimationOffset(
+             tracker.actuallyEncodedOffsets[index]))
+        return false;
+      const auto& expected = tracker.evidence->selections[index];
+      if(tracker.actuallyEncodedHandles[index]!=expected.selectedHandle ||
+         iosUVAnimationFloatBits(
+             tracker.actuallyEncodedOffsets[index].x)!=
+             iosUVAnimationFloatBits(expected.uvOffset.x) ||
+         iosUVAnimationFloatBits(
+             tracker.actuallyEncodedOffsets[index].y)!=
+             iosUVAnimationFloatBits(expected.uvOffset.y))
+        return false;
+      IOSUVAnimationSelection encoded = expected;
+      encoded.selectedHandle = tracker.actuallyEncodedHandles[index];
+      encoded.uvOffset = tracker.actuallyEncodedOffsets[index];
+      finalized.encodedEntries.emplace_back(encoded);
+      textureDigest = iosUVAnimationFNV1aAppendUint64(
+          textureDigest,encoded.sourceId);
+      textureDigest = iosUVAnimationFNV1aAppendUint32(
+          textureDigest,static_cast<uint32_t>(encoded.mode));
+      textureDigest = iosUVAnimationFNV1aAppendUint64(
+          textureDigest,encoded.frameOrdinal);
+      textureDigest = iosUVAnimationFNV1aAppendUint64(
+          textureDigest,encoded.selectedHandle.generation.value);
+      textureDigest = iosUVAnimationFNV1aAppendUint64(
+          textureDigest,encoded.selectedHandle.value);
+      uvDigest = iosUVAnimationFNV1aAppendUint64(
+          uvDigest,encoded.sourceId);
+      uvDigest = iosUVAnimationFNV1aAppendUint32(
+          uvDigest,iosUVAnimationFloatBits(encoded.uvOffset.x));
+      uvDigest = iosUVAnimationFNV1aAppendUint32(
+          uvDigest,iosUVAnimationFloatBits(encoded.uvOffset.y));
+      }
+    if(finalized.encodedEntries.size()!=tracker.evidence->plannedCount ||
+       textureDigest!=tracker.evidence->textureSelectionDigest ||
+       uvDigest!=tracker.evidence->plannedUVDigest)
+      return false;
+    finalized.drawnUvOnly = tracker.drawnUvOnly;
+    finalized.drawnFrameAndUv = tracker.drawnFrameAndUv;
+    finalized.encodedCount = finalized.encodedEntries.size();
+    finalized.encodedTextureDigest = textureDigest;
+    finalized.encodedUVDigest = uvDigest;
+    finalized.valid = true;
+    output = std::move(finalized);
+    return true;
+    }
+  catch(...) {
+    return false;
+    }
+  }
