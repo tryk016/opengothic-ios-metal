@@ -6881,7 +6881,7 @@ resize = context.split("void IOSMetalContext::resize() {", 1)[1].split(
 )[0]
 resize_contract = (
     "impl->swapchain.reset();",
-    "impl->resetTargets();",
+    "impl->resetTargets(IOSLinearHDRActivationAttempt::Recreate);",
     "#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)",
     'impl->logLifecycleCounts("resize-settled",true);',
     "#endif",
