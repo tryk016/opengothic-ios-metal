@@ -7,6 +7,7 @@ import copy
 import importlib.util
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -168,27 +169,34 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
         document["resources"]["scene"]["allocatedBytes"] += 4096
         VALIDATOR.validate_document(document)
 
-    def test_device_capture_log_join_passes_library_and_cli(self) -> None:
+    def test_dummy_texture_and_manual_hdr_values_are_blocked_after_device_join(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = pathlib.Path(temporary)
             capture = make_capture(directory)
             document = device_document(self.document, capture)
+            self.assertEqual(
+                (capture / "MTLTexture-7-0-mipmap0-slice0").read_bytes(),
+                b"linear-hdr-pixels",
+            )
+            self.assertEqual(document["sceneSamples"]["samples"][0]["rgb"][0], 1.375)
+            self.assertEqual(document["sceneSamples"]["observedMaximumComponent"], 1.625)
             log = directory / "linear-hdr.log"
             log.write_text(linear_hdr_log(), encoding="utf-8")
             evidence = directory / "evidence.json"
             evidence.write_text(json.dumps(document), encoding="utf-8")
 
-            values = VALIDATOR.validate_device_join(
-                document,
-                capture,
-                log,
-                BUILD,
-                "startup",
-                True,
-            )
-            self.assertEqual(values["generation"], 7)
-            self.assertEqual(values["snapshot_sequence"], 41)
-            self.assertEqual(values["bytes"], 48)
+            with self.assertRaisesRegex(
+                VALIDATOR.EvidenceError,
+                rf"^{VALIDATOR.MISSING_LOSSLESS_SCENE_SAMPLE_PROOF}$",
+            ):
+                VALIDATOR.validate_device_join(
+                    document,
+                    capture,
+                    log,
+                    BUILD,
+                    "startup",
+                    True,
+                )
 
             incomplete = subprocess.run(
                 [sys.executable, str(SCRIPT), "--evidence", str(evidence)],
@@ -221,10 +229,12 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
                 stderr=subprocess.PIPE,
                 text=True,
             )
-            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.stdout, "")
             self.assertEqual(
-                result.stdout,
-                "linear HDR GPU evidence validation passed: class=device-gpudebug\n",
+                result.stderr,
+                "linear HDR GPU evidence validation failed: "
+                f"{VALIDATOR.MISSING_LOSSLESS_SCENE_SAMPLE_PROOF}\n",
             )
 
     def test_device_join_rejects_foreign_identity_extent_and_digest(self) -> None:
@@ -236,16 +246,35 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
             log.write_text(linear_hdr_log(), encoding="utf-8")
 
             mutations = (
-                ("digest", assign(("source", "captureSha256"), "0" * 64)),
-                ("build", assign(("runIdentity", "buildSha"), "1" * 40)),
-                ("generation", assign(("runIdentity", "targetGeneration"), 8)),
-                ("sequence", assign(("runIdentity", "snapshotSequence"), 42)),
+                (
+                    "digest",
+                    assign(("source", "captureSha256"), "0" * 64),
+                    "capture digest differs from GPU evidence JSON",
+                ),
+                (
+                    "build",
+                    assign(("runIdentity", "buildSha"), "1" * 40),
+                    "build SHA does not join GPU evidence and log",
+                ),
+                (
+                    "generation",
+                    assign(("runIdentity", "targetGeneration"), 8),
+                    "target generation does not join GPU evidence and log",
+                ),
+                (
+                    "sequence",
+                    assign(("runIdentity", "snapshotSequence"), 42),
+                    "snapshot sequence does not join GPU evidence and log",
+                ),
             )
-            for label, mutation in mutations:
+            for label, mutation, expected_error in mutations:
                 candidate = copy.deepcopy(document)
                 mutation(candidate)
                 with self.subTest(join=label):
-                    with self.assertRaises(VALIDATOR.EvidenceError):
+                    with self.assertRaisesRegex(
+                        VALIDATOR.EvidenceError,
+                        rf"^{re.escape(expected_error)}$",
+                    ):
                         VALIDATOR.validate_device_join(
                             candidate,
                             capture,
@@ -260,7 +289,10 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
                 linear_hdr_log(width=5, height=3),
                 encoding="utf-8",
             )
-            with self.assertRaises(VALIDATOR.EvidenceError):
+            with self.assertRaisesRegex(
+                VALIDATOR.EvidenceError,
+                r"^width does not join GPU evidence and log$",
+            ):
                 VALIDATOR.validate_device_join(
                     document,
                     capture,

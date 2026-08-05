@@ -12,7 +12,7 @@ import pathlib
 import re
 import stat
 import sys
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, NoReturn, Sequence
 
 
 MAX_EVIDENCE_BYTES = 1024 * 1024
@@ -28,6 +28,9 @@ DRAWABLE_RESOURCE = "drawable"
 DEVICE_EVIDENCE = "device-gpudebug"
 SYNTHETIC_EVIDENCE = "synthetic-fixture"
 REQUIRED_CAPTURE_MEMBERS = ("capture", "index", "metadata", "store0")
+MISSING_LOSSLESS_SCENE_SAMPLE_PROOF = (
+    "BLOCKED: missing lossless capture-derived scene-sample proof"
+)
 
 
 class EvidenceError(RuntimeError):
@@ -461,7 +464,7 @@ def validate_device_join(
     expected_sha: str,
     require_attempt: str,
     require_ui: bool = False,
-) -> dict[str, Any]:
+) -> NoReturn:
     validate_document(document)
     exact_string(document["evidenceClass"], DEVICE_EVIDENCE, "evidenceClass")
 
@@ -488,7 +491,7 @@ def validate_device_join(
     require(extent["width"] == values.get("width"), "width does not join GPU evidence and log")
     require(extent["height"] == values.get("height"), "height does not join GPU evidence and log")
     require(document["logicalBytes"] == values.get("bytes"), "logical byte size does not join GPU evidence and log")
-    return values
+    raise EvidenceError(MISSING_LOSSLESS_SCENE_SAMPLE_PROOF)
 
 
 def parse_arguments(argv: Sequence[str]) -> argparse.Namespace:
