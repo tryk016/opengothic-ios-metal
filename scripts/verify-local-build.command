@@ -119,6 +119,10 @@ echo "### Tempest verifier (2x)"
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh
 
+echo "### Tempest Metal 2D copy contract"
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/tests/test_tempest_metal_2d_copy_contract.py
+
 echo "### Neutral P2.1 scene boundary"
 headers=(
   game/graphics/iosframeinput.h

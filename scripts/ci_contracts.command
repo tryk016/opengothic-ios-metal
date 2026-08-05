@@ -23,6 +23,10 @@ printf '\n### CI contract: Verify pinned Tempest fork twice\n'
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh
 
+printf '\n### CI contract: Verify Tempest Metal 2D copy contract\n'
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/tests/test_tempest_metal_2d_copy_contract.py
+
 scripts/verify_ios_linear_hdr.command
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_validate_linear_hdr_log.py
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_gpu_evidence.py

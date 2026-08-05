@@ -10,8 +10,8 @@ TEMPEST_ROOT="${TEMPEST_ROOT:-$ROOT/lib/Tempest}"
 
 EXPECTED_URL="https://github.com/tryk016/Tempest.git"
 BASE_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
-EXPECTED_COMMIT="5321b8d05222c17cad1646faf8ff3d53e1f00fd1"
-EXPECTED_TAG="opengothic-ios-patch-stack-v14"
+EXPECTED_COMMIT="308ec44c501c6ee86c153ba4acd63d44e39cf38d"
+EXPECTED_TAG="opengothic-ios-patch-stack-v15"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -238,4 +238,4 @@ require_literal "$METAL_TEST" "OfflineBuiltinManifestFailsClosed" "offline Built
 require_literal "$METAL_TEST" "OfflineInventoryMetallib" "offline inventory Metal runtime test"
 require_literal "$METAL_TEST" "OfflineInventoryManifestFailsClosed" "offline inventory fail-closed runtime test"
 
-echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource/encoder bridges + one-shot command-buffer bridge + runtime compilation counters + exact Builtin role attribution + fail-closed offline Builtin/inventory manifests + device-wide Builtin/inventory binary pipeline archive)"
+echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource/encoder bridges + one-shot command-buffer bridge + 2D texture readback conformance + runtime compilation counters + exact Builtin role attribution + fail-closed offline Builtin/inventory manifests + device-wide Builtin/inventory binary pipeline archive)"

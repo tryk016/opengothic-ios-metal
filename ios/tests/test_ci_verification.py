@@ -160,6 +160,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "Verify shared CMake presets",
         "Verify P2.1c3b3b causal build isolation",
         "Verify pinned Tempest fork twice",
+        "Verify Tempest Metal 2D copy contract",
         "Verify neutral P2.1 scene boundary",
         "Verify neutral P2.2d frame plan",
         "Verify P2.6a host-neutral device facts contract",
