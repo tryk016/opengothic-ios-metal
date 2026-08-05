@@ -23,6 +23,10 @@ printf '\n### CI contract: Verify pinned Tempest fork twice\n'
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh
 
+scripts/verify_ios_linear_hdr.command
+PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_validate_linear_hdr_log.py
+PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_gpu_evidence.py
+
 printf '\n### CI contract: Verify P2.1c3b3b causal build isolation\n'
 set -euo pipefail
 
@@ -3888,13 +3892,13 @@ grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
 grep -Fq 'opengothic-ios-patch-stack-v14' \
   ios/patches/apply-patches.sh
 
-grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-7.binaryarchive' \
+grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-8.binaryarchive' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'PreviousArchiveFileName' \
   game/graphics/iospipelinearchivepolicy.h
-grep -Fq '"RendererIOS-abi-6.binaryarchive"' \
+grep -Fq '"RendererIOS-abi-7.binaryarchive"' \
   game/graphics/iospipelinearchivepolicy.h
-grep -Fq '"RendererIOS-abi-6.provenance"' \
+grep -Fq '"RendererIOS-abi-7.provenance"' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'NSSearchPathForDirectoriesInDomains(' \
   game/graphics/rendereriosplatform.mm
@@ -5033,6 +5037,7 @@ link_rendererios_metallib \
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
+  riosToneResolveVertex riosToneResolveFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -5049,6 +5054,7 @@ require_exact_rendererios_exports() {
   for function in \
       riosLandscapeVertex riosLandscapeFragment \
       riosLandscapeAlphaTestFragment \
+      riosToneResolveVertex riosToneResolveFragment \
       riosBinkVertex riosBinkFragment \
       riosUiColorVertex riosUiColorFragment \
       riosUiTextureVertex riosUiTextureFragment \
@@ -5063,7 +5069,7 @@ require_exact_rendererios_exports() {
   exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
     awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
   test "$exports" = "$EXPECTED_RIOS_EXPORTS"
-  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 16
+  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 18
 }
 require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
 require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
@@ -5093,7 +5099,7 @@ int main(int argc, char** argv) {
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==7u);
+  static_assert(Archive::MetallibAbiVersion==8u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
   static_assert(
     Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
@@ -5101,7 +5107,7 @@ int main(int argc, char** argv) {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-7.binaryarchive");
+    "RendererIOS-abi-8.binaryarchive");
   if(argc!=3)
     return 1;
   const std::string_view candidate = argv[1];
@@ -5120,9 +5126,9 @@ int main(int argc, char** argv) {
     "provenance-schema=1\n"
     "cache-schema=1\n"
     "pipeline-key-abi=1\n"
-    "metallib-abi=7\n"
+    "metallib-abi=8\n"
     "metallib-sha256="+std::string(candidate)+"\n"
-    "archive-file=RendererIOS-abi-7.binaryarchive\n";
+    "archive-file=RendererIOS-abi-8.binaryarchive\n";
   return record==expected ? 0 : 4;
 }
 CPP
@@ -5136,6 +5142,8 @@ xcrun clang++ -std=c++20 \
 
 if grep -Eq \
     'newLibraryWithSource|compileSource|MTLCompileOptions|newCommandQueue|commandBufferWith|presentDrawable' \
+    shader/ios-metal/landscape.metal \
+    game/graphics/ioslandscapeshaderabi.h \
     shader/ios-metal/shading-prototypes.metal \
     game/graphics/iosshadingprototypeshaderabi.h; then
   echo 'P2.5b0 prototype ABI contains runtime compilation or ownership'
@@ -5304,7 +5312,7 @@ normalized = "".join(source.split())
 needle = (
     "static_assert("
     "RendererIOSShadingPrototypeShader::"
-    "TotalMetallibExportCount==16u);"
+    "TotalMetallibExportCount==18u);"
 )
 print(normalized.count(needle))
 PY
@@ -5886,7 +5894,7 @@ profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
-    "case=tile-prototype-v1 contract=1 metallib-abi=7 "
+    "case=tile-prototype-v1 contract=1 metallib-abi=8 "
     "minimum-apple=4 output=4x4 rgba8-private=1",
     "RendererIOS shading prototype tile self-test: FACTORY READY "
     "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
@@ -6089,7 +6097,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
 TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
 strings "$TILE_BINARY" >"$TILE_STRINGS"
 for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 output=4x4 rgba8-private=1' \
+    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1' \
     'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
     'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

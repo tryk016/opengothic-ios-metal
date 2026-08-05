@@ -111,6 +111,8 @@ MTLPixelFormat nativeColorFormat(IOSGPUScene::ColorFormat format) {
   switch(format) {
     case IOSGPUScene::ColorFormat::Bgra8Unorm:
       return MTLPixelFormatBGRA8Unorm;
+    case IOSGPUScene::ColorFormat::Rg11B10Float:
+      return MTLPixelFormatRG11B10Float;
     }
   throw std::invalid_argument("RendererIOS IOSGPUScene received an unsupported color format");
   }
@@ -1177,6 +1179,11 @@ IOSGPUScene::IOSGPUScene(Tempest::Device& device, TargetLayout target)
   }
 
 IOSGPUScene::~IOSGPUScene() = default;
+
+bool IOSGPUScene::pipelinesReady() const noexcept {
+  return impl!=nullptr &&
+         impl->initializationResult==IOSGPUScene::Result::Success;
+  }
 
 IOSGPUScene::Report IOSGPUScene::encode(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,

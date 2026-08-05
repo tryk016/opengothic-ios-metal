@@ -19,6 +19,7 @@ class IOSGPUScene final {
   public:
     enum class ColorFormat : uint8_t {
       Bgra8Unorm,
+      Rg11B10Float,
       };
 
     enum class DepthFormat : uint8_t {
@@ -71,6 +72,8 @@ class IOSGPUScene final {
 
     IOSGPUScene(const IOSGPUScene&) = delete;
     IOSGPUScene& operator=(const IOSGPUScene&) = delete;
+
+    bool pipelinesReady() const noexcept;
 
     // The encoder must own an active render pass whose color, depth and sample
     // layout exactly matches the TargetLayout used to construct this scene.

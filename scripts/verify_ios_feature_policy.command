@@ -924,7 +924,7 @@ def validate_runtime_contract(candidate_header, candidate_source):
             "P2.6e2 global policy marker call count changed"
         )
     for anchor in (
-        "resetTargets();",
+        "resetTargets(IOSLinearHDRActivationAttempt::Startup);",
         build_anchor,
         take_anchor,
         result_anchor,
@@ -937,7 +937,7 @@ def validate_runtime_contract(candidate_header, candidate_source):
     ordered = (
         "iosLogDeviceFacts(deviceFacts);",
         "if(!deviceFacts.value)",
-        "resetTargets();",
+        "resetTargets(IOSLinearHDRActivationAttempt::Startup);",
         build_anchor,
         take_anchor,
         result_anchor,
@@ -951,7 +951,9 @@ def validate_runtime_contract(candidate_header, candidate_source):
     if swallowed_try<=positions[-2]:
         raise ValueError("P2.6e2 mandatory log entered swallow-all")
 
-    raw_reset = constructor_source.index("    resetTargets();")
+    raw_reset = constructor_source.index(
+        "    resetTargets(IOSLinearHDRActivationAttempt::Startup);"
+    )
     raw_log = constructor_source.index(
         "    Log::i(featurePolicyTelemetry.data(),"
     )
@@ -1100,8 +1102,10 @@ runtime_mutations.append((
     context_header,
     replace_once(
         context_source,
-        "    resetTargets();\n" + build_block,
-        build_block + "    resetTargets();\n",
+        "    resetTargets(IOSLinearHDRActivationAttempt::Startup);\n"
+        + build_block,
+        build_block
+        + "    resetTargets(IOSLinearHDRActivationAttempt::Startup);\n",
     ),
 ))
 runtime_mutations.append((

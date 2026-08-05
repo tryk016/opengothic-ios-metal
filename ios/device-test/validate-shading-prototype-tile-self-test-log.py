@@ -20,7 +20,7 @@ CAPTURE_NAME = "RendererIOS-tile-prototype-v1.gputrace"
 MAX_MARKER_BYTES = 250
 MAX_CAPTURE_BYTES = 512 * 1024 * 1024
 ARMED = (
-    f"{PREFIX} ARMED case={CASE} contract=1 metallib-abi=7 minimum-apple=4 "
+    f"{PREFIX} ARMED case={CASE} contract=1 metallib-abi=8 minimum-apple=4 "
     "output=4x4 rgba8-private=1"
 )
 FACTORY_READY = (
@@ -401,7 +401,7 @@ def validate_pass(
         "shading_prototype_tile_unsupported_count": 0,
         "shading_prototype_tile_fail_count": 0,
         "shading_prototype_tile_contract": 1,
-        "shading_prototype_tile_metallib_abi": 7,
+        "shading_prototype_tile_metallib_abi": 8,
         "shading_prototype_tile_pipelines": 3,
         "shading_prototype_tile_forward": 0,
         "shading_prototype_tile_passes": 1,
@@ -568,7 +568,7 @@ def self_test() -> None:
             "unknown": valid.replace(SUBMITTED, f"{PREFIX} UNKNOWN case={CASE}"),
             "wrong-build": valid.replace(build, "f" * 40 + "-local"),
             "wrong-contract": valid.replace("contract=1", "contract=2"),
-            "wrong-abi": valid.replace("metallib-abi=7", "metallib-abi=6"),
+            "wrong-abi": valid.replace("metallib-abi=8", "metallib-abi=7"),
             "forward": valid.replace("forward=0", "forward=1"),
             "extra-pipeline": valid.replace("pipelines=3", "pipelines=4"),
             "extra-pass": valid.replace("pass=1", "pass=2"),

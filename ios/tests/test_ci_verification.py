@@ -235,7 +235,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
-        ')" -eq 16',
+        ')" -eq 18',
         "RendererIOS.candidate.sha256",
     ):
         if candidate.count(literal) != 1:
@@ -2126,10 +2126,30 @@ def test_bash32_candidate_arguments() -> None:
         "# CI_PROFILE_CANDIDATE_END",
         "profile candidate metallib",
     )
+    export_oracle_sources = (
+        ("profile", profile, 1),
+        ("contracts", CONTRACTS.read_text(encoding="utf-8"), 2),
+        ("local", LOCAL_VERIFY.read_text(encoding="utf-8"), 2),
+    )
+    tone_exports = ("riosToneResolveVertex", "riosToneResolveFragment")
+    cross_script_mutations_killed = 0
+    for label, source, expected_count in export_oracle_sources:
+        for function in tone_exports:
+            assert source.count(function) == expected_count, (
+                f"{label} exact ABI8 export oracle drifted: {function}"
+            )
+            mutant = source.replace(function, "riosToneResolveMutant", 1)
+            assert mutant.count(function) != expected_count, (
+                f"{label} ABI8 export mutation survived: {function}"
+            )
+            cross_script_mutations_killed += 1
+    assert cross_script_mutations_killed == 6
     exports = (
         "riosLandscapeVertex",
         "riosLandscapeFragment",
         "riosLandscapeAlphaTestFragment",
+        "riosToneResolveVertex",
+        "riosToneResolveFragment",
         "riosBinkVertex",
         "riosBinkFragment",
         "riosUiColorVertex",
@@ -2144,6 +2164,7 @@ def test_bash32_candidate_arguments() -> None:
         "riosForwardPlusBuildLightList",
         "riosForwardPlusFragment",
     )
+    assert len(exports) == 18
     metal_nm_output = "".join(f"00000000 T {name}\\n" for name in exports)
     harness = f"""\
 set -Eeuo pipefail
@@ -2209,6 +2230,67 @@ xcrun() {{
         flag in metal_commands[-1]
         for flag in ("-Wall", "-Wextra", "-Werror")
     )
+
+    old_abi7_exports = tuple(
+        name for name in exports
+        if name not in ("riosToneResolveVertex", "riosToneResolveFragment")
+    )
+    assert len(old_abi7_exports) == 16
+    export_mutations = (
+        (
+            "missing-tone-vertex",
+            tuple(name for name in exports if name != "riosToneResolveVertex"),
+        ),
+        (
+            "missing-tone-fragment",
+            tuple(name for name in exports if name != "riosToneResolveFragment"),
+        ),
+        ("old-abi7-set", old_abi7_exports),
+        ("duplicate-tone-vertex", exports + ("riosToneResolveVertex",)),
+        ("unexpected-export", exports + ("riosUnexpectedRuntimeShader",)),
+    )
+    mutations_killed = 0
+    for label, mutated_exports in export_mutations:
+        mutated_nm = "".join(
+            f"00000000 T {name}\\n" for name in mutated_exports
+        )
+        mutated_harness = f"""\
+set -Eeuo pipefail
+IFS=$'\\n\\t'
+xcrun() {{
+  if [ "${{3:-}}" = metal-nm ]; then
+    printf '%b' {json.dumps(mutated_nm)}
+    return
+  fi
+  output=
+  previous=
+  for argument in "$@"; do
+    if [ "$previous" = -o ]; then
+      output="$argument"
+    fi
+    previous="$argument"
+  done
+  test -n "$output"
+  : >"$output"
+}}
+{candidate}
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            result = subprocess.run(
+                ["/bin/bash"],
+                input=mutated_harness,
+                text=True,
+                cwd=REPO,
+                env={**os.environ, "RUNNER_TEMP": directory},
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+        assert result.returncode != 0, (
+            "RendererIOS ABI8 export mutation survived: " + label
+        )
+        mutations_killed += 1
+    assert mutations_killed == 5
 
 
 def test_bash32_causal_profile_tuple() -> None:
@@ -2362,7 +2444,8 @@ def main() -> None:
         "7 workflow mutations, 12 extraction/profile mutations, "
         "19 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
-        "17 UI selector mutations, 6 UI harness mutations"
+        "17 UI selector mutations, 6 UI harness mutations, "
+        "11 ABI8 export mutations"
     )
 
 

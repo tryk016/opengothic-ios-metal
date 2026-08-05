@@ -5,11 +5,13 @@
 #include <Tempest/Painter>
 
 #include <stdexcept>
+#include <limits>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "iosmetalcontext.h"
+#include "gothic.h"
 #include "iosgpusceneplan.h"
 #include "iosrenderworld.h"
 #include "iossceneassetregistry.h"
@@ -44,6 +46,25 @@ struct RendererIOS::Impl final {
     : device(device),
       assets(device,renderWorld.generation()),
       context(device,window) {
+    Gothic::inst().onSettingsChanged.bind(this,&Impl::setupSettings);
+    setupSettings();
+    }
+
+  ~Impl() {
+    Gothic::inst().onSettingsChanged.ubind(this,&Impl::setupSettings);
+    }
+
+  void setupSettings() noexcept {
+    try {
+      context.updateLinearHDRSettings(
+        Gothic::settingsGetF("VIDEO","zVidBrightness"),
+        Gothic::settingsGetF("VIDEO","zVidContrast"),
+        Gothic::settingsGetF("VIDEO","zVidGamma"));
+      }
+    catch(...) {
+      const float invalid = std::numeric_limits<float>::quiet_NaN();
+      context.updateLinearHDRSettings(invalid,invalid,invalid);
+      }
     }
 
   Device&          device;

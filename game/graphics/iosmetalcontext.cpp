@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -41,6 +42,8 @@
 #include "iosgpubink.h"
 #include "iosdevicefactscollector.h"
 #include "iosfeaturepolicyprovenance.h"
+#include "ioslinearhdr.h"
+#include "ioslinearhdrmetal.h"
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
@@ -610,7 +613,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1093,6 +1096,18 @@ static_assert(
 }
 
 struct IOSMetalContext::Impl final {
+  struct LinearHDRTargets final {
+    Attachment color;
+    ZBuffer depth;
+    IOSLinearHDRExtent extent;
+    uint64_t generation = 0u;
+
+    bool current(uint32_t width, uint32_t height) const noexcept {
+      return !color.isEmpty() && !depth.isEmpty() &&
+             extent.width==width && extent.height==height;
+      }
+    };
+
   enum class PreviewState : uint8_t {
     Idle,
     AwaitingGpu,
@@ -1190,6 +1205,9 @@ struct IOSMetalContext::Impl final {
     IOSSceneSnapshotPtr        sceneFrame;
     PreparedUi                 uiPayload;
     uint64_t                   videoSerial = 0;
+    IOSLinearHDRFrameSequence  linearHDRSequence;
+    bool                       linearHDRPolicyReadyAtEncode = false;
+    bool                       linearHDRTerminalPending = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     FunctionalEvidence         functionalEvidence;
 #endif
@@ -1216,6 +1234,15 @@ struct IOSMetalContext::Impl final {
     if(!deviceFacts.value)
       throw std::runtime_error(
         "RendererIOS device facts validation failed");
+    linearHDRSettings = iosLinearHDRLoadSettings({}).state;
+    try {
+      linearHDRMetal = std::make_unique<IOSLinearHDRMetal>(device);
+      linearHDRProbe = linearHDRMetal->probe();
+      }
+    catch(...) {
+      linearHDRMetal.reset();
+      linearHDRProbe = IOSLinearHDRProbeResult::factoryFailed();
+      }
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
     runIOSResourceAllocatorSelfTest(resourceAllocator,device);
 #endif
@@ -1231,16 +1258,20 @@ struct IOSMetalContext::Impl final {
         break;
         }
       }
-    if(!depthSupported)
-      throw std::runtime_error(
-        "RendererIOS IOSGPUScene requires a supported Metal depth format");
-    gpuScene = std::make_unique<IOSGPUScene>(
-      device,
-      IOSGPUScene::TargetLayout{
-        IOSGPUScene::ColorFormat::Bgra8Unorm,
-        iosGPUSceneDepthFormat(depthFormat),
-        1u,
-        });
+    if(depthSupported) {
+      try {
+        gpuScene = std::make_unique<IOSGPUScene>(
+          device,
+          IOSGPUScene::TargetLayout{
+            IOSGPUScene::ColorFormat::Rg11B10Float,
+            iosGPUSceneDepthFormat(depthFormat),
+            1u,
+            });
+        }
+      catch(...) {
+        gpuScene.reset();
+        }
+      }
     gpuBink = std::make_unique<IOSGPUBink>(device);
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     armBinkSelfTest();
@@ -1248,7 +1279,7 @@ struct IOSMetalContext::Impl final {
 
     for(auto& frame:frames)
       frame.command = device.commandBuffer();
-    resetTargets();
+    resetTargets(IOSLinearHDRActivationAttempt::Startup);
     featurePolicyProvenance.emplace(
       iosBuildFeaturePolicyProvenance(
         *deviceFacts.value,
@@ -1764,7 +1795,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==7u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==8u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2553,12 +2584,12 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==7u);
+    static_assert(Pipeline::OfflineMetallibAbi==8u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
                  RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=7 minimum-apple=4");
+             " contract=1 metallib-abi=8 minimum-apple=4");
       }
     catch(...) {
       }
@@ -3197,12 +3228,68 @@ struct IOSMetalContext::Impl final {
     std::_Exit(EXIT_FAILURE);
     }
 
-  void resetTargets() {
-    overlayDepth = ZBuffer();
+  void resetTargets(IOSLinearHDRActivationAttempt attempt) noexcept {
     const uint32_t w = swapchain.w();
     const uint32_t h = swapchain.h();
-    if(depthSupported && w>0u && h>0u)
-      overlayDepth = device.zbuffer(depthFormat,w,h);
+    bool targetReady = false;
+    uint64_t targetBytes = 0u;
+    if(depthSupported && linearHDRMetal!=nullptr &&
+       iosLinearHDRCheckedTargetByteSize({w,h},targetBytes) &&
+       linearHDRTargets.generation!=std::numeric_limits<uint64_t>::max()) {
+      try {
+        LinearHDRTargets next;
+        next.color = device.attachment(TextureFormat::R11G11B10UF,w,h);
+        next.depth = device.zbuffer(depthFormat,w,h);
+        next.extent = {w,h};
+        next.generation = linearHDRTargets.generation+1u;
+        targetReady = next.current(w,h) &&
+                      linearHDRMetal->exactTarget(next.color,w,h);
+        if(targetReady)
+          linearHDRTargets = std::move(next);
+        }
+      catch(...) {
+        targetReady = false;
+        }
+      }
+    linearHDRPolicy = iosEvaluateLinearHDRPolicy(
+      true,linearHDRProbe,
+      IOSLinearHDRActivationStatus{
+        targetReady,
+        gpuScene!=nullptr && gpuScene->pipelinesReady(),
+        linearHDRMetal!=nullptr && linearHDRMetal->resolvePipelineReady(),
+        });
+    const IOSLinearHDRSafetyTransition transition =
+        iosAdvanceLinearHDRSafetyState(
+          linearHDRSafety,attempt,linearHDRPolicy);
+    if(transition.protocolValid)
+      linearHDRSafety = transition.state;
+    else
+      linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+    const char* attemptName = "invalid";
+    switch(attempt) {
+      case IOSLinearHDRActivationAttempt::Startup:
+        attemptName = "startup";
+        break;
+      case IOSLinearHDRActivationAttempt::Recreate:
+        attemptName = "recreate";
+        break;
+      }
+    try {
+      Log::i("RendererIOS linear HDR activation: attempt=",attemptName,
+             " probe=",
+             linearHDRProbe.reason()==IOSLinearHDRProbeReason::None ? 1 : 0,
+             " target=",targetReady ? 1 : 0,
+             " scene=",gpuScene!=nullptr && gpuScene->pipelinesReady() ? 1 : 0,
+             " resolve=",linearHDRMetal!=nullptr &&
+                           linearHDRMetal->resolvePipelineReady() ? 1 : 0,
+             " ready=",linearHDRPolicy.ready ? 1 : 0,
+             " safe=",linearHDRSafety.mode==
+                         IOSLinearHDRSafetyMode::SafeNoScene ? 1 : 0,
+             " bytes=",targetReady ? targetBytes : 0u,
+             " generation=",linearHDRTargets.generation);
+      }
+    catch(...) {
+      }
     }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
@@ -3530,12 +3617,26 @@ struct IOSMetalContext::Impl final {
     logFatalSnapshot();
     }
 
+  void markLinearHDRTerminalFailed(FrameContext& frame) noexcept {
+    if(!frame.linearHDRTerminalPending)
+      return;
+    (void)iosAdvanceLinearHDRFrameSequence(
+      frame.linearHDRSequence,
+      IOSLinearHDRFrameEvent::TerminalFailed,
+      frame.linearHDRSequence.identity());
+    frame.linearHDRTerminalPending = false;
+    }
+
   void neutralizeFences() noexcept {
     // Tempest::Fence::~Fence() waits and can throw for a completed Metal error.
     // Move-assigning an empty wrapper releases it without invoking that wait.
     for(auto& frame:frames) {
+      markLinearHDRTerminalFailed(frame);
       frame.fence     = Fence();
       frame.submitted = false;
+      frame.linearHDRSequence = {};
+      frame.linearHDRPolicyReadyAtEncode = false;
+      frame.linearHDRTerminalPending = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       frame.functionalEvidence = {};
 #endif
@@ -3633,6 +3734,9 @@ struct IOSMetalContext::Impl final {
       auto& frame = frames[nextSlot];
       clearPreparedUi(frame);
       releaseVideoFrame(frame);
+      frame.linearHDRSequence = {};
+      frame.linearHDRPolicyReadyAtEncode = false;
+      frame.linearHDRTerminalPending = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       frame.functionalEvidence = {};
 #endif
@@ -3642,10 +3746,14 @@ struct IOSMetalContext::Impl final {
     }
 
   void retireSlotAfterTerminal(FrameContext& frame) noexcept {
+    markLinearHDRTerminalFailed(frame);
     frame.submitted = false;
     clearPreparedUi(frame);
     releaseVideoFrame(frame);
     releaseSceneFrame(frame);
+    frame.linearHDRSequence = {};
+    frame.linearHDRPolicyReadyAtEncode = false;
+    frame.linearHDRTerminalPending = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     frame.functionalEvidence = {};
 #endif
@@ -3769,6 +3877,114 @@ struct IOSMetalContext::Impl final {
     }
 #endif
 
+  bool materializeLinearHDREvidenceAfterTerminal(
+      FrameContext& frame, bool deviceAlreadyIdle = false) noexcept {
+    if(!frame.linearHDRTerminalPending)
+      return true;
+    if(linearHDRProven.proven) {
+      const bool completed = iosAdvanceLinearHDRFrameSequence(
+          frame.linearHDRSequence,
+          IOSLinearHDRFrameEvent::TerminalCompleted,
+          frame.linearHDRSequence.identity())==
+            IOSLinearHDRFrameError::None;
+      frame.linearHDRTerminalPending = false;
+      if(!completed) {
+        linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+        fail("RendererIOS linear HDR terminal sequence failed");
+        }
+      return completed;
+      }
+    if(frame.linearHDRSequence.route()!=IOSLinearHDRFrameRoute::Scene) {
+      const bool completed = iosAdvanceLinearHDRFrameSequence(
+          frame.linearHDRSequence,
+          IOSLinearHDRFrameEvent::TerminalCompleted,
+          frame.linearHDRSequence.identity())==
+            IOSLinearHDRFrameError::None;
+      frame.linearHDRTerminalPending = false;
+      return completed;
+      }
+#if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    const bool completed =
+        iosAdvanceLinearHDRFrameSequence(
+          frame.linearHDRSequence,
+          IOSLinearHDRFrameEvent::TerminalCompleted,
+          frame.linearHDRSequence.identity())==
+            IOSLinearHDRFrameError::None &&
+        iosLinearHDRCommitProvenEvidence(
+          frame.linearHDRPolicyReadyAtEncode,
+          frame.linearHDRSequence,linearHDRProven);
+    frame.linearHDRTerminalPending = false;
+    if(!completed) {
+      linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+      fail("RendererIOS linear HDR terminal sequence failed");
+      }
+    return completed;
+#else
+    if(!deviceAlreadyIdle) {
+      try {
+        device.waitIdle();
+        }
+      catch(const std::exception& e) {
+        (void)iosAdvanceLinearHDRFrameSequence(
+          frame.linearHDRSequence,
+          IOSLinearHDRFrameEvent::TerminalFailed,
+          frame.linearHDRSequence.identity());
+        frame.linearHDRTerminalPending = false;
+        fail("RendererIOS linear HDR terminal settle failed",e.what());
+        return false;
+        }
+      catch(...) {
+        (void)iosAdvanceLinearHDRFrameSequence(
+          frame.linearHDRSequence,
+          IOSLinearHDRFrameEvent::TerminalFailed,
+          frame.linearHDRSequence.identity());
+        frame.linearHDRTerminalPending = false;
+        fail("RendererIOS linear HDR terminal settle failed");
+        return false;
+        }
+      }
+    if(!pollPresentFailure(
+         "RendererIOS linear HDR terminal present failed")) {
+      (void)iosAdvanceLinearHDRFrameSequence(
+        frame.linearHDRSequence,
+        IOSLinearHDRFrameEvent::TerminalFailed,
+        frame.linearHDRSequence.identity());
+      frame.linearHDRTerminalPending = false;
+      return false;
+      }
+    if(iosAdvanceLinearHDRFrameSequence(
+         frame.linearHDRSequence,
+         IOSLinearHDRFrameEvent::TerminalCompleted,
+         frame.linearHDRSequence.identity())!=
+           IOSLinearHDRFrameError::None ||
+       !iosLinearHDRCommitProvenEvidence(
+         frame.linearHDRPolicyReadyAtEncode,
+         frame.linearHDRSequence,linearHDRProven)) {
+      frame.linearHDRTerminalPending = false;
+      linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+      fail("RendererIOS linear HDR terminal sequence failed");
+      return false;
+      }
+    const IOSLinearHDRFrameIdentity identity =
+        frame.linearHDRSequence.identity();
+    try {
+      Log::i("RendererIOS linear HDR: v=1 b=",
+             OPENGOTHIC_RENDERER_IOS_BUILD_SHA,
+             " g=",identity.targetGeneration,
+             " s=",identity.snapshotSequence,
+             " w=",identity.extent.width,
+             " h=",identity.extent.height,
+             " fmt=rg11b10f probe=1 target=1 scene=1 resolve=1 ui=",
+             frame.linearHDRSequence.overlayHasUI() ? 1 : 0,
+             " present=1 terminal=C");
+      }
+    catch(...) {
+      }
+    frame.linearHDRTerminalPending = false;
+    return true;
+#endif
+    }
+
   void stopFrameAdmission(LifecycleState state) noexcept {
     lifecycleState = state;
     cancelActiveFrame();
@@ -3873,10 +4089,6 @@ struct IOSMetalContext::Impl final {
     // releasing the borrowed buffers' scene/video owners below.
     discardAmbiguousCommandsAfterConfirmedIdle();
 
-    const bool presentHealthy = pollPresentFailure(
-      "RendererIOS asynchronous Metal present failed");
-    releaseRetainedPreviewAfterIdle();
-
     // Metal Device::waitIdle() only waits for completion. Error propagation is
     // owned by Fence::wait(), so inspect every terminal fence before releasing
     // the wrappers or claiming a clean lifecycle transition.
@@ -3917,6 +4129,20 @@ struct IOSMetalContext::Impl final {
         return false;
         }
       }
+
+    bool presentHealthy = !failed;
+    if(presentHealthy) {
+      for(auto& frame:frames) {
+        if(!materializeLinearHDREvidenceAfterTerminal(frame)) {
+          presentHealthy = false;
+          break;
+          }
+        }
+      }
+    if(presentHealthy)
+      presentHealthy = pollPresentFailure(
+        "RendererIOS asynchronous Metal present failed");
+    releaseRetainedPreviewAfterIdle();
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     materializeBinkSelfTestAfterTerminal(
@@ -4088,7 +4314,14 @@ struct IOSMetalContext::Impl final {
   uint64_t                                      sceneReleaseCount = 0;
   FaultInjection                               fault;
 
-  ZBuffer                                      overlayDepth;
+  LinearHDRTargets                             linearHDRTargets;
+  IOSLinearHDRProbeResult                      linearHDRProbe =
+      IOSLinearHDRProbeResult::factoryFailed();
+  IOSLinearHDRPolicyState                      linearHDRPolicy;
+  IOSLinearHDRSafetyState                      linearHDRSafety;
+  IOSLinearHDRSettingsState                    linearHDRSettings;
+  IOSLinearHDRProvenEvidence                   linearHDRProven;
+  std::unique_ptr<IOSLinearHDRMetal>            linearHDRMetal;
   TextureFormat                                depthFormat = TextureFormat::Depth16;
   bool                                         depthSupported = false;
   std::unique_ptr<IOSGPUScene>                  gpuScene;
@@ -4215,6 +4448,8 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
                                 : "RendererIOS Metal frame fence failed");
     return std::nullopt;
     }
+  if(!impl->materializeLinearHDREvidenceAfterTerminal(frameContext))
+    return std::nullopt;
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   impl->materializeBinkSelfTestAfterTerminal(
     frameContext,slot,"RendererIOS Bink self-test readback failed");
@@ -4245,6 +4480,14 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     impl->fail("RendererIOS command-buffer rebuild failed");
     return std::nullopt;
     }
+
+  const IOSLinearHDRSettingsCommitResult settingsCommit =
+      iosLinearHDRCommitSettingsAtFrameBoundary(
+        impl->linearHDRSettings);
+  impl->linearHDRSettings = settingsCommit.state;
+  if(!iosLinearHDRToneValuesAreValid(
+       impl->linearHDRSettings.committed))
+    impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
 
   Resources::resetRecycled(slot);
   impl->frameActive  = true;
@@ -4411,6 +4654,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool frameAnimationDrawnReady = false;
   IOSGPUSceneUVAnimationDrawReport uvAnimationDrawn;
   bool uvAnimationDrawnReady = false;
+  IOSLinearHDRFrameSequence linearHDRSequence;
+  IOSLinearHDRFrameIdentity linearHDRIdentity;
+  bool linearHDRSequenceBegun = false;
 
   try {
     if(input.capture.kind==IOSCaptureRequest::Kind::SavePreview &&
@@ -4499,14 +4745,50 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
                       return (entity.visibilityMask&
                               IOSSceneVisibilityMain)!=0;
                     });
-      if(sceneVisible) {
-        if(impl->overlayDepth.isEmpty())
+      const bool linearHDRSceneActive = sceneVisible &&
+        impl->linearHDRSafety.mode==IOSLinearHDRSafetyMode::Ready &&
+        impl->linearHDRPolicy.ready &&
+        impl->linearHDRTargets.current(
+          impl->swapchain.w(),impl->swapchain.h()) &&
+        impl->gpuScene!=nullptr && impl->linearHDRMetal!=nullptr;
+      const IOSLinearHDRFrameRoute linearHDRRoute =
+          videoActive ? IOSLinearHDRFrameRoute::VideoBypass :
+          !sceneVisible ? IOSLinearHDRFrameRoute::NoWorldBypass :
+          linearHDRSceneActive ? IOSLinearHDRFrameRoute::Scene :
+                                 IOSLinearHDRFrameRoute::SafeNoSceneBypass;
+      linearHDRIdentity = {
+        linearHDRRoute==IOSLinearHDRFrameRoute::Scene
+          ? impl->linearHDRTargets.generation : 0u,
+        linearHDRRoute==IOSLinearHDRFrameRoute::Scene
+          ? input.snapshot->sequence.value : 0u,
+        {impl->swapchain.w(),impl->swapchain.h()},
+        };
+      const IOSLinearHDRFrameSequenceBeginResult linearHDRBegin =
+          iosBeginLinearHDRFrameSequence(
+            linearHDRRoute,linearHDRIdentity);
+      if(!linearHDRBegin)
+        throw std::runtime_error(
+          "RendererIOS linear HDR frame sequence could not begin");
+      linearHDRSequence = linearHDRBegin.sequence;
+      linearHDRSequenceBegun = true;
+      const auto advanceLinearHDR =
+          [&](IOSLinearHDRFrameEvent event,
+              bool overlayHasUI = false) {
+            if(iosAdvanceLinearHDRFrameSequence(
+                 linearHDRSequence,event,linearHDRIdentity,
+                 overlayHasUI)!=IOSLinearHDRFrameError::None)
+              throw std::runtime_error(
+                "RendererIOS linear HDR frame sequence order failed");
+            };
+      if(linearHDRSceneActive) {
+        if(impl->linearHDRTargets.depth.isEmpty() ||
+           impl->linearHDRTargets.color.isEmpty())
           throw std::runtime_error(
-            "RendererIOS native Landscape pass has no depth attachment");
-        encoder.setDebugMarker("RendererIOS native Landscape");
+            "RendererIOS native Landscape pass has no current HDR target pair");
+        encoder.setDebugMarker("RendererIOS native Landscape HDR");
         encoder.setFramebuffer(
-          {{drawable,OpaqueBlack,Tempest::Preserve}},
-          {impl->overlayDepth,1.f,Tempest::Preserve});
+          {{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},
+          {impl->linearHDRTargets.depth,1.f,Tempest::Discard});
         const auto report =
           impl->gpuScene->encode(
               encoder,*input.snapshot,assets,
@@ -4565,7 +4847,28 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           uvAnimationDrawn = report.uvAnimation;
           uvAnimationDrawnReady = true;
           }
-        encoder.setDebugMarker("RendererIOS UI over native Landscape");
+        const IOSLinearHDRToneValues tone =
+            impl->linearHDRSettings.committed;
+        const IOSToneResolveConstants constants = {
+          tone.brightness,tone.contrast,tone.gamma,tone.exposure,
+          };
+        encoder.setFramebuffer({});
+        advanceLinearHDR(IOSLinearHDRFrameEvent::SceneHDR);
+        encoder.setDebugMarker("RendererIOS tone resolve");
+        encoder.setFramebuffer(
+          {{drawable,Tempest::Discard,Tempest::Preserve}});
+        const IOSLinearHDRMetalEncodeResult resolve =
+            impl->linearHDRMetal->encodeToneResolve(
+              encoder,impl->linearHDRTargets.color,constants);
+        if(resolve!=IOSLinearHDRMetalEncodeResult::Success) {
+          impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+          throw std::runtime_error(
+            std::string("RendererIOS tone resolve failed: ")+
+            iosLinearHDRMetalEncodeResultName(resolve));
+          }
+        encoder.setFramebuffer({});
+        advanceLinearHDR(IOSLinearHDRFrameEvent::ToneResolve);
+        encoder.setDebugMarker("RendererIOS UI over tone resolve");
         encoder.setFramebuffer(
           {{drawable,Tempest::Preserve,Tempest::Preserve}});
         }
@@ -4574,6 +4877,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setFramebuffer(
           {{drawable,OpaqueBlack,Tempest::Preserve}});
       }
+      advanceLinearHDR(IOSLinearHDRFrameEvent::LdrOverlay,true);
       frameContext.uiMesh.draw(encoder);
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -4588,10 +4892,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       const bool ringIcons = !videoActive && inventory.itemRenderer().hasItems();
       const bool inventoryVisible = inventoryMenuVisible || ringIcons;
       if(inventoryVisible) {
-        if(!impl->overlayDepth.isEmpty()) {
+        const bool currentInventoryDepth =
+            impl->linearHDRTargets.current(
+              impl->swapchain.w(),impl->swapchain.h());
+        if(currentInventoryDepth) {
           encoder.setDebugMarker("RendererIOS bootstrap inventory");
           encoder.setFramebuffer({{drawable,Tempest::Preserve,Tempest::Preserve}},
-                                 {impl->overlayDepth,1.f,Tempest::Preserve});
+                                 {impl->linearHDRTargets.depth,1.f,Tempest::Discard});
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
           uiItemDrawCount = inventory.draw(encoder);
 #else
@@ -4651,6 +4958,19 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     ++impl->counters.presentAttempts;
     impl->device.present(impl->swapchain);
     ++impl->counters.presentAccepted;
+    if(!linearHDRSequenceBegun ||
+       iosAdvanceLinearHDRFrameSequence(
+         linearHDRSequence,IOSLinearHDRFrameEvent::Present,
+         linearHDRIdentity)!=IOSLinearHDRFrameError::None) {
+      impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+      throw std::runtime_error(
+        "RendererIOS linear HDR present sequence failed");
+      }
+    frameContext.linearHDRSequence = linearHDRSequence;
+    frameContext.linearHDRPolicyReadyAtEncode =
+        linearHDRSequence.route()==IOSLinearHDRFrameRoute::Scene &&
+        impl->linearHDRPolicy.ready;
+    frameContext.linearHDRTerminalPending = true;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     frameContext.functionalEvidence.serial = frame.serial;
     frameContext.functionalEvidence.presentAccepted = true;
@@ -4773,7 +5093,7 @@ void IOSMetalContext::resize() {
     }
   try {
     impl->swapchain.reset();
-    impl->resetTargets();
+    impl->resetTargets(IOSLinearHDRActivationAttempt::Recreate);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     impl->logLifecycleCounts("resize-settled",true);
 #endif
@@ -4846,7 +5166,7 @@ bool IOSMetalContext::resume() noexcept {
     }
   try {
     impl->swapchain.reset();
-    impl->resetTargets();
+    impl->resetTargets(IOSLinearHDRActivationAttempt::Recreate);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     ++impl->activeResumeCycle;
 #endif
@@ -4877,6 +5197,15 @@ bool IOSMetalContext::waitIdle() noexcept {
     impl->logFatalSettledOnce();
     }
   return idleConfirmed;
+  }
+
+void IOSMetalContext::updateLinearHDRSettings(
+    float brightness, float contrast, float gamma) noexcept {
+  const IOSLinearHDRSettingsUpdateResult update =
+      iosLinearHDRQueueSettingsUpdate(
+        impl->linearHDRSettings,
+        IOSLinearHDRRawSettings{brightness,contrast,gamma});
+  impl->linearHDRSettings = update.state;
   }
 
 void IOSMetalContext::shutdown() noexcept {

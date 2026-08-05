@@ -362,6 +362,7 @@ xcrun --sdk iphoneos metallib \
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
+  riosToneResolveVertex riosToneResolveFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -375,7 +376,7 @@ ACTUAL_RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"
-test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 16
+test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 18
 shasum -a 256 "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '{print $1}' >"$RUNNER_TEMP/RendererIOS.candidate.sha256"
 # CI_PROFILE_CANDIDATE_END
@@ -477,7 +478,7 @@ else
     "$APP_STRINGS"
 fi
 if [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ]; then
-  test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 output=4x4 rgba8-private=1' \
+  test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1' \
     "$APP_STRINGS" || true)" -eq 1
   test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     "$APP_STRINGS" || true)" -eq 1

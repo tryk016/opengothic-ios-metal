@@ -2,6 +2,7 @@
 #include "graphics/iosgpusceneplan.h"
 
 #include <array>
+#include <bit>
 #include <cctype>
 #include <cstddef>
 #include <cstdint>
@@ -157,19 +158,22 @@ std::string expectedAlphaTestFunction() {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
   if(texel.a<0.5)
     discard_fragment();
-  return float4(texel.rgb*in.color.rgb,1.0);
+  const float3 currentLdrRgb = texel.rgb*in.color.rgb;
+  return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);
 })";
 }
 
 bool validLandscapeSource(std::string_view rawSource) {
   const std::string source = stripComments(rawSource);
   if(source.empty() ||
-     countWord(source,"vertex")!=1u ||
-     countWord(source,"fragment")!=2u ||
+     countWord(source,"vertex")!=2u ||
+     countWord(source,"fragment")!=3u ||
      countWord(source,"kernel")!=0u ||
      countOccurrences(source,RendererIOSShader::VertexFunction)!=1u ||
      countOccurrences(source,RendererIOSShader::FragmentFunction)!=1u ||
-     countOccurrences(source,RendererIOSShader::AlphaTestFragmentFunction)!=1u)
+     countOccurrences(source,RendererIOSShader::AlphaTestFragmentFunction)!=1u ||
+     countOccurrences(source,RendererIOSShader::ToneResolveVertexFunction)!=1u ||
+     countOccurrences(source,RendererIOSShader::ToneResolveFragmentFunction)!=1u)
     return false;
 
   const auto vertex = extractFunction(
@@ -178,7 +182,11 @@ bool validLandscapeSource(std::string_view rawSource) {
       source,"fragment",RendererIOSShader::FragmentFunction);
   const auto alphaTest = extractFunction(
       source,"fragment",RendererIOSShader::AlphaTestFragmentFunction);
-  if(!vertex || !fragment || !alphaTest)
+  const auto toneVertex = extractFunction(
+      source,"vertex",RendererIOSShader::ToneResolveVertexFunction);
+  const auto toneFragment = extractFunction(
+      source,"fragment",RendererIOSShader::ToneResolveFragmentFunction);
+  if(!vertex || !fragment || !alphaTest || !toneVertex || !toneFragment)
     return false;
 
   constexpr std::string_view ExpectedDrawConstants = R"(
@@ -189,6 +197,48 @@ struct IOSLandscapeDrawConstants {
   float2   uvOffset;
 })";
   if(countOccurrences(compact(source),compact(ExpectedDrawConstants))!=1u)
+    return false;
+
+  constexpr std::string_view ExpectedToneConstants = R"(
+struct alignas(16) IOSToneResolveConstants {
+  float brightness;
+  float contrast;
+  float gamma;
+  float exposure;
+})";
+  constexpr std::string_view ExpectedToneHelpers = R"(
+static float3 riosInverseAcesToneMap(float3 color) {
+  return (-0.59*color+0.03-
+          sqrt(-1.0127*color*color+1.3702*color+0.0009))/
+         (2.0*(2.43*color-2.51));
+}
+
+static float3 riosLiftLegacyLdrToScene(float3 color) {
+  const float3 encoded = clamp(color,0.0,1.0);
+  const float3 linear = pow(encoded,float3(2.2));
+  return riosInverseAcesToneMap(linear);
+}
+
+static float3 riosAcesToneMap(float3 color) {
+  return clamp(
+      (color*(2.51*color+0.03))/(color*(2.43*color+0.59)+0.14),
+      0.0,1.0);
+}
+
+static float riosInterleavedGradientNoise(float2 pixel) {
+  return fract(52.9829189*fract(
+      0.06711056*pixel.x+0.00583715*pixel.y));
+})";
+  if(countOccurrences(compact(source),compact(ExpectedToneConstants))!=1u ||
+     countOccurrences(compact(source),compact(ExpectedToneHelpers))!=1u ||
+     countOccurrences(
+         compact(source),
+         "static_assert(sizeof(IOSToneResolveConstants)==16,"
+         "\"IOSToneResolveConstantssizedrifted\");")!=1u ||
+     countOccurrences(
+         compact(source),
+         "static_assert(alignof(IOSToneResolveConstants)==16,"
+         "\"IOSToneResolveConstantsalignmentdrifted\");")!=1u)
     return false;
 
   constexpr std::string_view ExpectedVertex = R"(
@@ -210,11 +260,42 @@ fragment float4 riosLandscapeFragment(
     texture2d<float, access::sample> baseColorTexture [[texture(0)]],
     sampler baseColorSampler [[sampler(0)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
-  return float4(texel.rgb*in.color.rgb,1.0);
+  const float3 currentLdrRgb = texel.rgb*in.color.rgb;
+  return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);
+})";
+  constexpr std::string_view ExpectedToneVertex = R"(
+vertex IOSToneResolveVertexOut riosToneResolveVertex(
+    uint vertexId [[vertex_id]]) {
+  constexpr float2 positions[3] = {
+    float2(-1.0,-1.0),
+    float2( 3.0,-1.0),
+    float2(-1.0, 3.0),
+  };
+  IOSToneResolveVertexOut out;
+  out.position = float4(positions[vertexId],0.0,1.0);
+  return out;
+})";
+  constexpr std::string_view ExpectedToneFragment = R"(
+fragment float4 riosToneResolveFragment(
+    IOSToneResolveVertexOut in [[stage_in]],
+    texture2d<float, access::read> hdr [[texture(0)]],
+    constant IOSToneResolveConstants& constants [[buffer(0)]]) {
+  const uint2 pixel = uint2(in.position.xy);
+  float3 color = hdr.read(pixel).rgb;
+  color *= constants.exposure;
+  color = max(float3(0.0),color+constants.brightness)*constants.contrast;
+  color = riosAcesToneMap(color);
+  color = pow(color,float3(constants.gamma));
+  const float noise = riosInterleavedGradientNoise(in.position.xy);
+  const float dither = ((noise*2.0)-1.0)/255.0;
+  color += float3(dither);
+  return float4(color,1.0);
 })";
   if(compact(*vertex)!=compact(ExpectedVertex) ||
      compact(*fragment)!=compact(ExpectedFragment) ||
-     compact(*alphaTest)!=compact(expectedAlphaTestFunction()))
+     compact(*alphaTest)!=compact(expectedAlphaTestFunction()) ||
+     compact(*toneVertex)!=compact(ExpectedToneVertex) ||
+     compact(*toneFragment)!=compact(ExpectedToneFragment))
     return false;
 
   constexpr std::array<std::string_view,3> RuntimeCompilationTokens = {
@@ -245,12 +326,14 @@ std::string replaceLastOnce(
   return source;
 }
 
-std::string eraseAlphaTestFunction(std::string source) {
-  const std::string declaration =
-      std::string("fragment float4 ")+std::string(AlphaTestFunctionName);
+std::string eraseFunction(
+    std::string source, std::string_view declaration) {
   const size_t start = source.find(declaration);
+  if(start==std::string::npos ||
+     source.find(declaration,start+declaration.size())!=std::string::npos)
+    return {};
   const size_t brace = source.find('{',start);
-  if(start==std::string::npos || brace==std::string::npos)
+  if(brace==std::string::npos)
     return {};
   size_t depth = 0u;
   for(size_t offset=brace; offset<source.size(); ++offset) {
@@ -272,8 +355,10 @@ bool mutationsAreRejected(const std::string& source) {
       stripComments(source),"fragment",AlphaTestFunctionName);
   if(!alphaTest)
     return false;
-  const std::array<std::string,19> mutations = {
-    eraseAlphaTestFunction(source),
+  const std::string alphaDeclaration =
+      std::string("fragment float4 ")+std::string(AlphaTestFunctionName);
+  const std::array<std::string,19> landscapeMutations = {
+    eraseFunction(source,alphaDeclaration),
     replaceOnce(source,"    discard_fragment();",""),
     replaceOnce(source,"if(texel.a<0.5)","if(texel.a<=0.5)"),
     replaceOnce(source,"if(texel.a<0.5)","if(texel.a<0.4)"),
@@ -299,18 +384,20 @@ bool mutationsAreRejected(const std::string& source) {
         source,
         "  if(texel.a<0.5)\n"
         "    discard_fragment();\n"
-        "  return float4(texel.rgb*in.color.rgb,1.0);",
-        "  return float4(texel.rgb*in.color.rgb,1.0);\n"
+        "  const float3 currentLdrRgb = texel.rgb*in.color.rgb;\n"
+        "  return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);",
+        "  const float3 currentLdrRgb = texel.rgb*in.color.rgb;\n"
+        "  return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);\n"
         "  if(texel.a<0.5)\n"
         "    discard_fragment();"),
     replaceLastOnce(
         source,
-        "return float4(texel.rgb*in.color.rgb,1.0);",
-        "return float4(texel.rgb+in.color.rgb,1.0);"),
+        "return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);",
+        "return float4(currentLdrRgb,1.0);"),
     replaceLastOnce(
         source,
-        "return float4(texel.rgb*in.color.rgb,1.0);",
-        "return float4(texel.rgb*in.color.rgb,in.color.a);"),
+        "return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);",
+        "return float4(riosLiftLegacyLdrToScene(currentLdrRgb),in.color.a);"),
     source+"\nnewLibraryWithSource\n",
     source+"\n"+*alphaTest+"\n",
     replaceOnce(source,"clip.y = -clip.y;","clip.y = clip.y;"),
@@ -319,17 +406,70 @@ bool mutationsAreRejected(const std::string& source) {
         source,"out.uv = in.uv + draw.uvOffset;","out.uv = in.uv;"),
     replaceLastOnce(
         source,
-        "return float4(texel.rgb*in.color.rgb,1.0);",
-        "return float4(texel.rgb*in.color.rgb,0.0);"),
+        "return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);",
+        "return float4(riosLiftLegacyLdrToScene(currentLdrRgb),0.0);"),
   };
-  for(const std::string& mutation:mutations)
+  for(const std::string& mutation:landscapeMutations)
     if(mutation.empty() || validLandscapeSource(mutation))
       return false;
+
+  const std::array<std::string,26> toneMutations = {
+    eraseFunction(source,"vertex IOSToneResolveVertexOut riosToneResolveVertex"),
+    eraseFunction(source,"fragment float4 riosToneResolveFragment"),
+    replaceOnce(source,"struct alignas(16) IOSToneResolveConstants",
+                       "struct IOSToneResolveConstants"),
+    replaceOnce(source,"  float brightness;","  half brightness;"),
+    replaceOnce(source,"  float contrast;","  float exposure;"),
+    replaceOnce(source,"alignof(IOSToneResolveConstants)==16",
+                       "alignof(IOSToneResolveConstants)==4"),
+    replaceOnce(source,"uint vertexId [[vertex_id]]",
+                       "uint vertexId [[instance_id]]"),
+    replaceOnce(source,"uint vertexId [[vertex_id]]) {",
+                       "uint vertexId [[vertex_id]], "
+                       "constant uint& forbidden [[buffer(0)]]) {"),
+    replaceOnce(source,"float2(-1.0,-1.0)","float2(-1.0,1.0)"),
+    replaceOnce(source,"float2( 3.0,-1.0)","float2(1.0,-1.0)"),
+    replaceOnce(source,"float2(-1.0, 3.0)","float2(-1.0,1.0)"),
+    replaceOnce(source,"float4(positions[vertexId],0.0,1.0)",
+                       "float4(positions[vertexId],1.0,1.0)"),
+    replaceOnce(source,"texture2d<float, access::read> hdr [[texture(0)]]",
+                       "texture2d<float, access::sample> hdr [[texture(0)]]"),
+    replaceOnce(source,
+                       "constant IOSToneResolveConstants& constants "
+                       "[[buffer(0)]]) {",
+                       "constant IOSToneResolveConstants& constants "
+                       "[[buffer(0)]], sampler forbidden [[sampler(0)]]) {"),
+    replaceLastOnce(source,"[[texture(0)]]","[[texture(1)]]"),
+    replaceOnce(source,"constants [[buffer(0)]]","constants [[buffer(1)]]"),
+    replaceOnce(source,"const uint2 pixel = uint2(in.position.xy);",
+                       "const uint2 pixel = uint2(in.position.yx);"),
+    replaceOnce(source,"float3 color = hdr.read(pixel).rgb;",
+                       "float3 color = hdr.read(pixel+1u).rgb;"),
+    replaceOnce(source,"  color *= constants.exposure;",""),
+    replaceOnce(source,"max(float3(0.0),color+constants.brightness)",
+                       "max(float3(0.0),color-constants.brightness)"),
+    replaceOnce(source,"2.51*color+0.03","2.50*color+0.03"),
+    replaceOnce(source,"color = pow(color,float3(constants.gamma));",
+                       "color = pow(color,float3(1.0));"),
+    replaceOnce(source,"52.9829189","52.9829180"),
+    replaceOnce(source,"0.00583715*pixel.y","0.00583715*pixel.x"),
+    replaceOnce(source,"/255.0;","/256.0;"),
+    replaceLastOnce(source,"return float4(color,1.0);",
+                           "return float4(color,0.0);"),
+  };
+  for(const std::string& mutation:toneMutations)
+    if(mutation.empty() || validLandscapeSource(mutation))
+      return false;
+  if(!validLandscapeSource(
+       source+"\n// newLibraryWithSource MTLCompileOptions\n"))
+    return false;
   return true;
 }
 
 bool symbolAllowlistMatches(const std::filesystem::path& repository) {
   const std::map<std::string,size_t> expectedSymbols = {
+    {"ios/device-test/validate-linear-hdr-gpu-evidence.py",1u},
+    {"ios/tests/fixtures/linear-hdr-gpu-evidence-v1.json",1u},
     {"shader/ios-metal/landscape.metal",1u},
     {"game/graphics/ioslandscapeshaderabi.h",1u},
     {"ios/tests/ioslandscapeshader.cpp",1u},
@@ -491,8 +631,12 @@ bool runtimeUVAnimationEvidenceContractMatches(
 
 int main(int argc, char** argv) {
   if(argc!=3 ||
-     RendererIOSShader::AbiVersion!=7u ||
-     RendererIOSShader::AlphaTestFragmentFunction!=AlphaTestFunctionName)
+     RendererIOSShader::AbiVersion!=8u ||
+     RendererIOSShader::AlphaTestFragmentFunction!=AlphaTestFunctionName ||
+     RendererIOSShader::ToneResolveVertexFunction!=
+         "riosToneResolveVertex" ||
+     RendererIOSShader::ToneResolveFragmentFunction!=
+         "riosToneResolveFragment")
     return 1;
 
   const auto source = readFile(argv[1]);
@@ -517,5 +661,19 @@ int main(int argc, char** argv) {
   static_assert(offsetof(IOSGPUSceneDrawConstants,uvOffset)==144u);
   static_assert(sizeof(IOSGPUSceneDrawConstants)==160u);
   static_assert(alignof(IOSGPUSceneDrawConstants)==16u);
+  static_assert(RendererIOSShader::ToneResolveTextureIndex==0u);
+  static_assert(RendererIOSShader::ToneResolveConstantsBufferIndex==0u);
+  static_assert(offsetof(IOSToneResolveConstants,brightness)==0u);
+  static_assert(offsetof(IOSToneResolveConstants,contrast)==4u);
+  static_assert(offsetof(IOSToneResolveConstants,gamma)==8u);
+  static_assert(offsetof(IOSToneResolveConstants,exposure)==12u);
+  static_assert(sizeof(IOSToneResolveConstants)==16u);
+  static_assert(alignof(IOSToneResolveConstants)==16u);
+  constexpr IOSToneResolveConstants DefaultToneResolveConstants;
+  static_assert(DefaultToneResolveConstants.brightness==0.0f);
+  static_assert(DefaultToneResolveConstants.contrast==1.0f);
+  static_assert(DefaultToneResolveConstants.gamma==1.0f/2.2f);
+  static_assert(std::bit_cast<uint32_t>(
+                    DefaultToneResolveConstants.exposure)==0x3F800000u);
   return 0;
   }

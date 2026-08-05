@@ -415,7 +415,7 @@ int main() {
   using namespace RendererIOSShadingPrototypeForwardPipeline;
 
   static_assert(ContractVersion==1u);
-  static_assert(OfflineMetallibAbi==7u);
+  static_assert(OfflineMetallibAbi==8u);
   static_assert(MinimumAppleGPUFamily==4u);
   static_assert(ResolvedFunctionCount==3u);
   static_assert(SpecializationCount==2u);
@@ -442,7 +442,7 @@ int main() {
   static_assert(Shader::ColorAttribute==ColorAttribute);
   static_assert(Shader::ForwardLightListBuffer==
                 LightListBufferIndex);
-  static_assert(Shader::TotalMetallibExportCount==16u);
+  static_assert(Shader::TotalMetallibExportCount==18u);
 
   static_assert(static_cast<uint8_t>(Status::Ready)==0u);
   static_assert(static_cast<uint8_t>(Status::DeviceUnavailable)==1u);

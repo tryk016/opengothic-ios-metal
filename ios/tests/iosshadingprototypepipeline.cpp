@@ -368,7 +368,7 @@ bool rejectsSecondMaterialPipelineMutations() {
 int main() {
   using namespace RendererIOSShadingPrototypePipeline;
   static_assert(ContractVersion==1u);
-  static_assert(OfflineMetallibAbi==7u);
+  static_assert(OfflineMetallibAbi==8u);
   static_assert(MinimumAppleGPUFamily==4u);
   static_assert(TileFunctionCount==3u);
   static_assert(TilePipelineCount==3u);

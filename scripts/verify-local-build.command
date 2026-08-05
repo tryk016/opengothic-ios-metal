@@ -113,6 +113,8 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 echo "### P2.6c host-neutral feature policy"
 scripts/verify_ios_feature_policy.command
 
+RUNNER_TEMP="$TMP_GATE" scripts/verify_ios_linear_hdr.command
+
 echo "### Tempest verifier (2x)"
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh
@@ -1624,6 +1626,7 @@ xcrun --sdk iphoneos metallib \
 for function in \
     riosLandscapeVertex riosLandscapeFragment \
     riosLandscapeAlphaTestFragment \
+    riosToneResolveVertex riosToneResolveFragment \
     riosBinkVertex riosBinkFragment \
     riosUiColorVertex riosUiColorFragment \
     riosUiTextureVertex riosUiTextureFragment \
@@ -1642,6 +1645,7 @@ RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
+  riosToneResolveVertex riosToneResolveFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -1652,9 +1656,9 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 16-export ABI7"
-[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 16 ] ||
-  fail "RendererIOS.metallib export count nie wynosi 16"
+  fail "RendererIOS.metallib nie ma exact 18-export ABI8"
+[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 18 ] ||
+  fail "RendererIOS.metallib export count nie wynosi 18"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   shasum -a 256 "$TMP_GATE/RendererIOS.metallib" | awk '{print $1}'
 )"
@@ -1662,6 +1666,8 @@ CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   fail "canonical RendererIOS.metallib nie ma poprawnego SHA-256"
 if grep -Eq \
     'newLibraryWithSource|compileSource|MTLCompileOptions|newCommandQueue|commandBufferWith|presentDrawable' \
+    shader/ios-metal/landscape.metal \
+    game/graphics/ioslandscapeshaderabi.h \
     shader/ios-metal/shading-prototypes.metal \
     game/graphics/iosshadingprototypeshaderabi.h; then
   fail "P2.5b0 offline ABI zawiera runtime compilation lub command ownership"
@@ -2007,7 +2013,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -2690,7 +2696,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
     fail "profil $profile nie ma minimum iOS 16.4"
   metallib_sha256="$(shasum -a 256 "$metallib" | awk '{print $1}')"
   [ "$metallib_sha256" = "$CANONICAL_RENDERER_IOS_METALLIB_SHA256" ] ||
-    fail "profil $profile ma RendererIOS.metallib inny niz canonical exact16"
+    fail "profil $profile ma RendererIOS.metallib inny niz canonical exact18"
   strings "$binary" >"$strings_file"
   [ "$(grep -Fxc "$HEAD_SHA-local" "$strings_file" || true)" -eq 1 ] ||
     fail "profil $profile nie ma exact binarnego build SHA $HEAD_SHA-local"
@@ -2743,7 +2749,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=7 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

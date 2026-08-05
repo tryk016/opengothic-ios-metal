@@ -78,6 +78,9 @@ class IOSMetalContext final {
     bool             suspend() noexcept;
     bool             resume() noexcept;
     bool             waitIdle() noexcept;
+    void             updateLinearHDRSettings(float brightness,
+                                             float contrast,
+                                             float gamma) noexcept;
     void             shutdown() noexcept;
     void             prepareForOwnerRelease() noexcept;
     void             onWorldChanged();

@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "synthetic-fixture",
+  "producer": "opengothic-linear-hdr-gpu-adapter/1",
+  "source": {
+    "tool": "gpudebug",
+    "toolVersion": "1.0",
+    "captureSha256": "8f5b7538f468744f8b8a8e63305f3ce005e0e8c537824369894730328b2ed9f8"
+  },
+  "runIdentity": {
+    "buildSha": "0123456789abcdef0123456789abcdef01234567",
+    "targetGeneration": 7,
+    "snapshotSequence": 41
+  },
+  "extent": {
+    "width": 1179,
+    "height": 2556
+  },
+  "logicalBytes": 12054096,
+  "resources": {
+    "scene": {
+      "resource": "scene-color",
+      "pixelFormat": "RG11B10Float",
+      "textureType": "2D",
+      "storageMode": "Private",
+      "usage": [
+        "RenderTarget",
+        "ShaderRead"
+      ],
+      "width": 1179,
+      "height": 2556,
+      "bytesPerPixel": 4,
+      "allocatedBytes": 12054096
+    },
+    "drawable": {
+      "resource": "drawable",
+      "pixelFormat": "BGRA8Unorm",
+      "width": 1179,
+      "height": 2556
+    }
+  },
+  "events": [
+    {
+      "index": 0,
+      "kind": "scene",
+      "colorResource": "scene-color",
+      "pixelFormat": "RG11B10Float",
+      "loadAction": "Clear",
+      "storeAction": "Store",
+      "draws": [
+        {
+          "vertexFunction": "riosLandscapeVertex",
+          "fragmentFunction": "riosLandscapeFragment"
+        },
+        {
+          "vertexFunction": "riosLandscapeVertex",
+          "fragmentFunction": "riosLandscapeAlphaTestFragment"
+        }
+      ]
+    },
+    {
+      "index": 1,
+      "kind": "tone-resolve",
+      "colorResource": "drawable",
+      "pixelFormat": "BGRA8Unorm",
+      "loadAction": "DontCare",
+      "storeAction": "Store",
+      "vertexFunction": "riosToneResolveVertex",
+      "fragmentFunction": "riosToneResolveFragment",
+      "fragmentTextures": [
+        {
+          "index": 0,
+          "resource": "scene-color",
+          "access": "ReadOnly"
+        }
+      ],
+      "fragmentSamplers": []
+    },
+    {
+      "index": 2,
+      "kind": "overlay",
+      "colorResource": "drawable",
+      "pixelFormat": "BGRA8Unorm",
+      "loadAction": "Load",
+      "storeAction": "Store"
+    },
+    {
+      "index": 3,
+      "kind": "present",
+      "resource": "drawable"
+    }
+  ],
+  "sceneSamples": {
+    "encoding": "linear-rgb",
+    "samples": [
+      {
+        "x": 420,
+        "y": 1200,
+        "rgb": [
+          1.375,
+          0.625,
+          0.25
+        ]
+      },
+      {
+        "x": 760,
+        "y": 900,
+        "rgb": [
+          0.75,
+          0.5,
+          0.375
+        ]
+      }
+    ],
+    "observedMaximumComponent": 1.625
+  }
+}
