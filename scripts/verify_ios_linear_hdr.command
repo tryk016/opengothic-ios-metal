@@ -12,6 +12,10 @@ CORE_SOURCES=(
   game/graphics/ioslinearhdr.cpp
   ios/tests/ioslinearhdr.cpp
 )
+PROOF_SOURCES=(
+  game/graphics/ioslinearhdrproof.cpp
+  ios/tests/ioslinearhdrproof.cpp
+)
 
 cd "$REPO"
 
@@ -36,6 +40,164 @@ xcrun clang++ -std=c++20 \
   -Igame "${CORE_SOURCES[@]}" \
   -o "$RUNNER_TEMP/ioslinearhdr-ubsan"
 UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/ioslinearhdr-ubsan"
+
+printf '\n### P2.1e0 RG11B10 decoder and binary schema v1\n'
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
+  -Igame "${PROOF_SOURCES[@]}" -o "$RUNNER_TEMP/ioslinearhdrproof"
+"$RUNNER_TEMP/ioslinearhdrproof"
+
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=address -fno-omit-frame-pointer \
+  -Igame "${PROOF_SOURCES[@]}" -o "$RUNNER_TEMP/ioslinearhdrproof-asan"
+ASAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/ioslinearhdrproof-asan"
+
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=undefined -fno-sanitize-recover=undefined \
+  -fno-omit-frame-pointer \
+  -Igame "${PROOF_SOURCES[@]}" -o "$RUNNER_TEMP/ioslinearhdrproof-ubsan"
+UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/ioslinearhdrproof-ubsan"
+
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+
+
+def sanitize_cpp(source: str) -> str:
+    result = list(source)
+    index = 0
+    state = "code"
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if current == '"':
+                state = "string"
+            elif current == "'":
+                state = "character"
+            elif current == "/" and following == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "line-comment"
+            elif current == "/" and following == "*":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "block-comment"
+        elif state == "string":
+            if current == "\\":
+                index += 1
+            elif current == '"':
+                state = "code"
+        elif state == "character":
+            if current == "\\":
+                index += 1
+            elif current == "'":
+                state = "code"
+        elif state == "line-comment":
+            if current == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+        elif state == "block-comment":
+            if current == "*" and following == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "code"
+            elif current != "\n":
+                result[index] = " "
+        index += 1
+    if state == "block-comment":
+        raise ValueError("unterminated block comment")
+    return "".join(result)
+
+
+def compact(source: str) -> str:
+    return "".join(sanitize_cpp(source).split())
+
+
+def function_scope(source: str, signature: str) -> str:
+    sanitized = sanitize_cpp(source)
+    start = sanitized.find(signature)
+    if start < 0 or sanitized.find(signature, start + 1) >= 0:
+        raise ValueError(f"function signature is not exact: {signature}")
+    brace = sanitized.find("{", start + len(signature))
+    if brace < 0:
+        raise ValueError(f"function body missing: {signature}")
+    depth = 0
+    for index in range(brace, len(sanitized)):
+        if sanitized[index] == "{":
+            depth += 1
+        elif sanitized[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return sanitized[start:index + 1]
+    raise ValueError(f"function body unterminated: {signature}")
+
+
+def validate(source: str, header: str) -> None:
+    code = compact(source)
+    header_code = compact(header)
+    for required in (
+        "constuint32_tred=word&0x7ffu;",
+        "constuint32_tgreen=(word>>11u)&0x7ffu;",
+        "constuint32_tblue=(word>>22u)&0x3ffu;",
+        "if(exponent==31u)returnfalse;",
+        "-14-static_cast<int>(mantissaBits)",
+        "static_cast<int>(exponent)-15",
+        "if(!validView(view))",
+        "if(expectedInputSize!=input.size())",
+    ):
+        if required not in code:
+            raise ValueError(f"RG11/schema contract missing: {required}")
+    for required in (
+        "std::span<conststd::byte>payload;",
+        "IOSLinearHDRRGBmaximum;",
+        "InvalidPackedValue=16u",
+    ):
+        if required not in header_code:
+            raise ValueError(f"RG11/schema API changed: {required}")
+    parser = function_scope(
+        source,
+        "IOSLinearHDRProofError iosParseLinearHDRProofV1(")
+    if parser.count("view = candidate;") != 1:
+        raise ValueError("parser publication count changed")
+    publication = parser.index("view = candidate;")
+    if "view." in sanitize_cpp(parser[:publication]):
+        raise ValueError("parser mutates output before successful publication")
+
+
+source = Path("game/graphics/ioslinearhdrproof.cpp").read_text()
+header = Path("game/graphics/ioslinearhdrproof.h").read_text()
+validate(source, header)
+
+mutations = (
+    source.replace(
+        "  const uint32_t green = (word >> 11u)&0x7ffu;\n",
+        "  const uint32_t green = (word >> 22u)&0x3ffu;\n", 1),
+    source.replace("-14-static_cast<int>(mantissaBits)",
+                   "-13-static_cast<int>(mantissaBits)", 1),
+    source.replace("static_cast<int>(exponent)-15",
+                   "static_cast<int>(exponent)-14", 1),
+    source.replace("if(exponent==31u)\n    return false;",
+                   "if(exponent==31u) {\n    if(mantissa==0u)\n      return false;\n    }", 1),
+    source.replace(
+        "  const uint64_t logicalBytes = loadLe64(input,32u);\n",
+        "  const uint64_t logicalBytes = loadLe64(input,32u);\n"
+        "  view.logicalBytes = logicalBytes;\n", 1),
+    source.replace("  if(!validView(view))\n",
+                   "  // if(!validView(view))\n", 1),
+)
+for mutated in mutations:
+    try:
+        validate(mutated, header)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit("P2.1e0 RG11/schema mutation survived")
+
+print(f"RG11B10/schema mutations killed: {len(mutations)}")
+PY
 
 printf '\n### P2.1e0 strict native tone-resolve bridge\n'
 xcrun clang++ -x objective-c++ -std=c++20 \
