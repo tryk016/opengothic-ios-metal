@@ -11,6 +11,8 @@ import re
 ROOT = Path(__file__).resolve().parents[2]
 TEMPEST_ROOT = Path(os.environ.get("TEMPEST_ROOT", ROOT / "lib/Tempest"))
 SOURCE = TEMPEST_ROOT / "Engine/gapi/metal/mtcommandbuffer.cpp"
+APPLY_PATCHES = ROOT / "ios/patches/apply-patches.sh"
+CI_CONTRACTS = ROOT / "scripts/ci_contracts.command"
 
 
 def strip_cpp_comments(source: str) -> str:
@@ -108,9 +110,26 @@ def expect_rejected(source: str, label: str) -> None:
     raise AssertionError(f"mutation survived: {label}")
 
 
+def validate_tag_sync(verifier: str, contracts: str) -> str:
+    tags = re.findall(r'^EXPECTED_TAG="([^"]+)"$', verifier, re.MULTILINE)
+    if len(tags) != 1:
+        raise ValueError("Tempest verifier must declare exactly one expected tag")
+    marker = re.compile(
+        rf"^grep -Fq '{re.escape(tags[0])}' \\\n"
+        r"  ios/patches/apply-patches\.sh$",
+        re.MULTILINE,
+    )
+    if len(marker.findall(contracts)) != 1:
+        raise ValueError("CI Tempest tag marker does not match the pinned verifier")
+    return tags[0]
+
+
 def main() -> None:
     source = SOURCE.read_text(encoding="utf-8")
     validate(source)
+    verifier = APPLY_PATCHES.read_text(encoding="utf-8")
+    contracts = CI_CONTRACTS.read_text(encoding="utf-8")
+    tag = validate_tag_sync(verifier, contracts)
 
     old_tail = "offset, bpp*width,0);"
     if source.count(old_tail) != 1:
@@ -127,7 +146,31 @@ def main() -> None:
     expect_rejected(source.replace("MTL::Size(width,height,1)",
                                    "MTL::Size(width,height,0)", 1),
                     "non-2D source depth")
-    print("Tempest Metal 2D copy contract: PASS mutations-killed=3")
+    stale_tag = contracts.replace(
+        f"grep -Fq '{tag}'", "grep -Fq 'stale-tag'", 1
+    )
+    marker = f"grep -Fq '{tag}' \\\n  ios/patches/apply-patches.sh"
+    for label, mutation in (
+        ("stale Tempest CI tag", stale_tag),
+        (
+            "wrong Tempest CI target",
+            contracts.replace(
+                marker,
+                marker.replace("ios/patches/apply-patches.sh", "unrelated.sh"),
+                1,
+            ),
+        ),
+        (
+            "comment-only Tempest CI tag",
+            contracts.replace(marker, "# " + marker, 1),
+        ),
+    ):
+        try:
+            validate_tag_sync(verifier, mutation)
+        except ValueError:
+            continue
+        raise AssertionError(f"mutation survived: {label}")
+    print("Tempest Metal 2D copy contract: PASS mutations-killed=6")
 
 
 if __name__ == "__main__":

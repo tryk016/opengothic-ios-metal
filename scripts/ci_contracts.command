@@ -3893,7 +3893,7 @@ grep -Fq 'new-game pipeline archive mode has no non-empty scene snapshot' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
   ios/patches/apply-patches.sh
-grep -Fq 'opengothic-ios-patch-stack-v14' \
+grep -Fq 'opengothic-ios-patch-stack-v15' \
   ios/patches/apply-patches.sh
 
 grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-8.binaryarchive' \
