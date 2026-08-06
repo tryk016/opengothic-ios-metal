@@ -280,6 +280,7 @@ bash -n ios/device-test/run-linear-hdr-proof-test.sh
 [[ "$(ios/device-test/run-linear-hdr-proof-test.sh --self-test)" == \
    "SELF-TEST PASS" ]]
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import ast
 from pathlib import Path
 
 
@@ -287,7 +288,8 @@ source = Path("ios/device-test/run-linear-hdr-proof-test.sh").read_text()
 required = (
     'pattern = re.compile(r"^\\.RendererIOS-linear-hdr-proof-v1\\.[0-9a-f]{32}\\.tmp$")',
     '"$UV" run --python python3.11 --with pymobiledevice3 python -',
-    'value = (await service.stat(leaf)).get("st_ifmt")',
+    'documents_path = f"Documents/{leaf}"',
+    'value = (await service.stat(documents_path)).get("st_ifmt")',
     '[[ "$file_type" == S_IFREG ]]',
     'require_afc_regular_leaf "$leaf" || return 1',
     'remaining="$(enumerate_owned_temps "$label-after")" || return 1',
@@ -299,12 +301,122 @@ required = (
     'python3 "$GUARD" run --timeout',
     'python3 "$VALIDATOR"',
 )
-for literal in required:
-    if source.count(literal) != 1:
-        raise SystemExit(f"guarded producer runner contract changed: {literal}")
-for forbidden in ("--remove-existing-content", "GPU PASS"):
-    if forbidden in source:
-        raise SystemExit(f"guarded producer runner contains forbidden text: {forbidden}")
+
+
+def afc_python_source(candidate: str) -> str:
+    start = "afc_file_type() {\n  local leaf=\"$1\"\n"
+    end = "\nPY\n}\n\nrequire_afc_regular_leaf() {"
+    if candidate.count(start) != 1 or candidate.count(end) != 1:
+        raise ValueError("AFC helper boundaries changed")
+    scope = candidate[candidate.index(start) + len(start) : candidate.index(end)]
+    heredoc = "<<'PY'\n"
+    if scope.count(heredoc) != 1:
+        raise ValueError("AFC helper Python heredoc changed")
+    return scope.split(heredoc, 1)[1]
+
+
+EXPECTED_AFC_PYTHON = '''\
+import asyncio
+import sys
+
+from pymobiledevice3.lockdown import create_using_usbmux
+from pymobiledevice3.services.house_arrest import HouseArrestService
+
+
+async def main() -> None:
+    udid, bundle_id, leaf = sys.argv[1:]
+    documents_path = f"Documents/{leaf}"
+    async with await create_using_usbmux(
+        serial=udid, autopair=False
+    ) as lockdown:
+        async with await HouseArrestService.create(
+            lockdown=lockdown, bundle_id=bundle_id, documents_only=True
+        ) as service:
+            value = (await service.stat(documents_path)).get("st_ifmt")
+    if not isinstance(value, str) or not value:
+        raise RuntimeError("AFC stat returned no explicit st_ifmt")
+    print(value)
+
+
+asyncio.run(main())
+'''
+EXPECTED_AFC_AST = ast.dump(
+    ast.parse(EXPECTED_AFC_PYTHON), include_attributes=False
+)
+
+
+def validate_afc_python_contract(candidate: str) -> None:
+    try:
+        tree = ast.parse(candidate)
+    except SyntaxError as error:
+        raise ValueError(f"AFC helper Python is invalid: {error}") from error
+    if ast.dump(tree, include_attributes=False) != EXPECTED_AFC_AST:
+        raise ValueError("AFC helper Python AST changed")
+
+
+def validate_guarded_runner(candidate: str) -> None:
+    for literal in required:
+        if candidate.count(literal) != 1:
+            raise ValueError(f"guarded producer runner contract changed: {literal}")
+    for forbidden in ("--remove-existing-content", "GPU PASS"):
+        if forbidden in candidate:
+            raise ValueError(f"guarded producer runner contains forbidden text: {forbidden}")
+    validate_afc_python_contract(afc_python_source(candidate))
+
+
+validate_guarded_runner(source)
+leaf_regression = source.replace(
+    "service.stat(documents_path)",
+    "service.stat(leaf)",
+    1,
+)
+try:
+    validate_afc_python_contract(afc_python_source(leaf_regression))
+except ValueError:
+    pass
+else:
+    raise SystemExit("AFC Documents path regression mutation survived")
+
+comment_only_repair = source.replace(
+    "service.stat(documents_path)",
+    'service.stat("Documents/not-the-checked-leaf")'
+    "  # service.stat(documents_path)",
+    1,
+)
+try:
+    validate_afc_python_contract(afc_python_source(comment_only_repair))
+except ValueError:
+    pass
+else:
+    raise SystemExit("AFC end-of-line comment-only repair mutation survived")
+
+disconnected_value = source.replace(
+    'value = (await service.stat(documents_path)).get("st_ifmt")',
+    'await service.stat(documents_path)\n'
+    '            value = "S_IFREG"\n'
+    '            # value = (await service.stat(documents_path)).get("st_ifmt")',
+    1,
+)
+try:
+    validate_afc_python_contract(afc_python_source(disconnected_value))
+except ValueError:
+    pass
+else:
+    raise SystemExit("AFC disconnected value mutation survived")
+
+dead_code_annassign = source.replace(
+    'value = (await service.stat(documents_path)).get("st_ifmt")',
+    'if False:\n'
+    '                value = (await service.stat(documents_path)).get("st_ifmt")\n'
+    '            value: str = "S_IFREG"',
+    1,
+)
+try:
+    validate_afc_python_contract(afc_python_source(dead_code_annassign))
+except ValueError:
+    pass
+else:
+    raise SystemExit("AFC dead-code AnnAssign mutation survived")
 PY
 
 printf '\n### P2.1e0 HDR producer source and mutation contracts\n'

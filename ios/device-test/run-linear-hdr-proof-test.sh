@@ -238,13 +238,14 @@ from pymobiledevice3.services.house_arrest import HouseArrestService
 
 async def main() -> None:
     udid, bundle_id, leaf = sys.argv[1:]
+    documents_path = f"Documents/{leaf}"
     async with await create_using_usbmux(
         serial=udid, autopair=False
     ) as lockdown:
         async with await HouseArrestService.create(
             lockdown=lockdown, bundle_id=bundle_id, documents_only=True
         ) as service:
-            value = (await service.stat(leaf)).get("st_ifmt")
+            value = (await service.stat(documents_path)).get("st_ifmt")
     if not isinstance(value, str) or not value:
         raise RuntimeError("AFC stat returned no explicit st_ifmt")
     print(value)
