@@ -5,10 +5,6 @@
 
 namespace {
 
-constexpr size_t HeaderBytes = 160u;
-constexpr uint32_t MaximumExtent = 16384u;
-constexpr uint64_t MaximumPayloadBytes = 256u*1024u*1024u;
-
 uint8_t byteAt(std::span<const std::byte> bytes, size_t offset) noexcept {
   return std::to_integer<uint8_t>(bytes[offset]);
   }
@@ -74,9 +70,10 @@ bool validLabel(std::span<const std::byte> input) noexcept {
 
 bool validView(const IOSLinearHDRProofView& view) noexcept {
   if(view.width==0u || view.height==0u ||
-     view.width>MaximumExtent || view.height>MaximumExtent ||
+     view.width>IOSLinearHDRProofV1MaximumExtent ||
+     view.height>IOSLinearHDRProofV1MaximumExtent ||
      view.targetGeneration==0u || view.snapshotSequence==0u ||
-     view.logicalBytes>MaximumPayloadBytes)
+     view.logicalBytes>IOSLinearHDRProofV1MaximumPayloadBytes)
     return false;
 
   bool proofIsZero = true;
@@ -140,7 +137,7 @@ bool iosDecodeLinearHDRRG11B10(
 IOSLinearHDRProofError iosParseLinearHDRProofV1(
     std::span<const std::byte> input,
     IOSLinearHDRProofView& view) noexcept {
-  if(input.size()<HeaderBytes)
+  if(input.size()<IOSLinearHDRProofV1HeaderBytes)
     return IOSLinearHDRProofError::InvalidInputSize;
 
   constexpr char Magic[] = "RIOSR11";
@@ -152,7 +149,7 @@ IOSLinearHDRProofError iosParseLinearHDRProofV1(
     return IOSLinearHDRProofError::InvalidMagic;
   if(loadLe16(input,8u)!=1u)
     return IOSLinearHDRProofError::UnsupportedSchema;
-  if(loadLe16(input,10u)!=HeaderBytes)
+  if(loadLe16(input,10u)!=IOSLinearHDRProofV1HeaderBytes)
     return IOSLinearHDRProofError::InvalidHeaderSize;
   if(loadLe32(input,12u)!=1u)
     return IOSLinearHDRProofError::UnsupportedProducerVersion;
@@ -179,12 +176,14 @@ IOSLinearHDRProofError iosParseLinearHDRProofV1(
     return IOSLinearHDRProofError::InvalidResourceLabel;
 
   uint64_t expectedInputSize = 0u;
-  if(!checkedAdd(uint64_t(HeaderBytes),logicalBytes,expectedInputSize))
+  if(!checkedAdd(uint64_t(IOSLinearHDRProofV1HeaderBytes),logicalBytes,
+                 expectedInputSize))
     return IOSLinearHDRProofError::SizeOverflow;
   if(width==0u || height==0u ||
-     width>MaximumExtent || height>MaximumExtent)
+     width>IOSLinearHDRProofV1MaximumExtent ||
+     height>IOSLinearHDRProofV1MaximumExtent)
     return IOSLinearHDRProofError::InvalidExtent;
-  if(logicalBytes>MaximumPayloadBytes)
+  if(logicalBytes>IOSLinearHDRProofV1MaximumPayloadBytes)
     return IOSLinearHDRProofError::InvalidLogicalBytes;
 
   uint64_t expectedRowPitch = 0u;
@@ -202,7 +201,7 @@ IOSLinearHDRProofError iosParseLinearHDRProofV1(
     return IOSLinearHDRProofError::InvalidInputSize;
 
   IOSLinearHDRProofView candidate;
-  candidate.payload = input.subspan(HeaderBytes,
+  candidate.payload = input.subspan(IOSLinearHDRProofV1HeaderBytes,
                                     static_cast<size_t>(logicalBytes));
   candidate.width = width;
   candidate.height = height;

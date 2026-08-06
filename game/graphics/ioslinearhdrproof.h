@@ -7,6 +7,11 @@
 
 #include "ioslinearhdr.h"
 
+inline constexpr size_t IOSLinearHDRProofV1HeaderBytes = 160u;
+inline constexpr uint32_t IOSLinearHDRProofV1MaximumExtent = 16384u;
+inline constexpr uint64_t IOSLinearHDRProofV1MaximumPayloadBytes =
+    256u*1024u*1024u;
+
 enum class IOSLinearHDRProofChannel : uint8_t {
   R = 0u,
   G = 1u,

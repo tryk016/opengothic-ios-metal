@@ -16,6 +16,11 @@ PROOF_SOURCES=(
   game/graphics/ioslinearhdrproof.cpp
   ios/tests/ioslinearhdrproof.cpp
 )
+PRODUCER_SOURCES=(
+  game/graphics/ioslinearhdrproof.cpp
+  game/graphics/ioslinearhdrproofproducer.cpp
+  ios/tests/ioslinearhdrproofproducer.cpp
+)
 
 cd "$REPO"
 
@@ -59,6 +64,28 @@ xcrun clang++ -std=c++20 \
   -fno-omit-frame-pointer \
   -Igame "${PROOF_SOURCES[@]}" -o "$RUNNER_TEMP/ioslinearhdrproof-ubsan"
 UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/ioslinearhdrproof-ubsan"
+
+printf '\n### P2.1e0 diagnostics GPU HDR producer model\n'
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
+  -Igame "${PRODUCER_SOURCES[@]}" \
+  -o "$RUNNER_TEMP/ioslinearhdrproofproducer"
+"$RUNNER_TEMP/ioslinearhdrproofproducer"
+
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=address -fno-omit-frame-pointer \
+  -Igame "${PRODUCER_SOURCES[@]}" \
+  -o "$RUNNER_TEMP/ioslinearhdrproofproducer-asan"
+ASAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/ioslinearhdrproofproducer-asan"
+
+xcrun clang++ -std=c++20 \
+  -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
+  -fsanitize=undefined -fno-sanitize-recover=undefined \
+  -fno-omit-frame-pointer \
+  -Igame "${PRODUCER_SOURCES[@]}" \
+  -o "$RUNNER_TEMP/ioslinearhdrproofproducer-ubsan"
+UBSAN_OPTIONS=halt_on_error=1 "$RUNNER_TEMP/ioslinearhdrproofproducer-ubsan"
 
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 from pathlib import Path
@@ -208,6 +235,520 @@ xcrun clang++ -x objective-c++ -std=c++20 \
   -isystem lib/Tempest/Engine/include \
   -isystem lib/ZenKit/include \
   -fsyntax-only game/graphics/ioslinearhdrmetal.mm
+
+xcrun clang++ -x objective-c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=\"0123456789abcdef0123456789abcdef01234567\" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -fsyntax-only game/graphics/ioslinearhdrproofproducer.mm
+
+printf '\n### P2.1e0 strict RendererIOS producer integration ON/OFF\n'
+xcrun clang++ -x c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS \
+  -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=\"0123456789abcdef0123456789abcdef01234567\" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -isystem lib/TinySoundFont \
+  -isystem lib/miniz \
+  -isystem lib/bullet3/src \
+  -fsyntax-only game/graphics/iosmetalcontext.cpp
+
+xcrun clang++ -x c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=\"0123456789abcdef0123456789abcdef01234567\" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -isystem lib/TinySoundFont \
+  -isystem lib/miniz \
+  -isystem lib/bullet3/src \
+  -fsyntax-only game/graphics/iosmetalcontext.cpp
+
+printf '\n### P2.1e0 artifact/log join and guarded runner contracts\n'
+PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_proof_artifact.py
+bash -n ios/device-test/run-linear-hdr-proof-test.sh
+[[ "$(ios/device-test/run-linear-hdr-proof-test.sh --self-test)" == \
+   "SELF-TEST PASS" ]]
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+
+
+source = Path("ios/device-test/run-linear-hdr-proof-test.sh").read_text()
+required = (
+    'pattern = re.compile(r"^\\.RendererIOS-linear-hdr-proof-v1\\.[0-9a-f]{32}\\.tmp$")',
+    '"$UV" run --python python3.11 --with pymobiledevice3 python -',
+    'value = (await service.stat(leaf)).get("st_ifmt")',
+    '[[ "$file_type" == S_IFREG ]]',
+    'require_afc_regular_leaf "$leaf" || return 1',
+    'remaining="$(enumerate_owned_temps "$label-after")" || return 1',
+    'require_afc_regular_leaf "$FINAL_LEAF" ||',
+    '"$UVX" --python python3.11 pymobiledevice3 apps rm',
+    '--udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf"',
+    'require_game_zero pre',
+    'require_game_zero post',
+    'python3 "$GUARD" run --timeout',
+    'python3 "$VALIDATOR"',
+)
+for literal in required:
+    if source.count(literal) != 1:
+        raise SystemExit(f"guarded producer runner contract changed: {literal}")
+for forbidden in ("--remove-existing-content", "GPU PASS"):
+    if forbidden in source:
+        raise SystemExit(f"guarded producer runner contains forbidden text: {forbidden}")
+PY
+
+printf '\n### P2.1e0 HDR producer source and mutation contracts\n'
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from pathlib import Path
+import re
+import subprocess
+
+
+IOS_SDK = subprocess.check_output(
+    ["xcrun", "--sdk", "iphoneos", "--show-sdk-path"], text=True
+).strip()
+PREPROCESS_CACHE: dict[tuple[str, str, bool], tuple[str, str]] = {}
+EXPANDED_PREPROCESS_CACHE: dict[tuple[str, str, bool], str] = {}
+
+
+def preprocess_active(
+    source: str, language: str, diagnostics: bool
+) -> tuple[str, str]:
+    key = (source, language, diagnostics)
+    cached = PREPROCESS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    command = [
+        "xcrun", "clang++", "-E", "-fdirectives-only",
+        "-x", language, "-std=c++20",
+        "-target", "arm64-apple-ios16.4", "-isysroot", IOS_SDK,
+        '-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="0123456789abcdef0123456789abcdef01234567"',
+        "-Igame", "-Igame/graphics",
+        "-isystem", "lib/Tempest/Engine/include",
+        "-isystem", "lib/ZenKit/include",
+        "-isystem", "lib/TinySoundFont",
+        "-isystem", "lib/miniz",
+        "-isystem", "lib/bullet3/src",
+    ]
+    if diagnostics:
+        command.append("-DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS")
+    command.append("-")
+    completed = subprocess.run(
+        command, input=source, text=True, capture_output=True, check=False
+    )
+    if completed.returncode != 0:
+        raise ValueError(
+            "AppleClang preprocessing failed: " + completed.stderr[-1000:]
+        )
+    active: list[str] = []
+    current_file = ""
+    for line in completed.stdout.splitlines():
+        marker = re.match(r'^#\s+\d+\s+"([^"]+)"', line)
+        if marker is not None:
+            current_file = marker.group(1)
+        elif current_file == "<stdin>":
+            active.append(line)
+    result = ("\n".join(active), completed.stdout)
+    PREPROCESS_CACHE[key] = result
+    return result
+
+
+def preprocess_expanded(source: str, language: str, diagnostics: bool) -> str:
+    key = (source, language, diagnostics)
+    cached = EXPANDED_PREPROCESS_CACHE.get(key)
+    if cached is not None:
+        return cached
+    command = [
+        "xcrun", "clang++", "-E", "-P",
+        "-x", language, "-std=c++20",
+        "-target", "arm64-apple-ios16.4", "-isysroot", IOS_SDK,
+        '-DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="0123456789abcdef0123456789abcdef01234567"',
+        "-Igame", "-Igame/graphics",
+        "-isystem", "lib/Tempest/Engine/include",
+        "-isystem", "lib/ZenKit/include",
+        "-isystem", "lib/TinySoundFont",
+        "-isystem", "lib/miniz",
+        "-isystem", "lib/bullet3/src",
+    ]
+    if diagnostics:
+        command.append("-DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS")
+    command.append("-")
+    completed = subprocess.run(
+        command, input=source, text=True, capture_output=True, check=False
+    )
+    if completed.returncode != 0:
+        raise ValueError(
+            "AppleClang macro-expanded preprocessing failed: "
+            + completed.stderr[-1000:]
+        )
+    EXPANDED_PREPROCESS_CACHE[key] = completed.stdout
+    return completed.stdout
+
+
+def sanitize_cpp(source: str) -> str:
+    result = list(source)
+    index = 0
+    state = "code"
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if current == '"':
+                state = "string"
+            elif current == "'":
+                state = "character"
+            elif current == "/" and following == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "line-comment"
+            elif current == "/" and following == "*":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "block-comment"
+        elif state == "string":
+            if current == "\\":
+                index += 1
+            elif current == '"':
+                state = "code"
+        elif state == "character":
+            if current == "\\":
+                index += 1
+            elif current == "'":
+                state = "code"
+        elif state == "line-comment":
+            if current == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+        elif state == "block-comment":
+            if current == "*" and following == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "code"
+            elif current != "\n":
+                result[index] = " "
+        index += 1
+    if state == "block-comment":
+        raise ValueError("unterminated block comment")
+    return "".join(result)
+
+
+def compact(source: str) -> str:
+    return "".join(sanitize_cpp(source).split())
+
+
+def function_scope(source: str, signature: str) -> str:
+    sanitized = sanitize_cpp(source)
+    start = sanitized.find(signature)
+    if start < 0 or sanitized.find(signature, start + 1) >= 0:
+        raise ValueError(f"function signature is not exact: {signature}")
+    brace = sanitized.find("{", start + len(signature))
+    if brace < 0:
+        raise ValueError(f"function body missing: {signature}")
+    depth = 0
+    for index in range(brace, len(sanitized)):
+        if sanitized[index] == "{":
+            depth += 1
+        elif sanitized[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return sanitized[start:index + 1]
+    raise ValueError(f"function body unterminated: {signature}")
+
+
+def require_once(source: str, literal: str) -> int:
+    count = source.count(literal)
+    if count != 1:
+        raise ValueError(f"required literal count changed ({count}): {literal}")
+    return source.index(literal)
+
+
+def ordered(source: str, literals: tuple[str, ...]) -> None:
+    positions = [require_once(source, literal) for literal in literals]
+    if positions != sorted(positions):
+        raise ValueError(f"required order changed: {literals}")
+
+
+def validate(header: str, model: str, native: str, context: str) -> None:
+    header_code = compact(header)
+    model_code = compact(model)
+    native_active, _ = preprocess_active(native, "objective-c++", True)
+    context_active, context_on_full = preprocess_active(context, "c++", True)
+    context_off_active, context_off_full = preprocess_active(
+        context, "c++", False
+    )
+    native_expanded = preprocess_expanded(native, "objective-c++", True)
+    context_on_expanded = preprocess_expanded(context, "c++", True)
+    context_off_expanded = preprocess_expanded(context, "c++", False)
+    native_code = compact(native_active)
+    context_code = compact(context_active)
+    context_off_code = compact(context_off_active)
+    context_on_expanded_code = compact(context_on_expanded)
+    context_off_expanded_code = compact(context_off_expanded)
+
+    producer_header = "ioslinearhdrproofproducer.h"
+    if producer_header not in context_on_full:
+        raise ValueError("diagnostics ON preprocessing omitted producer header")
+    if producer_header in context_off_full or "linearHDRProof" in context_off_code:
+        raise ValueError("diagnostics OFF preprocessing retained producer code")
+    require_once(
+        context_on_expanded_code, "linearHDRProof->prepareFrame("
+    )
+    if "linearHDRProof" in context_off_expanded_code:
+        raise ValueError(
+            "diagnostics OFF macro-expanded preprocessing retained producer code"
+        )
+
+    expanded_arm = compact(function_scope(
+        native_expanded, "  void arm() noexcept"))
+    require_once(
+        expanded_arm,
+        "SecRandomCopyBytes(kSecRandomDefault,proofId.size(),proofId.data())",
+    )
+
+    for required in (
+        "Disabled,Armed,Encoded,Submitted,Completed,Published,Failed,",
+        "IOSLinearHDRProofFrame(constIOSLinearHDRProofFrame&)=delete;",
+        "boolisSubmitted(constIOSLinearHDRProofFrame&frame)constnoexcept;",
+    ):
+        require_once(header_code, required)
+    for required in (
+        "if(state!=IOSLinearHDRProofProducerState::Disabled)returnfalse;",
+        "if(state==IOSLinearHDRProofProducerState::Published||state==IOSLinearHDRProofProducerState::Failed)returnfalse;",
+        "storeLe16(candidate,10u,static_cast<uint16_t>(IOSLinearHDRProofV1HeaderBytes));",
+        "constexprcharLabelPrefix[]=\"RendererIOS.SceneHDR.\";",
+    ):
+        require_once(model_code, required)
+
+    for required in (
+        "SecRandomCopyBytes(kSecRandomDefault,proofId.size(),proofId.data())",
+        "std::string(\"RendererIOS.SceneHDR.\")+identityText.data()",
+        "std::string(\"RendererIOS.HDRProofCopy.\")+identityText.data()",
+        "std::string(\"RendererIOS.ToneResolve.\")+identityText.data()",
+        "tempLeaf.size()!=69u",
+        "removeRegularIfPresent(directory,FinalLeaf)",
+        "removeRegularIfPresent(directory,tempLeaf.c_str())",
+        "owner.ssbo(Tempest::BufferHeap::Upload,Tempest::Uninitialized,static_cast<size_t>(logical))",
+        "mapped=nativeBuffer.contents",
+        "nativeBuffer.storageMode==MTLStorageModeShared",
+        "mapped!=nullptr&&nativeBuffer.length>=NSUInteger(logical)",
+        "(id<MTLTexture>)(void*)borrowed.get()!=frame.impl->source",
+        "encoder.copy(source,0u,frame.impl->buffer,0u);",
+        "O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC",
+        "~Impl(){[sourcerelease];}",
+    ):
+        require_once(native_code, required)
+    for forbidden in (
+        "readBytes(", "withActiveCommandBuffer(", "arc4random",
+        "random_device", "glob(",
+    ):
+        if forbidden in native_code:
+            raise ValueError(f"forbidden producer operation: {forbidden}")
+    if "[frame.impl->sourcerelease];" in native_code:
+        raise ValueError("source lease is released before terminal owner release")
+    if native_code.count("openat(directory,tempLeaf.c_str(),") != 1:
+        raise ValueError("artifact open escaped terminal publication")
+    if native_code.count(
+            "std::span<conststd::byte>(frame.impl->mapped,") != 1:
+        raise ValueError("mapped payload read escaped terminal completion")
+
+    publication = compact(function_scope(
+        native_active, "  void publish(const IOSLinearHDRProofMetadata& metadata,"))
+    ordered(publication, (
+        "iosParseLinearHDRProofV1(artifact,parsed)",
+        "iosScanLinearHDRProofV1(parsed,scan)",
+        "openat(directory,tempLeaf.c_str(),",
+        "writeAll(file,artifact)",
+        "fsync(file)",
+        "constintcloseResult=close(file);",
+        "renameatx_np(directory,tempLeaf.c_str(),directory,FinalLeaf,RENAME_EXCL)",
+        "fsync(directory)",
+        "IOSLinearHDRProofProducerEvent::Publish",
+        "Tempest::Log::i(line.data())",
+    ))
+    terminal = compact(function_scope(
+        native_active, "void IOSLinearHDRProofProducer::completeAfterTerminal("))
+    ordered(terminal, (
+        "frame.impl->presentFailure",
+        "metadata.targetGeneration!=currentTargetGeneration",
+        "IOSLinearHDRProofProducerEvent::Complete",
+        "impl->publish(",
+    ))
+
+    submit = compact(function_scope(
+        context_active,
+        "IOSMetalContext::SubmitResult IOSMetalContext::submitFrame("))
+    ordered(submit, (
+        "linearHDRProof->prepareFrame(",
+        "linearHDRProof->sceneMarker()",
+        "impl->gpuScene->encode(",
+        "advanceLinearHDR(IOSLinearHDRFrameEvent::SceneHDR);",
+        "linearHDRProof->copyMarker()",
+        "linearHDRProof->encodeCopy(",
+        "linearHDRProof->toneResolveMarker()",
+        "impl->linearHDRMetal->encodeToneResolve(",
+        "impl->device.submit(command);",
+        "impl->linearHDRProof->markSubmitted(frameContext.linearHDRProof);",
+        "frameContext.fence=std::move(submittedFence);",
+    ))
+    frame = compact(function_scope(
+        context_active, "  struct FrameContext final"))
+    ordered(frame, (
+        "IOSLinearHDRProofFramelinearHDRProof;",
+        "CommandBuffercommand;",
+        "Fencefence;",
+    ))
+    mailbox = compact(function_scope(
+        context_active,
+        "bool takePresentFailureAndLatchProof(const char* operation)"))
+    require_once(mailbox, "device.takePresentFailure();")
+    ordered(mailbox, (
+        "device.takePresentFailure();",
+        "linearHDRProof->latchPresentFailure(frame.linearHDRProof);",
+        "if(failed)returnfalse;",
+    ))
+    if context_code.count("device.takePresentFailure()") != 1:
+        raise ValueError("raw present mailbox consumer escaped wrapper")
+    settle = compact(function_scope(
+        context_active,
+        "bool settleGpu(SettleReason reason, const char* operation,"))
+    ordered(settle, (
+        "frame.fence.wait(0)",
+        "takePresentFailureAndLatchProof(",
+        "materializeLinearHDRProofAfterTerminal(frames[index],true)",
+        "neutralizeFences()",
+        "releaseLinearHDRProofFramesAfterTerminal()",
+        "releaseSceneFrames()",
+    ))
+    idle_failure = "markLinearHDRProofIdleFailure();"
+    if settle.count(idle_failure) != 3:
+        raise ValueError("idle-unconfirmed failure coverage changed")
+    search_from = 0
+    for _ in range(3):
+        failure_at = settle.index(idle_failure, search_from)
+        return_at = settle.index("returnfalse;", failure_at)
+        failure_path = settle[failure_at:return_at]
+        if "forcePreviewPlaceholder();" not in failure_path:
+            raise ValueError("idle-unconfirmed path lost placeholder transition")
+        if ("neutralizeFences()" in failure_path or
+                "releaseLinearHDRProofFramesAfterTerminal()" in failure_path):
+            raise ValueError("idle-unconfirmed path releases proof owners")
+        search_from = failure_at + len(idle_failure)
+
+
+paths = {
+    "header": Path("game/graphics/ioslinearhdrproofproducer.h").read_text(),
+    "model": Path("game/graphics/ioslinearhdrproofproducer.cpp").read_text(),
+    "native": Path("game/graphics/ioslinearhdrproofproducer.mm").read_text(),
+    "context": Path("game/graphics/iosmetalcontext.cpp").read_text(),
+}
+validate(paths["header"], paths["model"], paths["native"], paths["context"])
+
+
+def mutated(key: str, old: str, new: str) -> dict[str, str]:
+    if paths[key].count(old) != 1:
+        raise SystemExit(f"mutation anchor count changed: {key}: {old!r}")
+    result = dict(paths)
+    result[key] = result[key].replace(old, new, 1)
+    return result
+
+
+copy_block = """          if(!impl->linearHDRProof->encodeCopy(
+               frameContext.linearHDRProof,encoder,
+               impl->linearHDRTargets.color))
+            throw std::runtime_error(
+              \"RendererIOS HDR proof copy encode failed\");
+"""
+resolve_block = """        const IOSLinearHDRMetalEncodeResult resolve =
+            impl->linearHDRMetal->encodeToneResolve(
+              encoder,impl->linearHDRTargets.color,constants);
+"""
+if paths["context"].count(copy_block) != 1 or \
+   paths["context"].count(resolve_block) != 1:
+    raise SystemExit("copy-after-resolve mutation anchors changed")
+copy_after_resolve = dict(paths)
+copy_after_resolve["context"] = paths["context"].replace(copy_block, "", 1)
+copy_after_resolve["context"] = copy_after_resolve["context"].replace(
+    resolve_block, resolve_block + copy_block, 1)
+
+
+mutations = (
+    mutated("context", '#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)\n#include "ioslinearhdrproofproducer.h"\n#endif', '#include "ioslinearhdrproofproducer.h"'),
+    mutated("native", "SecRandomCopyBytes(\n        kSecRandomDefault,proofId.size(),proofId.data())", "std::memset(proofId.data(),1,proofId.size())"),
+    mutated(
+        "native",
+        "    const int randomStatus = SecRandomCopyBytes(\n"
+        "        kSecRandomDefault,proofId.size(),proofId.data());\n",
+        "#if 0\n"
+        "    const int randomStatus = SecRandomCopyBytes(\n"
+        "        kSecRandomDefault,proofId.size(),proofId.data());\n"
+        "#else\n"
+        "    std::memset(proofId.data(),1,proofId.size());\n"
+        "    const int randomStatus = errSecSuccess;\n"
+        "#endif\n",
+    ),
+    mutated(
+        "native",
+        "    const int randomStatus = SecRandomCopyBytes(\n"
+        "        kSecRandomDefault,proofId.size(),proofId.data());\n",
+        "#define SecRandomCopyBytes(...) \\\n"
+        "  (std::memset(proofId.data(),1,proofId.size()),errSecSuccess)\n"
+        "    const int randomStatus = SecRandomCopyBytes(\n"
+        "        kSecRandomDefault,proofId.size(),proofId.data());\n",
+    ),
+    mutated("native", "SecRandomCopyBytes(\n        kSecRandomDefault,proofId.size(),proofId.data())", "arc4random_buf(proofId.data(),proofId.size())"),
+    mutated("native", "RendererIOS.SceneHDR.", "RendererIOS.SceneLDR."),
+    mutated("model", "storeLe16(candidate,10u,\n              static_cast<uint16_t>(IOSLinearHDRProofV1HeaderBytes));", "storeLe16(candidate,10u,128u);"),
+    copy_after_resolve,
+    mutated("native", "encoder.copy(source,0u,frame.impl->buffer,0u);", "encoder.copy(source,1u,frame.impl->buffer,0u);"),
+    mutated("native", "(id<MTLTexture>)(void*)borrowed.get()!=frame.impl->source", "false"),
+    mutated("native", "Tempest::BufferHeap::Upload,Tempest::Uninitialized", "Tempest::BufferHeap::Device,Tempest::Uninitialized"),
+    mutated("native", "    frame.impl->encoded = true;\n", "    frame.impl->encoded = true;\n    publish(frame.impl->metadata,std::span<const std::byte>(frame.impl->mapped,static_cast<size_t>(frame.impl->metadata.logicalBytes)));\n"),
+    mutated("native", "    frame.impl->encoded = true;\n", "    frame.impl->encoded = true;\n    [frame.impl->source release];\n"),
+    mutated("native", "    frame.impl->encoded = true;\n", "    frame.impl->encoded = true;\n    (void)openat(directory,tempLeaf.c_str(),O_WRONLY);\n"),
+    mutated("native", "IOSLinearHDRProofProducerEvent::Complete", "IOSLinearHDRProofProducerEvent::Submit"),
+    mutated("native", "if(fsync(file)!=0)", "if(false)"),
+    mutated("native", "if(fsync(directory)!=0)", "if(false)"),
+    mutated("native", "if(renameatx_np(directory,tempLeaf.c_str(),directory,FinalLeaf,\n                    RENAME_EXCL)!=0)", "if(false)"),
+    mutated("context", "linearHDRProof->latchPresentFailure(frame.linearHDRProof);", "(void)frame;"),
+    mutated("context", "IOSLinearHDRProofFrame     linearHDRProof;", "// IOSLinearHDRProofFrame linearHDRProof;"),
+    mutated("model", "if(state!=IOSLinearHDRProofProducerState::Disabled)\n        return false;", "if(state==IOSLinearHDRProofProducerState::Armed)\n        return true;"),
+)
+for index, values in enumerate(mutations, start=1):
+    try:
+        validate(values["header"], values["model"], values["native"], values["context"])
+    except ValueError:
+        pass
+    else:
+        raise SystemExit(f"P2.1e0 HDR producer mutation survived: {index}")
+
+# A comment cannot repair an active-code RNG contract.
+comment_only = dict(paths)
+comment_only["native"] = comment_only["native"].replace(
+    "    const int randomStatus = SecRandomCopyBytes(\n",
+    "    // const int randomStatus = SecRandomCopyBytes(\n",
+    1,
+)
+try:
+    validate(comment_only["header"], comment_only["model"],
+             comment_only["native"], comment_only["context"])
+except ValueError:
+    pass
+else:
+    raise SystemExit("P2.1e0 HDR producer comment-only mutation survived")
+
+print(f"HDR producer mutations killed: {len(mutations) + 1}")
+PY
 
 printf '\n### P2.1e0 production integration and mutation oracle\n'
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
@@ -381,8 +922,10 @@ def validate(renderer: str, context: str, native: str) -> None:
         "bool settleGpu(SettleReason reason, const char* operation,"))
     settle_order = (
         "frame.fence.wait(0)",
-        "materializeLinearHDREvidenceAfterTerminal(frame)",
-        'pollPresentFailure("RendererIOSasynchronousMetalpresentfailed")',
+        "takePresentFailureAndLatchProof(",
+        "materializeLinearHDRProofAfterTerminal(frames[index],true)",
+        "materializeLinearHDREvidenceAfterTerminal(frame,true)",
+        "neutralizeFences()",
     )
     settle_positions = [require_once(settle, value, value)
                         for value in settle_order]
@@ -398,7 +941,8 @@ def validate(renderer: str, context: str, native: str) -> None:
     )
     diagnostic_mailbox = require_once(
         materialize,
-        'pollPresentFailure("RendererIOSlinearHDRterminalpresentfailed")',
+        'takePresentFailureAndLatchProof('
+        '"RendererIOSlinearHDRterminalpresentfailed")',
         "diagnostic terminal mailbox",
     )
     diagnostic_commit = materialize.rfind(

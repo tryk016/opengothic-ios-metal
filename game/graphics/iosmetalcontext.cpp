@@ -44,6 +44,9 @@
 #include "iosfeaturepolicyprovenance.h"
 #include "ioslinearhdr.h"
 #include "ioslinearhdrmetal.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#include "ioslinearhdrproofproducer.h"
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
 #include "iosbinkselftest.h"
 #endif
@@ -1214,6 +1217,12 @@ struct IOSMetalContext::Impl final {
     bool                       submitted = false;
     bool                       discardCommandAfterIdle = false;
     bool                       rebuildCommand = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    // The proof frame owns its Shared buffer and strong native source lease.
+    // Declaration before command/fence makes reverse destruction release the
+    // terminal wrappers before retainedReferences=false resource owners.
+    IOSLinearHDRProofFrame     linearHDRProof;
+#endif
     // Impl teardown settles explicitly. Reverse member destruction still
     // drops the fence and command before the scene/video keep-alives.
     CommandBuffer              command;
@@ -1273,6 +1282,19 @@ struct IOSMetalContext::Impl final {
         }
       }
     gpuBink = std::make_unique<IOSGPUBink>(device);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    try {
+      linearHDRProof =
+          std::make_unique<IOSLinearHDRProofProducer>(device);
+      }
+    catch(...) {
+      try {
+        Log::e("RendererIOS HDR proof: v=1 id=none terminal=F class=contract reason=state");
+        }
+      catch(...) {
+        }
+      }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     armBinkSelfTest();
 #endif
@@ -3244,6 +3266,11 @@ struct IOSMetalContext::Impl final {
         next.generation = linearHDRTargets.generation+1u;
         targetReady = next.current(w,h) &&
                       linearHDRMetal->exactTarget(next.color,w,h);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        if(targetReady && linearHDRProof!=nullptr &&
+           linearHDRProof->armed())
+          (void)linearHDRProof->labelSceneTarget(next.color);
+#endif
         if(targetReady)
           linearHDRTargets = std::move(next);
         }
@@ -3724,6 +3751,11 @@ struct IOSMetalContext::Impl final {
     // resources alive until device.waitIdle() establishes the terminal point.
     if(frameActive && &frames[nextSlot]==&frame)
       clearPreparedUi(frame);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    if(linearHDRProof!=nullptr &&
+       linearHDRProof->hasOwners(frame.linearHDRProof))
+      linearHDRProof->markSubmitAmbiguous(frame.linearHDRProof);
+#endif
     frame.discardCommandAfterIdle = true;
     frameActive  = false;
     activeSerial = 0;
@@ -3732,6 +3764,14 @@ struct IOSMetalContext::Impl final {
   void cancelActiveFrame() noexcept {
     if(frameActive) {
       auto& frame = frames[nextSlot];
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      if(linearHDRProof!=nullptr &&
+         linearHDRProof->hasOwners(frame.linearHDRProof)) {
+        linearHDRProof->abortBeforeSubmit(frame.linearHDRProof);
+        discardUnsubmittedCommand(frame);
+        linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
+        }
+#endif
       clearPreparedUi(frame);
       releaseVideoFrame(frame);
       frame.linearHDRSequence = {};
@@ -3756,8 +3796,71 @@ struct IOSMetalContext::Impl final {
     frame.linearHDRTerminalPending = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     frame.functionalEvidence = {};
+    if(linearHDRProof!=nullptr)
+      linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
 #endif
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  void markLinearHDRProofFenceFailure(FrameContext& frame) noexcept {
+    if(linearHDRProof!=nullptr)
+      linearHDRProof->markFenceFailure(frame.linearHDRProof);
+    }
+
+  void markLinearHDRProofIdleFailure() noexcept {
+    if(linearHDRProof==nullptr)
+      return;
+    for(auto& frame:frames)
+      linearHDRProof->markIdleFailure(frame.linearHDRProof);
+    }
+
+  void markLinearHDRProofPostSubmitFailure(FrameContext& frame) noexcept {
+    if(linearHDRProof!=nullptr)
+      linearHDRProof->markPostSubmitFailure(frame.linearHDRProof);
+    }
+
+  void releaseLinearHDRProofFramesAfterTerminal() noexcept {
+    if(linearHDRProof==nullptr)
+      return;
+    for(auto& frame:frames)
+      linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
+    }
+
+  bool materializeLinearHDRProofAfterTerminal(
+      FrameContext& frame, bool deviceAlreadyIdle = false,
+      bool* idleConfirmed = nullptr) noexcept {
+    if(idleConfirmed!=nullptr)
+      *idleConfirmed = deviceAlreadyIdle;
+    if(linearHDRProof==nullptr ||
+       !linearHDRProof->isSubmitted(frame.linearHDRProof))
+      return true;
+    if(linearHDRProof->state()==
+         IOSLinearHDRProofProducerState::Submitted &&
+       !deviceAlreadyIdle) {
+      try {
+        device.waitIdle();
+        if(idleConfirmed!=nullptr)
+          *idleConfirmed = true;
+        }
+      catch(const std::exception& e) {
+        linearHDRProof->markIdleFailure(frame.linearHDRProof);
+        fail("RendererIOS HDR proof terminal idle failed",e.what());
+        return false;
+        }
+      catch(...) {
+        linearHDRProof->markIdleFailure(frame.linearHDRProof);
+        fail("RendererIOS HDR proof terminal idle failed");
+        return false;
+        }
+      }
+    const bool presentHealthy = takePresentFailureAndLatchProof(
+        "RendererIOS HDR proof terminal present failed");
+    linearHDRProof->completeAfterTerminal(
+        frame.linearHDRProof,linearHDRTargets.generation,
+        linearHDRTargets.extent.width,linearHDRTargets.extent.height);
+    return presentHealthy;
+    }
+#endif
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   bool uiSurfaceAlreadyProven(RendererIOSUISurfaceEvidence value) const noexcept {
@@ -3904,6 +4007,7 @@ struct IOSMetalContext::Impl final {
       return completed;
       }
 #if !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    (void)deviceAlreadyIdle;
     const bool completed =
         iosAdvanceLinearHDRFrameSequence(
           frame.linearHDRSequence,
@@ -3943,7 +4047,7 @@ struct IOSMetalContext::Impl final {
         return false;
         }
       }
-    if(!pollPresentFailure(
+    if(!takePresentFailureAndLatchProof(
          "RendererIOS linear HDR terminal present failed")) {
       (void)iosAdvanceLinearHDRFrameSequence(
         frame.linearHDRSequence,
@@ -3998,10 +4102,19 @@ struct IOSMetalContext::Impl final {
     previewAttachmentRetained = false;
     }
 
-  bool pollPresentFailure(const char* operation) noexcept {
+  bool takePresentFailureAndLatchProof(const char* operation) noexcept {
     const PresentFailure failure = device.takePresentFailure();
     if(!failure)
       return !failed;
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    if(linearHDRProof!=nullptr) {
+      for(auto& frame:frames) {
+        if(linearHDRProof->isSubmitted(frame.linearHDRProof))
+          linearHDRProof->latchPresentFailure(frame.linearHDRProof);
+        }
+      }
+#endif
 
     fault.observeAsyncPresentError(failure.nativeCode);
     forcePreviewPlaceholder();
@@ -4035,10 +4148,12 @@ struct IOSMetalContext::Impl final {
       fail("RendererIOS shading prototype forward self-test failed",
            "wait-idle-gate-invariant");
       return false;
-      }
+    }
 #endif
     if(fault.shutdownIdleUnconfirmedOnce(reason,counters.presentAccepted)) {
-      neutralizeFences();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      markLinearHDRProofIdleFailure();
+#endif
       forcePreviewPlaceholder();
       fail(operation,"fault injection: device idle deliberately left unconfirmed once");
       return false;
@@ -4050,13 +4165,17 @@ struct IOSMetalContext::Impl final {
       device.waitIdle();
       }
     catch(const std::exception& e) {
-      neutralizeFences();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      markLinearHDRProofIdleFailure();
+#endif
       forcePreviewPlaceholder();
       fail(operation,e.what());
       return false;
       }
     catch(...) {
-      neutralizeFences();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      markLinearHDRProofIdleFailure();
+#endif
       forcePreviewPlaceholder();
       fail(operation);
       return false;
@@ -4089,59 +4208,65 @@ struct IOSMetalContext::Impl final {
     // releasing the borrowed buffers' scene/video owners below.
     discardAmbiguousCommandsAfterConfirmedIdle();
 
-    // Metal Device::waitIdle() only waits for completion. Error propagation is
-    // owned by Fence::wait(), so inspect every terminal fence before releasing
-    // the wrappers or claiming a clean lifecycle transition.
-    for(auto& frame:frames) {
+    // Metal Device::waitIdle() only waits for completion. Classify every proof
+    // slot before any fence or retainedReferences=false owner is released,
+    // even if another slot has already made the global context fatal.
+    std::array<char,256u> firstFenceFailure{};
+    bool fencesHealthy = true;
+    for(size_t index=0u; index<frames.size(); ++index) {
+      auto& frame = frames[index];
       try {
         if(!frame.fence.wait(0)) {
-          neutralizeFences();
-          releaseVideoFrames();
-          releaseSceneFrames();
-          logSceneLifetime(reason);
-          forcePreviewPlaceholder();
-          releaseRetainedPreviewAfterIdle();
-          fail(operation,"frame fence was not terminal after device idle");
-          logFatalSettledOnce();
-          return false;
+          fencesHealthy = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+          markLinearHDRProofFenceFailure(frame);
+#endif
+          if(firstFenceFailure[0]=='\0')
+            std::snprintf(firstFenceFailure.data(),firstFenceFailure.size(),
+                          "%s","frame fence was not terminal after device idle");
+          continue;
           }
         }
       catch(const std::exception& e) {
-        neutralizeFences();
-        releaseVideoFrames();
-        releaseSceneFrames();
-        logSceneLifetime(reason);
-        forcePreviewPlaceholder();
-        releaseRetainedPreviewAfterIdle();
-        fail(operation,e.what());
-        logFatalSettledOnce();
-        return false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        markLinearHDRProofFenceFailure(frame);
+#endif
+        fencesHealthy = false;
+        if(firstFenceFailure[0]=='\0')
+          std::snprintf(firstFenceFailure.data(),firstFenceFailure.size(),
+                        "%s",e.what());
         }
       catch(...) {
-        neutralizeFences();
-        releaseVideoFrames();
-        releaseSceneFrames();
-        logSceneLifetime(reason);
-        forcePreviewPlaceholder();
-        releaseRetainedPreviewAfterIdle();
-        fail(operation);
-        logFatalSettledOnce();
-        return false;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        markLinearHDRProofFenceFailure(frame);
+#endif
+        fencesHealthy = false;
+        if(firstFenceFailure[0]=='\0')
+          std::snprintf(firstFenceFailure.data(),firstFenceFailure.size(),
+                        "%s","frame fence failed after device idle");
         }
       }
 
-    bool presentHealthy = !failed;
+    const bool mailboxHealthy = takePresentFailureAndLatchProof(
+        "RendererIOS asynchronous Metal present failed");
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    for(size_t index=0u; index<frames.size(); ++index)
+      (void)materializeLinearHDRProofAfterTerminal(frames[index],true);
+#endif
+    if(!fencesHealthy) {
+      forcePreviewPlaceholder();
+      fail(operation,firstFenceFailure.data());
+      }
+
+    bool presentHealthy = fencesHealthy && mailboxHealthy && !failed;
     if(presentHealthy) {
       for(auto& frame:frames) {
-        if(!materializeLinearHDREvidenceAfterTerminal(frame)) {
+        if(!materializeLinearHDREvidenceAfterTerminal(frame,true)) {
           presentHealthy = false;
           break;
           }
         }
       }
-    if(presentHealthy)
-      presentHealthy = pollPresentFailure(
-        "RendererIOS asynchronous Metal present failed");
     releaseRetainedPreviewAfterIdle();
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
@@ -4157,6 +4282,9 @@ struct IOSMetalContext::Impl final {
       }
 #endif
     neutralizeFences();
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    releaseLinearHDRProofFramesAfterTerminal();
+#endif
     releaseVideoFrames();
     releaseSceneFrames();
     logSceneLifetime(reason);
@@ -4309,6 +4437,9 @@ struct IOSMetalContext::Impl final {
   MetalRuntimeCompilationSnapshot              runtimeAfterLegacyShaders;
   MetalBuiltinRuntimeSnapshot                  builtinRuntimeAfterLegacyShaders;
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  std::unique_ptr<IOSLinearHDRProofProducer>    linearHDRProof;
+#endif
   std::array<FrameContext,Resources::MaxFramesInFlight> frames;
   uint64_t                                      sceneRetainCount  = 0;
   uint64_t                                      sceneReleaseCount = 0;
@@ -4398,7 +4529,7 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
   impl->pollShadingPrototypeForwardSelfTest();
   return std::nullopt;
 #endif
-  if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
+  if(!impl->takePresentFailureAndLatchProof("RendererIOS asynchronous Metal present failed"))
     return std::nullopt;
   if(impl->frameActive)
     throw std::logic_error("RendererIOS frame ticket is already active");
@@ -4432,6 +4563,9 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
   catch(const std::exception& e) {
     // Do not retry a Metal error command buffer: Tempest maps it to device
     // lost/hang. Dropping the fence also prevents its throwing destructor.
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    impl->markLinearHDRProofFenceFailure(frameContext);
+#endif
     frameContext.fence = Fence();
     impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
@@ -4441,6 +4575,9 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     return std::nullopt;
     }
   catch(...) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    impl->markLinearHDRProofFenceFailure(frameContext);
+#endif
     frameContext.fence = Fence();
     impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
@@ -4448,7 +4585,16 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
                                 : "RendererIOS Metal frame fence failed");
     return std::nullopt;
     }
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  bool proofIdleConfirmed = false;
+  if(!impl->materializeLinearHDRProofAfterTerminal(
+       frameContext,false,&proofIdleConfirmed))
+    return std::nullopt;
+  if(!impl->materializeLinearHDREvidenceAfterTerminal(
+       frameContext,proofIdleConfirmed))
+#else
   if(!impl->materializeLinearHDREvidenceAfterTerminal(frameContext))
+#endif
     return std::nullopt;
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   impl->materializeBinkSelfTestAfterTerminal(
@@ -4592,7 +4738,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 
   const uint8_t slot = frame.slot;
   auto& frameContext = impl->frames[slot];
-  if(!impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")) {
+  if(!impl->takePresentFailureAndLatchProof("RendererIOS asynchronous Metal present failed")) {
     cancelFrame(frame.serial);
     (void)completeFrame(completion,false,nullptr,nullptr);
     return {};
@@ -4785,7 +4931,27 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
            impl->linearHDRTargets.color.isEmpty())
           throw std::runtime_error(
             "RendererIOS native Landscape pass has no current HDR target pair");
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        bool linearHDRProofPrepared = false;
+        if(impl->linearHDRProof!=nullptr &&
+           impl->linearHDRProof->armed()) {
+          linearHDRProofPrepared = impl->linearHDRProof->prepareFrame(
+              frameContext.linearHDRProof,
+              impl->linearHDRTargets.color,
+              impl->linearHDRTargets.generation,
+              input.snapshot->sequence.value,
+              impl->swapchain.w(),impl->swapchain.h());
+          if(!linearHDRProofPrepared)
+            throw std::runtime_error(
+              "RendererIOS HDR proof preparation failed");
+          }
+        encoder.setDebugMarker(
+          linearHDRProofPrepared
+            ? impl->linearHDRProof->sceneMarker()
+            : std::string_view("RendererIOS native Landscape HDR"));
+#else
         encoder.setDebugMarker("RendererIOS native Landscape HDR");
+#endif
         encoder.setFramebuffer(
           {{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},
           {impl->linearHDRTargets.depth,1.f,Tempest::Discard});
@@ -4854,7 +5020,23 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           };
         encoder.setFramebuffer({});
         advanceLinearHDR(IOSLinearHDRFrameEvent::SceneHDR);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        if(linearHDRProofPrepared) {
+          encoder.setDebugMarker(impl->linearHDRProof->copyMarker());
+          if(!impl->linearHDRProof->encodeCopy(
+               frameContext.linearHDRProof,encoder,
+               impl->linearHDRTargets.color))
+            throw std::runtime_error(
+              "RendererIOS HDR proof copy encode failed");
+          encoder.setDebugMarker(
+            impl->linearHDRProof->toneResolveMarker());
+          }
+        else {
+          encoder.setDebugMarker("RendererIOS tone resolve");
+          }
+#else
         encoder.setDebugMarker("RendererIOS tone resolve");
+#endif
         encoder.setFramebuffer(
           {{drawable,Tempest::Discard,Tempest::Preserve}});
         const IOSLinearHDRMetalEncodeResult resolve =
@@ -4933,6 +5115,11 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     ++impl->counters.submitAttempts;
     submissionAttempted = true;
     Fence submittedFence = impl->device.submit(command);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    if(impl->linearHDRProof!=nullptr &&
+       impl->linearHDRProof->hasOwners(frameContext.linearHDRProof))
+      impl->linearHDRProof->markSubmitted(frameContext.linearHDRProof);
+#endif
     frameContext.fence = std::move(submittedFence);
     frameContext.submitted = true;
     ++impl->counters.submitAccepted;
@@ -4949,6 +5136,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
            completion,true,
            frameAnimationDrawnReady ? &frameAnimationDrawn : nullptr,
            uvAnimationDrawnReady ? &uvAnimationDrawn : nullptr)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      impl->markLinearHDRProofPostSubmitFailure(frameContext);
+#endif
       impl->fail("RendererIOS accepted frame could not commit scene history");
       return {};
       }
@@ -5007,7 +5197,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     impl->logRuntimeCompilationFrame(impl->counters.presentAccepted);
 #endif
 
-    (void)impl->pollPresentFailure(
+    (void)impl->takePresentFailureAndLatchProof(
       "RendererIOS asynchronous Metal present failed");
 
     return SubmitResult{previewAccepted};
@@ -5015,7 +5205,12 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   catch(const SwapchainSuboptimal&) {
     // Drawable replacement is a recoverable surface lifecycle event. The
     // submitted frame, if any, is settled by resize() before targets are reused.
-    if(!frameContext.submitted) {
+    if(frameContext.submitted) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      impl->markLinearHDRProofPostSubmitFailure(frameContext);
+#endif
+      }
+    else {
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
@@ -5028,7 +5223,12 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     throw;
     }
   catch(const std::exception& e) {
-    if(!frameContext.submitted) {
+    if(frameContext.submitted) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      impl->markLinearHDRProofPostSubmitFailure(frameContext);
+#endif
+      }
+    else {
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
@@ -5039,12 +5239,17 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         }
       }
     impl->forcePreviewPlaceholder();
-    if(impl->pollPresentFailure("RendererIOS asynchronous Metal present failed"))
+    if(impl->takePresentFailureAndLatchProof("RendererIOS asynchronous Metal present failed"))
       impl->fail("RendererIOS frame submission failed",e.what());
     throw;
     }
   catch(...) {
-    if(!frameContext.submitted) {
+    if(frameContext.submitted) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+      impl->markLinearHDRProofPostSubmitFailure(frameContext);
+#endif
+      }
+    else {
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
@@ -5065,7 +5270,7 @@ Size IOSMetalContext::drawableSize() const {
   }
 
 bool IOSMetalContext::pollDeviceFailure() noexcept {
-  return impl->pollPresentFailure(
+  return impl->takePresentFailureAndLatchProof(
     "RendererIOS asynchronous Metal present failed");
   }
 
@@ -5256,7 +5461,7 @@ void IOSMetalContext::onWorldChanged() {
   }
 
 bool IOSMetalContext::savePreviewReady() {
-  (void)impl->pollPresentFailure(
+  (void)impl->takePresentFailureAndLatchProof(
     "RendererIOS asynchronous Metal present failed");
   if(impl->previewState==Impl::PreviewState::ReadyCpu ||
      impl->previewState==Impl::PreviewState::ReadyPlaceholder)
@@ -5280,6 +5485,9 @@ bool IOSMetalContext::savePreviewReady() {
            impl->previewState==Impl::PreviewState::ReadyPlaceholder;
     }
   catch(const std::exception& e) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    impl->markLinearHDRProofFenceFailure(frameContext);
+#endif
     frameContext.fence = Fence();
     impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
@@ -5287,6 +5495,9 @@ bool IOSMetalContext::savePreviewReady() {
     return true;
     }
   catch(...) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    impl->markLinearHDRProofFenceFailure(frameContext);
+#endif
     frameContext.fence = Fence();
     impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();

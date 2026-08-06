@@ -9,7 +9,7 @@
 
 namespace {
 
-constexpr size_t HeaderBytes = 160u;
+constexpr size_t HeaderBytes = IOSLinearHDRProofV1HeaderBytes;
 using Fixture = std::array<std::byte,HeaderBytes+16u>;
 
 [[noreturn]] void fail() {
