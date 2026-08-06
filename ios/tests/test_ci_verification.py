@@ -31,6 +31,7 @@ SMOKE_HARNESS = REPO / "ios" / "device-test" / "run-smoke-test.sh"
 PIPELINE_ARCHIVE_HARNESS = (
     REPO / "ios" / "device-test" / "run-pipeline-archive-test.sh"
 )
+IOS_METAL_CONTEXT = REPO / "game" / "graphics" / "iosmetalcontext.cpp"
 
 
 def load_module():
@@ -285,6 +286,48 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     )
     if contracts.splitlines().count(smoke_invocation) != 1:
         raise ValueError("preview-fence save-slot smoke self-test is not exact")
+
+
+def validate_clear_only_admission_contract(contracts: str, context: str) -> None:
+    production_oracle = exact_scope(
+        contracts,
+        'if profile_gate.count("return std::nullopt;") != 1:',
+        'if begin_frame.index("impl->pollClearOnlyPassSelfTest();")',
+        "clear-only production admission oracle",
+    )
+    forbidden_calls = (
+        "pollPresentFailure",
+        "takePresentFailureAndLatchProof",
+        "startEncoding",
+        "device.submit",
+        "swapchain",
+        "gpuScene",
+    )
+    for production_call in forbidden_calls:
+        if production_oracle.splitlines().count(f'    "{production_call}",') != 1:
+            raise ValueError(
+                "clear-only production admission oracle is not exact: "
+                + production_call
+            )
+
+    begin_frame = context.split(
+        "std::optional<IOSMetalContext::FrameLease> "
+        "IOSMetalContext::beginFrame() {",
+        1,
+    )[1].split(
+        "\nbool IOSMetalContext::frameAdmissionActive() const noexcept {",
+        1,
+    )[0]
+    profile_gate = begin_frame.split(
+        "#if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST)",
+        1,
+    )[1].split("#endif", 1)[0]
+    for production_call in forbidden_calls:
+        if production_call in profile_gate:
+            raise ValueError(
+                "clear-only admission gate invokes production work: "
+                + production_call
+            )
 
 
 def validate_ui_automation_host_contract(
@@ -1043,8 +1086,24 @@ def test_workflow_contract() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     contracts = CONTRACTS.read_text(encoding="utf-8")
     profile = PROFILE.read_text(encoding="utf-8")
+    context = IOS_METAL_CONTEXT.read_text(encoding="utf-8")
     validate_workflow(workflow)
     validate_extracted_oracles(contracts, profile)
+    validate_clear_only_admission_contract(contracts, context)
+    mailbox_mutation = replace_once(
+        context,
+        "  impl->pollClearOnlyPassSelfTest();\n  return std::nullopt;",
+        "  impl->pollClearOnlyPassSelfTest();\n"
+        "  impl->takePresentFailureAndLatchProof(\n"
+        '      "RendererIOS asynchronous Metal present failed");\n'
+        "  return std::nullopt;",
+    )
+    try:
+        validate_clear_only_admission_contract(contracts, mailbox_mutation)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("clear-only mailbox mutation survived")
     mutations = (
         replace_once(
             workflow,

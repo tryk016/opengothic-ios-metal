@@ -3542,6 +3542,7 @@ if profile_gate.count("return std::nullopt;") != 1:
     raise SystemExit("clear-only profile can enter production frame admission")
 for production_call in (
     "pollPresentFailure",
+    "takePresentFailureAndLatchProof",
     "startEncoding",
     "device.submit",
     "swapchain",
@@ -3552,7 +3553,7 @@ for production_call in (
             f"clear-only admission gate invokes production work: {production_call}"
         )
 if begin_frame.index("impl->pollClearOnlyPassSelfTest();") > begin_frame.index(
-    'impl->pollPresentFailure("RendererIOS asynchronous Metal present failed")'
+    'impl->takePresentFailureAndLatchProof("RendererIOS asynchronous Metal present failed")'
 ):
     raise SystemExit("clear-only probe begins after production present polling")
 if "not ordinary_frame_lines" not in validator:
