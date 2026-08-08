@@ -439,26 +439,53 @@ def validate_sources(
         in candidate_cmake
     ):
         raise ValueError("HOST_TEST leaked into product CMake")
-    configure = {
-        item["name"]: item
-        for item in candidate_presets["configurePresets"]
-    }
-    expected_names = {
+    configure_presets = candidate_presets["configurePresets"]
+    expected_names = [
         "renderer-ios-base",
         "renderer-ios-off",
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
+        "renderer-ios-hdr-triple",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
+    ]
+    if [item["name"] for item in configure_presets] != expected_names:
+        raise ValueError("causal configure preset set/order drifted")
+    configure = {
+        item["name"]: item
+        for item in configure_presets
     }
-    if set(configure) != expected_names:
-        raise ValueError("causal configure preset set drifted")
-    if configure["renderer-ios-base"]["cacheVariables"].get(
+    base_cache = configure["renderer-ios-base"]["cacheVariables"]
+    if base_cache.get(
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
     ) != "none":
         raise ValueError("ordinary preset base is not explicit none")
+    if base_cache.get(
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
+    ) != "OFF":
+        raise ValueError("ordinary preset base capture gate is not OFF")
+    hdr_triple = configure["renderer-ios-hdr-triple"]
+    if hdr_triple.get("inherits") != "renderer-ios-base":
+        raise ValueError("hdr-triple does not inherit base")
+    if hdr_triple.get("binaryDir") != (
+        "${sourceDir}/build/local-renderer-ios-hdr-triple"
+    ):
+        raise ValueError("hdr-triple binaryDir drifted")
+    expected_hdr_triple_cache = {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON",
+    }
+    if hdr_triple.get("cacheVariables") != expected_hdr_triple_cache:
+        raise ValueError("hdr-triple exact capture tuple drifted")
     for suffix, mode in (
         ("causal-none", "none"),
         ("causal-a", "causal-a"),
@@ -491,6 +518,7 @@ def validate_sources(
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
+        "renderer-ios-hdr-triple",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -527,22 +555,32 @@ del mutated["configurePresets"][0]["cacheVariables"][
 ]
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][5]["binaryDir"] = (
+mutated["configurePresets"][6]["binaryDir"] = (
     "${sourceDir}/build/local-renderer-ios-causal-a"
 )
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][6]["cacheVariables"][
+mutated["configurePresets"][7]["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ] = "none"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][7]["cacheVariables"][
+mutated["configurePresets"][8]["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST"
 ] = "ON"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][5]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+mutated["configurePresets"][6]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+source_mutations.append((cmake, mutated, profile, local))
+mutated = deepcopy(presets)
+mutated["configurePresets"][0]["cacheVariables"][
+    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
+] = "ON"
+source_mutations.append((cmake, mutated, profile, local))
+mutated = deepcopy(presets)
+mutated["configurePresets"][5]["cacheVariables"][
+    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
+] = "OFF"
 source_mutations.append((cmake, mutated, profile, local))
 source_mutations.append(
     (
@@ -583,9 +621,9 @@ for mutation in source_mutations:
         killed += 1
     else:
         raise SystemExit("causal source mutation survived")
-if killed != 16:
+if killed != 18:
     raise SystemExit("causal source mutation count drifted")
-print("RendererIOS causal source oracle: mutations-killed=16")
+print("RendererIOS causal source oracle: mutations-killed=18")
 PY
 
 CAUSAL_CONTRACT_ROOT="$RUNNER_TEMP/renderer-ios-causal-contracts"
@@ -3233,16 +3271,35 @@ if context.count(
 capture_cmake = cmake.split(
     'option(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST', 1
 )[1].split('set(_renderer_ios_fault_modes', 1)[0]
-for literal in (
-    'set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")',
+legacy_capture_branch = (
     'if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR\n'
     '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR\n'
-    '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)',
-    '<key>MetalCaptureEnabled</key>',
-    '<true/>',
+    '     OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)\n'
+    '    set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY\n'
+    '        "  <key>MetalCaptureEnabled</key>\\n  <true/>")\n'
+    '  endif()'
+)
+hdr_triple_capture_branch = (
+    'if(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)\n'
+    '    set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY\n'
+    '        "  <key>RendererIOSLinearHDRGPUTripleCapture</key>\\n  <true/>\\n'
+    '  <key>MetalCaptureEnabled</key>\\n  <true/>")\n'
+    '  endif()'
+)
+for literal in (
+    'set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")',
+    legacy_capture_branch,
+    hdr_triple_capture_branch,
 ):
     if capture_cmake.count(literal) != 1:
         raise SystemExit(f"capture plist CMake contract is not exact: {literal}")
+for literal, expected_count in (
+    ('<key>MetalCaptureEnabled</key>', 2),
+    ('<key>RendererIOSLinearHDRGPUTripleCapture</key>', 1),
+    ('<true/>', 3),
+):
+    if capture_cmake.count(literal) != expected_count:
+        raise SystemExit(f"capture plist CMake cardinality drifted: {literal}")
 placeholder = '${OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY}'
 if plist_template.count(placeholder) != 1:
     raise SystemExit("capture plist template placeholder is not exact")
@@ -3255,10 +3312,25 @@ on_plist = plistlib.loads(
         "  <key>MetalCaptureEnabled</key>\n  <true/>",
     ).encode("utf-8")
 )
-if "MetalCaptureEnabled" in off_plist:
+hdr_triple_plist = plistlib.loads(
+    plist_template.replace(
+        placeholder,
+        "  <key>RendererIOSLinearHDRGPUTripleCapture</key>\n  <true/>\n"
+        "  <key>MetalCaptureEnabled</key>\n  <true/>",
+    ).encode("utf-8")
+)
+capture_keys = {
+    "MetalCaptureEnabled",
+    "RendererIOSLinearHDRGPUTripleCapture",
+}
+if capture_keys.intersection(off_plist):
     raise SystemExit("normal plist enables programmatic capture")
 if on_plist.get("MetalCaptureEnabled") is not True:
     raise SystemExit("clear-only plist does not enable programmatic capture")
+if "RendererIOSLinearHDRGPUTripleCapture" in on_plist:
+    raise SystemExit("clear-only plist enables HDR triple capture")
+if any(hdr_triple_plist.get(key) is not True for key in capture_keys):
+    raise SystemExit("HDR triple plist does not enable both capture gates")
 
 def exact_scope(source, start, end, label):
     if source.count(start) != 1 or source.count(end) != 1:
