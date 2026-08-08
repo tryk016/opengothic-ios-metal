@@ -349,6 +349,10 @@ PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_gpu_evidence.py
 bash -n ios/device-test/run-linear-hdr-proof-test.sh
 [[ "$(ios/device-test/run-linear-hdr-proof-test.sh --self-test)" == \
    "SELF-TEST PASS" ]]
+bash -n ios/device-test/run-smoke-test.sh
+ios/device-test/run-smoke-test.sh --self-test
+[[ "$(python3 ios/device-test/validate-plist-contract.py --self-test)" == \
+   "SELF-TEST PASS" ]]
 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import ast
 from pathlib import Path
@@ -1052,6 +1056,10 @@ for index, mutation in enumerate(validator_mutations, 1):
         raise SystemExit(f"collector mutation survived: {index}")
 
 runner = Path("ios/device-test/run-linear-hdr-proof-test.sh").read_text()
+smoke = Path("ios/device-test/run-smoke-test.sh").read_text()
+plist_validator = Path(
+    "ios/device-test/validate-plist-contract.py"
+).read_text()
 
 
 def shell_without_comments(source: str) -> str:
@@ -1110,6 +1118,87 @@ def runner_failure(candidate: str, arguments: list[str], expected: str) -> None:
             f"runner did not enforce {expected!r}: {completed.stderr[-400:]}")
 
 
+def validate_plist_helper(candidate: str) -> None:
+    try:
+        compile(candidate, "validate-plist-contract.py", "exec")
+    except SyntaxError as error:
+        raise ValueError(f"plist helper grammar is invalid: {error}") from error
+    code = compact(candidate)
+    for literal in (
+        "ifpayload.get(key)isnotTrue:",
+        "ifkeyinpayload:",
+        'raiseContractError(f"duplicateplistrequirement:{key}")',
+        'raiseContractError(f"conflictingplistrequirement:{key}")',
+        'raiseContractError(f"duplicateplistdictionarykey:{key}")',
+        "ifraw.startswith(BOMS):",
+        "metadata=os.lstat(path)",
+        "ifnotstat.S_ISREG(metadata.st_mode):",
+        '{hdr:"true",metal:True}',
+        '{hdr:True,metal:"true"}',
+        '"BOMduplicatekey"',
+        '"symlinkplist"',
+        'argument_parser().parse_args(["--unknown"])',
+    ):
+        if literal not in code:
+            raise ValueError(f"universal plist helper contract missing: {literal}")
+    completed = subprocess.run(
+        ["python3", "-", "--self-test"], input=candidate, text=True,
+        capture_output=True, check=False,
+        env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"],
+             "TMPDIR": os.environ.get("TMPDIR", "/tmp")},
+    )
+    if completed.returncode != 0 or completed.stdout != "SELF-TEST PASS\n" or \
+            completed.stderr:
+        raise ValueError(
+            "universal plist helper self-test failed: "
+            + completed.stderr[-400:]
+        )
+
+
+def validate_smoke_capture_hook(candidate: str) -> None:
+    syntax = subprocess.run(
+        ["bash", "-n"], input=candidate, text=True,
+        capture_output=True, check=False)
+    if syntax.returncode != 0:
+        raise ValueError(f"smoke shell grammar is invalid: {syntax.stderr}")
+    if len(candidate.splitlines()) > 5978:
+        raise ValueError("smoke core exceeds the frozen 5978-line budget")
+    active = shell_without_comments(candidate)
+    active_code = "".join(active.split())
+    declarations = "".join(active.split("\nfail() {", 1)[0].split())
+    if "REQUIRE_PROGRAMMATIC_METAL_CAPTURE=0" not in declarations or \
+            'PLIST_VALIDATOR="$ROOT/ios/device-test/validate-plist-contract.py"' \
+            not in declarations:
+        raise ValueError("smoke capture capability is not default OFF/universal")
+    if "validate_programmatic_metal_capture_profile" in active_code or \
+            "Print:MetalCaptureEnabled" in active_code:
+        raise ValueError("smoke retains a scenario-local plist parser")
+    for literal in (
+        "--require-programmatic-metal-capture)",
+        "REQUIRE_PROGRAMMATIC_METAL_CAPTURE=1",
+    ):
+        if literal not in active_code:
+            raise ValueError(f"smoke capture hook missing: {literal}")
+    mode_contract = (
+        "CAPTURE_PLIST_REQUIREMENT=--require-absent"
+        "if((REQUIRE_PROGRAMMATIC_METAL_CAPTURE!=0||"
+        "REQUIRE_CLEAR_ONLY_PASS_SELF_TEST!=0||"
+        "REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST!=0||"
+        "REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST!=0));then"
+        "CAPTURE_PLIST_REQUIREMENT=--require-true"
+        "fi"
+    )
+    if active_code.count(mode_contract) != 1:
+        raise ValueError("smoke capture requirement selection is not exact")
+    helper_call = (
+        'python3"$PLIST_VALIDATOR"--plist"$APP_INPUT/Info.plist"\\'
+        '"$CAPTURE_PLIST_REQUIREMENT"MetalCaptureEnabled||fail\\'
+        '"appprogrammaticMetalcaptureplistcontractfailed"'
+    )
+    if active_code.count(helper_call) != 1:
+        raise ValueError("smoke universal plist helper call is not exact")
+
+
 def validate_runner(candidate: str) -> None:
     syntax = subprocess.run(
         ["bash", "-n"], input=candidate, text=True,
@@ -1123,6 +1212,7 @@ def validate_runner(candidate: str) -> None:
         'fail"--gpu-triplerejects--new-game"',
         "RendererIOSLinearHDRGPUTripleCapture",
         "RendererIOSHDRcaptureprofile:v=1mode=one-shot",
+        'PLIST_VALIDATOR="$ROOT/ios/device-test/validate-plist-contract.py"',
         'python3"$GPU_VALIDATOR"--commit-capture-copy',
         '--expected-capture-kind"$DEVICE_CAPTURE_KIND"',
         'python3"$GPU_VALIDATOR"--collect',
@@ -1130,6 +1220,34 @@ def validate_runner(candidate: str) -> None:
     ):
         if literal not in runner_code:
             raise ValueError(f"active runner contract missing: {literal}")
+    if "PlistBuddy" in runner_code or "plistlib" in runner_code:
+        raise ValueError("linear HDR runner retains a scenario-local plist parser")
+    strict_gpu_plist = (
+        'python3"$PLIST_VALIDATOR"--plist"$APP/Info.plist"\\'
+        "--require-trueRendererIOSLinearHDRGPUTripleCapture\\"
+        "--require-trueMetalCaptureEnabled||"
+        'fail"--gpu-tripleapprequiresbothcapturekeysasexactCFBooleantrue"'
+    )
+    strict_producer_plist = (
+        'python3"$PLIST_VALIDATOR"--plist"$APP/Info.plist"\\'
+        "--require-absentRendererIOSLinearHDRGPUTripleCapture\\"
+        "--require-absentMetalCaptureEnabled||"
+        'fail"producer-onlyappcontainsacaptureplistkey"'
+    )
+    if runner_code.count(strict_gpu_plist) != 1 or \
+            runner_code.count(strict_producer_plist) != 1:
+        raise ValueError("linear HDR plist preflight is not exact")
+    if runner_code.index(strict_gpu_plist) >= \
+            runner_code.index('DEVICE_RECORD="$(select_device)"'):
+        raise ValueError("strict capture plist validation follows device selection")
+    smoke_capability = (
+        "if((GPU_TRIPLE!=0));then"
+        "SMOKE_ARGS+=(--require-programmatic-metal-capture)"
+        "fi"
+    )
+    if runner_code.count(smoke_capability) != 1 or \
+            runner_code.count("--require-programmatic-metal-capture") != 1:
+        raise ValueError("gpu-triple smoke capture capability wiring is not exact")
     ordered(runner_code, (
         '[[-f"$CAPTURE_SUMMARY"&&!-L"$CAPTURE_SUMMARY"]]',
         'delete_exact_device_leaf"$CAPTURE_LEAF"',
@@ -1158,6 +1276,74 @@ def validate_runner(candidate: str) -> None:
                    "duplicate --gpu-triple")
 
 
+validate_plist_helper(plist_validator)
+helper_mutations = (
+    plist_validator.replace(
+        "        if payload.get(key) is not True:\n",
+        "        if not payload.get(key):\n", 1),
+    plist_validator.replace(
+        "        if key in payload:\n",
+        "        if False:\n", 1),
+    plist_validator.replace(
+        "            if previous is not None:\n",
+        "            if False:\n", 1),
+    plist_validator.replace(
+        "            if key in keys:\n",
+        "            if False:\n", 1),
+    plist_validator.replace(
+        '                lambda: argument_parser().parse_args(["--unknown"]),\n',
+        '                lambda: argument_parser().parse_args([]),\n', 1),
+    plist_validator.replace(
+        "        if raw.startswith(BOMS):\n",
+        "        if False:\n", 1),
+    plist_validator.replace(
+        "        metadata = os.lstat(path)\n",
+        "        metadata = os.stat(path)\n", 1),
+    plist_validator.replace(
+        "    if not stat.S_ISREG(metadata.st_mode):\n",
+        "    if False:\n", 1),
+)
+for index, mutation in enumerate(helper_mutations, 1):
+    if mutation == plist_validator:
+        raise SystemExit(f"universal plist helper mutation is a no-op: {index}")
+    try:
+        validate_plist_helper(mutation)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit(f"universal plist helper mutation survived: {index}")
+
+validate_smoke_capture_hook(smoke)
+smoke_helper_call = (
+    'python3 "$PLIST_VALIDATOR" --plist "$APP_INPUT/Info.plist" \\\n'
+    '  "$CAPTURE_PLIST_REQUIREMENT" MetalCaptureEnabled || fail \\\n'
+    '  "app programmatic Metal capture plist contract failed"\n'
+)
+if smoke.count(smoke_helper_call) != 1:
+    raise SystemExit("smoke universal plist helper active structure changed")
+smoke_mutation = smoke.replace(
+    smoke_helper_call,
+    "true # universal plist helper call\n",
+    1,
+)
+try:
+    validate_smoke_capture_hook(smoke_mutation)
+except ValueError:
+    pass
+else:
+    raise SystemExit("comment-only smoke plist helper mutation survived")
+smoke_default_mutation = smoke.replace(
+    "CAPTURE_PLIST_REQUIREMENT=--require-absent\n",
+    "CAPTURE_PLIST_REQUIREMENT=--require-true # default drift\n",
+    1,
+)
+try:
+    validate_smoke_capture_hook(smoke_default_mutation)
+except ValueError:
+    pass
+else:
+    raise SystemExit("smoke default capture mutation survived")
+
 validate_runner(runner)
 save_guard = '    [[ "$SAVE_SLOT" == 4 ]] || fail "--gpu-triple requires exact save slot 4"\n'
 if runner.count(save_guard) != 1:
@@ -1173,7 +1359,52 @@ except ValueError:
 else:
     raise SystemExit("comment-only save4 guard mutation survived")
 
-print("exact gpudebug triple source contracts: PASS")
+smoke_capability_line = \
+    '  SMOKE_ARGS+=(--require-programmatic-metal-capture)\n'
+if runner.count(smoke_capability_line) != 1:
+    raise SystemExit("gpu-triple smoke capability active structure changed")
+gpu_plist_guard = (
+    '    python3 "$PLIST_VALIDATOR" --plist "$APP/Info.plist" \\\n'
+    '      --require-true RendererIOSLinearHDRGPUTripleCapture \\\n'
+    '      --require-true MetalCaptureEnabled ||\n'
+    '      fail "--gpu-triple app requires both capture keys as exact CFBoolean true"\n'
+)
+if runner.count(gpu_plist_guard) != 1:
+    raise SystemExit("gpu-triple strict plist guard active structure changed")
+runner_mutations = (
+    runner.replace(
+        gpu_plist_guard,
+        gpu_plist_guard.replace(
+            '      --require-true RendererIOSLinearHDRGPUTripleCapture \\\n'
+            '      --require-true MetalCaptureEnabled ||\n',
+            '      --require-true RendererIOSLinearHDRGPUTripleCapture ||\n',
+            1,
+        ),
+        1),
+    runner.replace(
+        gpu_plist_guard,
+        "    true # strict capture plist guard\n",
+        1),
+    runner.replace(
+        smoke_capability_line,
+        '  true # SMOKE_ARGS+=(--require-programmatic-metal-capture)\n',
+        1),
+    runner.replace(
+        'if ((GPU_TRIPLE != 0)); then\n' + smoke_capability_line + 'fi\n',
+        smoke_capability_line,
+        1),
+)
+for index, mutation in enumerate(runner_mutations, 1):
+    if mutation == runner:
+        raise SystemExit(f"runner smoke capability mutation is a no-op: {index}")
+    try:
+        validate_runner(mutation)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit(f"runner smoke capability mutation survived: {index}")
+
+print("exact gpudebug triple source contracts: PASS mutations=15")
 PY
 
 printf '\n### P2.1e0 HDR producer source and mutation contracts\n'

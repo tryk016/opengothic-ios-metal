@@ -11,6 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SMOKE="$ROOT/ios/device-test/run-smoke-test.sh"
 VALIDATOR="$ROOT/ios/device-test/validate-linear-hdr-proof-artifact.py"
 GPU_VALIDATOR="$ROOT/ios/device-test/validate-linear-hdr-gpu-evidence.py"
+PLIST_VALIDATOR="$ROOT/ios/device-test/validate-plist-contract.py"
 GUARD="$HOME/OpenGothic-RendererIOS-Handoff/current/private-tools/device_guard.py"
 BASE_BUNDLE_ID="opengothic.gothic2"
 APP_EXECUTABLE="Gothic2Notr"
@@ -104,7 +105,8 @@ if ((SELF_TEST == 0)); then
   [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be non-negative"
   [[ -n "$APP" && -d "$APP" && ! -L "$APP" ]] || fail "app path is invalid"
   [[ -x "$APP/$APP_EXECUTABLE" ]] || fail "app executable is missing"
-  [[ -x "$SMOKE" && -x "$GUARD" && -f "$VALIDATOR" && -f "$GPU_VALIDATOR" ]] ||
+  [[ -x "$SMOKE" && -x "$GUARD" && -f "$VALIDATOR" &&
+     -f "$GPU_VALIDATOR" && -f "$PLIST_VALIDATOR" ]] ||
     fail "required guarded-runner tools are missing"
   if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
     [[ "$EVIDENCE_PATH_FILE" == /* &&
@@ -128,17 +130,17 @@ if ((SELF_TEST == 0)); then
   strings "$APP/$APP_EXECUTABLE" >"$WORK/app.strings" ||
     fail "could not inspect app Mach-O markers"
   if ((GPU_TRIPLE != 0)); then
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :RendererIOSLinearHDRGPUTripleCapture' "$APP/Info.plist" 2>/dev/null)" == true ]] ||
-      fail "--gpu-triple app lacks RendererIOSLinearHDRGPUTripleCapture=true"
-    [[ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$APP/Info.plist" 2>/dev/null)" == true ]] ||
-      fail "--gpu-triple app lacks MetalCaptureEnabled=true"
+    python3 "$PLIST_VALIDATOR" --plist "$APP/Info.plist" \
+      --require-true RendererIOSLinearHDRGPUTripleCapture \
+      --require-true MetalCaptureEnabled ||
+      fail "--gpu-triple app requires both capture keys as exact CFBoolean true"
     [[ "$(grep -Fxc 'RendererIOS HDR capture profile: v=1 mode=one-shot' "$WORK/app.strings" || true)" -eq 1 ]] ||
       fail "--gpu-triple app lacks the exact one-shot Mach-O marker"
   else
-    ! /usr/libexec/PlistBuddy -c 'Print :RendererIOSLinearHDRGPUTripleCapture' "$APP/Info.plist" >/dev/null 2>&1 ||
-      fail "producer-only app contains RendererIOSLinearHDRGPUTripleCapture"
-    ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$APP/Info.plist" >/dev/null 2>&1 ||
-      fail "producer-only app contains MetalCaptureEnabled"
+    python3 "$PLIST_VALIDATOR" --plist "$APP/Info.plist" \
+      --require-absent RendererIOSLinearHDRGPUTripleCapture \
+      --require-absent MetalCaptureEnabled ||
+      fail "producer-only app contains a capture plist key"
     ! grep -Fq 'RendererIOS HDR capture profile: v=1 mode=one-shot' "$WORK/app.strings" ||
       fail "producer-only app contains the capture profile marker"
   fi
@@ -430,6 +432,9 @@ cleanup_owned_temps pre || fail "pre-run allowlisted temp cleanup failed"
 
 SMOKE_EVIDENCE_FILE="$WORK/smoke-evidence-path.txt"
 SMOKE_ARGS=(--duration "$DURATION" --evidence-path-file "$SMOKE_EVIDENCE_FILE")
+if ((GPU_TRIPLE != 0)); then
+  SMOKE_ARGS+=(--require-programmatic-metal-capture)
+fi
 if ((NEW_GAME != 0)); then
   SMOKE_ARGS+=(--new-game)
 else

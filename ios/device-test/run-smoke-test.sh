@@ -24,7 +24,7 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; PLIST_VALIDATOR="$ROOT/ios/device-test/validate-plist-contract.py"
 PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
 STUB="$ROOT/ios/device-test/provisioning-stub/Probe.xcodeproj"
 BASE_BUNDLE_ID="opengothic.gothic2"
@@ -37,6 +37,7 @@ REQUIRE_RESOURCE_ALLOCATOR_SELF_TEST=0
 REQUIRE_CLEAR_ONLY_PASS_SELF_TEST=0
 REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST=0
 REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=0
+REQUIRE_PROGRAMMATIC_METAL_CAPTURE=0
 REQUIRE_DEVICE_FACTS_REFERENCE_A17=0
 PIPELINE_ARCHIVE_TEST_MODE=""
 EXPECTED_FAULT="none"
@@ -2273,6 +2274,7 @@ while [[ $# -gt 0 ]]; do
       REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1
       shift
       ;;
+    --require-programmatic-metal-capture) REQUIRE_PROGRAMMATIC_METAL_CAPTURE=1; shift ;;
     --require-device-facts-reference-a17)
       REQUIRE_DEVICE_FACTS_REFERENCE_A17=1
       shift
@@ -2307,7 +2309,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-device-facts-reference-a17] [--native-alpha-test-causal-mode causal-a|causal-b --native-alpha-test-causal-sequence canonical-positive-uint64] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-programmatic-metal-capture|--require-device-facts-reference-a17] [--native-alpha-test-causal-mode causal-a|causal-b --native-alpha-test-causal-sequence canonical-positive-uint64] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
@@ -4252,18 +4254,16 @@ validate_shading_prototype_tile_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary shading prototype Tile self-test profile does not match the request"
 validate_shading_prototype_forward_binary_profile "$WORK/app-strings.txt" ||
   fail "app binary shading prototype Forward self-test profile does not match the request"
-if ((REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0 ||
+CAPTURE_PLIST_REQUIREMENT=--require-absent
+if ((REQUIRE_PROGRAMMATIC_METAL_CAPTURE != 0 ||
+     REQUIRE_CLEAR_ONLY_PASS_SELF_TEST != 0 ||
      REQUIRE_SHADING_PROTOTYPE_TILE_SELF_TEST != 0 ||
      REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)); then
-  [[ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
-      "$APP_INPUT/Info.plist" 2>/dev/null || true)" == true ]] ||
-    fail "capture self-test app does not enable programmatic Metal capture"
-else
-  if /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
-      "$APP_INPUT/Info.plist" >/dev/null 2>&1; then
-    fail "unrequested profile enables programmatic Metal capture"
-  fi
+  CAPTURE_PLIST_REQUIREMENT=--require-true
 fi
+python3 "$PLIST_VALIDATOR" --plist "$APP_INPUT/Info.plist" \
+  "$CAPTURE_PLIST_REQUIREMENT" MetalCaptureEnabled || fail \
+  "app programmatic Metal capture plist contract failed"
 [[ "$(grep -Ec '^RendererIOS configured fault mode=' "$WORK/app-strings.txt" || true)" -eq 1 ]] ||
   fail "app binary does not contain exactly one configured fault marker"
 grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT" \
