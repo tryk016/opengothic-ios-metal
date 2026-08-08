@@ -30,6 +30,7 @@ COLLECTOR_GLOBAL_TIMEOUT_SECONDS = 720.0
 COLLECTOR_MAIN_TIMEOUT_SECONDS = 600.0
 COLLECTOR_COMMAND_TIMEOUT_SECONDS = 90.0
 COLLECTOR_MINIMUM_TIMEOUT_SECONDS = 1.0
+COLLECTOR_SESSION_SETTLE_SECONDS = 1.0
 MAX_TEXTURE_EXTENT = 16384
 UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
@@ -42,9 +43,9 @@ CAPTURE_LEAF = "RendererIOS-linear-hdr-proof-v1.gputrace"
 SUMMARY_LEAF = "capture-copy-summary-v1.json"
 ROLE_ORDER = (
     "version", "open", "commands", "command-buffer", "scene-encoder",
-    "scene-color0", "proof-encoder", "proof-blit", "tone-encoder",
-    "tone-fragment", "tone-tex0", "scene-resource", "terminate",
-    "sessions-after",
+    "scene-color0", "proof-encoder", "proof-group", "proof-blit",
+    "tone-encoder", "tone-group", "tone-draw", "tone-fragment",
+    "tone-tex0", "scene-resource", "terminate", "sessions-after",
 )
 SAFE_BASENAME_RE = re.compile(r"[a-z0-9][a-z0-9.-]{0,95}\Z")
 H32_RE = re.compile(r"[0-9a-f]{32}\Z")
@@ -56,9 +57,13 @@ LOWER_HEX_RE = re.compile(r"[0-9a-f]+\Z")
 FLOAT_HEX_RE = re.compile(r"0x[01]\.[0-9a-f]{13}p[+-][0-9]+\Z")
 RENDER_PATH_RE = re.compile(r"commands/(cb(?:0|[1-9][0-9]*))/(re(?:0|[1-9][0-9]*))\Z")
 BLIT_PATH_RE = re.compile(r"commands/(cb(?:0|[1-9][0-9]*))/(be(?:0|[1-9][0-9]*))\Z")
-BLIT_COMMAND_RE = re.compile(r"commands/(cb(?:0|[1-9][0-9]*))/(be(?:0|[1-9][0-9]*))/(blit(?:0|[1-9][0-9]*))\Z")
+BLIT_COMMAND_RE = re.compile(
+    r"commands/(cb(?:0|[1-9][0-9]*))/(be(?:0|[1-9][0-9]*))/"
+    r"grp(?:0|[1-9][0-9]*)/(blit(?:0|[1-9][0-9]*))\Z"
+)
 DRAW_PATH_RE = re.compile(
-    r"commands/(cb(?:0|[1-9][0-9]*))/(re(?:0|[1-9][0-9]*))/(?:grp(?:0|[1-9][0-9]*)/)*draw(?:0|[1-9][0-9]*)\Z"
+    r"commands/(cb(?:0|[1-9][0-9]*))/(re(?:0|[1-9][0-9]*))/"
+    r"grp(?:0|[1-9][0-9]*)/draw(?:0|[1-9][0-9]*)\Z"
 )
 CAPTURE_SUCCESS_RE = re.compile(
     r"^RendererIOS HDR capture: v=1 id=([0-9a-f]{32}) "
@@ -70,9 +75,19 @@ CAPTURE_FAILURE_RE = re.compile(
     r"terminal=F reason=(?:start|start-ambiguous|stop|pre-submit|"
     r"submit-ambiguous|idle|state)$"
 )
-SESSION_RE = re.compile(
-    r"(?:sessionId|session ID|session id)[\"' :=]+([A-Za-z0-9._-]+)"
+SESSION_RE = re.compile(r"Session ([1-9][0-9]*) created\.\Z")
+OTHER_SESSIONS_RE = re.compile(
+    r"([1-9][0-9]*) other (session|sessions) active\.\Z"
 )
+SESSION_LIST_HEADER_RE = re.compile(
+    r"ID {2,}Trace {2,}Device {2,}Replayer {2,}Lifetime\Z"
+)
+SESSION_LIST_ROW_RE = re.compile(
+    r"([1-9][0-9]*) {2,}(\S(?:.*?\S)?) {2,}"
+    r"(\S(?:.*?\S)?) {2,}([A-Za-z][A-Za-z0-9._-]*) {2,}"
+    r"(\S(?:.*\S)?)\Z"
+)
+SESSION_LIST_FOOTER_RE = re.compile(r"\(([1-9][0-9]*) (session|sessions)\)\Z")
 
 
 class EvidenceError(RuntimeError):
@@ -635,14 +650,20 @@ def expected_filenames(command: dict[str, Any]) -> dict[str, str]:
     proof_blit = BLIT_COMMAND_RE.fullmatch(command["proofBlit"]["commandPath"])
     tone_re = RENDER_PATH_RE.fullmatch(command["toneResolve"]["encoderPath"])
     assert scene_re and proof_be and proof_blit and tone_re
+    proof_group = command["proofBlit"]["commandPath"].rsplit("/", 2)[-2]
+    tone_group, tone_draw = command["toneResolve"]["drawPath"].rsplit("/", 1)
+    tone_group = tone_group.rsplit("/", 1)[1]
     return {
         "version": "gpudebug-version.txt", "open": "gpudebug-open.json",
         "commands": "commands.json", "command-buffer": f"cb-{cb}.json",
         "scene-encoder": f"scene-re-{scene_re.group(2)[2:]}.json",
         "scene-color0": "scene-color0.json",
         "proof-encoder": f"proof-be-{proof_be.group(2)[2:]}.json",
+        "proof-group": f"proof-grp-{proof_group[3:]}.json",
         "proof-blit": f"proof-blit-{proof_blit.group(3)[4:]}.json",
         "tone-encoder": f"tone-re-{tone_re.group(2)[2:]}.json",
+        "tone-group": f"tone-grp-{tone_group[3:]}.json",
+        "tone-draw": f"tone-draw-{tone_draw[4:]}.json",
         "tone-fragment": "tone-fragment.json", "tone-tex0": "tone-tex0.json",
         "scene-resource": "scene-resource.json",
         "terminate": "gpudebug-terminate.txt",
@@ -650,14 +671,132 @@ def expected_filenames(command: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _canonical_count_value(value: Any, singular: str, plural: str,
+                           label: str) -> int:
+    text = printable(value, label)
+    match = re.fullmatch(
+        rf"([1-9][0-9]*) ({re.escape(singular)}|{re.escape(plural)})", text)
+    require(match is not None, f"{label} has invalid count grammar")
+    count = int(match.group(1))
+    noun = match.group(2)
+    require((count == 1 and noun == singular) or
+            (count > 1 and noun == plural),
+            f"{label} has noncanonical singular/plural grammar")
+    return count
+
+
+def _validate_open_root(document: Any) -> None:
+    root = exact_object(document, ("children", "totalCount"),
+                        "gpudebug open root")
+    children = root["children"]
+    require(isinstance(children, list),
+            "gpudebug open root children are not an array")
+    exact_int(root["totalCount"], len(children),
+              "gpudebug open root.totalCount")
+    expected = (
+        ("commands", "go"),
+        ("performance", ""),
+        ("api_calls", "go"),
+        ("resources", "go"),
+    )
+    require(len(children) == len(expected),
+            "gpudebug open root does not expose the exact canonical children")
+    values: dict[str, str] = {}
+    for index, ((name, actions), child_value) in enumerate(zip(expected, children)):
+        child = exact_object(child_value, ("actions", "name", "values"),
+                             f"gpudebug open root child {index}")
+        exact_string(child["name"], name,
+                     f"gpudebug open root child {index}.name")
+        exact_string(child["actions"], actions,
+                     f"gpudebug open root child {index}.actions")
+        child_values = child["values"]
+        require(isinstance(child_values, list) and len(child_values) == 1,
+                f"gpudebug open root child {index}.values is not exact")
+        item = exact_object(child_values[0], ("type", "value"),
+                            f"gpudebug open root child {index}.values[0]")
+        exact_string(item["type"], "string",
+                     f"gpudebug open root child {index}.values[0].type")
+        values[name] = printable(
+            item["value"], f"gpudebug open root child {index}.values[0].value")
+    _canonical_count_value(values["commands"], "command buffer",
+                           "command buffers", "gpudebug open commands value")
+    exact_string(values["performance"], "see 'profile ?'",
+                 "gpudebug open performance value")
+    _canonical_count_value(values["api_calls"], "API call", "API calls",
+                           "gpudebug open api_calls value")
+    _canonical_count_value(values["resources"], "object", "objects",
+                           "gpudebug open resources value")
+
+
 def parse_session(raw: bytes) -> str:
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as error:
         raise EvidenceError("gpudebug open transcript is not UTF-8") from error
-    matches = SESSION_RE.findall(text)
-    require(len(matches) == 1, "gpudebug startup did not publish exactly one session ID")
-    return matches[0]
+    require(text.endswith("\n") and "\r" not in text,
+            "gpudebug open transcript does not use exact LF lines")
+    lines = text.splitlines(keepends=True)
+    require(len(lines) >= 3,
+            "gpudebug startup transcript is incomplete")
+    match = SESSION_RE.fullmatch(lines[0][:-1])
+    require(match is not None,
+            "gpudebug startup did not publish one canonical session ID")
+    session = match.group(1)
+    index = 1
+    other = OTHER_SESSIONS_RE.fullmatch(lines[index][:-1])
+    if other is not None:
+        count = int(other.group(1))
+        noun = other.group(2)
+        require((count == 1 and noun == "session") or
+                (count > 1 and noun == "sessions"),
+                "gpudebug startup other-session count is noncanonical")
+        index += 1
+    require(index < len(lines) and
+            lines[index] ==
+            f"gpudebug -s {session} -c <command> to send commands.\n",
+            "gpudebug startup command hint is invalid")
+    payload = "".join(lines[index + 1:]).encode("utf-8")
+    documents, _ = _json_documents(payload, "gpudebug open payload", 1)
+    _validate_open_root(documents[0])
+    return session
+
+
+def validate_terminate(raw: bytes, session: str) -> None:
+    expected = f"Session {session} terminated.\n".encode("ascii")
+    require(raw == expected, "gpudebug terminate transcript is not byte-exact")
+
+
+def listed_session_ids(raw: bytes) -> set[str]:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise EvidenceError("gpudebug session listing is not UTF-8") from error
+    require(text.endswith("\n") and "\r" not in text,
+            "gpudebug session listing does not use exact LF lines")
+    if text == "No active sessions.\n":
+        return set()
+    lines = text[:-1].split("\n")
+    require(len(lines) >= 3 and SESSION_LIST_HEADER_RE.fullmatch(lines[0]) is not None,
+            "gpudebug session listing header is invalid")
+    footer = SESSION_LIST_FOOTER_RE.fullmatch(lines[-1])
+    require(footer is not None, "gpudebug session listing footer is invalid")
+    rows = lines[1:-1]
+    count = int(footer.group(1))
+    noun = footer.group(2)
+    require(count == len(rows) and
+            ((count == 1 and noun == "session") or
+             (count > 1 and noun == "sessions")),
+            "gpudebug session listing count is invalid")
+    sessions: set[str] = set()
+    for row in rows:
+        match = SESSION_LIST_ROW_RE.fullmatch(row)
+        require(match is not None, "gpudebug session listing row is invalid")
+        require(all(32 <= ord(character) <= 126 for character in row),
+                "gpudebug session listing row is not printable ASCII")
+        session = match.group(1)
+        require(session not in sessions, "gpudebug session listing repeats an ID")
+        sessions.add(session)
+    return sessions
 
 
 def expected_argv(role: str, command: dict[str, Any], capture: pathlib.Path,
@@ -667,19 +806,29 @@ def expected_argv(role: str, command: dict[str, Any], capture: pathlib.Path,
     proof_blit = command["proofBlit"]["commandPath"]
     tone_encoder = command["toneResolve"]["encoderPath"]
     tone_draw = command["toneResolve"]["drawPath"]
+    proof_group = proof_blit.rsplit("/", 1)[0]
+    tone_group = tone_draw.rsplit("/", 1)[0]
     values = {
         "version": [GPUDEBUG, "--version"],
         "open": [GPUDEBUG, "--json", "-t", str(capture), "--timeout", "120", "-c", "list"],
         "commands": [GPUDEBUG, "--json", "-s", session, "-c", "go commands", "-c", "list --all"],
         "command-buffer": [GPUDEBUG, "--json", "-s", session, "-c", f"go commands/{command['commandBuffer']}", "-c", "list --all"],
         "scene-encoder": [GPUDEBUG, "--json", "-s", session, "-c", f"go {scene}", "-c", "list --all"],
-        "scene-color0": [GPUDEBUG, "--json", "-s", session, "-c", f"go {scene}/color0", "-c", "info"],
+        "scene-color0": [GPUDEBUG, "--json", "-s", session, "-c", f"info {scene}/color0"],
         "proof-encoder": [GPUDEBUG, "--json", "-s", session, "-c", f"go {proof_encoder}", "-c", "list --all"],
-        "proof-blit": [GPUDEBUG, "--json", "-s", session, "-c", f"go {proof_blit}", "-c", "info"],
+        "proof-group": [GPUDEBUG, "--json", "-s", session, "-c",
+                        f"go {proof_group}", "-c", "list --all"],
+        "proof-blit": [GPUDEBUG, "--json", "-s", session, "-c", f"info {proof_blit}"],
         "tone-encoder": [GPUDEBUG, "--json", "-s", session, "-c", f"go {tone_encoder}", "-c", "list --all"],
-        "tone-fragment": [GPUDEBUG, "--json", "-s", session, "-c", f"go {tone_draw}/fragment", "-c", "info"],
-        "tone-tex0": [GPUDEBUG, "--json", "-s", session, "-c", f"go {tone_draw}/fragment/tex0", "-c", "info"],
-        "scene-resource": [GPUDEBUG, "--json", "-s", session, "-c", f"go {resource['textureRef']}", "-c", "info"],
+        "tone-group": [GPUDEBUG, "--json", "-s", session, "-c",
+                       f"go {tone_group}", "-c", "list --all"],
+        "tone-draw": [GPUDEBUG, "--json", "-s", session, "-c",
+                      f"go {tone_draw}", "-c", "list --all"],
+        "tone-fragment": [GPUDEBUG, "--json", "-s", session, "-c",
+                          f"go {tone_draw}/fragment", "-c", "list --all"],
+        "tone-tex0": [GPUDEBUG, "--json", "-s", session, "-c",
+                      f"info {tone_draw}/fragment/tex[0]"],
+        "scene-resource": [GPUDEBUG, "--json", "-s", session, "-c", f"info {resource['textureRef']}"],
         "terminate": [GPUDEBUG, "--terminate", session],
         "sessions-after": [GPUDEBUG, "--list-sessions"],
     }
@@ -709,7 +858,7 @@ def validate_transcripts(value: Any, command: dict[str, Any], resource: dict[str
                          width: int | None = None,
                          height: int | None = None) -> list[dict[str, Any]]:
     require(isinstance(value, list) and len(value) == len(ROLE_ORDER),
-            "transcripts must contain exact 14 entries")
+            "transcripts must contain exact 17 entries")
     names = expected_filenames(command)
     entries: list[dict[str, Any]] = []
     raws: dict[str, bytes] = {}
@@ -740,55 +889,74 @@ def validate_transcripts(value: Any, command: dict[str, Any], resource: dict[str
     assert capture is not None and width is not None and height is not None
     require(raws["version"] == GPUDEBUG_VERSION, "gpudebug version is not byte-exact 1.0")
     session = parse_session(raws["open"])
+    validate_terminate(raws["terminate"], session)
     for entry in entries:
         require(entry["argv"] == expected_argv(entry["role"], command, capture,
                                                 session, resource),
                 f"transcript argv differs for role {entry['role']}")
-    require(session.encode("ascii") not in raws["sessions-after"],
+    require(session not in listed_session_ids(raws["sessions-after"]),
             "owned gpudebug session remains after terminate")
-    scene_color = raws["scene-color0"]
-    exact_scene_color = {
-        "label": resource["label"], "textureRef": resource["textureRef"],
-        "allocationID": resource["allocationID"],
+    cb_path = _command_buffer_path(raws["commands"])
+    require(cb_path == "commands/" + command["commandBuffer"],
+            "commands transcript selected a different command buffer")
+    scene_path, proof_path, tone_path = _encoder_paths(
+        raws["command-buffer"], cb_path, command["scene"]["marker"],
+        command["proofBlit"]["marker"], command["toneResolve"]["marker"])
+    require((scene_path, proof_path, tone_path) ==
+            (command["scene"]["encoderPath"], command["proofBlit"]["encoderPath"],
+             command["toneResolve"]["encoderPath"]),
+            "command-buffer transcript paths differ from evidence")
+
+    scene_listing = _navigable_json(raws["scene-encoder"], "scene encoder")
+    scene_ref, scene_width, scene_height, scene_format = _texture_binding(
+        scene_listing, "color0", resource["label"], "scene color0 binding")
+    require((scene_ref, scene_width, scene_height, scene_format) ==
+            (resource["textureRef"], width, height, resource["pixelFormat"]),
+            "scene color0 binding differs from resource/extent")
+    expected_info = {
+        "label": resource["label"], "allocationID": resource["allocationID"],
         "resourceIndex": resource["resourceIndex"],
         "pixelFormat": resource["pixelFormat"],
         "textureType": resource["textureType"],
-        "storageMode": resource["storageMode"],
-        "width": width, "height": height, "mipLevel": 0, "arraySlice": 0,
+        "storageMode": resource["storageMode"], "width": width, "height": height,
     }
-    for field, expected in exact_scene_color.items():
-        require(_one_field(scene_color, field, "scene color0") == expected,
-                f"scene color0 {field} differs from exact resource/extent")
+    require(_resource_info(_direct_info_json(raws["scene-color0"], "scene color0"),
+                           "scene color0") == expected_info,
+            "scene color0 info differs from canonical resource")
+
+    proof_group = _one_group_path(
+        raws["proof-encoder"], proof_path, command["proofBlit"]["marker"],
+        "proof encoder")
+    blit_path = _proof_group_command_path(raws["proof-group"], proof_group)
+    proof_ref, proof_info = _proof_blit_result(
+        raws["proof-blit"], resource["label"])
+    require(blit_path == command["proofBlit"]["commandPath"] and
+            proof_ref == resource["textureRef"],
+            "proof blit transcript differs from evidence resource/path")
+    for field, expected in (("sourceLevel", command["proofBlit"]["sourceLevel"]),
+                            ("sourceSlice", command["proofBlit"]["sourceSlice"])):
+        observed = str(_document_one_field(proof_info, field, "proof blit"))
+        require(UINT_RE.fullmatch(observed) is not None and int(observed) == expected,
+                f"proof blit {field} differs from evidence")
+    require(str(_document_one_field(proof_info, "sourceSize", "proof blit")) ==
+            f"{width}x{height}x1", "proof blit source extent differs")
+
+    tone_group = _one_group_path(
+        raws["tone-encoder"], tone_path, command["toneResolve"]["marker"],
+        "tone encoder")
+    draw_path = _tone_group_draw_path(raws["tone-group"], tone_group)
+    fragment_path = _tone_draw_fragment_path(raws["tone-draw"], draw_path)
+    require(fragment_path == draw_path + "/fragment",
+            "tone draw fragment path is invalid")
+    tone_ref, texture_index, tone_width, tone_height = _tone_fragment_result(
+        raws["tone-fragment"], resource["label"])
+    require((draw_path, tone_ref, texture_index, tone_width, tone_height) ==
+            (command["toneResolve"]["drawPath"], resource["textureRef"],
+             command["toneResolve"]["fragmentTextureIndex"], width, height),
+            "tone fragment transcript differs from evidence resource/path/extent")
     for role in ("tone-tex0", "scene-resource"):
-        for field in ("textureRef", "allocationID", "resourceIndex"):
-            require(_one_field(raws[role], field, role) == resource[field],
-                    f"{role} {field} differs from canonical resource")
-    semantic = {
-        "command-buffer": (
-            command["scene"]["encoderPath"], command["scene"]["marker"],
-            command["proofBlit"]["encoderPath"], command["proofBlit"]["marker"],
-            command["toneResolve"]["encoderPath"], command["toneResolve"]["marker"],
-        ),
-        "scene-encoder": (command["scene"]["marker"], "color0", resource["textureRef"]),
-        "scene-color0": (resource["textureRef"], resource["allocationID"],
-                           resource["resourceIndex"], resource["pixelFormat"],
-                           resource["textureType"], resource["storageMode"]),
-        "proof-encoder": (command["proofBlit"]["marker"], command["proofBlit"]["commandPath"]),
-        "proof-blit": (resource["textureRef"], "sourceLevel", "0", "sourceSlice"),
-        "tone-encoder": (command["toneResolve"]["marker"], command["toneResolve"]["drawPath"]),
-        "tone-fragment": ("fragmentTextureIndex", "0", resource["textureRef"]),
-        "tone-tex0": (resource["textureRef"], resource["allocationID"], resource["resourceIndex"]),
-        "scene-resource": (resource["textureRef"], resource["allocationID"], resource["resourceIndex"]),
-    }
-    for role, tokens in semantic.items():
-        text = raws[role].decode("utf-8", "strict")
-        for token in tokens:
-            require(token in text, f"transcript {role} does not derive token {token!r}")
-    ordered_text = raws["command-buffer"].decode("utf-8", "strict")
-    positions = [ordered_text.find(command[key]["marker"])
-                 for key in ("scene", "proofBlit", "toneResolve")]
-    require(all(position >= 0 for position in positions) and positions == sorted(positions),
-            "command-buffer transcript does not prove ordered render/blit/render triple")
+        require(_resource_info(_direct_info_json(raws[role], role), role) == expected_info,
+                f"{role} info differs from canonical resource")
     return entries
 
 
@@ -952,40 +1120,256 @@ def _scalar_values(value: Any, key: str) -> list[Any]:
     return results
 
 
-def _json(raw: bytes, label: str) -> Any:
+def _json_documents(raw: bytes, label: str,
+                    expected_count: int) -> tuple[list[Any], list[str]]:
     try:
-        return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object,
-                          parse_constant=reject_constant)
+        text = raw.decode("utf-8")
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise EvidenceError(f"{label} is not exact gpudebug JSON: {error}") from error
+    require("\r" not in text, f"{label} gpudebug JSON does not use exact LF lines")
+    decoder = json.JSONDecoder(object_pairs_hook=unique_object,
+                               parse_constant=reject_constant)
+    documents: list[Any] = []
+    fragments: list[str] = []
+    offset = 0
+    try:
+        for _ in range(expected_count):
+            document, end = decoder.raw_decode(text, offset)
+            require(isinstance(document, dict),
+                    f"{label} gpudebug JSON document is not an object")
+            documents.append(document)
+            fragments.append(text[offset:end])
+            require(end < len(text) and text[end] == "\n",
+                    f"{label} gpudebug JSON document lacks exact LF terminator")
+            offset = end + 1
+    except json.JSONDecodeError as error:
+        raise EvidenceError(f"{label} is not exact gpudebug JSON: {error}") from error
+    require(offset == len(text),
+            f"{label} does not contain exactly {expected_count} gpudebug JSON documents")
+    return documents, fragments
 
 
-def _one_field(raw: bytes, key: str, label: str) -> Any:
-    values = _scalar_values(_json(raw, label), key)
+def _navigable_json(raw: bytes, label: str) -> Any:
+    documents, fragments = _json_documents(raw, label, 2)
+    require(fragments[0] == fragments[1] and documents[0] == documents[1],
+            f"{label} go/list gpudebug JSON documents differ")
+    return documents[1]
+
+
+def _direct_info_json(raw: bytes, label: str) -> Any:
+    documents, _ = _json_documents(raw, label, 1)
+    return documents[0]
+
+
+def _document_one_field(document: Any, key: str, label: str) -> Any:
+    values = _scalar_values(document, key)
     require(len(values) == 1, f"{label} does not expose exactly one {key}")
     return values[0]
 
 
-def _one_path(raw: bytes, pattern: re.Pattern[str], marker: str, label: str) -> str:
-    document = _json(raw, label)
-    candidates: list[str] = []
-    def visit(value: Any) -> None:
-        if isinstance(value, dict):
-            encoded = json.dumps(value, sort_keys=True, separators=(",", ":"))
-            paths = [child for key, child in value.items()
-                     if key in ("path", "encoderPath", "commandPath", "drawPath") and
-                     isinstance(child, str) and pattern.fullmatch(child)]
-            if marker in encoded:
-                candidates.extend(paths)
-            for child in value.values():
-                visit(child)
-        elif isinstance(value, list):
-            for child in value:
-                visit(child)
-    visit(document)
-    candidates = sorted(set(candidates))
-    require(len(candidates) == 1, f"{label} does not expose one marker-bound path")
-    return candidates[0]
+def _listing_children(document: Any, label: str) -> list[dict[str, Any]]:
+    require(isinstance(document, dict), f"{label} listing is not an object")
+    require(set(document) in ({"children", "totalCount"},
+                              {"children", "links", "totalCount"}),
+            f"{label} listing keys are invalid")
+    children = document["children"]
+    require(isinstance(children, list), f"{label} children are not an array")
+    exact_int(document["totalCount"], len(children), f"{label}.totalCount")
+    if "links" in document:
+        links = document["links"]
+        require(isinstance(links, dict) and
+                all(isinstance(key, str) and isinstance(value, str)
+                    for key, value in links.items()),
+                f"{label} links are invalid")
+    result: list[dict[str, Any]] = []
+    for index, child in enumerate(children):
+        require(isinstance(child, dict) and
+                set(child) in ({"actions", "name"},
+                               {"actions", "name", "values"}),
+                f"{label} child {index} keys are invalid")
+        printable(child["actions"], f"{label} child {index} actions")
+        printable(child["name"], f"{label} child {index} name")
+        values = child.get("values", [])
+        require(isinstance(values, list), f"{label} child {index} values are invalid")
+        for value_index, value in enumerate(values):
+            if value is None:
+                continue
+            exact_object(value, ("type", "value"),
+                         f"{label} child {index} value {value_index}")
+            exact_string(value["type"], "string",
+                         f"{label} child {index} value {value_index}.type")
+            require(isinstance(value["value"], str),
+                    f"{label} child {index} value {value_index}.value is invalid")
+        result.append(child)
+    return result
+
+
+def _child_strings(child: dict[str, Any]) -> list[str]:
+    return [value["value"] for value in child.get("values", [])
+            if isinstance(value, dict)]
+
+
+def _child_actions(child: dict[str, Any]) -> set[str]:
+    actions = child["actions"].split(", ")
+    require(actions and all(re.fullmatch(r"[a-z]+", action) is not None
+                            for action in actions) and len(set(actions)) == len(actions),
+            "gpudebug child actions are noncanonical")
+    return set(actions)
+
+
+def _marker_value_matches(value: str, marker: str,
+                          scene_display: bool = False) -> bool:
+    expected = f'"{marker} (2)"' if scene_display else f'"{marker}"'
+    return value == expected
+
+
+def _one_matching_child(
+        children: list[dict[str, Any]], predicate: Any,
+        label: str) -> tuple[int, dict[str, Any]]:
+    matches = [(index, child) for index, child in enumerate(children)
+               if predicate(child)]
+    require(len(matches) == 1, f"{label} does not expose exactly one matching child")
+    return matches[0]
+
+
+def _command_buffer_path(raw: bytes) -> str:
+    children = _listing_children(_navigable_json(raw, "commands"), "commands")
+    _, child = _one_matching_child(
+        children,
+        lambda item: "go" in _child_actions(item) and
+        re.fullmatch(r"cb(?:0|[1-9][0-9]*)", item["name"]) is not None,
+        "commands")
+    require(len(children) == 1, "commands exposes more than one command buffer")
+    return "commands/" + child["name"]
+
+
+def _encoder_paths(raw: bytes, cb_path: str, scene_marker: str,
+                   proof_marker: str, tone_marker: str) -> tuple[str, str, str]:
+    children = _listing_children(
+        _navigable_json(raw, "command buffer"), "command buffer")
+
+    def marker_child(marker: str, prefix: str,
+                     scene_display: bool = False) -> tuple[int, dict[str, Any]]:
+        return _one_matching_child(
+            children,
+            lambda item: "go" in _child_actions(item) and
+            re.fullmatch(prefix + r"(?:0|[1-9][0-9]*)", item["name"]) is not None and
+            sum(_marker_value_matches(value, marker, scene_display)
+                for value in _child_strings(item)) == 1,
+            f"command buffer marker {marker}")
+
+    scene_index, scene = marker_child(scene_marker, "re", True)
+    proof_index, proof = marker_child(proof_marker, "be")
+    tone_index, tone = marker_child(tone_marker, "re")
+    require(scene_index < proof_index < tone_index,
+            "command buffer encoder markers are not ordered scene/proof/tone")
+    return (f"{cb_path}/{scene['name']}", f"{cb_path}/{proof['name']}",
+            f"{cb_path}/{tone['name']}")
+
+
+def _one_group_path(raw: bytes, encoder_path: str, marker: str,
+                    label: str) -> str:
+    children = _listing_children(_navigable_json(raw, label), label)
+    _, child = _one_matching_child(
+        children,
+        lambda item: "go" in _child_actions(item) and
+        re.fullmatch(r"grp(?:0|[1-9][0-9]*)", item["name"]) is not None and
+        sum(_marker_value_matches(value, marker)
+            for value in _child_strings(item)) == 1,
+        f"{label} marker {marker}")
+    return f"{encoder_path}/{child['name']}"
+
+
+def _texture_binding(document: Any, child_name: str, marker: str,
+                     label: str) -> tuple[str, int, int, str]:
+    children = _listing_children(document, label)
+    _, child = _one_matching_child(
+        children, lambda item: item["name"] == child_name and
+        "info" in _child_actions(item), label)
+    values = _child_strings(child)
+    require(len(values) == 2 and values[0] == f'"{marker}"',
+            f"{label} texture label is invalid")
+    binding = re.fullmatch(
+        r"(@tex(?:0|[1-9][0-9]*)) ([1-9][0-9]*)x([1-9][0-9]*) "
+        r"([A-Za-z0-9]+)", values[1])
+    require(binding is not None, f"{label} texture binding is invalid")
+    return (binding.group(1), int(binding.group(2)), int(binding.group(3)),
+            binding.group(4))
+
+
+def _proof_group_command_path(raw: bytes, group_path: str) -> str:
+    children = _listing_children(
+        _navigable_json(raw, "proof group"), "proof group")
+    _, child = _one_matching_child(
+        children,
+        lambda item: {"go", "info"}.issubset(_child_actions(item)) and
+        re.fullmatch(r"blit(?:0|[1-9][0-9]*)", item["name"]) is not None,
+        "proof group")
+    require(len(children) == 1, "proof group exposes more than one command")
+    return f"{group_path}/{child['name']}"
+
+
+def _proof_blit_result(raw: bytes, scene_marker: str) -> tuple[str, Any]:
+    document = _direct_info_json(raw, "proof blit")
+    source = str(_document_one_field(document, "sourceTexture", "proof blit"))
+    source_match = re.fullmatch(
+        rf'(@tex(?:0|[1-9][0-9]*)) "{re.escape(scene_marker)}"', source)
+    require(source_match is not None, "proof blit source texture identity is invalid")
+    return source_match.group(1), document
+
+
+def _tone_group_draw_path(raw: bytes, group_path: str) -> str:
+    group_children = _listing_children(
+        _navigable_json(raw, "tone group"), "tone group")
+    _, draw = _one_matching_child(
+        group_children,
+        lambda item: "go" in _child_actions(item) and
+        re.fullmatch(r"draw(?:0|[1-9][0-9]*)", item["name"]) is not None,
+        "tone group")
+    require(len(group_children) == 1, "tone group exposes more than one draw")
+    return f"{group_path}/{draw['name']}"
+
+
+def _tone_draw_fragment_path(raw: bytes, draw_path: str) -> str:
+    draw_children = _listing_children(
+        _navigable_json(raw, "tone draw"), "tone draw")
+    fragments = [child for child in draw_children
+                 if child["name"] == "fragment"]
+    require(len(fragments) == 1 and "go" in _child_actions(fragments[0]),
+            "tone draw does not expose exactly one navigable fragment")
+    return draw_path + "/fragment"
+
+
+def _tone_fragment_result(raw: bytes,
+                          scene_marker: str) -> tuple[str, int, int, int]:
+    document = _navigable_json(raw, "tone fragment")
+    fragment_children = _listing_children(
+        document, "tone fragment")
+    texture_names = [child["name"] for child in fragment_children
+                     if re.fullmatch(r"tex\[(?:0|[1-9][0-9]*)\]",
+                                     child["name"]) is not None]
+    require(texture_names == ["tex[0]"],
+            "tone fragment does not expose exactly one texture at tex[0]")
+    texture_ref, width, height, pixel_format = _texture_binding(
+        document, "tex[0]", scene_marker, "tone fragment")
+    require(pixel_format == "RG11B10Float",
+            "tone fragment texture format is not RG11B10Float")
+    return texture_ref, 0, width, height
+
+
+def _resource_info(document: Any, label: str) -> dict[str, Any]:
+    dimensions = str(_document_one_field(document, "dimensions", label))
+    match = re.fullmatch(r"([1-9][0-9]*)x([1-9][0-9]*)", dimensions)
+    require(match is not None, f"{label} dimensions are invalid")
+    return {
+        "label": str(_document_one_field(document, "label", label)),
+        "allocationID": str(_document_one_field(document, "allocationID", label)),
+        "resourceIndex": str(_document_one_field(document, "resourceIndex", label)),
+        "pixelFormat": str(_document_one_field(document, "pixelFormat", label)),
+        "textureType": str(_document_one_field(document, "textureType", label)),
+        "storageMode": str(_document_one_field(document, "storageMode", label)),
+        "width": int(match.group(1)), "height": int(match.group(2)),
+    }
 
 
 def collector_command_timeout(deadline: float, now: float | None = None) -> float:
@@ -1078,6 +1462,19 @@ def _transcript_entry(role: str, filename: str, argv: list[str], raw: bytes,
             "bytes": len(raw), "sha256": sha256(raw)}
 
 
+def wait_for_owned_session_absence(
+        session: str, argv: list[str], overall_deadline: float) -> bytes:
+    while True:
+        raw = run_collector_command(argv, overall_deadline)
+        if session not in listed_session_ids(raw):
+            return raw
+        remaining = overall_deadline - time.monotonic()
+        require(remaining >= (COLLECTOR_SESSION_SETTLE_SECONDS +
+                              COLLECTOR_MINIMUM_TIMEOUT_SECONDS),
+                "owned gpudebug session did not settle before cleanup deadline")
+        time.sleep(COLLECTOR_SESSION_SETTLE_SECONDS)
+
+
 def cleanup_owned_collector_session(
         session: str, transcript_dir: pathlib.Path,
         entries: list[dict[str, Any]], raws: dict[str, bytes],
@@ -1087,6 +1484,7 @@ def cleanup_owned_collector_session(
     terminate_argv = [GPUDEBUG, "--terminate", session]
     try:
         raw = run_collector_command(terminate_argv, overall_deadline)
+        validate_terminate(raw, session)
         entries.append(_transcript_entry(
             "terminate", "gpudebug-terminate.txt", terminate_argv, raw,
             transcript_dir))
@@ -1096,13 +1494,12 @@ def cleanup_owned_collector_session(
 
     sessions_argv = [GPUDEBUG, "--list-sessions"]
     try:
-        raw = run_collector_command(sessions_argv, overall_deadline)
+        raw = wait_for_owned_session_absence(
+            session, sessions_argv, overall_deadline)
         entries.append(_transcript_entry(
             "sessions-after", "gpudebug-sessions-after.txt", sessions_argv,
             raw, transcript_dir))
         raws["sessions-after"] = raw
-        require(session.encode("ascii") not in raw,
-                "owned gpudebug session remains after terminate")
     except (EvidenceError, OSError, subprocess.TimeoutExpired) as error:
         failures.append(f"sessions-after: {error}")
     require(not failures,
@@ -1158,69 +1555,99 @@ def collect(capture: pathlib.Path, summary_path: pathlib.Path,
         raws["open"] = opened
         commands = invoke("commands", "commands.json",
                           [GPUDEBUG, "--json", "-s", session, "-c", "go commands", "-c", "list --all"])
-        cb_path = _one_path(commands, re.compile(r"commands/cb(?:0|[1-9][0-9]*)\Z"),
-                            scene_marker, "commands")
+        cb_path = _command_buffer_path(commands)
         cb = cb_path.rsplit("/", 1)[1]
         command_buffer = invoke("command-buffer", f"cb-{cb[2:]}.json",
                                 [GPUDEBUG, "--json", "-s", session, "-c", f"go {cb_path}", "-c", "list --all"])
-        scene_path = _one_path(command_buffer, RENDER_PATH_RE, scene_marker, "command buffer")
-        proof_path = _one_path(command_buffer, BLIT_PATH_RE, proof_marker, "command buffer")
-        tone_path = _one_path(command_buffer, RENDER_PATH_RE, tone_marker, "command buffer")
+        scene_path, proof_path, tone_path = _encoder_paths(
+            command_buffer, cb_path, scene_marker, proof_marker, tone_marker)
         scene_re = scene_path.rsplit("/", 1)[1]
         proof_be = proof_path.rsplit("/", 1)[1]
         tone_re = tone_path.rsplit("/", 1)[1]
         scene_encoder = invoke("scene-encoder", f"scene-re-{scene_re[2:]}.json",
                                [GPUDEBUG, "--json", "-s", session, "-c", f"go {scene_path}", "-c", "list --all"])
+        texture_ref, binding_width, binding_height, binding_format = _texture_binding(
+            _navigable_json(scene_encoder, "scene encoder"), "color0",
+            scene_marker, "scene color0 binding")
         scene_color = invoke("scene-color0", "scene-color0.json",
-                             [GPUDEBUG, "--json", "-s", session, "-c", f"go {scene_path}/color0", "-c", "info"])
+                             [GPUDEBUG, "--json", "-s", session, "-c", f"info {scene_path}/color0"])
         proof_encoder = invoke("proof-encoder", f"proof-be-{proof_be[2:]}.json",
                                [GPUDEBUG, "--json", "-s", session, "-c", f"go {proof_path}", "-c", "list --all"])
-        blit_path = _one_path(proof_encoder, BLIT_COMMAND_RE, proof_marker, "proof encoder")
-        blit = blit_path.rsplit("/", 1)[1]
-        proof_blit = invoke("proof-blit", f"proof-blit-{blit[4:]}.json",
-                            [GPUDEBUG, "--json", "-s", session, "-c", f"go {blit_path}", "-c", "info"])
+        proof_group = _one_group_path(
+            proof_encoder, proof_path, proof_marker, "proof encoder")
+        proof_group_name = proof_group.rsplit("/", 1)[1]
+        proof_group_raw = invoke(
+            "proof-group", f"proof-grp-{proof_group_name[3:]}.json",
+            [GPUDEBUG, "--json", "-s", session, "-c", f"go {proof_group}",
+             "-c", "list --all"])
+        blit_path = _proof_group_command_path(proof_group_raw, proof_group)
+        blit_name = blit_path.rsplit("/", 1)[1]
+        proof_blit = invoke(
+            "proof-blit", f"proof-blit-{blit_name[4:]}.json",
+            [GPUDEBUG, "--json", "-s", session, "-c", f"info {blit_path}"])
+        proof_texture_ref, proof_blit_info = _proof_blit_result(
+            proof_blit, scene_marker)
         tone_encoder = invoke("tone-encoder", f"tone-re-{tone_re[2:]}.json",
                               [GPUDEBUG, "--json", "-s", session, "-c", f"go {tone_path}", "-c", "list --all"])
-        draw_path = _one_path(tone_encoder, DRAW_PATH_RE, tone_marker, "tone encoder")
-        tone_fragment = invoke("tone-fragment", "tone-fragment.json",
-                               [GPUDEBUG, "--json", "-s", session, "-c", f"go {draw_path}/fragment", "-c", "info"])
+        tone_group = _one_group_path(
+            tone_encoder, tone_path, tone_marker, "tone encoder")
+        tone_group_name = tone_group.rsplit("/", 1)[1]
+        tone_group_raw = invoke(
+            "tone-group", f"tone-grp-{tone_group_name[3:]}.json",
+            [GPUDEBUG, "--json", "-s", session, "-c", f"go {tone_group}",
+             "-c", "list --all"])
+        draw_path = _tone_group_draw_path(tone_group_raw, tone_group)
+        draw_name = draw_path.rsplit("/", 1)[1]
+        tone_draw = invoke(
+            "tone-draw", f"tone-draw-{draw_name[4:]}.json",
+            [GPUDEBUG, "--json", "-s", session, "-c", f"go {draw_path}",
+             "-c", "list --all"])
+        fragment_path = _tone_draw_fragment_path(tone_draw, draw_path)
+        tone_fragment = invoke(
+            "tone-fragment", "tone-fragment.json",
+            [GPUDEBUG, "--json", "-s", session, "-c", f"go {fragment_path}",
+             "-c", "list --all"])
+        tone_texture_ref, fragment_texture_index, tone_width, tone_height = (
+            _tone_fragment_result(tone_fragment, scene_marker)
+        )
         tone_tex0 = invoke("tone-tex0", "tone-tex0.json",
-                           [GPUDEBUG, "--json", "-s", session, "-c", f"go {draw_path}/fragment/tex0", "-c", "info"])
-        texture_ref = str(_one_field(scene_color, "textureRef", "scene color0"))
+                           [GPUDEBUG, "--json", "-s", session, "-c",
+                            f"info {fragment_path}/tex[0]"])
         scene_resource = invoke("scene-resource", "scene-resource.json",
-                                [GPUDEBUG, "--json", "-s", session, "-c", f"go {texture_ref}", "-c", "info"])
+                                [GPUDEBUG, "--json", "-s", session, "-c", f"info {texture_ref}"])
     finally:
         if session is not None:
             try:
                 cleanup_owned_collector_session(
-                    session,transcript_dir,entries,raws,overall_deadline)
+                    session, transcript_dir, entries, raws, overall_deadline)
             except EvidenceError as error:
                 cleanup_error = error
         if cleanup_error is not None:
             raise cleanup_error
 
-    allocation_id = str(_one_field(scene_color, "allocationID", "scene color0"))
-    resource_index = str(_one_field(scene_color, "resourceIndex", "scene color0"))
+    scene_info = _resource_info(_direct_info_json(scene_color, "scene color0"),
+                                "scene color0")
+    allocation_id = scene_info["allocationID"]
+    resource_index = scene_info["resourceIndex"]
     scene_identity = {
-        "textureRef": texture_ref, "allocationID": allocation_id,
-        "resourceIndex": resource_index,
+        "allocationID": allocation_id, "resourceIndex": resource_index,
+        "label": scene_marker, "pixelFormat": binding_format,
+        "textureType": scene_info["textureType"],
+        "storageMode": scene_info["storageMode"],
+        "width": binding_width, "height": binding_height,
     }
-    require(str(_one_field(scene_color, "label", "scene color0")) == scene_marker,
-            "scene color0 label differs from proof identity")
-    require(int(_one_field(scene_color, "width", "scene color0")) == artifact["width"] and
-            int(_one_field(scene_color, "height", "scene color0")) == artifact["height"],
+    require(scene_info == scene_identity,
+            "scene color0 info differs from listing identity/extent")
+    require((binding_width, binding_height) == (artifact["width"], artifact["height"]),
             "scene color0 extent differs from numeric artifact")
-    require(int(_one_field(scene_color, "mipLevel", "scene color0")) == 0 and
-            int(_one_field(scene_color, "arraySlice", "scene color0")) == 0,
-            "scene color0 subresource is not mip0/slice0")
     for role_raw, label in ((tone_tex0, "tone tex0"),
                             (scene_resource, "scene resource")):
-        for field, expected in scene_identity.items():
-            require(str(_one_field(role_raw, field, label)) == expected,
-                    f"{label} {field} differs from scene color0")
-    require(str(_one_field(proof_blit, "sourceTextureRef", "proof blit")) == texture_ref,
+        require(_resource_info(_direct_info_json(role_raw, label), label) == scene_identity,
+                f"{label} differs from scene color0")
+    require(proof_texture_ref == texture_ref,
             "proof blit source differs from scene resource")
-    require(str(_one_field(tone_fragment, "textureRef", "tone fragment")) == texture_ref,
+    require((tone_texture_ref, fragment_texture_index, tone_width, tone_height) ==
+            (texture_ref, 0, binding_width, binding_height),
             "tone fragment tex[0] differs from scene resource")
     kind, capture_bytes, manifest_sha = stable_capture_manifest(capture)
     summary_raw = regular_bytes(summary_path, "capture copy summary", MAX_EVIDENCE_BYTES, True)
@@ -1233,19 +1660,21 @@ def collect(capture: pathlib.Path, summary_path: pathlib.Path,
         "proofBlit": {"childIndex": int(proof_be[2:]), "encoderPath": proof_path,
                       "marker": proof_marker, "commandPath": blit_path,
                       "sourceTextureRef": texture_ref,
-                      "sourceLevel": int(_one_field(proof_blit, "sourceLevel", "proof blit")),
-                      "sourceSlice": int(_one_field(proof_blit, "sourceSlice", "proof blit"))},
+                      "sourceLevel": int(_document_one_field(
+                          proof_blit_info, "sourceLevel", "proof blit")),
+                      "sourceSlice": int(_document_one_field(
+                          proof_blit_info, "sourceSlice", "proof blit"))},
         "toneResolve": {"childIndex": int(tone_re[2:]), "encoderPath": tone_path,
                         "marker": tone_marker, "drawPath": draw_path,
-                        "fragmentTextureIndex": int(_one_field(tone_fragment, "fragmentTextureIndex", "tone fragment")),
+                        "fragmentTextureIndex": fragment_texture_index,
                         "textureRef": texture_ref},
     }
     resource = {
         "label": scene_marker, "textureRef": texture_ref,
         "allocationID": allocation_id, "resourceIndex": resource_index,
-        "pixelFormat": str(_one_field(scene_color, "pixelFormat", "scene color0")),
-        "textureType": str(_one_field(scene_color, "textureType", "scene color0")),
-        "storageMode": str(_one_field(scene_color, "storageMode", "scene color0")),
+        "pixelFormat": scene_info["pixelFormat"],
+        "textureType": scene_info["textureType"],
+        "storageMode": scene_info["storageMode"],
         "mipLevel": 0, "arraySlice": 0,
     }
     document = {

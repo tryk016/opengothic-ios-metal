@@ -35,6 +35,9 @@ POST_BOUNDARY_DONE=0
 SELF_TEST=0
 SELF_TEST_AFC_TYPE=""
 SELF_TEST_DELETE_CALLED=0
+SELF_TEST_DELETE_ARGUMENT=""
+SELF_TEST_TEMP_REMAINS=0
+SELF_TEST_CAPTURE_LISTING_MODE=""
 
 fail() {
   echo "FAIL: $*" >&2
@@ -266,6 +269,42 @@ for entry in files:
 PY
 }
 
+capture_documents_listing() {
+  local output="$1"
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory Documents --no-recurse \
+    --json-output "$output" >/dev/null \
+    2>"$WORK/documents-capture-delete-post.stderr"
+}
+
+capture_leaf_absent() {
+  local leaf="$1"
+  local output="$WORK/documents-capture-delete-post.json"
+  capture_documents_listing "$output" || return 1
+  python3 - "$output" "$leaf" <<'PY'
+import json
+import sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as source:
+        payload = json.load(source)
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+if type(payload) is not dict or type(payload.get("result")) is not dict:
+    raise SystemExit("capture absence provider result is malformed")
+files = payload["result"].get("files")
+if not isinstance(files, list):
+    raise SystemExit("capture absence provider returned no files array")
+leaf = sys.argv[2]
+for entry in files:
+    if type(entry) is not dict or type(entry.get("name")) is not str:
+        raise SystemExit("capture absence provider returned a malformed entry")
+    if entry["name"] == leaf:
+        raise SystemExit("capture leaf remains after exact delete")
+PY
+}
+
 afc_file_type() {
   local leaf="$1"
   "$UV" run --python python3.11 --with pymobiledevice3 python - \
@@ -315,7 +354,7 @@ delete_exact_device_leaf() {
   local leaf="$1"
   require_afc_capture_leaf "$leaf" || return 1
   "$UVX" --python python3.11 pymobiledevice3 apps rm \
-    --udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf" \
+    --udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "Documents/$leaf" \
     >>"$WORK/device-owned-delete.log" 2>&1
 }
 
@@ -327,7 +366,7 @@ cleanup_owned_temps() {
     [[ -n "$leaf" ]] || continue
     require_afc_regular_leaf "$leaf" || return 1
     "$UVX" --python python3.11 pymobiledevice3 apps rm \
-      --udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf" \
+      --udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "Documents/$leaf" \
       >>"$WORK/temp-cleanup-$label.log" 2>&1 || return 1
   done <<<"$leaves"
   remaining="$(enumerate_owned_temps "$label-after")" || return 1
@@ -346,7 +385,9 @@ run_host_contract_self_test() {
     printf '%s\n' "$SELF_TEST_AFC_TYPE"
   }
   enumerate_owned_temps() {
-    if [[ "$1" == "${cleanup_label}-before" ]]; then
+    if [[ "$1" == "${cleanup_label}-before" ||
+         ("$1" == "${cleanup_label}-after" &&
+          "$SELF_TEST_TEMP_REMAINS" == 1) ]]; then
       echo ".RendererIOS-linear-hdr-proof-v1.0123456789abcdef0123456789abcdef.tmp"
     fi
   }
@@ -354,6 +395,38 @@ run_host_contract_self_test() {
   # shellcheck disable=SC2329
   self_test_uvx() {
     SELF_TEST_DELETE_CALLED=1
+    SELF_TEST_DELETE_ARGUMENT="${!#}"
+  }
+  capture_documents_listing() {
+    local output="$1"
+    case "$SELF_TEST_CAPTURE_LISTING_MODE" in
+      absent)
+        printf '%s\n' '{"result":{"files":[{"name":"other"}]}}' >"$output"
+        ;;
+      present-file)
+        printf '%s\n' \
+          '{"result":{"files":[{"name":"RendererIOS-linear-hdr-proof-v1.gputrace","resources":{"isDirectory":false,"isSymbolicLink":false}}]}}' \
+          >"$output"
+        ;;
+      present-directory)
+        printf '%s\n' \
+          '{"result":{"files":[{"name":"RendererIOS-linear-hdr-proof-v1.gputrace","resources":{"isDirectory":true,"isSymbolicLink":false}}]}}' \
+          >"$output"
+        ;;
+      present-unsupported)
+        printf '%s\n' \
+          '{"result":{"files":[{"name":"RendererIOS-linear-hdr-proof-v1.gputrace","resources":{"isDirectory":null}}]}}' \
+          >"$output"
+        ;;
+      malformed)
+        printf '%s\n' '{"providerError":"unavailable"}' >"$output"
+        ;;
+      malformed-entry)
+        printf '%s\n' '{"result":{"files":[{"resources":{}}]}}' >"$output"
+        ;;
+      provider-error) return 1 ;;
+      *) return 1 ;;
+    esac
   }
   UVX=self_test_uvx
   for candidate in S_IFDIR S_IFCHR S_IFBLK S_IFIFO S_IFLNK S_IFSOCK UNKNOWN ""; do
@@ -378,6 +451,45 @@ run_host_contract_self_test() {
     fail "explicit AFC S_IFREG cleanup failed"
   ((SELF_TEST_DELETE_CALLED == 1)) ||
     fail "explicit AFC S_IFREG did not reach exact delete"
+  [[ "$SELF_TEST_DELETE_ARGUMENT" == \
+     Documents/.RendererIOS-linear-hdr-proof-v1.0123456789abcdef0123456789abcdef.tmp ]] ||
+    fail "temp cleanup did not pass an exact Documents path"
+  SELF_TEST_TEMP_REMAINS=1
+  SELF_TEST_DELETE_CALLED=0
+  if cleanup_owned_temps "$cleanup_label"; then
+    fail "exit-zero temp delete with a remaining leaf survived"
+  fi
+  ((SELF_TEST_DELETE_CALLED == 1)) ||
+    fail "exit-zero remaining-leaf self-test did not reach delete"
+  SELF_TEST_TEMP_REMAINS=0
+  SELF_TEST_AFC_TYPE=S_IFDIR
+  SELF_TEST_DELETE_ARGUMENT=""
+  delete_exact_device_leaf RendererIOS-linear-hdr-proof-v1.gputrace ||
+    fail "capture exact-delete path self-test failed"
+  [[ "$SELF_TEST_DELETE_ARGUMENT" == \
+     Documents/RendererIOS-linear-hdr-proof-v1.gputrace ]] ||
+    fail "capture cleanup did not pass an exact Documents path"
+  for candidate in present-file present-directory present-unsupported; do
+    SELF_TEST_CAPTURE_LISTING_MODE="$candidate"
+    if capture_leaf_absent RendererIOS-linear-hdr-proof-v1.gputrace \
+        >/dev/null 2>&1; then
+      fail "exit-zero capture delete with a remaining leaf survived: $candidate"
+    fi
+  done
+  for candidate in provider-error malformed malformed-entry; do
+    SELF_TEST_CAPTURE_LISTING_MODE="$candidate"
+    if capture_leaf_absent RendererIOS-linear-hdr-proof-v1.gputrace \
+        >/dev/null 2>&1; then
+      fail "capture absence provider failure survived: $candidate"
+    fi
+  done
+  SELF_TEST_CAPTURE_LISTING_MODE=absent
+  capture_leaf_absent RendererIOS-linear-hdr-proof-v1.gputrace ||
+    fail "exact zero-match capture absence was rejected"
+  unlink "$WORK/documents-capture-delete-post.json" ||
+    fail "capture absence self-test listing could not be removed"
+  unlink "$WORK/device-owned-delete.log" ||
+    fail "capture exact-delete path self-test log could not be removed"
   unlink "$WORK/temp-cleanup-$cleanup_label.log" ||
     fail "self-test cleanup log could not be removed"
   echo "SELF-TEST PASS"
@@ -539,9 +651,8 @@ if ((GPU_TRIPLE != 0)); then
     fail "capture evidenceCommitted summary was not published"
   delete_exact_device_leaf "$CAPTURE_LEAF" ||
     fail "committed fixed device capture could not be deleted exactly"
-  if require_afc_capture_leaf "$CAPTURE_LEAF" >/dev/null 2>&1; then
-    fail "fixed device capture remains after committed exact delete"
-  fi
+  capture_leaf_absent "$CAPTURE_LEAF" ||
+    fail "could not prove fixed device capture absence after exact delete"
   mkdir -m 700 "$TRANSCRIPT_DIR" ||
     fail "could not create private transcript directory"
   GPU_RESULT="$EVIDENCE_DIR/linear-hdr-gpu-result.txt"

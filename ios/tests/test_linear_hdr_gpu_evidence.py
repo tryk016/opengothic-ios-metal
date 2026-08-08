@@ -30,6 +30,63 @@ SHA = "0123456789abcdef0123456789abcdef01234567"
 PROOF = bytes(range(1, 17))
 PROOF_ID = PROOF.hex()
 Mutation = Callable[[dict[str, Any]], None]
+LIVE_TRANSIENT_SESSION_13 = (
+    b"ID  Trace                                     Device             Replayer  Lifetime\n"
+    b"13  RendererIOS-linear-hdr-proof-v1.gputrace  Apple A17 Pro GPU  error     "
+    b"anchored to PID 72527 (zsh)\n"
+    b"(1 session)\n"
+)
+
+
+def session_listing(*sessions: str) -> bytes:
+    if not sessions:
+        return b"No active sessions.\n"
+    rows = b"".join(
+        f"{session}  trace-{session}.gputrace  Device  idle  persistent\n".encode()
+        for session in sessions
+    )
+    noun = "session" if len(sessions) == 1 else "sessions"
+    return (
+        b"ID  Trace  Device  Replayer  Lifetime\n" + rows +
+        f"({len(sessions)} {noun})\n".encode()
+    )
+
+
+def navigable_json(value: Any) -> bytes:
+    document = (json.dumps(value, separators=(",", ":")) + "\n").encode()
+    return document + document
+
+
+def direct_info_json(value: Any) -> bytes:
+    return (json.dumps(value, indent=2) + "\n").encode()
+
+
+def gpudebug_child(actions: str, name: str, *values: str) -> dict[str, Any]:
+    child: dict[str, Any] = {"actions": actions, "name": name}
+    if values:
+        child["values"] = [{"type": "string", "value": value} for value in values]
+    return child
+
+
+def gpudebug_listing(*children: dict[str, Any]) -> dict[str, Any]:
+    return {"children": list(children), "totalCount": len(children)}
+
+
+def gpudebug_open_root(command_buffers: int = 1, api_calls: int = 148764,
+                       objects: int = 3991) -> dict[str, Any]:
+    command_noun = "command buffer" if command_buffers == 1 else "command buffers"
+    api_noun = "API call" if api_calls == 1 else "API calls"
+    object_noun = "object" if objects == 1 else "objects"
+    return gpudebug_listing(
+        gpudebug_child("go", "commands", f"{command_buffers} {command_noun}"),
+        gpudebug_child("", "performance", "see 'profile ?'"),
+        gpudebug_child("go", "api_calls", f"{api_calls} {api_noun}"),
+        gpudebug_child("go", "resources", f"{objects} {object_noun}"),
+    )
+
+
+def compact_json(value: Any) -> bytes:
+    return (json.dumps(value, separators=(",", ":")) + "\n").encode()
 
 
 def write_0600(path: pathlib.Path, raw: bytes) -> None:
@@ -64,34 +121,68 @@ def transcript_raws(document: dict[str, Any], capture: pathlib.Path) -> dict[str
     scene = command["scene"]
     proof = command["proofBlit"]
     tone = command["toneResolve"]
+    cb = command["commandBuffer"]
+    scene_name = scene["encoderPath"].rsplit("/", 1)[1]
+    proof_name = proof["encoderPath"].rsplit("/", 1)[1]
+    tone_name = tone["encoderPath"].rsplit("/", 1)[1]
+    proof_group, blit_name = proof["commandPath"].rsplit("/", 1)
+    proof_group_name = proof_group.rsplit("/", 1)[1]
+    tone_group, draw_name = tone["drawPath"].rsplit("/", 1)
+    tone_group_name = tone_group.rsplit("/", 1)[1]
+    binding = f'{resource["textureRef"]} 4x3 RG11B10Float'
+    resource_info = {
+        "allocationID": resource["allocationID"], "dimensions": "4x3",
+        "label": resource["label"], "pixelFormat": resource["pixelFormat"],
+        "resourceIndex": resource["resourceIndex"],
+        "storageMode": resource["storageMode"],
+        "textureType": resource["textureType"],
+    }
     return {
         "version": b"gpudebug 1.0\n",
-        "open": b'{"sessionId":"session-1"}\n',
-        "commands": (json.dumps({"path": "commands/cb4", "label": scene["marker"]}) + "\n").encode(),
-        "command-buffer": (json.dumps([
-            {"path": scene["encoderPath"], "label": scene["marker"]},
-            {"path": proof["encoderPath"], "label": proof["marker"]},
-            {"path": tone["encoderPath"], "label": tone["marker"]},
-        ]) + "\n").encode(),
-        "scene-encoder": (json.dumps({"label": scene["marker"], "attachment": "color0",
-                                       "textureRef": resource["textureRef"]}) + "\n").encode(),
-        "scene-color0": (json.dumps({**resource, "width": 4, "height": 3}) + "\n").encode(),
-        "proof-encoder": (json.dumps({"label": proof["marker"],
-                                       "commandPath": proof["commandPath"]}) + "\n").encode(),
-        "proof-blit": (json.dumps({"sourceTextureRef": resource["textureRef"],
-                                    "sourceLevel": 0, "sourceSlice": 0}) + "\n").encode(),
-        "tone-encoder": (json.dumps({"label": tone["marker"],
-                                      "drawPath": tone["drawPath"]}) + "\n").encode(),
-        "tone-fragment": (json.dumps({"fragmentTextureIndex": 0,
-                                       "textureRef": resource["textureRef"]}) + "\n").encode(),
-        "tone-tex0": (json.dumps({"textureRef": resource["textureRef"],
-                                   "allocationID": resource["allocationID"],
-                                   "resourceIndex": resource["resourceIndex"]}) + "\n").encode(),
-        "scene-resource": (json.dumps({"textureRef": resource["textureRef"],
-                                        "allocationID": resource["allocationID"],
-                                        "resourceIndex": resource["resourceIndex"]}) + "\n").encode(),
-        "terminate": b'{"terminated":true}\n',
-        "sessions-after": b'{"sessions":[]}\n',
+        "open": (
+            b"Session 10 created.\n"
+            b"1 other session active.\n"
+            b"gpudebug -s 10 -c <command> to send commands.\n"
+            + compact_json(gpudebug_open_root())
+        ),
+        "commands": navigable_json(gpudebug_listing(
+            gpudebug_child("go", cb, "4 encoders", '"MTLCommandQueue 1"'))),
+        "command-buffer": navigable_json(gpudebug_listing(
+            gpudebug_child("go", scene_name, f'"{scene["marker"]} (2)"', "1 draw"),
+            gpudebug_child("go", proof_name, f'"{proof["marker"]}"', "1 blit"),
+            gpudebug_child("go", tone_name, f'"{tone["marker"]}"', "1 draw"))),
+        "scene-encoder": navigable_json(gpudebug_listing(
+            gpudebug_child("info, fetch", "color0", f'"{resource["label"]}"',
+                           binding))),
+        "scene-color0": direct_info_json(resource_info),
+        "proof-encoder": navigable_json(gpudebug_listing(
+            gpudebug_child("go", proof_group_name, f'"{proof["marker"]}"',
+                           "1 blit"))),
+        "proof-group": navigable_json(gpudebug_listing(
+            gpudebug_child("go, info", blit_name))),
+        "proof-blit": direct_info_json({
+            "sourceLevel": "0", "sourceSize": "4x3x1", "sourceSlice": "0",
+            "sourceTexture": f'{resource["textureRef"]} "{resource["label"]}"',
+        }),
+        "tone-encoder": navigable_json(gpudebug_listing(
+            gpudebug_child("go", tone_group_name, f'"{tone["marker"]}"',
+                           "1 draw"))),
+        "tone-group": navigable_json(gpudebug_listing(
+            gpudebug_child("go, info", draw_name, '"vertex / fragment"'))),
+        "tone-draw": navigable_json(gpudebug_listing(
+            gpudebug_child("info", "pipeline", '"pipeline"', "@rps0"),
+            gpudebug_child("go", "vertex", '"vertex"'),
+            gpudebug_child("go", "fragment", '"fragment"'),
+            gpudebug_child("info, fetch", "color0", '"output"',
+                           "@tex0 4x3 BGRA8Unorm"))),
+        "tone-fragment": navigable_json(gpudebug_listing(
+            gpudebug_child("fetch", "buf[0]", "16 bytes (inline)"),
+            gpudebug_child("info, fetch", "tex[0]",
+                           f'"{resource["label"]}"', binding))),
+        "tone-tex0": direct_info_json(resource_info),
+        "scene-resource": direct_info_json(resource_info),
+        "terminate": b"Session 10 terminated.\n",
+        "sessions-after": b"No active sessions.\n",
     }
 
 
@@ -134,7 +225,7 @@ def make_join(root: pathlib.Path) -> tuple[dict[str, Any], dict[str, pathlib.Pat
     transcript_dir.mkdir()
     raws = transcript_raws(document, capture)
     entries = []
-    session = "session-1"
+    session = "10"
     names = VALIDATOR.expected_filenames(document["command"])
     for role in VALIDATOR.ROLE_ORDER:
         raw = raws[role]
@@ -177,6 +268,222 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
         with self.subTest(label=label):
             with self.assertRaises(VALIDATOR.EvidenceError):
                 VALIDATOR.validate_document(candidate)
+
+    def test_parse_session_accepts_exact_startup_banner_with_other_session_count(self) -> None:
+        root = compact_json(gpudebug_open_root())
+        with_other = (
+            b"Session 10 created.\n"
+            b"1 other session active.\n"
+            b"gpudebug -s 10 -c <command> to send commands.\n"
+            + root
+        )
+        without_other = (
+            b"Session 10 created.\n"
+            b"gpudebug -s 10 -c <command> to send commands.\n"
+            + root
+        )
+        plural_other = (
+            b"Session 10 created.\n"
+            b"2 other sessions active.\n"
+            b"gpudebug -s 10 -c <command> to send commands.\n"
+            + compact_json(gpudebug_open_root(2, 1, 1))
+        )
+        for raw in (with_other, without_other, plural_other):
+            self.assertEqual(VALIDATOR.parse_session(raw), "10")
+
+    def test_parse_session_rejects_noncanonical_open_root_listings(self) -> None:
+        prefix = (
+            b"Session 10 created.\n"
+            b"gpudebug -s 10 -c <command> to send commands.\n"
+        )
+        valid = gpudebug_open_root()
+        missing_commands = copy.deepcopy(valid)
+        missing_commands["children"] = missing_commands["children"][1:]
+        missing_commands["totalCount"] -= 1
+        duplicate_commands = copy.deepcopy(valid)
+        duplicate_commands["children"][1] = copy.deepcopy(
+            duplicate_commands["children"][0])
+        foreign_child = copy.deepcopy(valid)
+        foreign_child["children"][3]["name"] = "foreign"
+        count_drift = copy.deepcopy(valid)
+        count_drift["totalCount"] += 1
+        wrong_action = copy.deepcopy(valid)
+        wrong_action["children"][0]["actions"] = "info"
+        unknown_key = copy.deepcopy(valid)
+        unknown_key["children"][0]["path"] = "commands"
+        wrong_values = copy.deepcopy(valid)
+        wrong_values["children"][0]["values"] = []
+        noun_drift = copy.deepcopy(valid)
+        noun_drift["children"][0]["values"][0]["value"] = "2 command buffer"
+        performance_action = copy.deepcopy(valid)
+        performance_action["children"][1]["actions"] = "go"
+        performance_value = copy.deepcopy(valid)
+        performance_value["children"][1]["values"][0]["value"] = "profile"
+        api_value = copy.deepcopy(valid)
+        api_value["children"][2]["values"][0]["value"] = "many API calls"
+        resource_type = copy.deepcopy(valid)
+        resource_type["children"][3]["values"][0]["type"] = "number"
+        cases = (
+            ("empty object", {}),
+            ("error object", {"error": "replay failed"}),
+            ("legacy path object", {"path": "commands"}),
+            ("missing commands", missing_commands),
+            ("duplicate commands", duplicate_commands),
+            ("foreign child", foreign_child),
+            ("totalCount drift", count_drift),
+            ("commands wrong action", wrong_action),
+            ("child unknown key", unknown_key),
+            ("missing values", wrong_values),
+            ("count noun drift", noun_drift),
+            ("performance action", performance_action),
+            ("performance value", performance_value),
+            ("api_calls value", api_value),
+            ("resources value type", resource_type),
+        )
+        for label, payload in cases:
+            with self.subTest(label=label):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR.parse_session(prefix + compact_json(payload))
+
+    def test_parse_session_rejects_noncanonical_or_ambiguous_banners(self) -> None:
+        valid_root = compact_json(gpudebug_open_root())
+        valid_prefix = (
+            b"Session 10 created.\n"
+            b"gpudebug -s 10 -c <command> to send commands.\n"
+        )
+        cases = (
+            ("missing", b"1 other session active.\n{}\n"),
+            ("multiple", b"Session 10 created.\nSession 11 created.\n{}\n"),
+            ("canonical plus leading zero",
+             b"Session 10 created.\nSession 011 created.\n{}\n"),
+            ("zero", b"Session 0 created.\n{}\n"),
+            ("leading zero", b"Session 010 created.\n{}\n"),
+            ("plus sign", b"Session +10 created.\n{}\n"),
+            ("minus sign", b"Session -10 created.\n{}\n"),
+            ("foreign prefix", b"notice: Session 10 created.\n{}\n"),
+            ("foreign suffix", b"Session 10 created. unexpectedly\n{}\n"),
+            ("legacy json", b'{"sessionId":"10"}\n'),
+            ("not first line", b"notice\nSession 10 created.\n{}\n"),
+            ("non utf8", b"Session 10 created.\n\xff\n"),
+            ("wrong hint session",
+             b"Session 10 created.\ngpudebug -s 11 -c <command> to send commands.\n{}\n"),
+            ("singular mismatch",
+             b"Session 10 created.\n2 other session active.\n"
+             b"gpudebug -s 10 -c <command> to send commands.\n{}\n"),
+            ("plural mismatch",
+             b"Session 10 created.\n1 other sessions active.\n"
+             b"gpudebug -s 10 -c <command> to send commands.\n{}\n"),
+            ("extra error after payload", valid_prefix + valid_root +
+             b"ERROR: replay failed\n"),
+            ("multiple payloads", valid_prefix + valid_root + valid_root),
+            ("missing payload",
+             b"Session 10 created.\ngpudebug -s 10 -c <command> to send commands.\n"),
+            ("missing final lf", valid_prefix + valid_root[:-1]),
+        )
+        for label, raw in cases:
+            with self.subTest(label=label):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR.parse_session(raw)
+
+    def test_session_listing_parser_is_exact_and_id_aware(self) -> None:
+        self.assertEqual(VALIDATOR.listed_session_ids(b"No active sessions.\n"), set())
+        self.assertEqual(
+            VALIDATOR.listed_session_ids(LIVE_TRANSIENT_SESSION_13), {"13"})
+        self.assertEqual(
+            VALIDATOR.listed_session_ids(session_listing("1", "13")), {"1", "13"})
+        self.assertNotIn("1", VALIDATOR.listed_session_ids(session_listing("13")))
+        cases = (
+            ("legacy json", b'{"sessions":[]}\n'),
+            ("wrong zero sentinel", b"No active sessions.\nextra\n"),
+            ("count drift", session_listing("13").replace(b"(1 session)",
+                                                            b"(2 sessions)")),
+            ("leading zero row", session_listing("13").replace(b"13  trace",
+                                                                  b"013  trace")),
+            ("truncated row",
+             b"ID  Trace  Device  Replayer  Lifetime\n13  garbage\n(1 session)\n"),
+            ("missing lifetime",
+             b"ID  Trace  Device  Replayer  Lifetime\n"
+             b"13  trace.gputrace  Device  idle\n(1 session)\n"),
+            ("duplicate id", session_listing("13", "13")),
+            ("crlf", b"No active sessions.\r\n"),
+            ("non utf8", b"No active sessions.\n\xff"),
+        )
+        for label, raw in cases:
+            with self.subTest(label=label):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR.listed_session_ids(raw)
+
+    def test_gpudebug_json_document_boundaries_are_strict(self) -> None:
+        first = (json.dumps({"children": [], "totalCount": 0},
+                            separators=(",", ":")) + "\n").encode()
+        second = (json.dumps({"children": [
+            {"actions": "go", "name": "cb0"}], "totalCount": 1},
+            separators=(",", ":")) + "\n").encode()
+        valid_navigation = first + first
+        self.assertEqual(
+            VALIDATOR._navigable_json(valid_navigation, "navigation"),
+            {"children": [], "totalCount": 0})
+        navigation_cases = (
+            ("missing", first),
+            ("extra", valid_navigation + first),
+            ("different", first + second),
+            ("malformed", first + b"{bad}\n"),
+            ("trailing", valid_navigation + b"trailing\n"),
+            ("missing final lf", valid_navigation[:-1]),
+        )
+        for label, raw in navigation_cases:
+            with self.subTest(shape="navigation", label=label):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR._navigable_json(raw, "navigation")
+
+        valid_info = direct_info_json({"allocationID": "91"})
+        self.assertEqual(VALIDATOR._direct_info_json(valid_info, "info"),
+                         {"allocationID": "91"})
+        info_cases = (
+            ("missing", b""),
+            ("extra", valid_info + valid_info),
+            ("malformed", b"{bad}\n"),
+            ("array shape", b"[]\n"),
+            ("trailing", valid_info + b"trailing\n"),
+            ("exit-zero error text",
+             b"color0 is not navigable\nempty object has no info\n"),
+        )
+        for label, raw in info_cases:
+            with self.subTest(shape="direct-info", label=label):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR._direct_info_json(raw, "info")
+
+    def test_discovery_roles_drive_nonzero_blit_and_draw_argv(self) -> None:
+        command = copy.deepcopy(self.fixture["command"])
+        command["proofBlit"]["commandPath"] = "commands/cb4/be3/grp7/blit9"
+        command["toneResolve"]["drawPath"] = "commands/cb4/re4/grp6/draw8"
+        capture = pathlib.Path("/private/RendererIOS-linear-hdr-proof-v1.gputrace")
+        resource = self.fixture["sceneResource"]
+        names = VALIDATOR.expected_filenames(command)
+        self.assertEqual(names["proof-group"], "proof-grp-7.json")
+        self.assertEqual(names["proof-blit"], "proof-blit-9.json")
+        self.assertEqual(names["tone-group"], "tone-grp-6.json")
+        self.assertEqual(names["tone-draw"], "tone-draw-8.json")
+        self.assertEqual(
+            VALIDATOR.expected_argv("proof-blit", command, capture, "10", resource),
+            [VALIDATOR.GPUDEBUG, "--json", "-s", "10", "-c",
+             "info commands/cb4/be3/grp7/blit9"])
+        self.assertEqual(
+            VALIDATOR.expected_argv("tone-fragment", command, capture, "10", resource),
+            [VALIDATOR.GPUDEBUG, "--json", "-s", "10", "-c",
+             "go commands/cb4/re4/grp6/draw8/fragment", "-c", "list --all"])
+        self.assertEqual(
+            VALIDATOR._proof_group_command_path(
+                navigable_json(gpudebug_listing(
+                    gpudebug_child("go, info", "blit9"))),
+                "commands/cb4/be3/grp7"),
+            "commands/cb4/be3/grp7/blit9")
+        self.assertEqual(
+            VALIDATOR._tone_group_draw_path(
+                navigable_json(gpudebug_listing(
+                    gpudebug_child("go, info", "draw8"))),
+                "commands/cb4/re4/grp6"),
+            "commands/cb4/re4/grp6/draw8")
 
     def test_synthetic_fixture_requires_explicit_non_device_mode(self) -> None:
         VALIDATOR.validate_document(copy.deepcopy(self.fixture))
@@ -232,8 +539,12 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
             ("scene format", lambda d: d["sceneResource"].__setitem__("pixelFormat", "RGBA16Float")),
             ("scene mip", lambda d: d["sceneResource"].__setitem__("mipLevel", 1)),
             ("foreign texture", lambda d: d["command"]["proofBlit"].__setitem__("sourceTextureRef", "@tex8")),
+            ("nested proof group", lambda d: d["command"]["proofBlit"].__setitem__(
+                "commandPath", "commands/cb4/be3/grp0/grp1/blit0")),
             ("proof slice", lambda d: d["command"]["proofBlit"].__setitem__("sourceSlice", 1)),
             ("tone tex1", lambda d: d["command"]["toneResolve"].__setitem__("fragmentTextureIndex", 1)),
+            ("nested tone group", lambda d: d["command"]["toneResolve"].__setitem__(
+                "drawPath", "commands/cb4/re4/grp0/grp1/draw1")),
             ("reordered", lambda d: d["command"]["proofBlit"].__setitem__("childIndex", 5)),
             ("foreign cb", lambda d: d["command"]["toneResolve"].__setitem__("encoderPath", "commands/cb5/re4")),
             ("role order", lambda d: d["transcripts"].__setitem__(0, d["transcripts"][1])),
@@ -282,6 +593,166 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
                             paths["artifact"], paths["log"],
                             paths["transcripts"], SHA)
             write_0600(paths["log"], original_log)
+
+            sessions_path = paths["transcripts"] / "gpudebug-sessions-after.txt"
+            original_sessions = sessions_path.read_bytes()
+            for label, raw in (
+                ("owned session still listed", session_listing("10")),
+                ("malformed sessions listing", b'{"sessions":[]}\n'),
+            ):
+                write_0600(sessions_path, raw)
+                candidate = copy.deepcopy(document)
+                sessions_entry = candidate["transcripts"][-1]
+                sessions_entry["bytes"] = len(raw)
+                sessions_entry["sha256"] = VALIDATOR.sha256(raw)
+                candidate["source"]["transcriptManifestSha256"] = (
+                    VALIDATOR.transcript_manifest(
+                        candidate["transcripts"], paths["transcripts"])
+                )
+                with self.subTest(label=label):
+                    with self.assertRaises(VALIDATOR.EvidenceError):
+                        VALIDATOR.validate_join(
+                            candidate, paths["capture"], paths["summary"],
+                            paths["artifact"], paths["log"],
+                            paths["transcripts"], SHA)
+            write_0600(sessions_path, original_sessions)
+
+            def transcript_rejected(role: str, raw: bytes, label: str) -> None:
+                entry_index = next(
+                    index for index, entry in enumerate(document["transcripts"])
+                    if entry["role"] == role)
+                path = paths["transcripts"] / document["transcripts"][entry_index]["file"]
+                original = path.read_bytes()
+                try:
+                    write_0600(path, raw)
+                    candidate = copy.deepcopy(document)
+                    entry = candidate["transcripts"][entry_index]
+                    entry["bytes"] = len(raw)
+                    entry["sha256"] = VALIDATOR.sha256(raw)
+                    candidate["source"]["transcriptManifestSha256"] = (
+                        VALIDATOR.transcript_manifest(
+                            candidate["transcripts"], paths["transcripts"])
+                    )
+                    with self.subTest(label=label):
+                        with self.assertRaises(VALIDATOR.EvidenceError):
+                            VALIDATOR.validate_join(
+                                candidate, paths["capture"], paths["summary"],
+                                paths["artifact"], paths["log"],
+                                paths["transcripts"], SHA)
+                finally:
+                    write_0600(path, original)
+
+            raw_fixture = transcript_raws(document, paths["capture"])
+            commands_raw = raw_fixture["commands"]
+            commands_one = commands_raw[:len(commands_raw) // 2]
+            different = (json.dumps(
+                gpudebug_listing(gpudebug_child("go", "cb9")),
+                separators=(",", ":")) + "\n").encode()
+            transcript_rejected("commands", commands_one, "commands missing document")
+            transcript_rejected("commands", commands_raw + commands_one,
+                                "commands extra document")
+            transcript_rejected("commands", commands_one + different,
+                                "commands different documents")
+            transcript_rejected("commands", commands_one + b"{bad}\n",
+                                "commands malformed document")
+            transcript_rejected("commands", commands_raw + b"trailing\n",
+                                "commands trailing content")
+            transcript_rejected(
+                "scene-color0",
+                b"color0 is not navigable\nempty object has no info\n",
+                "scene color exit-zero error text")
+            transcript_rejected(
+                "scene-color0", raw_fixture["scene-color0"] * 2,
+                "scene color extra info document")
+            transcript_rejected(
+                "open", raw_fixture["open"] + b"ERROR: replay failed\n",
+                "open transcript has error after JSON payload")
+            open_prefix = (
+                b"Session 10 created.\n"
+                b"1 other session active.\n"
+                b"gpudebug -s 10 -c <command> to send commands.\n"
+            )
+            open_root = gpudebug_open_root()
+            missing_commands = copy.deepcopy(open_root)
+            missing_commands["children"] = missing_commands["children"][1:]
+            missing_commands["totalCount"] -= 1
+            duplicate_commands = copy.deepcopy(open_root)
+            duplicate_commands["children"][1] = copy.deepcopy(
+                duplicate_commands["children"][0])
+            foreign_commands = copy.deepcopy(open_root)
+            foreign_commands["children"][0]["name"] = "command"
+            open_count_drift = copy.deepcopy(open_root)
+            open_count_drift["totalCount"] += 1
+            for label, payload in (
+                ("open empty object", {}),
+                ("open error object", {"error": "replay failed"}),
+                ("open legacy path object", {"path": "commands"}),
+                ("open missing commands", missing_commands),
+                ("open duplicate commands", duplicate_commands),
+                ("open foreign commands", foreign_commands),
+                ("open totalCount drift", open_count_drift),
+            ):
+                transcript_rejected(
+                    "open", open_prefix + compact_json(payload), label)
+            transcript_rejected(
+                "terminate", raw_fixture["terminate"] + b"ERROR: stale session\n",
+                "terminate transcript has trailing error")
+            transcript_rejected(
+                "proof-group", raw_fixture["proof-group"][:
+                               len(raw_fixture["proof-group"]) // 2],
+                "proof group missing list document")
+            transcript_rejected(
+                "proof-blit", raw_fixture["proof-blit"] * 2,
+                "proof blit extra info document")
+            transcript_rejected(
+                "tone-fragment",
+                raw_fixture["tone-fragment"] +
+                raw_fixture["tone-fragment"][:len(raw_fixture["tone-fragment"]) // 2],
+                "tone fragment extra document")
+            foreign_tone_texture = copy.deepcopy(VALIDATOR._navigable_json(
+                raw_fixture["tone-fragment"], "tone fragment"))
+            foreign_tone_texture["children"].append(
+                gpudebug_child("info, fetch", "tex[1]",
+                               f'"{document["sceneResource"]["label"]}"',
+                               "@tex8 4x3 RG11B10Float"))
+            foreign_tone_texture["totalCount"] += 1
+            transcript_rejected(
+                "tone-fragment",
+                navigable_json(foreign_tone_texture),
+                "tone fragment exposes foreign tex1")
+            tone_draw = copy.deepcopy(VALIDATOR._navigable_json(
+                raw_fixture["tone-draw"], "tone draw"))
+            tone_draw["children"] = [child for child in tone_draw["children"]
+                                     if child["name"] != "fragment"]
+            tone_draw["totalCount"] -= 1
+            transcript_rejected(
+                "tone-draw", navigable_json(tone_draw),
+                "tone draw omits fragment discovery")
+            duplicate_tone_draw = copy.deepcopy(VALIDATOR._navigable_json(
+                raw_fixture["tone-draw"], "tone draw"))
+            duplicate_tone_draw["children"].append(
+                gpudebug_child("info", "fragment", '"foreign fragment"'))
+            duplicate_tone_draw["totalCount"] += 1
+            transcript_rejected(
+                "tone-draw", navigable_json(duplicate_tone_draw),
+                "tone draw duplicates fragment name")
+
+            command_buffer_document = VALIDATOR._navigable_json(
+                raw_fixture["command-buffer"], "command buffer")
+            missing_scene_suffix = copy.deepcopy(command_buffer_document)
+            missing_scene_suffix["children"][0]["values"][0]["value"] = (
+                f'"{document["command"]["scene"]["marker"]}"'
+            )
+            transcript_rejected(
+                "command-buffer", navigable_json(missing_scene_suffix),
+                "scene marker missing exact display suffix")
+            foreign_proof_suffix = copy.deepcopy(command_buffer_document)
+            foreign_proof_suffix["children"][1]["values"][0]["value"] = (
+                f'"{document["command"]["proofBlit"]["marker"]} (2)"'
+            )
+            transcript_rejected(
+                "command-buffer", navigable_json(foreign_proof_suffix),
+                "proof marker has foreign display suffix")
 
     def test_capture_manifest_rejects_symlink_special_and_drift(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -510,14 +981,15 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
 
             def completed(argv: list[str], deadline: float) -> bytes:
                 calls.append((argv, deadline))
-                return b'{"ok":true}\n' if "--terminate" in argv else b'{"sessions":[]}\n'
+                return (b"Session 13 terminated.\n" if "--terminate" in argv else
+                        b"No active sessions.\n")
 
             with mock.patch.object(VALIDATOR, "run_collector_command",
                                    side_effect=completed):
                 VALIDATOR.cleanup_owned_collector_session(
-                    "owned-session", transcript_dir, entries, raws, 1050.0)
+                    "13", transcript_dir, entries, raws, 1050.0)
             self.assertEqual([entry[0] for entry in calls], [
-                [VALIDATOR.GPUDEBUG, "--terminate", "owned-session"],
+                [VALIDATOR.GPUDEBUG, "--terminate", "13"],
                 [VALIDATOR.GPUDEBUG, "--list-sessions"],
             ])
             self.assertNotIn("--terminate-all", sum((entry[0] for entry in calls), []))
@@ -533,20 +1005,81 @@ class LinearHDRGPUEvidenceTests(unittest.TestCase):
                 attempted.append(argv)
                 if "--terminate" in argv:
                     raise VALIDATOR.EvidenceError("forced terminate failure")
-                return b'{"sessions":[]}\n'
+                return b"No active sessions.\n"
 
             with mock.patch.object(VALIDATOR, "run_collector_command",
                                    side_effect=terminate_fails):
                 with self.assertRaises(VALIDATOR.EvidenceError):
                     VALIDATOR.cleanup_owned_collector_session(
-                        "owned-session", pathlib.Path(temporary), [], {}, 1050.0)
+                        "13", pathlib.Path(temporary), [], {}, 1050.0)
             self.assertEqual(len(attempted), 2)
+
+        with tempfile.TemporaryDirectory() as temporary:
+            responses = iter((b"Session 13 terminated.\nERROR: stale session\n",
+                              b"No active sessions.\n"))
+            entries = []
+            with mock.patch.object(VALIDATOR, "run_collector_command",
+                                   side_effect=lambda argv, deadline: next(responses)):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR.cleanup_owned_collector_session(
+                        "13", pathlib.Path(temporary), entries, {}, 1050.0)
+            self.assertEqual([entry["role"] for entry in entries], ["sessions-after"])
 
         self.assertEqual(VALIDATOR.COLLECTOR_MAIN_TIMEOUT_SECONDS, 600.0)
         self.assertEqual(VALIDATOR.COLLECTOR_GLOBAL_TIMEOUT_SECONDS, 720.0)
         self.assertEqual(
             VALIDATOR.COLLECTOR_GLOBAL_TIMEOUT_SECONDS -
             VALIDATOR.COLLECTOR_MAIN_TIMEOUT_SECONDS, 120.0)
+
+    def test_cleanup_repolls_transient_owned_session_and_records_final_absence(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            transcript_dir = pathlib.Path(temporary)
+            entries: list[dict[str, Any]] = []
+            raws: dict[str, bytes] = {}
+            calls: list[tuple[list[str], float]] = []
+            responses = iter((b"Session 13 terminated.\n",
+                              LIVE_TRANSIENT_SESSION_13,
+                              b"No active sessions.\n"))
+
+            def settling(argv: list[str], deadline: float) -> bytes:
+                calls.append((argv, deadline))
+                return next(responses)
+
+            with mock.patch.object(VALIDATOR, "run_collector_command",
+                                   side_effect=settling), \
+                 mock.patch.object(VALIDATOR.time, "monotonic", return_value=1000.0), \
+                 mock.patch.object(VALIDATOR.time, "sleep") as sleep:
+                VALIDATOR.cleanup_owned_collector_session(
+                    "13", transcript_dir, entries, raws, 1050.0)
+            self.assertEqual([argv for argv, _ in calls], [
+                [VALIDATOR.GPUDEBUG, "--terminate", "13"],
+                [VALIDATOR.GPUDEBUG, "--list-sessions"],
+                [VALIDATOR.GPUDEBUG, "--list-sessions"],
+            ])
+            self.assertTrue(all(deadline == 1050.0 for _, deadline in calls))
+            sleep.assert_called_once_with(VALIDATOR.COLLECTOR_SESSION_SETTLE_SECONDS)
+            self.assertEqual([entry["role"] for entry in entries],
+                             ["terminate", "sessions-after"])
+            self.assertEqual(raws["sessions-after"], b"No active sessions.\n")
+            self.assertEqual(
+                (transcript_dir / "gpudebug-sessions-after.txt").read_bytes(),
+                b"No active sessions.\n")
+
+        with mock.patch.object(VALIDATOR, "run_collector_command",
+                               return_value=LIVE_TRANSIENT_SESSION_13), \
+             mock.patch.object(VALIDATOR.time, "monotonic", return_value=1048.5), \
+             mock.patch.object(VALIDATOR.time, "sleep") as sleep:
+            with self.assertRaises(VALIDATOR.EvidenceError):
+                VALIDATOR.wait_for_owned_session_absence(
+                    "13", [VALIDATOR.GPUDEBUG, "--list-sessions"], 1050.0)
+            sleep.assert_not_called()
+
+        with mock.patch.object(VALIDATOR, "run_collector_command",
+                               return_value=session_listing("13")):
+            self.assertEqual(
+                VALIDATOR.wait_for_owned_session_absence(
+                    "1", [VALIDATOR.GPUDEBUG, "--list-sessions"], 1050.0),
+                session_listing("13"))
 
     def test_duplicate_nonfinite_and_noncanonical_json_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

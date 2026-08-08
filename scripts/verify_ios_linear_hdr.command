@@ -27,6 +27,9 @@ GPU_TRIPLE_DEFINE=(
 
 cd "$REPO"
 
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/tests/test_linear_hdr_capture_cleanup.py
+
 printf '\n### P2.1e0 linear-HDR value/lifetime contracts\n'
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Werror \
@@ -367,13 +370,15 @@ required = (
     '[[ "$file_type" == S_IFREG ]]',
     'require_afc_regular_leaf "$leaf" || return 1',
     'remaining="$(enumerate_owned_temps "$label-after")" || return 1',
+    'capture_documents_listing "$output" || return 1',
+    'if entry["name"] == leaf:',
+    'capture_leaf_absent "$CAPTURE_LEAF" ||',
     'require_afc_regular_leaf "$FINAL_LEAF" ||',
     'require_game_zero pre',
     'require_game_zero post',
     'python3 "$GUARD" run --timeout',
     'python3 "$VALIDATOR"',
 )
-
 
 def afc_python_source(candidate: str) -> str:
     start = "afc_file_type() {\n  local leaf=\"$1\"\n"
@@ -433,14 +438,18 @@ def validate_guarded_runner(candidate: str) -> None:
     for forbidden in ("--remove-existing-content",):
         if forbidden in candidate:
             raise ValueError(f"guarded producer runner contains forbidden text: {forbidden}")
+    if 'if require_afc_capture_leaf "$CAPTURE_LEAF"' in candidate:
+        raise ValueError("capture absence conflates AFC/provider failure with absence")
     for literal in (
         '"$UVX" --python python3.11 pymobiledevice3 apps rm',
-        '--udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf"',
+        '--udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "Documents/$leaf"',
     ):
         if candidate.count(literal) != 2:
             raise ValueError(
                 f"guarded proof/capture exact-delete coverage changed: {literal}"
             )
+    if '--documents "$BUNDLE_ID" "$leaf"' in candidate:
+        raise ValueError("guarded runner retains a bare-leaf delete path")
     validate_afc_python_contract(afc_python_source(candidate))
 
 
@@ -497,6 +506,7 @@ except ValueError:
     pass
 else:
     raise SystemExit("AFC dead-code AnnAssign mutation survived")
+
 PY
 
 printf '\n### P2.1e0 exact gpudebug triple source contracts\n'
@@ -874,6 +884,14 @@ def require_call(node: ast.AST, name: str, count: int = 1) -> list[ast.Call]:
     return matches
 
 
+def require_unparsed(node: ast.AST, fragments: tuple[str, ...], label: str) -> str:
+    source = ast.unparse(node)
+    for fragment in fragments:
+        if fragment not in source:
+            raise ValueError(f"{label} changed: {fragment}")
+    return source
+
+
 def validate_validator(candidate: str) -> None:
     try:
         tree = ast.parse(candidate)
@@ -890,13 +908,20 @@ def validate_validator(candidate: str) -> None:
         "COLLECTOR_MAIN_TIMEOUT_SECONDS": 600.0,
         "COLLECTOR_COMMAND_TIMEOUT_SECONDS": 90.0,
         "COLLECTOR_MINIMUM_TIMEOUT_SECONDS": 1.0,
+        "COLLECTOR_SESSION_SETTLE_SECONDS": 1.0,
     }
     for name, expected_value in exact_assignments.items():
         if assigned_literal(tree, name) != expected_value:
             raise ValueError(f"validator constant changed: {name}")
     role_values = assigned_literal(tree, "ROLE_ORDER")
-    if not isinstance(role_values, tuple) or len(role_values) != 14:
-        raise ValueError("gpudebug transcript role count changed")
+    expected_roles = (
+        "version", "open", "commands", "command-buffer", "scene-encoder",
+        "scene-color0", "proof-encoder", "proof-group", "proof-blit",
+        "tone-encoder", "tone-group", "tone-draw", "tone-fragment",
+        "tone-tex0", "scene-resource", "terminate", "sessions-after",
+    )
+    if role_values != expected_roles:
+        raise ValueError("gpudebug transcript roles differ from exact discovery flow")
 
     timeout = function_node(tree, "collector_command_timeout")
     minimums = calls(timeout, "min")
@@ -934,16 +959,220 @@ def validate_validator(candidate: str) -> None:
     if "SIGKILL" not in ast.dump(killer, include_attributes=False):
         raise ValueError("collector timeout/overflow no longer kills its process group")
 
+    listing = function_node(tree, "listed_session_ids")
+    listing_source = require_unparsed(listing, (
+        "text.endswith('\\n') and '\\r' not in text",
+        "text == 'No active sessions.\\n'",
+        "SESSION_LIST_HEADER_RE.fullmatch(lines[0])",
+        "SESSION_LIST_FOOTER_RE.fullmatch(lines[-1])",
+        "count == len(rows)",
+        "SESSION_LIST_ROW_RE.fullmatch(row)",
+        "session not in sessions",
+        "sessions.add(session)",
+    ), "strict session-list parser")
+    if "json.loads" in listing_source or "json.JSONDecoder" in listing_source:
+        raise ValueError("session-list parser retains the legacy JSON contract")
+
+    open_parser = function_node(tree, "parse_session")
+    require_unparsed(open_parser, (
+        "text.endswith('\\n') and '\\r' not in text",
+        "text.splitlines(keepends=True)",
+        "SESSION_RE.fullmatch(lines[0][:-1])",
+        "OTHER_SESSIONS_RE.fullmatch(lines[index][:-1])",
+        "count == 1 and noun == 'session' or (count > 1 and noun == 'sessions')",
+        "lines[index] == f'gpudebug -s {session} -c <command> to send commands.\\n'",
+        "documents, _ = _json_documents(payload, 'gpudebug open payload', 1)",
+        "_validate_open_root(documents[0])",
+        "return session",
+    ), "strict open transcript parser")
+    open_root = function_node(tree, "_validate_open_root")
+    require_unparsed(open_root, (
+        "exact_object(document, ('children', 'totalCount'), 'gpudebug open root')",
+        "exact_int(root['totalCount'], len(children), 'gpudebug open root.totalCount')",
+        "expected = (('commands', 'go'), ('performance', ''), ('api_calls', 'go'), ('resources', 'go'))",
+        "len(children) == len(expected)",
+        "zip(expected, children)",
+        "exact_object(child_value, ('actions', 'name', 'values')",
+        "len(child_values) == 1",
+        "exact_object(child_values[0], ('type', 'value')",
+        "exact_string(item['type'], 'string'",
+        "_canonical_count_value(values['commands'], 'command buffer', 'command buffers'",
+        "exact_string(values['performance'], \"see 'profile ?'\"",
+        "_canonical_count_value(values['api_calls'], 'API call', 'API calls'",
+        "_canonical_count_value(values['resources'], 'object', 'objects'",
+    ), "exact open-root hierarchy")
+    terminate_parser = function_node(tree, "validate_terminate")
+    require_unparsed(terminate_parser, (
+        "f'Session {session} terminated.\\n'.encode('ascii')",
+        "raw == expected",
+    ), "strict terminate transcript parser")
+
+    waiter = function_node(tree, "wait_for_owned_session_absence")
+    waiter_runner = require_call(waiter, "run_collector_command")[0]
+    if [ast.unparse(argument) for argument in waiter_runner.args] != [
+            "argv", "overall_deadline"]:
+        raise ValueError("owned-session repoll escaped the overall deadline")
+    listed = require_call(waiter, "listed_session_ids")[0]
+    membership = [node for node in ast.walk(waiter)
+                  if isinstance(node, ast.Compare) and
+                  len(node.ops) == 1 and isinstance(node.ops[0], ast.NotIn) and
+                  ast_name(node.left) == "session" and
+                  ast.dump(node.comparators[0], include_attributes=False) ==
+                  ast.dump(listed, include_attributes=False)]
+    loops = [node for node in ast.walk(waiter)
+             if isinstance(node, ast.While) and
+             isinstance(node.test, ast.Constant) and node.test.value is True]
+    sleeps = require_call(waiter, "time.sleep")
+    if len(membership) != 1 or len(loops) != 1 or \
+            [ast.unparse(argument) for argument in sleeps[0].args] != [
+                "COLLECTOR_SESSION_SETTLE_SECONDS"]:
+        raise ValueError("owned-session bounded exact-ID repoll changed")
+    require_unparsed(waiter, (
+        "remaining = overall_deadline - time.monotonic()",
+        "remaining >= COLLECTOR_SESSION_SETTLE_SECONDS + COLLECTOR_MINIMUM_TIMEOUT_SECONDS",
+        "return raw",
+    ), "owned-session bounded exact-ID repoll")
+
     cleanup = function_node(tree, "cleanup_owned_collector_session")
-    cleanup_dump = ast.dump(cleanup, include_attributes=False)
-    if cleanup_dump.count("run_collector_command") != 2 or \
-            "--terminate-all" in cleanup_dump:
+    cleanup_source = ast.unparse(cleanup)
+    cleanup_runner = require_call(cleanup, "run_collector_command")[0]
+    cleanup_wait = require_call(cleanup, "wait_for_owned_session_absence")[0]
+    cleanup_terminate = require_call(cleanup, "validate_terminate")[0]
+    if [ast.unparse(argument) for argument in cleanup_runner.args] != [
+            "terminate_argv", "overall_deadline"] or \
+            [ast.unparse(argument) for argument in cleanup_wait.args] != [
+                "session", "sessions_argv", "overall_deadline"] or \
+            [ast.unparse(argument) for argument in cleanup_terminate.args] != [
+                "raw", "session"] or \
+            "--terminate-all" in cleanup_source:
         raise ValueError("owned session cleanup contract changed")
-    if "--terminate" not in cleanup_dump or "--list-sessions" not in cleanup_dump:
+    if "'--terminate'" not in cleanup_source or \
+            "'--list-sessions'" not in cleanup_source:
         raise ValueError("owned session cleanup commands changed")
-    if calls(cleanup, "time.monotonic") or cleanup_dump.count(
+    sessions_entries = [call for call in calls(cleanup, "_transcript_entry")
+                        if call.args and isinstance(call.args[0], ast.Constant) and
+                        call.args[0].value == "sessions-after"]
+    terminate_entries = [call for call in calls(cleanup, "_transcript_entry")
+                         if call.args and isinstance(call.args[0], ast.Constant) and
+                         call.args[0].value == "terminate"]
+    if len(terminate_entries) != 1 or \
+            not (cleanup_runner.lineno < cleanup_terminate.lineno <
+                 terminate_entries[0].lineno) or \
+            len(sessions_entries) != 1 or \
+            cleanup_wait.lineno >= sessions_entries[0].lineno or \
+            "raws['sessions-after'] = raw" not in cleanup_source:
+        raise ValueError("cleanup does not retain only the final absence transcript")
+    if calls(cleanup, "time.monotonic") or cleanup_source.count(
             "overall_deadline") < 3:
         raise ValueError("cleanup created a fresh deadline")
+
+    documents = function_node(tree, "_json_documents")
+    documents_source = require_unparsed(documents, (
+        "json.JSONDecoder(object_pairs_hook=unique_object, parse_constant=reject_constant)",
+        "for _ in range(expected_count):",
+        "decoder.raw_decode(text, offset)",
+        "isinstance(document, dict)",
+        "end < len(text) and text[end] == '\\n'",
+        "offset = end + 1",
+        "offset == len(text)",
+    ), "strict multi-document JSON parser")
+    if "json.loads" in documents_source:
+        raise ValueError("gpudebug parser retains a single-json shortcut")
+    navigable = function_node(tree, "_navigable_json")
+    require_unparsed(navigable, (
+        "documents, fragments = _json_documents(raw, label, 2)",
+        "fragments[0] == fragments[1] and documents[0] == documents[1]",
+        "return documents[1]",
+    ), "go/list multi-document parser")
+    direct_info = function_node(tree, "_direct_info_json")
+    require_unparsed(direct_info, (
+        "documents, _ = _json_documents(raw, label, 1)",
+        "return documents[0]",
+    ), "direct-info single-document parser")
+
+    command_buffer_path = function_node(tree, "_command_buffer_path")
+    require_unparsed(command_buffer_path, (
+        "_navigable_json(raw, 'commands')",
+        "len(children) == 1",
+        "return 'commands/' + child['name']",
+    ), "command-buffer hierarchy parser")
+    encoder_paths = function_node(tree, "_encoder_paths")
+    require_unparsed(encoder_paths, (
+        "_navigable_json(raw, 'command buffer')",
+        "scene_index < proof_index < tone_index",
+        "f\"{cb_path}/{scene['name']}\"",
+        "f\"{cb_path}/{proof['name']}\"",
+        "f\"{cb_path}/{tone['name']}\"",
+    ), "encoder hierarchy parser")
+    group_path = function_node(tree, "_one_group_path")
+    require_unparsed(group_path, (
+        "_navigable_json(raw, label)",
+        "re.fullmatch('grp(?:0|[1-9][0-9]*)', item['name'])",
+        "_marker_value_matches(value, marker)",
+        "f\"{encoder_path}/{child['name']}\"",
+    ), "marker group hierarchy parser")
+    proof_group_command = function_node(tree, "_proof_group_command_path")
+    require_unparsed(proof_group_command, (
+        "_navigable_json(raw, 'proof group')",
+        "{'go', 'info'}.issubset(_child_actions(item))",
+        "re.fullmatch('blit(?:0|[1-9][0-9]*)', item['name'])",
+        "len(children) == 1",
+        "f\"{group_path}/{child['name']}\"",
+    ), "dynamic proof-group command discovery")
+    proof_result = function_node(tree, "_proof_blit_result")
+    require_unparsed(proof_result, (
+        "document = _direct_info_json(raw, 'proof blit')",
+        "_document_one_field(document, 'sourceTexture', 'proof blit')",
+        "return (source_match.group(1), document)",
+    ), "direct-info proof-blit parser")
+    tone_group_draw = function_node(tree, "_tone_group_draw_path")
+    require_unparsed(tone_group_draw, (
+        "_navigable_json(raw, 'tone group')",
+        "re.fullmatch('draw(?:0|[1-9][0-9]*)', item['name'])",
+        "len(group_children) == 1",
+        "f\"{group_path}/{draw['name']}\"",
+    ), "dynamic tone-group draw discovery")
+    tone_draw_fragment = function_node(tree, "_tone_draw_fragment_path")
+    require_unparsed(tone_draw_fragment, (
+        "_navigable_json(raw, 'tone draw')",
+        "fragments = [child for child in draw_children if child['name'] == 'fragment']",
+        "len(fragments) == 1 and 'go' in _child_actions(fragments[0])",
+        "return draw_path + '/fragment'",
+    ), "dynamic tone-draw fragment discovery")
+    tone_result = function_node(tree, "_tone_fragment_result")
+    require_unparsed(tone_result, (
+        "document = _navigable_json(raw, 'tone fragment')",
+        "_listing_children(document, 'tone fragment')",
+        "texture_names == ['tex[0]']",
+        "_texture_binding(document, 'tex[0]', scene_marker, 'tone fragment')",
+    ), "tone fragment parser")
+
+    filenames = function_node(tree, "expected_filenames")
+    require_unparsed(filenames, (
+        "proof_group = command['proofBlit']['commandPath'].rsplit('/', 2)[-2]",
+        "tone_group, tone_draw = command['toneResolve']['drawPath'].rsplit('/', 1)",
+        "tone_group = tone_group.rsplit('/', 1)[1]",
+        "'proof-group': f'proof-grp-{proof_group[3:]}.json'",
+        "'proof-blit': f'proof-blit-{proof_blit.group(3)[4:]}.json'",
+        "'tone-group': f'tone-grp-{tone_group[3:]}.json'",
+        "'tone-draw': f'tone-draw-{tone_draw[4:]}.json'",
+    ), "dynamic discovery transcript filenames")
+    expected_arguments = function_node(tree, "expected_argv")
+    require_unparsed(expected_arguments, (
+        "'commands': [GPUDEBUG, '--json', '-s', session, '-c', 'go commands', '-c', 'list --all']",
+        "'command-buffer': [GPUDEBUG, '--json', '-s', session, '-c', f\"go commands/{command['commandBuffer']}\", '-c', 'list --all']",
+        "'scene-encoder': [GPUDEBUG, '--json', '-s', session, '-c', f'go {scene}', '-c', 'list --all']",
+        "'scene-color0': [GPUDEBUG, '--json', '-s', session, '-c', f'info {scene}/color0']",
+        "'proof-encoder': [GPUDEBUG, '--json', '-s', session, '-c', f'go {proof_encoder}', '-c', 'list --all']",
+        "'proof-group': [GPUDEBUG, '--json', '-s', session, '-c', f'go {proof_group}', '-c', 'list --all']",
+        "'proof-blit': [GPUDEBUG, '--json', '-s', session, '-c', f'info {proof_blit}']",
+        "'tone-encoder': [GPUDEBUG, '--json', '-s', session, '-c', f'go {tone_encoder}', '-c', 'list --all']",
+        "'tone-group': [GPUDEBUG, '--json', '-s', session, '-c', f'go {tone_group}', '-c', 'list --all']",
+        "'tone-draw': [GPUDEBUG, '--json', '-s', session, '-c', f'go {tone_draw}', '-c', 'list --all']",
+        "'tone-fragment': [GPUDEBUG, '--json', '-s', session, '-c', f'go {tone_draw}/fragment', '-c', 'list --all']",
+        "'tone-tex0': [GPUDEBUG, '--json', '-s', session, '-c', f'info {tone_draw}/fragment/tex[0]']",
+        "'scene-resource': [GPUDEBUG, '--json', '-s', session, '-c', f\"info {resource['textureRef']}\"]",
+    ), "real gpudebug transcript argv")
 
     collect_node = function_node(tree, "collect")
     finalizers = [part for part in ast.walk(collect_node)
@@ -957,9 +1186,40 @@ def validate_validator(candidate: str) -> None:
         "started = time.monotonic()",
         "main_deadline = started + COLLECTOR_MAIN_TIMEOUT_SECONDS",
         "overall_deadline = started + COLLECTOR_GLOBAL_TIMEOUT_SECONDS",
+        "commands = invoke('commands', 'commands.json', [GPUDEBUG, '--json', '-s', session, '-c', 'go commands', '-c', 'list --all'])",
+        "command_buffer = invoke('command-buffer'",
+        "'-c', f'go {cb_path}', '-c', 'list --all'",
+        "scene_encoder = invoke('scene-encoder'",
+        "'-c', f'go {scene_path}', '-c', 'list --all'",
+        "scene_color = invoke('scene-color0', 'scene-color0.json', [GPUDEBUG, '--json', '-s', session, '-c', f'info {scene_path}/color0'])",
+        "proof_encoder = invoke('proof-encoder'",
+        "'-c', f'go {proof_path}', '-c', 'list --all'",
+        "proof_group = _one_group_path(proof_encoder, proof_path, proof_marker, 'proof encoder')",
+        "proof_group_name = proof_group.rsplit('/', 1)[1]",
+        "proof_group_raw = invoke('proof-group', f'proof-grp-{proof_group_name[3:]}.json', [GPUDEBUG, '--json', '-s', session, '-c', f'go {proof_group}', '-c', 'list --all'])",
+        "blit_path = _proof_group_command_path(proof_group_raw, proof_group)",
+        "blit_name = blit_path.rsplit('/', 1)[1]",
+        "proof_blit = invoke('proof-blit', f'proof-blit-{blit_name[4:]}.json', [GPUDEBUG, '--json', '-s', session, '-c', f'info {blit_path}'])",
+        "_proof_blit_result(proof_blit, scene_marker)",
+        "tone_group = _one_group_path(tone_encoder, tone_path, tone_marker, 'tone encoder')",
+        "tone_group_name = tone_group.rsplit('/', 1)[1]",
+        "tone_group_raw = invoke('tone-group', f'tone-grp-{tone_group_name[3:]}.json', [GPUDEBUG, '--json', '-s', session, '-c', f'go {tone_group}', '-c', 'list --all'])",
+        "draw_path = _tone_group_draw_path(tone_group_raw, tone_group)",
+        "draw_name = draw_path.rsplit('/', 1)[1]",
+        "tone_draw = invoke('tone-draw', f'tone-draw-{draw_name[4:]}.json', [GPUDEBUG, '--json', '-s', session, '-c', f'go {draw_path}', '-c', 'list --all'])",
+        "fragment_path = _tone_draw_fragment_path(tone_draw, draw_path)",
+        "tone_fragment = invoke('tone-fragment', 'tone-fragment.json', [GPUDEBUG, '--json', '-s', session, '-c', f'go {fragment_path}', '-c', 'list --all'])",
+        "tone_tex0 = invoke('tone-tex0', 'tone-tex0.json', [GPUDEBUG, '--json', '-s', session, '-c', f'info {fragment_path}/tex[0]'])",
+        "scene_resource = invoke('scene-resource', 'scene-resource.json', [GPUDEBUG, '--json', '-s', session, '-c', f'info {texture_ref}'])",
     ):
         if required not in collect_source:
             raise ValueError(f"collector total budget changed: {required}")
+    dynamic_nodes = (filenames, expected_arguments, proof_group_command,
+                     tone_group_draw, tone_draw_fragment, collect_node)
+    if any(isinstance(part, ast.Constant) and
+           part.value in ("blit0", "draw0", "grp0")
+           for node in dynamic_nodes for part in ast.walk(node)):
+        raise ValueError("collector hardcodes a discovered group/blit/draw identity")
     main_commands = calls(collect_node, "run_collector_command")
     if len(main_commands) != 2 or any(
             not call.args or ast_name(call.args[-1]) != "main_deadline"
@@ -976,6 +1236,23 @@ def validate_validator(candidate: str) -> None:
     if len(parse_calls) != 1 or len(open_entries) != 1 or \
             parse_calls[0].lineno >= open_entries[0].lineno:
         raise ValueError("session identity is not retained before transcript write")
+    transcript_validation = function_node(tree, "validate_transcripts")
+    transcript_validation_source = require_unparsed(transcript_validation, (
+        "validate_terminate(raws['terminate'], session)",
+        "session not in listed_session_ids(raws['sessions-after'])",
+        "_navigable_json(raws['scene-encoder'], 'scene encoder')",
+        "_direct_info_json(raws['scene-color0'], 'scene color0')",
+        "_one_group_path(raws['proof-encoder'], proof_path",
+        "_proof_group_command_path(raws['proof-group'], proof_group)",
+        "_proof_blit_result(raws['proof-blit'], resource['label'])",
+        "_one_group_path(raws['tone-encoder'], tone_path",
+        "_tone_group_draw_path(raws['tone-group'], tone_group)",
+        "_tone_draw_fragment_path(raws['tone-draw'], draw_path)",
+        "_tone_fragment_result(raws['tone-fragment'], resource['label'])",
+        "_direct_info_json(raws[role], role)",
+    ), "final transcript parser")
+    if "session.encode()" in transcript_validation_source:
+        raise ValueError("final transcript retains substring session matching")
 
     clone = function_node(tree, "clone_capture_no_follow")
     clone_dump = ast.dump(clone, include_attributes=False)
@@ -1033,12 +1310,12 @@ validator_mutations = (
         "    if returncode != 0:\n        pass\n", 1),
     validator.replace(
         "                cleanup_owned_collector_session(\n"
-        "                    session,transcript_dir,entries,raws,overall_deadline)\n",
+        "                    session, transcript_dir, entries, raws, overall_deadline)\n",
         "                pass  # cleanup_owned_collector_session(session, transcript_dir, entries, raws)\n",
         1),
     validator.replace(
-        "                    session,transcript_dir,entries,raws,overall_deadline)\n",
-        "                    session,transcript_dir,entries,raws,time.monotonic()+120.0)\n",
+        "                    session, transcript_dir, entries, raws, overall_deadline)\n",
+        "                    session, transcript_dir, entries, raws, time.monotonic()+120.0)\n",
         1),
     validator.replace(
         "    require(remaining >= COLLECTOR_MINIMUM_TIMEOUT_SECONDS,\n"
@@ -1046,14 +1323,122 @@ validator_mutations = (
         "    require(remaining > 0.0,\n"
         "            \"collector deadline has less than one second remaining\")\n",
         1),
+    validator.replace(
+        '    "scene-color0", "proof-encoder", "proof-group", "proof-blit",\n',
+        '    "scene-color0", "proof-encoder", "proof-blit",\n', 1),
+    validator.replace(
+        "        if session not in listed_session_ids(raw):\n",
+        "        if session.encode() not in raw:\n", 1),
+    validator.replace(
+        "        raw = wait_for_owned_session_absence(\n"
+        "            session, sessions_argv, overall_deadline)\n",
+        "        raw = run_collector_command(sessions_argv, overall_deadline)\n",
+        1),
+    validator.replace(
+        "    footer = SESSION_LIST_FOOTER_RE.fullmatch(lines[-1])\n",
+        "    footer = SESSION_LIST_FOOTER_RE.search(lines[-1])\n", 1),
+    validator.replace(
+        "    match = SESSION_RE.fullmatch(lines[0][:-1])\n",
+        "    match = SESSION_RE.search(text)  # fullmatch(lines[0][:-1])\n", 1),
+    validator.replace(
+        "    require(raw == expected, \"gpudebug terminate transcript is not byte-exact\")\n",
+        "    require(True, \"gpudebug terminate transcript is not byte-exact\")\n",
+        1),
+    validator.replace(
+        "    require(offset == len(text),\n",
+        "    require(offset <= len(text),\n", 1),
+    validator.replace(
+        "    documents, fragments = _json_documents(raw, label, 2)\n",
+        "    documents, fragments = _json_documents(raw, label, 1)\n", 1),
+    validator.replace(
+        "    require(fragments[0] == fragments[1] and documents[0] == documents[1],\n",
+        "    require(True,\n", 1),
+    validator.replace(
+        "    documents, _ = _json_documents(raw, label, 1)\n",
+        "    documents = [_navigable_json(raw, label)]\n", 1),
+    validator.replace(
+        '    return f"{group_path}/{child[\'name\']}"\n\n\n'
+        "def _proof_blit_result",
+        '    return f"{group_path}/blit0"\n\n\n'
+        "def _proof_blit_result",
+        1),
+    validator.replace(
+        '        "proof-blit": [GPUDEBUG, "--json", "-s", session, "-c", f"info {proof_blit}"],\n',
+        '        "proof-blit": [GPUDEBUG, "--json", "-s", session, "-c", "info blit0"],\n',
+        1),
+    validator.replace(
+        "        blit_path = _proof_group_command_path(proof_group_raw, proof_group)\n",
+        '        blit_path = proof_group + "/blit0"\n', 1),
+    validator.replace(
+        '    return f"{group_path}/{draw[\'name\']}"\n',
+        '    return f"{group_path}/draw0"\n', 1),
+    validator.replace(
+        '        "tone-fragment": [GPUDEBUG, "--json", "-s", session, "-c",\n'
+        '                          f"go {tone_draw}/fragment", "-c", "list --all"],\n',
+        '        "tone-fragment": [GPUDEBUG, "--json", "-s", session, "-c",\n'
+        '                          "go draw0/fragment", "-c", "list --all"],\n',
+        1),
+    validator.replace(
+        "        fragment_path = _tone_draw_fragment_path(tone_draw, draw_path)\n",
+        '        fragment_path = tone_group + "/draw0/fragment"\n', 1),
+    validator.replace(
+        '    require(session not in listed_session_ids(raws["sessions-after"]),\n',
+        '    require(session.encode() not in raws["sessions-after"],\n', 1),
+    validator.replace(
+        '    validate_terminate(raws["terminate"], session)\n',
+        '    pass  # validate_terminate(raws["terminate"], session)\n', 1),
+    validator.replace(
+        "        require(session not in sessions, \"gpudebug session listing repeats an ID\")\n",
+        "        require(True, \"gpudebug session listing repeats an ID\")\n",
+        1),
+    validator.replace(
+        '    document = _direct_info_json(raw, "proof blit")\n',
+        '    document = _navigable_json(raw, "proof blit")\n', 1),
+    validator.replace(
+        '    document = _navigable_json(raw, "tone fragment")\n',
+        '    document = _direct_info_json(raw, "tone fragment")\n', 1),
+    validator.replace(
+        "    _validate_open_root(documents[0])\n",
+        "    pass  # _validate_open_root(documents[0])\n", 1),
+    validator.replace(
+        '        ("commands", "go"),\n'
+        '        ("performance", ""),\n'
+        '        ("api_calls", "go"),\n'
+        '        ("resources", "go"),\n',
+        '        ("commands", "go"),\n'
+        '        ("api_calls", "go"),\n'
+        '        ("performance", ""),\n'
+        '        ("resources", "go"),\n',
+        1),
+    validator.replace(
+        '    exact_int(root["totalCount"], len(children),\n'
+        '              "gpudebug open root.totalCount")\n',
+        '    pass  # exact_int(root["totalCount"], len(children))\n',
+        1),
+    validator.replace(
+        '    proof_group = command["proofBlit"]["commandPath"].rsplit("/", 2)[-2]\n',
+        '    proof_group = "grp0"\n', 1),
+    validator.replace(
+        '        proof_group_name = proof_group.rsplit("/", 1)[1]\n',
+        '        proof_group_name = "grp0"\n', 1),
+    validator.replace(
+        "        validate_terminate(raw, session)\n",
+        "        pass  # validate_terminate(raw, session)\n", 1),
+    validator.replace(
+        "    other = OTHER_SESSIONS_RE.fullmatch(lines[index][:-1])\n",
+        "    other = None  # OTHER_SESSIONS_RE.fullmatch(lines[index][:-1])\n",
+        1),
 )
 for index, mutation in enumerate(validator_mutations, 1):
+    if mutation == validator:
+        raise SystemExit(f"collector mutation is a no-op: {index}")
     try:
         validate_validator(mutation)
     except ValueError:
         pass
     else:
         raise SystemExit(f"collector mutation survived: {index}")
+print(f"real gpudebug collector source contracts: PASS mutations={len(validator_mutations)}")
 
 runner = Path("ios/device-test/run-linear-hdr-proof-test.sh").read_text()
 smoke = Path("ios/device-test/run-smoke-test.sh").read_text()
@@ -1251,6 +1636,7 @@ def validate_runner(candidate: str) -> None:
     ordered(runner_code, (
         '[[-f"$CAPTURE_SUMMARY"&&!-L"$CAPTURE_SUMMARY"]]',
         'delete_exact_device_leaf"$CAPTURE_LEAF"',
+        'capture_leaf_absent"$CAPTURE_LEAF"',
         'python3"$GPU_VALIDATOR"--collect',
         'cat"$GPU_RESULT"',
     ))
