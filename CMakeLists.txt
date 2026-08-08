@@ -72,6 +72,11 @@ if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
     "RendererIOS shading prototype Forward self-test is available only for iOS")
 endif()
 
+if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+  message(FATAL_ERROR
+    "RendererIOS linear HDR GPU triple capture is available only for iOS")
+endif()
+
 if(MSVC)
   add_definitions(-D_USE_MATH_DEFINES)
   add_definitions(-D_CRT_SECURE_NO_WARNINGS)
@@ -125,12 +130,18 @@ elseif(IOS)
          "Encode, submit and capture one deterministic shading prototype Tile pass" OFF)
   option(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST
          "Encode, submit, read back and capture one deterministic shading prototype Forward pass" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE
+         "Capture one exact SceneHDR/proof-copy/tone-resolve command-buffer triple" OFF)
   set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")
   if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR
      OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR
      OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
     set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY
         "  <key>MetalCaptureEnabled</key>\n  <true/>")
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY
+        "  <key>RendererIOSLinearHDRGPUTripleCapture</key>\n  <true/>\n  <key>MetalCaptureEnabled</key>\n  <true/>")
   endif()
   set(_renderer_ios_fault_modes
       none
@@ -267,6 +278,18 @@ elseif(IOS)
     message(FATAL_ERROR
       "RendererIOS shading prototype Forward self-test requires OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON")
   endif()
+  if(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE AND
+     (NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS OR
+      NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none" OR
+      NOT OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE STREQUAL "none" OR
+      OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR
+      OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST))
+    message(FATAL_ERROR
+      "RendererIOS linear HDR GPU triple capture requires the exact diagnostics=ON, fault=none, causal=none, Bink/resource/clear/tile/forward=OFF tuple")
+  endif()
   if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST AND
      NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")
     message(FATAL_ERROR
@@ -321,6 +344,10 @@ elseif(IOS)
   if(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE=1)
   endif()
   if(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
        STREQUAL "causal-a")

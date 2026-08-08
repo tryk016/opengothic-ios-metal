@@ -9,6 +9,7 @@
 #include <Tempest/Texture2d>
 
 #import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <Metal/Metal.h>
 #import <Security/Security.h>
 
@@ -36,6 +37,9 @@
 namespace {
 
 constexpr char FinalLeaf[] = "RendererIOS-linear-hdr-proof-v1.bin";
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+constexpr char CaptureLeaf[] = "RendererIOS-linear-hdr-proof-v1.gputrace";
+#endif
 
 bool allZero(std::span<const uint8_t> bytes) noexcept {
   return std::all_of(bytes.begin(),bytes.end(),
@@ -94,6 +98,24 @@ struct IOSLinearHDRProofFrame::Impl final {
   bool presentFailure = false;
   };
 
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+struct IOSLinearHDRCaptureFrame::Impl final {
+  std::unique_ptr<IOSMetalCaptureSession> session;
+  IOSLinearHDRCaptureState state = IOSLinearHDRCaptureState::Armed;
+  IOSMetalCaptureStartObservation observation;
+  bool terminalLogged = false;
+  bool provenActive = false;
+  bool permanentAmbiguous = false;
+  };
+
+IOSLinearHDRCaptureFrame::IOSLinearHDRCaptureFrame() noexcept = default;
+IOSLinearHDRCaptureFrame::~IOSLinearHDRCaptureFrame() = default;
+IOSLinearHDRCaptureFrame::IOSLinearHDRCaptureFrame(
+    IOSLinearHDRCaptureFrame&&) noexcept = default;
+IOSLinearHDRCaptureFrame& IOSLinearHDRCaptureFrame::operator=(
+    IOSLinearHDRCaptureFrame&&) noexcept = default;
+#endif
+
 IOSLinearHDRProofFrame::IOSLinearHDRProofFrame() noexcept = default;
 IOSLinearHDRProofFrame::~IOSLinearHDRProofFrame() = default;
 IOSLinearHDRProofFrame::IOSLinearHDRProofFrame(
@@ -104,6 +126,9 @@ IOSLinearHDRProofFrame& IOSLinearHDRProofFrame::operator=(
 struct IOSLinearHDRProofProducer::Impl final {
   explicit Impl(Tempest::Device& owner) noexcept : owner(owner) {
     arm();
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    armCaptureProfile();
+#endif
     }
 
   ~Impl() {
@@ -207,6 +232,187 @@ struct IOSLinearHDRProofProducer::Impl final {
          state,IOSLinearHDRProofProducerEvent::Arm))
       fail(IOSLinearHDRProofFailureReason::State);
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+  void logCaptureFailure(IOSLinearHDRCaptureFrame::Impl& frame,
+                         const char* reason) noexcept {
+    if(frame.terminalLogged)
+      return;
+    frame.terminalLogged = true;
+    std::array<char,255u> line{};
+    const int length = std::snprintf(
+        line.data(),line.size(),
+        "RendererIOS HDR capture: v=1 id=%s terminal=F reason=%s",
+        identityAvailable ? identityText.data() : "none",reason);
+    if(length<=0 || size_t(length)>=line.size())
+      return;
+    try {
+      Tempest::Log::e(line.data());
+      }
+    catch(...) {
+      }
+    }
+
+  void logCaptureSuccess(IOSLinearHDRCaptureFrame::Impl& frame,
+                         const IOSMetalCaptureArtifact& artifact) noexcept {
+    if(frame.terminalLogged)
+      return;
+    std::array<char,255u> line{};
+    const int length = std::snprintf(
+        line.data(),line.size(),
+        "RendererIOS HDR capture: v=1 id=%s file=%s kind=%s bytes=%llu terminal=C",
+        identityText.data(),CaptureLeaf,
+        iosMetalCaptureArtifactKindName(artifact.kind),
+        static_cast<unsigned long long>(artifact.bytes));
+    if(length<=0 || size_t(length)>=line.size()) {
+      logCaptureFailure(frame,"state");
+      return;
+      }
+    frame.terminalLogged = true;
+    try {
+      Tempest::Log::i(line.data());
+      }
+    catch(...) {
+      }
+    }
+
+  void armCaptureProfile() noexcept {
+    if(state!=IOSLinearHDRProofProducerState::Armed)
+      return;
+    @autoreleasepool {
+      @try {
+        id value = [[NSBundle mainBundle]
+            objectForInfoDictionaryKey:
+              @"RendererIOSLinearHDRGPUTripleCapture"];
+        const bool exactCFBoolean = value!=nil &&
+            CFGetTypeID(static_cast<CFTypeRef>(value))==CFBooleanGetTypeID();
+        const bool booleanValue = exactCFBoolean &&
+            CFBooleanGetValue(static_cast<CFBooleanRef>(value));
+        captureProfileArmed =
+            iosLinearHDRCaptureProfileAcceptsExactBoolean(
+                exactCFBoolean,booleanValue);
+        }
+      @catch(NSException*) {
+        captureProfileArmed = false;
+        }
+      }
+    if(captureProfileArmed)
+      (void)iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Arm);
+    }
+
+  IOSLinearHDRCaptureStartResult beginCapture(
+      IOSLinearHDRCaptureFrame& frame) noexcept {
+    if(!captureProfileArmed || captureAttempted ||
+       captureState!=IOSLinearHDRCaptureState::Armed ||
+       state!=IOSLinearHDRProofProducerState::Armed || frame.impl!=nullptr)
+      return IOSLinearHDRCaptureStartResult::RejectedInactive;
+    captureAttempted = true;
+    try {
+      frame.impl = std::make_unique<IOSLinearHDRCaptureFrame::Impl>();
+      frame.impl->session = std::make_unique<IOSMetalCaptureSession>();
+      }
+    catch(...) {
+      (void)iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Fail);
+      if(frame.impl!=nullptr) {
+        frame.impl->state = IOSLinearHDRCaptureState::Failed;
+        logCaptureFailure(*frame.impl,"start");
+        }
+      else {
+        try {
+          Tempest::Log::e(
+            "RendererIOS HDR capture: v=1 id=none terminal=F reason=start");
+          }
+        catch(...) {
+          }
+        }
+      return IOSLinearHDRCaptureStartResult::RejectedInactive;
+      }
+    const char* reason = nullptr;
+    const IOSLinearHDRCaptureStartResult result =
+        frame.impl->session->beginCapture(
+            owner,CaptureLeaf,
+            IOSMetalCaptureExistingArtifactPolicy::RequireAbsent,reason);
+    (void)reason;
+    frame.impl->observation = frame.impl->session->startObservation();
+    const IOSLinearHDRCaptureObservationDecision decision =
+        iosClassifyLinearHDRCaptureStartObservation(
+            frame.impl->observation.startReturn,
+            frame.impl->observation.activeAfter,
+            frame.impl->observation.complete);
+    if(result==IOSLinearHDRCaptureStartResult::Started &&
+       decision==IOSLinearHDRCaptureObservationDecision::Started) {
+      frame.impl->provenActive = true;
+      (void)iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Start);
+      frame.impl->state = captureState;
+      return result;
+      }
+    if(result==IOSLinearHDRCaptureStartResult::RejectedInactive &&
+       decision==IOSLinearHDRCaptureObservationDecision::RejectedInactive) {
+      (void)iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Fail);
+      frame.impl->state = IOSLinearHDRCaptureState::Failed;
+      logCaptureFailure(*frame.impl,"start");
+      frame.impl.reset();
+      return IOSLinearHDRCaptureStartResult::RejectedInactive;
+      }
+    if(decision==IOSLinearHDRCaptureObservationDecision::ActiveFailure) {
+      frame.impl->provenActive = true;
+      (void)iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Fail);
+      frame.impl->state = IOSLinearHDRCaptureState::Failed;
+      logCaptureFailure(*frame.impl,"start-ambiguous");
+      return IOSLinearHDRCaptureStartResult::AmbiguousActive;
+      }
+    frame.impl->permanentAmbiguous = true;
+    (void)iosAdvanceLinearHDRCaptureState(
+        captureState,IOSLinearHDRCaptureEvent::PermanentAmbiguity);
+    frame.impl->state = IOSLinearHDRCaptureState::PermanentAmbiguous;
+    logCaptureFailure(*frame.impl,"state");
+    return IOSLinearHDRCaptureStartResult::AmbiguousActive;
+    }
+
+  void captureFailure(IOSLinearHDRCaptureFrame& frame,
+                      const char* reason) noexcept {
+    if(frame.impl==nullptr)
+      return;
+    if(frame.impl->state!=IOSLinearHDRCaptureState::PermanentAmbiguous) {
+      (void)iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Fail);
+      frame.impl->state = IOSLinearHDRCaptureState::Failed;
+      }
+    logCaptureFailure(*frame.impl,reason);
+    }
+
+  bool markCaptureSubmittedAndStop(
+      IOSLinearHDRCaptureFrame& frame) noexcept {
+    if(frame.impl==nullptr || frame.impl->session==nullptr ||
+       frame.impl->state!=IOSLinearHDRCaptureState::Active ||
+       !iosAdvanceLinearHDRCaptureState(
+          captureState,IOSLinearHDRCaptureEvent::Submit)) {
+      captureFailure(frame,"state");
+      return false;
+      }
+    frame.impl->state = IOSLinearHDRCaptureState::Submitted;
+    IOSMetalCaptureArtifact artifact;
+    const char* reason = nullptr;
+    if(!frame.impl->session->stopAndInspect(artifact,reason)) {
+      (void)reason;
+      captureFailure(frame,"stop");
+      return false;
+      }
+    if(!iosAdvanceLinearHDRCaptureState(
+         captureState,IOSLinearHDRCaptureEvent::Complete)) {
+      captureFailure(frame,"state");
+      return false;
+      }
+    frame.impl->state = IOSLinearHDRCaptureState::Completed;
+    logCaptureSuccess(*frame.impl,artifact);
+    return true;
+    }
+#endif
 
   bool labelSceneTarget(Tempest::Attachment& target) noexcept {
     if(state!=IOSLinearHDRProofProducerState::Armed)
@@ -527,6 +733,11 @@ struct IOSLinearHDRProofProducer::Impl final {
   int directory = -1;
   bool identityAvailable = false;
   bool failureLogged = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+  IOSLinearHDRCaptureState captureState = IOSLinearHDRCaptureState::Disabled;
+  bool captureProfileArmed = false;
+  bool captureAttempted = false;
+#endif
   };
 
 IOSLinearHDRProofProducer::IOSLinearHDRProofProducer(
@@ -554,6 +765,71 @@ IOSLinearHDRProofProducerState IOSLinearHDRProofProducer::state() const noexcept
 bool IOSLinearHDRProofProducer::armed() const noexcept {
   return state()==IOSLinearHDRProofProducerState::Armed;
   }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+bool IOSLinearHDRProofProducer::captureProfileArmed() const noexcept {
+  return impl!=nullptr && impl->captureProfileArmed &&
+         impl->captureState==IOSLinearHDRCaptureState::Armed;
+  }
+
+IOSLinearHDRCaptureStartResult IOSLinearHDRProofProducer::beginCapture(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  return impl!=nullptr ? impl->beginCapture(frame) :
+                         IOSLinearHDRCaptureStartResult::RejectedInactive;
+  }
+
+void IOSLinearHDRProofProducer::markCapturePreSubmitFailure(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  if(impl!=nullptr)
+    impl->captureFailure(frame,"pre-submit");
+  }
+
+void IOSLinearHDRProofProducer::markCaptureSubmitAmbiguous(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  if(impl!=nullptr)
+    impl->captureFailure(frame,"submit-ambiguous");
+  }
+
+bool IOSLinearHDRProofProducer::markCaptureSubmittedAndStop(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  return impl!=nullptr && impl->markCaptureSubmittedAndStop(frame);
+  }
+
+void IOSLinearHDRProofProducer::markCaptureIdleFailure(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  if(impl!=nullptr)
+    impl->captureFailure(frame,"idle");
+  }
+
+bool IOSLinearHDRProofProducer::captureHasOwners(
+    const IOSLinearHDRCaptureFrame& frame) const noexcept {
+  return frame.impl!=nullptr && frame.impl->session!=nullptr;
+  }
+
+bool IOSLinearHDRProofProducer::captureRequiresNoTeardown(
+    const IOSLinearHDRCaptureFrame& frame) const noexcept {
+  return frame.impl!=nullptr && frame.impl->permanentAmbiguous;
+  }
+
+bool IOSLinearHDRProofProducer::settleCaptureAfterConfirmedIdle(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  if(frame.impl==nullptr || frame.impl->session==nullptr)
+    return true;
+  if(frame.impl->permanentAmbiguous)
+    return false;
+  if(frame.impl->session->active())
+    frame.impl->session->cancel();
+  return !frame.impl->session->active();
+  }
+
+void IOSLinearHDRProofProducer::releaseCaptureAfterTerminal(
+    IOSLinearHDRCaptureFrame& frame) noexcept {
+  if(frame.impl==nullptr || frame.impl->permanentAmbiguous ||
+     (frame.impl->session!=nullptr && frame.impl->session->active()))
+    return;
+  frame.impl.reset();
+  }
+#endif
 
 bool IOSLinearHDRProofProducer::labelSceneTarget(
     Tempest::Attachment& target) noexcept {

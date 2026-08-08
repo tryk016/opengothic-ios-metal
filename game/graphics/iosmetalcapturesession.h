@@ -2,7 +2,8 @@
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,23 @@ enum class IOSMetalCaptureArtifactKind : uint8_t {
 struct IOSMetalCaptureArtifact final {
   IOSMetalCaptureArtifactKind kind = IOSMetalCaptureArtifactKind::File;
   uint64_t bytes = 0u;
+  };
+
+enum class IOSLinearHDRCaptureStartResult : uint8_t {
+  Started,
+  RejectedInactive,
+  AmbiguousActive,
+  };
+
+enum class IOSMetalCaptureExistingArtifactPolicy : uint8_t {
+  RemoveExactOwned,
+  RequireAbsent,
+  };
+
+struct IOSMetalCaptureStartObservation final {
+  bool startReturn = false;
+  bool activeAfter = false;
+  bool complete = false;
   };
 
 // Apple GPU trace packages may use relative in-package symlinks for shared
@@ -53,12 +71,19 @@ class IOSMetalCaptureSession final {
     [[nodiscard]] bool start(Tempest::Device& device,
                              const char* artifactName,
                              const char*& reason) noexcept;
+    [[nodiscard]] IOSLinearHDRCaptureStartResult beginCapture(
+        Tempest::Device& device,
+        const char* artifactName,
+        IOSMetalCaptureExistingArtifactPolicy existingArtifactPolicy,
+        const char*& reason) noexcept;
     [[nodiscard]] bool stopAndInspect(IOSMetalCaptureArtifact& artifact,
                                       const char*& reason) noexcept;
     void cancel() noexcept;
     void reset() noexcept;
     [[nodiscard]] bool initialized() const noexcept;
     [[nodiscard]] bool active() const noexcept;
+    [[nodiscard]] IOSMetalCaptureStartObservation
+        startObservation() const noexcept;
 
   private:
     struct Impl;

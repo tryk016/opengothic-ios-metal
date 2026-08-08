@@ -68,7 +68,18 @@ class LinearHDRProofArtifactTests(unittest.TestCase):
     def test_exact_join_accepts_lossless_hdr_payload(self) -> None:
         word = 0x882003C0
         payload = struct.pack("<IIII", word, 0, 0, 0)
-        self.validate(artifact(payload), success())
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            artifact_path = root / "RendererIOS-linear-hdr-proof-v1.bin"
+            log_path = root / "log.txt"
+            artifact_path.write_bytes(artifact(payload))
+            log_path.write_text(success(), encoding="utf-8")
+            values = VALIDATOR.validate(artifact_path, log_path, SHA)
+        self.assertEqual(values["maximumX"], 0)
+        self.assertEqual(values["maximumY"], 0)
+        self.assertEqual(values["maximumChannel"], "b")
+        self.assertEqual(values["packedWord"], "0x882003c0")
+        self.assertRegex(values["valueHex"], r"^0x[01]\.[0-9a-f]{13}p[+-][0-9]+$")
 
     def test_rejects_missing_or_duplicate_success(self) -> None:
         self.rejected(artifact(), "")

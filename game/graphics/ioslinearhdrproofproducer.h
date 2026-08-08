@@ -1,6 +1,9 @@
 #pragma once
 
 #include "ioslinearhdrproof.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+#include "iosmetalcapturesession.h"
+#endif
 
 #include <array>
 #include <cstddef>
@@ -103,6 +106,63 @@ bool iosLinearHDRProofFormatSuccessLine(
     const IOSLinearHDRProofMetadata& metadata,
     std::array<char,255u>& line) noexcept;
 
+enum class IOSLinearHDRCaptureState : uint8_t {
+  Disabled,
+  Armed,
+  Active,
+  Submitted,
+  Completed,
+  Failed,
+  PermanentAmbiguous,
+  };
+
+enum class IOSLinearHDRCaptureEvent : uint8_t {
+  Arm,
+  Start,
+  Submit,
+  Complete,
+  Fail,
+  PermanentAmbiguity,
+  };
+
+enum class IOSLinearHDRCaptureObservationDecision : uint8_t {
+  Started,
+  RejectedInactive,
+  ActiveFailure,
+  PermanentNoTeardown,
+  };
+
+bool iosAdvanceLinearHDRCaptureState(
+    IOSLinearHDRCaptureState& state,
+    IOSLinearHDRCaptureEvent event) noexcept;
+IOSLinearHDRCaptureObservationDecision
+iosClassifyLinearHDRCaptureStartObservation(
+    bool startReturn,
+    bool activeAfter,
+    bool complete) noexcept;
+bool iosLinearHDRCaptureProfileAcceptsExactBoolean(
+    bool exactCFBoolean,
+    bool booleanValue) noexcept;
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+class IOSLinearHDRCaptureFrame final {
+  public:
+    IOSLinearHDRCaptureFrame() noexcept;
+    ~IOSLinearHDRCaptureFrame();
+    IOSLinearHDRCaptureFrame(IOSLinearHDRCaptureFrame&&) noexcept;
+    IOSLinearHDRCaptureFrame& operator=(IOSLinearHDRCaptureFrame&&) noexcept;
+
+    IOSLinearHDRCaptureFrame(const IOSLinearHDRCaptureFrame&) = delete;
+    IOSLinearHDRCaptureFrame& operator=(const IOSLinearHDRCaptureFrame&) = delete;
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl;
+
+  friend class IOSLinearHDRProofProducer;
+  };
+#endif
+
 class IOSLinearHDRProofFrame final {
   public:
     IOSLinearHDRProofFrame() noexcept;
@@ -131,6 +191,27 @@ class IOSLinearHDRProofProducer final {
 
     IOSLinearHDRProofProducerState state() const noexcept;
     bool armed() const noexcept;
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    bool captureProfileArmed() const noexcept;
+    IOSLinearHDRCaptureStartResult beginCapture(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+    void markCapturePreSubmitFailure(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+    void markCaptureSubmitAmbiguous(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+    bool markCaptureSubmittedAndStop(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+    void markCaptureIdleFailure(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+    bool captureHasOwners(
+        const IOSLinearHDRCaptureFrame& frame) const noexcept;
+    bool captureRequiresNoTeardown(
+        const IOSLinearHDRCaptureFrame& frame) const noexcept;
+    bool settleCaptureAfterConfirmedIdle(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+    void releaseCaptureAfterTerminal(
+        IOSLinearHDRCaptureFrame& frame) noexcept;
+#endif
     bool labelSceneTarget(Tempest::Attachment& target) noexcept;
     bool prepareFrame(
         IOSLinearHDRProofFrame& frame,

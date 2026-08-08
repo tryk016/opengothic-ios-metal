@@ -47,6 +47,79 @@ void testStateMachine() {
   require(state==IOSLinearHDRProofProducerState::Failed);
   require(!iosAdvanceLinearHDRProofProducerState(
       state,IOSLinearHDRProofProducerEvent::Arm));
+
+  IOSLinearHDRCaptureState capture = IOSLinearHDRCaptureState::Disabled;
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Start));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Arm));
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Arm));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Start));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Submit));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Complete));
+  require(capture==IOSLinearHDRCaptureState::Completed);
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Fail));
+
+  capture = IOSLinearHDRCaptureState::Disabled;
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Arm));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::PermanentAmbiguity));
+  require(capture==IOSLinearHDRCaptureState::PermanentAmbiguous);
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Complete));
+
+  capture = IOSLinearHDRCaptureState::Disabled;
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Arm));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Fail));
+  require(capture==IOSLinearHDRCaptureState::Failed);
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Arm));
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Start));
+
+  capture = IOSLinearHDRCaptureState::Disabled;
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Arm));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Start));
+  require(iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::PermanentAmbiguity));
+  require(capture==IOSLinearHDRCaptureState::PermanentAmbiguous);
+  require(!iosAdvanceLinearHDRCaptureState(
+      capture,IOSLinearHDRCaptureEvent::Fail));
+  }
+
+void testCaptureStartObservationAndProfileBoolean() {
+  using Decision = IOSLinearHDRCaptureObservationDecision;
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              true,true,true)==Decision::Started);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              false,false,true)==Decision::RejectedInactive);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              false,true,true)==Decision::ActiveFailure);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              true,false,true)==Decision::PermanentNoTeardown);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              false,false,false)==Decision::PermanentNoTeardown);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              false,true,false)==Decision::PermanentNoTeardown);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              true,false,false)==Decision::PermanentNoTeardown);
+  require(iosClassifyLinearHDRCaptureStartObservation(
+              true,true,false)==Decision::PermanentNoTeardown);
+
+  require(iosLinearHDRCaptureProfileAcceptsExactBoolean(true,true));
+  require(!iosLinearHDRCaptureProfileAcceptsExactBoolean(true,false));
+  require(!iosLinearHDRCaptureProfileAcceptsExactBoolean(false,true));
+  require(!iosLinearHDRCaptureProfileAcceptsExactBoolean(false,false));
   }
 
 void testBuildSha() {
@@ -185,6 +258,7 @@ void testFailureVocabulary() {
 
 int main() {
   testStateMachine();
+  testCaptureStartObservationAndProfileBoolean();
   testBuildSha();
   testArtifactRoundTrip();
   testFailureVocabulary();

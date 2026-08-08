@@ -64,6 +64,12 @@ def decode_component(encoded: int, mantissa_bits: int) -> float:
     return (1.0 + mantissa / float(1 << mantissa_bits)) * (2.0 ** (exponent - 15))
 
 
+def canonical_float_hex(value: float) -> str:
+    mantissa, exponent = value.hex().split("p", 1)
+    whole, fraction = mantissa.split(".", 1)
+    return f"{whole}.{fraction.ljust(13, '0')}p{exponent}"
+
+
 def parse_artifact(data: bytes) -> dict[str, int | str | float]:
     require(len(data) >= HEADER_BYTES, "artifact is shorter than its v1 header")
     require(data[:8] == b"RIOSR11\0", "artifact magic is not exact")
@@ -96,6 +102,10 @@ def parse_artifact(data: bytes) -> dict[str, int | str | float]:
             "artifact resource label is not exact")
 
     maximum = -1.0
+    maximum_x = 0
+    maximum_y = 0
+    maximum_channel = "r"
+    maximum_word = 0
     payload = memoryview(data)[HEADER_BYTES:]
     for offset in range(0, len(payload), 4):
         word = struct.unpack_from("<I", payload, offset)[0]
@@ -104,7 +114,14 @@ def parse_artifact(data: bytes) -> dict[str, int | str | float]:
             decode_component((word >> 11) & 0x7FF, 6),
             decode_component((word >> 22) & 0x3FF, 5),
         )
-        maximum = max(maximum, *values)
+        pixel = offset // 4
+        for channel, value in zip(("r", "g", "b"), values):
+            if value > maximum:
+                maximum = value
+                maximum_x = pixel % width
+                maximum_y = pixel // width
+                maximum_channel = channel
+                maximum_word = word
     require(maximum >= 0.0, "artifact payload has no decodable pixel")
     return {
         "id": proof_hex,
@@ -116,6 +133,11 @@ def parse_artifact(data: bytes) -> dict[str, int | str | float]:
         "row": row,
         "bytes": logical,
         "maximum": maximum,
+        "maximumX": maximum_x,
+        "maximumY": maximum_y,
+        "maximumChannel": maximum_channel,
+        "packedWord": f"0x{maximum_word:08x}",
+        "valueHex": canonical_float_hex(maximum),
     }
 
 

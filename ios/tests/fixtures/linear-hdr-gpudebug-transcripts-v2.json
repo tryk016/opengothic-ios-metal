@@ -1,0 +1,94 @@
+{
+  "schemaVersion": 2,
+  "evidenceClass": "device-gpudebug-lossless",
+  "producer": "opengothic-linear-hdr-gpu-adapter/2",
+  "source": {
+    "tool": "/usr/bin/gpudebug",
+    "toolVersion": "1.0",
+    "captureFile": "RendererIOS-linear-hdr-proof-v1.gputrace",
+    "captureKind": "directory",
+    "captureBytes": 4096,
+    "captureManifestSha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "captureCopySummarySha256": "2222222222222222222222222222222222222222222222222222222222222222",
+    "captureEvidenceCommitted": true,
+    "artifactBytes": 208,
+    "artifactSha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "runtimeLogBytes": 1024,
+    "runtimeLogSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+    "transcriptManifestSha256": "5555555555555555555555555555555555555555555555555555555555555555"
+  },
+  "runIdentity": {
+    "proofId": "0102030405060708090a0b0c0d0e0f10",
+    "buildSha": "0123456789abcdef0123456789abcdef01234567",
+    "targetGeneration": 7,
+    "snapshotSequence": 41
+  },
+  "extent": {
+    "width": 4,
+    "height": 3,
+    "rowBytes": 16,
+    "logicalBytes": 48
+  },
+  "sceneResource": {
+    "label": "RendererIOS.SceneHDR.0102030405060708090a0b0c0d0e0f10",
+    "textureRef": "@tex7",
+    "allocationID": "91",
+    "resourceIndex": "0x2a",
+    "pixelFormat": "RG11B10Float",
+    "textureType": "2D",
+    "storageMode": "Private",
+    "mipLevel": 0,
+    "arraySlice": 0
+  },
+  "command": {
+    "commandBuffer": "cb4",
+    "scene": {
+      "childIndex": 2,
+      "encoderPath": "commands/cb4/re2",
+      "marker": "RendererIOS.SceneHDR.0102030405060708090a0b0c0d0e0f10",
+      "attachment": "color0"
+    },
+    "proofBlit": {
+      "childIndex": 3,
+      "encoderPath": "commands/cb4/be3",
+      "marker": "RendererIOS.HDRProofCopy.0102030405060708090a0b0c0d0e0f10",
+      "commandPath": "commands/cb4/be3/blit0",
+      "sourceTextureRef": "@tex7",
+      "sourceLevel": 0,
+      "sourceSlice": 0
+    },
+    "toneResolve": {
+      "childIndex": 4,
+      "encoderPath": "commands/cb4/re4",
+      "marker": "RendererIOS.ToneResolve.0102030405060708090a0b0c0d0e0f10",
+      "drawPath": "commands/cb4/re4/grp0/draw1",
+      "fragmentTextureIndex": 0,
+      "textureRef": "@tex7"
+    }
+  },
+  "numeric": {
+    "encoding": "packed-rg11b10float-le",
+    "maximumX": 1,
+    "maximumY": 2,
+    "maximumChannel": "r",
+    "packedWord": "0x882003c0",
+    "valueHex": "0x1.8000000000000p+0",
+    "aboveOne": true
+  },
+  "transcripts": [
+    {"role":"version","file":"gpudebug-version.txt","argv":["/usr/bin/gpudebug","--version"],"bytes":13,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"open","file":"gpudebug-open.json","argv":["/usr/bin/gpudebug","--json","-t","/private/RendererIOS-linear-hdr-proof-v1.gputrace","--timeout","120","-c","list"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"commands","file":"commands.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands","-c","list --all"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"command-buffer","file":"cb-4.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4","-c","list --all"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"scene-encoder","file":"scene-re-2.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/re2","-c","list --all"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"scene-color0","file":"scene-color0.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/re2/color0","-c","info"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"proof-encoder","file":"proof-be-3.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/be3","-c","list --all"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"proof-blit","file":"proof-blit-0.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/be3/blit0","-c","info"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"tone-encoder","file":"tone-re-4.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/re4","-c","list --all"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"tone-fragment","file":"tone-fragment.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/re4/grp0/draw1/fragment","-c","info"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"tone-tex0","file":"tone-tex0.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go commands/cb4/re4/grp0/draw1/fragment/tex0","-c","info"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"scene-resource","file":"scene-resource.json","argv":["/usr/bin/gpudebug","--json","-s","session-1","-c","go @tex7","-c","info"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"terminate","file":"gpudebug-terminate.txt","argv":["/usr/bin/gpudebug","--terminate","session-1"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+    {"role":"sessions-after","file":"gpudebug-sessions-after.txt","argv":["/usr/bin/gpudebug","--list-sessions"],"bytes":32,"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+  ]
+}

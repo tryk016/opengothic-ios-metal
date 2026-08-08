@@ -468,8 +468,6 @@ bool mutationsAreRejected(const std::string& source) {
 
 bool symbolAllowlistMatches(const std::filesystem::path& repository) {
   const std::map<std::string,size_t> expectedSymbols = {
-    {"ios/device-test/validate-linear-hdr-gpu-evidence.py",1u},
-    {"ios/tests/fixtures/linear-hdr-gpu-evidence-v1.json",1u},
     {"shader/ios-metal/landscape.metal",1u},
     {"game/graphics/ioslandscapeshaderabi.h",1u},
     {"ios/tests/ioslandscapeshader.cpp",1u},
@@ -581,21 +579,31 @@ bool runtimeReflectionContractMatches(
           "buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants)")==1u;
 }
 
-bool runtimeUVAnimationEvidenceContractMatches(
-    const std::filesystem::path& repository) {
-  const auto sceneRuntime = readFile(
-      repository/"game/graphics/iosgpuscene.mm");
-  const auto contextHeader = readFile(
-      repository/"game/graphics/iosmetalcontext.h");
-  const auto contextRuntime = readFile(
-      repository/"game/graphics/iosmetalcontext.cpp");
-  if(!sceneRuntime || !contextHeader || !contextRuntime)
+bool runtimeUVAnimationEvidenceContractMatchesSources(
+    std::string_view sceneRuntime,
+    std::string_view contextHeader,
+    std::string_view contextRuntime) {
+  const std::string scene = compact(stripComments(sceneRuntime));
+  const std::string header = compact(stripComments(contextHeader));
+  const std::string contextSource = stripComments(contextRuntime);
+  const std::string context = compact(contextSource);
+  const auto submitFrame = extractFunction(
+      contextSource,"IOSMetalContext::SubmitResult",
+      "IOSMetalContext::submitFrame(");
+  if(scene.empty() || header.empty() || context.empty() || !submitFrame)
     return false;
-  const std::string scene = compact(stripComments(*sceneRuntime));
-  const std::string header = compact(stripComments(*contextHeader));
-  const std::string context = compact(stripComments(*contextRuntime));
-  if(scene.empty() || header.empty() || context.empty())
+  const std::string submit = compact(*submitFrame);
+  constexpr std::string_view LegacyCompletionScopeEnd =
+      "InventoryMenu*inventoryOwner=nullptr;";
+  const size_t legacyCompletionScopeEnd =
+      submit.find(LegacyCompletionScopeEnd);
+  if(legacyCompletionScopeEnd==std::string::npos ||
+     submit.find(LegacyCompletionScopeEnd,
+                 legacyCompletionScopeEnd+LegacyCompletionScopeEnd.size())!=
+       std::string::npos)
     return false;
+  const std::string_view legacyCompletionScope(
+      submit.data(),legacyCompletionScopeEnd);
 
   return countOccurrences(
              scene,
@@ -616,7 +624,7 @@ bool runtimeUVAnimationEvidenceContractMatches(
           "void*,bool,constIOSGPUSceneFrameAnimationDrawReport*,"
           "constIOSGPUSceneUVAnimationDrawReport*)noexcept;")==1u &&
       countOccurrences(
-          context,
+          legacyCompletionScope,
           "completeFrame(completion,false,nullptr,nullptr)")==4u &&
       countOccurrences(
           context,"frameAnimation,uvAnimation);")==1u &&
@@ -625,6 +633,48 @@ bool runtimeUVAnimationEvidenceContractMatches(
       countOccurrences(
           context,
           "uvAnimationDrawnReady?&uvAnimationDrawn:nullptr")==1u;
+}
+
+bool runtimeUVAnimationEvidenceContractMatches(
+    const std::filesystem::path& repository) {
+  const auto sceneRuntime = readFile(
+      repository/"game/graphics/iosgpuscene.mm");
+  const auto contextHeader = readFile(
+      repository/"game/graphics/iosmetalcontext.h");
+  const auto contextRuntime = readFile(
+      repository/"game/graphics/iosmetalcontext.cpp");
+  if(!sceneRuntime || !contextHeader || !contextRuntime ||
+     !runtimeUVAnimationEvidenceContractMatchesSources(
+       *sceneRuntime,*contextHeader,*contextRuntime))
+    return false;
+
+  constexpr std::string_view LegacyInactiveCompletion =
+      "  if(impl->lifecycleState!=Impl::LifecycleState::Active) {\n"
+      "    cancelFrame(frame.serial);\n"
+      "    (void)completeFrame(completion,false,nullptr,nullptr);\n"
+      "    return {};\n"
+      "    }";
+  constexpr std::string_view MutatedInactiveCompletion =
+      "  if(impl->lifecycleState!=Impl::LifecycleState::Active) {\n"
+      "    cancelFrame(frame.serial);\n"
+      "    (void)completeFrame(completion,true,nullptr,nullptr);\n"
+      "    return {};\n"
+      "    }";
+  constexpr std::string_view CommentOnlyInactiveCompletion =
+      "  if(impl->lifecycleState!=Impl::LifecycleState::Active) {\n"
+      "    cancelFrame(frame.serial);\n"
+      "    // (void)completeFrame(completion,false,nullptr,nullptr);\n"
+      "    return {};\n"
+      "    }";
+  const std::string semanticMutation = replaceOnce(
+      *contextRuntime,LegacyInactiveCompletion,MutatedInactiveCompletion);
+  const std::string commentOnlyMutation = replaceOnce(
+      *contextRuntime,LegacyInactiveCompletion,CommentOnlyInactiveCompletion);
+  return !semanticMutation.empty() && !commentOnlyMutation.empty() &&
+      !runtimeUVAnimationEvidenceContractMatchesSources(
+        *sceneRuntime,*contextHeader,semanticMutation) &&
+      !runtimeUVAnimationEvidenceContractMatchesSources(
+        *sceneRuntime,*contextHeader,commentOnlyMutation);
 }
 
 }

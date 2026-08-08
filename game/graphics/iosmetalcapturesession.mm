@@ -2,7 +2,8 @@
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
 
 #include <Tempest/Device>
 #include <Tempest/MetalApi>
@@ -70,6 +71,7 @@ struct IOSMetalCaptureSession::Impl final {
   MTLCaptureManager* manager = nil;
   NSURL* outputURL = nil;
   bool captureActive = false;
+  IOSMetalCaptureStartObservation observation;
 
   ~Impl() {
     if(captureActive && manager!=nil) {
@@ -100,17 +102,32 @@ bool IOSMetalCaptureSession::start(
     Tempest::Device& device,
     const char* artifactName,
     const char*& reason) noexcept {
+  return beginCapture(
+      device,artifactName,
+      IOSMetalCaptureExistingArtifactPolicy::RemoveExactOwned,
+      reason)==IOSLinearHDRCaptureStartResult::Started;
+  }
+
+IOSLinearHDRCaptureStartResult IOSMetalCaptureSession::beginCapture(
+    Tempest::Device& device,
+    const char* artifactName,
+    IOSMetalCaptureExistingArtifactPolicy existingArtifactPolicy,
+    const char*& reason) noexcept {
   reason = "capture-start-failed";
   if(impl!=nullptr || !validCaptureArtifactName(artifactName)) {
     reason = impl!=nullptr ? "capture-already-initialized"
                            : "capture-output-name-invalid";
-    return false;
+    return IOSLinearHDRCaptureStartResult::RejectedInactive;
     }
   impl = new(std::nothrow) Impl();
   if(impl==nullptr) {
     reason = "capture-state-allocation-failed";
-    return false;
+    return IOSLinearHDRCaptureStartResult::RejectedInactive;
     }
+  // Every pre-start rejection is a complete, proven-inactive observation.
+  // Only an exception/inconsistency after entering MTLCaptureManager start may
+  // publish an incomplete or contradictory snapshot.
+  impl->observation = {false,false,true};
 
   @autoreleasepool {
     @try {
@@ -119,14 +136,14 @@ bool IOSMetalCaptureSession::start(
           reinterpret_cast<id<MTLDevice>>((void*)borrowed.get());
       if(nativeDevice==nil) {
         reason = "capture-device-unavailable";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
 
       OwnedObjectiveC<NSFileManager*> files(
           [[NSFileManager alloc] init]);
       if(files.get()==nil) {
         reason = "capture-file-manager-unavailable";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
       NSArray<NSURL*>* documents =
           [files.get() URLsForDirectory:NSDocumentDirectory
@@ -145,43 +162,48 @@ bool IOSMetalCaptureSession::start(
             isEqual:[documentsURL standardizedURL]];
       if(!exactPath) {
         reason = "capture-output-path-invalid";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
 
       const char* outputPath = [outputURL fileSystemRepresentation];
       if(outputPath==nullptr) {
         reason = "capture-output-path-unavailable";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
       struct stat existing = {};
       if(::lstat(outputPath,&existing)==0) {
+        if(existingArtifactPolicy==
+             IOSMetalCaptureExistingArtifactPolicy::RequireAbsent) {
+          reason = "capture-stale-artifact-present";
+          return IOSLinearHDRCaptureStartResult::RejectedInactive;
+          }
         NSError* removeError = nil;
         if(![files.get() removeItemAtURL:outputURL error:&removeError]) {
           (void)removeError;
           reason = "capture-stale-artifact-removal-failed";
-          return false;
+          return IOSLinearHDRCaptureStartResult::RejectedInactive;
           }
         }
       else if(errno!=ENOENT) {
         reason = "capture-stale-artifact-inspection-failed";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
       if(::lstat(outputPath,&existing)==0 || errno!=ENOENT) {
         reason = "capture-output-not-empty";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
 
       MTLCaptureManager* manager = [MTLCaptureManager sharedCaptureManager];
       if(manager==nil ||
          ![manager supportsDestination:MTLCaptureDestinationGPUTraceDocument]) {
         reason = "capture-gputrace-destination-unsupported";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
       OwnedObjectiveC<MTLCaptureDescriptor*> descriptor(
           [[MTLCaptureDescriptor alloc] init]);
       if(descriptor.get()==nil) {
         reason = "capture-descriptor-allocation-failed";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
       descriptor.get().captureObject = nativeDevice;
       descriptor.get().destination = MTLCaptureDestinationGPUTraceDocument;
@@ -195,18 +217,30 @@ bool IOSMetalCaptureSession::start(
       const BOOL started = [manager startCaptureWithDescriptor:descriptor.get()
                                                          error:&captureError];
       (void)captureError;
-      if(!started) {
-        impl->captureActive = false;
+      const BOOL activeAfter = manager.isCapturing;
+      impl->observation = {
+        started==YES,activeAfter==YES,true,
+        };
+      impl->captureActive = activeAfter==YES;
+      if(started==NO && activeAfter==NO) {
         reason = "capture-manager-start-rejected";
-        return false;
+        return IOSLinearHDRCaptureStartResult::RejectedInactive;
         }
-
-      reason = nullptr;
-      return true;
+      if(started==YES && activeAfter==YES) {
+        reason = nullptr;
+        return IOSLinearHDRCaptureStartResult::Started;
+        }
+      reason = started==NO ? "capture-manager-start-ambiguous" :
+                             "capture-manager-start-inconsistent";
+      return IOSLinearHDRCaptureStartResult::AmbiguousActive;
       }
     @catch(NSException*) {
+      if(impl!=nullptr) {
+        impl->observation = {};
+        impl->captureActive = true;
+        }
       reason = "capture-start-objective-c-exception";
-      return false;
+      return IOSLinearHDRCaptureStartResult::AmbiguousActive;
       }
     }
   }
@@ -269,6 +303,11 @@ bool IOSMetalCaptureSession::active() const noexcept {
 
 bool IOSMetalCaptureSession::initialized() const noexcept {
   return impl!=nullptr;
+  }
+
+IOSMetalCaptureStartObservation
+IOSMetalCaptureSession::startObservation() const noexcept {
+  return impl!=nullptr ? impl->observation : IOSMetalCaptureStartObservation{};
   }
 
 const char* iosMetalCaptureArtifactKindName(

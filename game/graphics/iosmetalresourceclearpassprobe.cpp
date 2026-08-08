@@ -2,7 +2,8 @@
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
 #include "iosmetalcapturesession.h"
 
 #include <algorithm>
@@ -87,7 +88,8 @@ bool exactSingleUsePass(const IOSPassDesc& pass,
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
 constexpr uint64_t MaxCaptureArtifactBytes = 512u*1024u*1024u;
 constexpr uint64_t MaxCaptureArtifactEntries = 65536u;
 constexpr std::size_t MaxCaptureLinkTargetLength = 4096u;
@@ -786,7 +788,8 @@ bool inspectNormalizedDirectory(int rootDescriptor,
 
 #if defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
 bool iosMetalNormalizeAndInspectCaptureArtifact(
     const char* rootPath,
     IOSMetalCaptureArtifact& artifact,

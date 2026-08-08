@@ -108,6 +108,70 @@ bool iosAdvanceLinearHDRProofProducerState(
   return true;
   }
 
+bool iosAdvanceLinearHDRCaptureState(
+    IOSLinearHDRCaptureState& state,
+    IOSLinearHDRCaptureEvent event) noexcept {
+  IOSLinearHDRCaptureState next = state;
+  switch(event) {
+    case IOSLinearHDRCaptureEvent::Arm:
+      if(state!=IOSLinearHDRCaptureState::Disabled)
+        return false;
+      next = IOSLinearHDRCaptureState::Armed;
+      break;
+    case IOSLinearHDRCaptureEvent::Start:
+      if(state!=IOSLinearHDRCaptureState::Armed)
+        return false;
+      next = IOSLinearHDRCaptureState::Active;
+      break;
+    case IOSLinearHDRCaptureEvent::Submit:
+      if(state!=IOSLinearHDRCaptureState::Active)
+        return false;
+      next = IOSLinearHDRCaptureState::Submitted;
+      break;
+    case IOSLinearHDRCaptureEvent::Complete:
+      if(state!=IOSLinearHDRCaptureState::Submitted)
+        return false;
+      next = IOSLinearHDRCaptureState::Completed;
+      break;
+    case IOSLinearHDRCaptureEvent::Fail:
+      if(state==IOSLinearHDRCaptureState::Disabled ||
+         state==IOSLinearHDRCaptureState::Completed ||
+         state==IOSLinearHDRCaptureState::Failed ||
+         state==IOSLinearHDRCaptureState::PermanentAmbiguous)
+        return false;
+      next = IOSLinearHDRCaptureState::Failed;
+      break;
+    case IOSLinearHDRCaptureEvent::PermanentAmbiguity:
+      if(state!=IOSLinearHDRCaptureState::Armed &&
+         state!=IOSLinearHDRCaptureState::Active)
+        return false;
+      next = IOSLinearHDRCaptureState::PermanentAmbiguous;
+      break;
+    }
+  state = next;
+  return true;
+  }
+
+IOSLinearHDRCaptureObservationDecision
+iosClassifyLinearHDRCaptureStartObservation(
+    bool startReturn,
+    bool activeAfter,
+    bool complete) noexcept {
+  if(!complete || (startReturn && !activeAfter))
+    return IOSLinearHDRCaptureObservationDecision::PermanentNoTeardown;
+  if(startReturn && activeAfter)
+    return IOSLinearHDRCaptureObservationDecision::Started;
+  if(!startReturn && activeAfter)
+    return IOSLinearHDRCaptureObservationDecision::ActiveFailure;
+  return IOSLinearHDRCaptureObservationDecision::RejectedInactive;
+  }
+
+bool iosLinearHDRCaptureProfileAcceptsExactBoolean(
+    bool exactCFBoolean,
+    bool booleanValue) noexcept {
+  return exactCFBoolean && booleanValue;
+  }
+
 IOSLinearHDRProofFailureClass iosLinearHDRProofFailureClass(
     IOSLinearHDRProofFailureReason reason) noexcept {
   switch(reason) {

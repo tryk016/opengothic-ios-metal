@@ -23,7 +23,8 @@
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
-        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "OFF"
       }
     },
     {
@@ -68,6 +69,22 @@
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "ON"
+      }
+    },
+    {
+      "name": "renderer-ios-hdr-triple",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-hdr-triple",
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON"
       }
     },
     {
@@ -165,6 +182,18 @@
     {
       "name": "renderer-ios-forward",
       "configurePreset": "renderer-ios-forward",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-hdr-triple",
+      "configurePreset": "renderer-ios-hdr-triple",
       "configuration": "Release",
       "nativeToolOptions": [
         "-sdk",

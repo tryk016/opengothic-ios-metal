@@ -22,8 +22,8 @@ case "$MODE" in
       echo "usage: $0 [quick|full|contracts|profiles PROFILE...]" >&2
       exit 2
     }
-    REQUESTED_PROFILES=(off on tile forward)
-    REQUESTED_PROFILE_COUNT=4
+    REQUESTED_PROFILES=(off on tile forward hdr-triple)
+    REQUESTED_PROFILE_COUNT=5
     ;;
   contracts)
     (($# == 0)) || {
@@ -38,7 +38,7 @@ case "$MODE" in
     }
     for profile in "$@"; do
       case "$profile" in
-        off|on|tile|forward|causal-none|causal-a|causal-b) ;;
+        off|on|tile|forward|hdr-triple|causal-none|causal-a|causal-b) ;;
         *)
           echo "unknown verification profile: $profile" >&2
           exit 2
@@ -2365,11 +2365,12 @@ build_variant() {
   local forward="$3"
   local profile="$4"
   local causal_mode="${5:-none}"
+  local gpu_triple="${6:-OFF}"
   local build
   build="$BUILD_ROOT-$profile"
   rm -rf -- "$build"
 
-  echo "### Configure diagnostics=$diagnostics tile=$tile forward=$forward causal=$causal_mode"
+  echo "### Configure diagnostics=$diagnostics tile=$tile forward=$forward causal=$causal_mode gpu-triple=$gpu_triple"
   cmake --preset "renderer-ios-$profile" -B "$build" \
     -DOPENGOTHIC_IOS_VERSION=1.0.9000 \
     -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$HEAD_SHA-local"
@@ -2380,6 +2381,25 @@ build_variant() {
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE:STRING=$causal_mode" \
     "$cache" ||
     fail "profil $profile ma niezgodny causal cache mode"
+  grep -Fxq \
+    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE:BOOL=$gpu_triple" \
+    "$cache" ||
+    fail "profil $profile ma niezgodny GPU triple capture cache gate"
+  if [[ "$profile" == hdr-triple ]]; then
+    for entry in \
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS:BOOL=ON" \
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE:STRING=none" \
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE:STRING=none" \
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST:BOOL=OFF" \
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE:BOOL=ON"; do
+      grep -Fxq "$entry" "$cache" ||
+        fail "profil $profile ma niezgodny exact GPU triple tuple: $entry"
+    done
+  fi
   if [[ "$profile" == causal-* ]]; then
     for entry in \
         "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS:BOOL=ON" \
@@ -2441,7 +2461,7 @@ build_variant() {
   done
   python3 - \
     "$project" "$diagnostics" "$tile" "$forward" "$causal_mode" \
-    "$profile" <<'PY'
+    "$profile" "$gpu_triple" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -2452,6 +2472,7 @@ tile = sys.argv[3]
 forward = sys.argv[4]
 causal_mode = sys.argv[5]
 profile = sys.argv[6]
+gpu_triple = sys.argv[7]
 targets = re.findall(
     r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
     r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
@@ -2522,6 +2543,15 @@ expected_diagnostics_definitions = 4 if diagnostics == "ON" else 0
 if project.count(diagnostics_definition) != expected_diagnostics_definitions:
     raise SystemExit(
         "RendererIOS diagnostics PBX compile-definition gate nie jest exact"
+    )
+
+gpu_triple_definition = (
+    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE=1"
+)
+expected_gpu_triple_definitions = 4 if gpu_triple == "ON" else 0
+if project.count(gpu_triple_definition) != expected_gpu_triple_definitions:
+    raise SystemExit(
+        "RendererIOS GPU triple PBX compile-definition gate nie jest exact"
     )
 
 causal_a = "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1"
@@ -2680,7 +2710,7 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
 ! grep -Fq 'Shaders::inst().bink' game/ui/videowidget.cpp ||
   fail "VideoWidget zachował runtime-compiled Bink fallback"
 
-  echo "### Build diagnostics=$diagnostics tile=$tile forward=$forward causal=$causal_mode"
+  echo "### Build diagnostics=$diagnostics tile=$tile forward=$forward causal=$causal_mode gpu-triple=$gpu_triple"
   cmake --build "$build" --config Release --parallel "$CPUS" -- \
     -sdk iphoneos \
     CODE_SIGNING_ALLOWED=NO \
@@ -2723,7 +2753,19 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
       "$strings_file" ||
       fail "profil $profile zawiera diagnostics ON binarny marker"
   fi
-  if [ "$forward" = ON ]; then
+  if [ "$gpu_triple" = ON ]; then
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :RendererIOSLinearHDRGPUTripleCapture' "$plist")" = true ] ||
+      fail "profil HDR-TRIPLE nie ma RendererIOSLinearHDRGPUTripleCapture=true"
+    [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
+      fail "profil HDR-TRIPLE nie ma MetalCaptureEnabled=true"
+    [ "$(grep -Fxc 'RendererIOS HDR capture profile: v=1 mode=one-shot' \
+      "$strings_file" || true)" -eq 1 ] ||
+      fail "profil HDR-TRIPLE nie ma exact jednego binarnego markera"
+    ! grep -Fq 'RendererIOS shading prototype tile self-test:' \
+      "$strings_file" || fail "profil HDR-TRIPLE zawiera TILE markers"
+    ! grep -Fq 'RendererIOS shading prototype forward self-test:' \
+      "$strings_file" || fail "profil HDR-TRIPLE zawiera FORWARD markers"
+  elif [ "$forward" = ON ]; then
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil FORWARD nie ma MetalCaptureEnabled=true"
     for marker in \
@@ -2790,6 +2832,16 @@ grep -Fq 'profile=bridge-only eager-bridge-pipelines=inventory offline-native-pi
       fail "profil $profile zawiera FORWARD capture basename"
     ! grep -Fq -- '-renderer-ios-forward-self-test-nonce=' "$strings_file" ||
       fail "profil $profile zawiera FORWARD nonce argument"
+  fi
+  if [ "$gpu_triple" != ON ]; then
+    if /usr/libexec/PlistBuddy -c \
+        'Print :RendererIOSLinearHDRGPUTripleCapture' \
+        "$plist" >/dev/null 2>&1; then
+      fail "profil $profile nie powinien miec RendererIOSLinearHDRGPUTripleCapture"
+    fi
+    ! grep -Fxq 'RendererIOS HDR capture profile: v=1 mode=one-shot' \
+      "$strings_file" ||
+      fail "profil $profile zawiera GPU triple marker"
   fi
   if [[ "$profile" == causal-* ]]; then
     python3 - "$strings_file" "$binary" "$causal_mode" <<'PY'
@@ -3057,6 +3109,38 @@ for causal_mode_under_test in causal-a causal-b; do
   fi
 done
 
+expect_gpu_triple_configure_failure() {
+  local name="$1"
+  shift
+  if cmake --preset renderer-ios-hdr-triple \
+      -B "$TMP_GATE/gpu-triple-invalid-$name" "$@" \
+      >/dev/null 2>&1; then
+    fail "P2.1e0 invalid GPU triple CMake tuple przetrwal: $name"
+  fi
+}
+
+expect_gpu_triple_configure_failure diagnostics-off \
+  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=OFF
+expect_gpu_triple_configure_failure fault \
+  -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=post-submit-suboptimal
+expect_gpu_triple_configure_failure causal \
+  -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE=causal-a
+expect_gpu_triple_configure_failure bink \
+  -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST=ON
+expect_gpu_triple_configure_failure allocator \
+  -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST=ON
+expect_gpu_triple_configure_failure clear \
+  -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST=ON
+expect_gpu_triple_configure_failure tile \
+  -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST=ON
+expect_gpu_triple_configure_failure forward \
+  -DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST=ON
+if cmake -S "$REPO" -B "$TMP_GATE/gpu-triple-invalid-non-ios" \
+    -DOPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE=ON \
+    >/dev/null 2>&1; then
+  fail "P2.1e0 non-iOS GPU triple configure przetrwal"
+fi
+
 if wants_profile off; then
   build_variant OFF OFF OFF off
 fi
@@ -3068,6 +3152,9 @@ if wants_profile tile; then
 fi
 if wants_profile forward; then
   build_variant ON OFF ON forward
+fi
+if wants_profile hdr-triple; then
+  build_variant ON OFF OFF hdr-triple none ON
 fi
 if wants_profile causal-none; then
   build_variant ON OFF OFF causal-none none

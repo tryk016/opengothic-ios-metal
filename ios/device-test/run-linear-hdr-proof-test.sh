@@ -5,18 +5,25 @@
 # run-smoke-test.sh and allowlisted deletion of producer-owned temporary leaves.
 
 set -euo pipefail
+umask 077
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SMOKE="$ROOT/ios/device-test/run-smoke-test.sh"
 VALIDATOR="$ROOT/ios/device-test/validate-linear-hdr-proof-artifact.py"
+GPU_VALIDATOR="$ROOT/ios/device-test/validate-linear-hdr-gpu-evidence.py"
 GUARD="$HOME/OpenGothic-RendererIOS-Handoff/current/private-tools/device_guard.py"
 BASE_BUNDLE_ID="opengothic.gothic2"
 APP_EXECUTABLE="Gothic2Notr"
 FINAL_LEAF="RendererIOS-linear-hdr-proof-v1.bin"
+CAPTURE_LEAF="RendererIOS-linear-hdr-proof-v1.gputrace"
+CAPTURE_SUMMARY_LEAF="capture-copy-summary-v1.json"
 EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-}"
 DURATION=45
 SAVE_SLOT=20
+SAVE_SLOT_SEEN=0
 NEW_GAME=0
+NEW_GAME_SEEN=0
+GPU_TRIPLE=0
 EVIDENCE_PATH_FILE=""
 APP=""
 DEVICE=""
@@ -44,12 +51,21 @@ while (($#)); do
       shift 2
       ;;
     --save-slot)
+      ((SAVE_SLOT_SEEN == 0)) || fail "duplicate --save-slot"
       SAVE_SLOT="${2:?missing save slot}"
+      SAVE_SLOT_SEEN=1
       NEW_GAME=0
       shift 2
       ;;
     --new-game)
+      ((NEW_GAME_SEEN == 0)) || fail "duplicate --new-game"
+      NEW_GAME_SEEN=1
       NEW_GAME=1
+      shift
+      ;;
+    --gpu-triple)
+      ((GPU_TRIPLE == 0)) || fail "duplicate --gpu-triple"
+      GPU_TRIPLE=1
       shift
       ;;
     --evidence-path-file)
@@ -61,7 +77,7 @@ while (($#)); do
       shift
       ;;
     -*)
-      fail "usage: $0 --expected-sha 40-lowercase-hex [--duration 10..600] [--save-slot number|--new-game] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
+      fail "usage: $0 --expected-sha 40-lowercase-hex [--duration 10..600] [--save-slot number|--new-game] [--gpu-triple] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
       ;;
     *)
       [[ -z "$APP" ]] || fail "only one app path may be supplied"
@@ -72,6 +88,13 @@ while (($#)); do
 done
 
 if ((SELF_TEST == 0)); then
+  if ((GPU_TRIPLE != 0)); then
+    ((NEW_GAME_SEEN == 0)) || fail "--gpu-triple rejects --new-game"
+    if ((SAVE_SLOT_SEEN == 0)); then
+      SAVE_SLOT=4
+    fi
+    [[ "$SAVE_SLOT" == 4 ]] || fail "--gpu-triple requires exact save slot 4"
+  fi
   [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]] ||
     fail "expected SHA must be exactly 40 lowercase hexadecimal characters"
   if [[ ! "$DURATION" =~ ^[0-9]+$ ]] ||
@@ -81,7 +104,7 @@ if ((SELF_TEST == 0)); then
   [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be non-negative"
   [[ -n "$APP" && -d "$APP" && ! -L "$APP" ]] || fail "app path is invalid"
   [[ -x "$APP/$APP_EXECUTABLE" ]] || fail "app executable is missing"
-  [[ -x "$SMOKE" && -x "$GUARD" && -f "$VALIDATOR" ]] ||
+  [[ -x "$SMOKE" && -x "$GUARD" && -f "$VALIDATOR" && -f "$GPU_VALIDATOR" ]] ||
     fail "required guarded-runner tools are missing"
   if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
     [[ "$EVIDENCE_PATH_FILE" == /* &&
@@ -102,6 +125,23 @@ if ((SELF_TEST == 0)); then
   WORK="$(mktemp -d "${TMPDIR%/}/opengothic-linear-hdr-proof.XXXXXX")" ||
     fail "could not create private work directory"
   chmod 700 "$WORK" || fail "could not secure private work directory"
+  strings "$APP/$APP_EXECUTABLE" >"$WORK/app.strings" ||
+    fail "could not inspect app Mach-O markers"
+  if ((GPU_TRIPLE != 0)); then
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :RendererIOSLinearHDRGPUTripleCapture' "$APP/Info.plist" 2>/dev/null)" == true ]] ||
+      fail "--gpu-triple app lacks RendererIOSLinearHDRGPUTripleCapture=true"
+    [[ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$APP/Info.plist" 2>/dev/null)" == true ]] ||
+      fail "--gpu-triple app lacks MetalCaptureEnabled=true"
+    [[ "$(grep -Fxc 'RendererIOS HDR capture profile: v=1 mode=one-shot' "$WORK/app.strings" || true)" -eq 1 ]] ||
+      fail "--gpu-triple app lacks the exact one-shot Mach-O marker"
+  else
+    ! /usr/libexec/PlistBuddy -c 'Print :RendererIOSLinearHDRGPUTripleCapture' "$APP/Info.plist" >/dev/null 2>&1 ||
+      fail "producer-only app contains RendererIOSLinearHDRGPUTripleCapture"
+    ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$APP/Info.plist" >/dev/null 2>&1 ||
+      fail "producer-only app contains MetalCaptureEnabled"
+    ! grep -Fq 'RendererIOS HDR capture profile: v=1 mode=one-shot' "$WORK/app.strings" ||
+      fail "producer-only app contains the capture profile marker"
+  fi
 fi
 
 select_device() {
@@ -262,6 +302,21 @@ require_afc_regular_leaf() {
   [[ "$file_type" == S_IFREG ]]
 }
 
+require_afc_capture_leaf() {
+  local leaf="$1"
+  local file_type
+  file_type="$(afc_file_type "$leaf")" || return 1
+  [[ "$file_type" == S_IFREG || "$file_type" == S_IFDIR ]]
+}
+
+delete_exact_device_leaf() {
+  local leaf="$1"
+  require_afc_capture_leaf "$leaf" || return 1
+  "$UVX" --python python3.11 pymobiledevice3 apps rm \
+    --udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf" \
+    >>"$WORK/device-owned-delete.log" 2>&1
+}
+
 cleanup_owned_temps() {
   local label="$1"
   local leaf leaves remaining
@@ -328,6 +383,8 @@ run_host_contract_self_test() {
 
 if ((SELF_TEST != 0)); then
   [[ -z "$APP" ]] || fail "--self-test accepts no app path"
+  ((GPU_TRIPLE == 0 && SAVE_SLOT_SEEN == 0 && NEW_GAME_SEEN == 0)) ||
+    fail "--self-test rejects device-run mode arguments"
   run_host_contract_self_test
   exit 0
 fi
@@ -396,6 +453,8 @@ require_game_zero proof || fail "game ZERO was not established before proof extr
 EVIDENCE_DIR="$(sed -n '1p' "$SMOKE_EVIDENCE_FILE")"
 [[ "$EVIDENCE_DIR" == /* && -d "$EVIDENCE_DIR" && ! -L "$EVIDENCE_DIR" ]] ||
   fail "base smoke evidence path is invalid"
+[[ "$EVIDENCE_DIR" != "$WORK" && "$EVIDENCE_DIR" != "$WORK/"* ]] ||
+  fail "base smoke evidence path is inside ephemeral work"
 [[ -f "$EVIDENCE_DIR/log.txt" && ! -L "$EVIDENCE_DIR/log.txt" ]] ||
   fail "base smoke runtime log is invalid"
 
@@ -404,7 +463,7 @@ xcrun devicectl device info files --device "$DEVICE" \
   --username mobile --subdirectory Documents --no-recurse \
   --json-output "$WORK/documents-artifact.json" >/dev/null ||
   fail "could not enumerate the proof artifact"
-python3 - "$WORK/documents-artifact.json" "$FINAL_LEAF" <<'PY' ||
+python3 - "$WORK/documents-artifact.json" "$FINAL_LEAF" "$CAPTURE_LEAF" "$GPU_TRIPLE" <<'PY' ||
 import json
 import sys
 
@@ -417,6 +476,13 @@ if len(matches) != 1:
 resources = matches[0].get("resources", {})
 if resources.get("isDirectory") is not False or resources.get("isSymbolicLink") is not False:
     raise SystemExit("final proof artifact is a directory/symlink or lacks exact type booleans")
+if sys.argv[4] == "1":
+    captures = [entry for entry in files if isinstance(entry, dict) and entry.get("name") == sys.argv[3]]
+    if len(captures) != 1:
+        raise SystemExit(f"expected exactly one fixed capture leaf, found {len(captures)}")
+    resources = captures[0].get("resources", {})
+    if resources.get("isSymbolicLink") is not False or resources.get("isDirectory") not in (True, False):
+        raise SystemExit("capture leaf is a symlink or lacks exact kind booleans")
 PY
   fail "final proof artifact type check failed"
 require_afc_regular_leaf "$FINAL_LEAF" ||
@@ -432,6 +498,60 @@ xcrun devicectl device copy from --device "$DEVICE" \
 [[ -f "$ARTIFACT" && ! -L "$ARTIFACT" ]] ||
   fail "copied proof artifact is not regular"
 chmod 600 "$ARTIFACT" || fail "could not secure proof evidence"
+
+if ((GPU_TRIPLE != 0)); then
+  DEVICE_CAPTURE_TYPE="$(afc_file_type "$CAPTURE_LEAF")" ||
+    fail "capture leaf has no explicit AFC regular/directory type"
+  case "$DEVICE_CAPTURE_TYPE" in
+    S_IFREG) DEVICE_CAPTURE_KIND="file" ;;
+    S_IFDIR) DEVICE_CAPTURE_KIND="directory" ;;
+    *) fail "capture leaf has no explicit AFC regular/directory type" ;;
+  esac
+  CAPTURE_FINAL="$EVIDENCE_DIR/$CAPTURE_LEAF"
+  CAPTURE_STAGING_PARENT="$EVIDENCE_DIR/gpudebug-capture-staging"
+  CAPTURE_STAGING="$CAPTURE_STAGING_PARENT/$CAPTURE_LEAF"
+  CAPTURE_SUMMARY="$EVIDENCE_DIR/$CAPTURE_SUMMARY_LEAF"
+  TRANSCRIPT_DIR="$EVIDENCE_DIR/gpudebug-transcripts-v1"
+  GPU_EVIDENCE="$EVIDENCE_DIR/linear-hdr-gpu-evidence-v2.json"
+  [[ ! -e "$CAPTURE_FINAL" && ! -L "$CAPTURE_FINAL" &&
+     ! -e "$CAPTURE_STAGING_PARENT" && ! -L "$CAPTURE_STAGING_PARENT" &&
+     ! -e "$CAPTURE_SUMMARY" && ! -L "$CAPTURE_SUMMARY" &&
+     ! -e "$TRANSCRIPT_DIR" && ! -L "$TRANSCRIPT_DIR" &&
+     ! -e "$GPU_EVIDENCE" && ! -L "$GPU_EVIDENCE" ]] ||
+    fail "GPU evidence destination already exists"
+  mkdir -m 700 "$CAPTURE_STAGING_PARENT" ||
+    fail "could not create private capture staging directory"
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "Documents/$CAPTURE_LEAF" --destination "$CAPTURE_STAGING" >/dev/null ||
+    fail "could not copy the fixed GPU trace"
+  PYTHONDONTWRITEBYTECODE=1 python3 "$GPU_VALIDATOR" --commit-capture-copy \
+    --capture-staging "$CAPTURE_STAGING" --capture "$CAPTURE_FINAL" \
+    --capture-summary "$CAPTURE_SUMMARY" --runtime-log "$EVIDENCE_DIR/log.txt" \
+    --expected-capture-kind "$DEVICE_CAPTURE_KIND" ||
+    fail "capture copy/summary commit failed"
+  [[ -f "$CAPTURE_SUMMARY" && ! -L "$CAPTURE_SUMMARY" ]] ||
+    fail "capture evidenceCommitted summary was not published"
+  delete_exact_device_leaf "$CAPTURE_LEAF" ||
+    fail "committed fixed device capture could not be deleted exactly"
+  if require_afc_capture_leaf "$CAPTURE_LEAF" >/dev/null 2>&1; then
+    fail "fixed device capture remains after committed exact delete"
+  fi
+  mkdir -m 700 "$TRANSCRIPT_DIR" ||
+    fail "could not create private transcript directory"
+  GPU_RESULT="$EVIDENCE_DIR/linear-hdr-gpu-result.txt"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "$GPU_VALIDATOR" --collect \
+      --evidence "$GPU_EVIDENCE" --capture "$CAPTURE_FINAL" \
+      --capture-summary "$CAPTURE_SUMMARY" --artifact "$ARTIFACT" \
+      --runtime-log "$EVIDENCE_DIR/log.txt" --transcript-dir "$TRANSCRIPT_DIR" \
+      --expected-sha "$EXPECTED_SHA" >"$GPU_RESULT"; then
+    fail "owned gpudebug collection or exact v2 join failed"
+  fi
+  [[ "$(grep -Fxc 'GPU PASS' "$GPU_RESULT" || true)" -eq 1 &&
+     "$(wc -l <"$GPU_RESULT" | tr -d '[:space:]')" -eq 1 ]] ||
+    fail "GPU collector emitted an unexpected result"
+  chmod 600 "$GPU_RESULT" || fail "could not secure GPU result evidence"
+fi
 
 post_boundary || fail "post-run game ZERO or allowlisted temp cleanup failed"
 RESULT_FILE="$EVIDENCE_DIR/linear-hdr-proof-result.txt"
@@ -449,4 +569,8 @@ if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
   printf '%s\n' "$EVIDENCE_DIR" >"$EVIDENCE_PATH_FILE" ||
     fail "could not publish proof evidence path"
 fi
-cat "$RESULT_FILE"
+if ((GPU_TRIPLE != 0)); then
+  cat "$GPU_RESULT"
+else
+  cat "$RESULT_FILE"
+fi

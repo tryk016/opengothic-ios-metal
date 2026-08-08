@@ -51,7 +51,8 @@
 #include "iosbinkselftest.h"
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
-    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+    defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
 #include "iosmetalcapturesession.h"
 #endif
 #include "iosmetalresourceallocator.h"
@@ -183,6 +184,37 @@ constexpr char RendererIOSConfiguredFaultModeEvidence[] =
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
     !defined(__IOS__)
 #error "RendererIOS shading prototype Tile self-test requires iOS"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) && \
+    !defined(__IOS__)
+#error "RendererIOS linear HDR GPU triple capture requires iOS"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#error "RendererIOS linear HDR GPU triple capture requires diagnostics"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) && \
+    OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 0
+#error "RendererIOS linear HDR GPU triple capture requires fault mode none"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) && \
+    (defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B))
+#error "RendererIOS linear HDR GPU triple capture requires the exact isolated tuple"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+constexpr char RendererIOSLinearHDRCaptureProfileEvidence[] =
+  "RendererIOS HDR capture profile: v=1 mode=one-shot";
 #endif
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST) && \
@@ -1221,6 +1253,9 @@ struct IOSMetalContext::Impl final {
     // The proof frame owns its Shared buffer and strong native source lease.
     // Declaration before command/fence makes reverse destruction release the
     // terminal wrappers before retainedReferences=false resource owners.
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    IOSLinearHDRCaptureFrame   linearHDRCapture;
+#endif
     IOSLinearHDRProofFrame     linearHDRProof;
 #endif
     // Impl teardown settles explicitly. Reverse member destruction still
@@ -1337,6 +1372,9 @@ struct IOSMetalContext::Impl final {
       logRuntimeCompilationBridge();
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
       Log::i("RendererIOS Bink self-test: ARMED case=yuv420p-4x4-padded-v1");
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      Log::i(RendererIOSLinearHDRCaptureProfileEvidence);
 #endif
       if(ConfiguredFaultMode!=RendererIOSFaultMode::None)
         Log::i("RendererIOS fault injection armed: mode=",fault.name(),
@@ -3755,15 +3793,45 @@ struct IOSMetalContext::Impl final {
     if(linearHDRProof!=nullptr &&
        linearHDRProof->hasOwners(frame.linearHDRProof))
       linearHDRProof->markSubmitAmbiguous(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    if(linearHDRProof!=nullptr &&
+       linearHDRProof->captureHasOwners(frame.linearHDRCapture))
+      linearHDRProof->markCaptureSubmitAmbiguous(frame.linearHDRCapture);
+#endif
 #endif
     frame.discardCommandAfterIdle = true;
     frameActive  = false;
     activeSerial = 0;
     }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+  void retainLinearHDRCapturePreSubmitFailure(
+      FrameContext& frame) noexcept {
+    if(linearHDRProof!=nullptr) {
+      if(!frame.submitted &&
+         linearHDRProof->hasOwners(frame.linearHDRProof))
+        linearHDRProof->abortBeforeSubmit(frame.linearHDRProof);
+      if(linearHDRProof->captureHasOwners(frame.linearHDRCapture))
+        linearHDRProof->markCapturePreSubmitFailure(
+            frame.linearHDRCapture);
+      }
+    clearPreparedUi(frame);
+    frame.discardCommandAfterIdle = true;
+    frameActive = false;
+    activeSerial = 0;
+    }
+#endif
+
   void cancelActiveFrame() noexcept {
     if(frameActive) {
       auto& frame = frames[nextSlot];
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(linearHDRProof!=nullptr &&
+         linearHDRProof->captureHasOwners(frame.linearHDRCapture)) {
+        retainLinearHDRCapturePreSubmitFailure(frame);
+        return;
+        }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       if(linearHDRProof!=nullptr &&
          linearHDRProof->hasOwners(frame.linearHDRProof)) {
@@ -3798,6 +3866,10 @@ struct IOSMetalContext::Impl final {
     frame.functionalEvidence = {};
     if(linearHDRProof!=nullptr)
       linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    if(linearHDRProof!=nullptr)
+      linearHDRProof->releaseCaptureAfterTerminal(frame.linearHDRCapture);
+#endif
 #endif
     }
 
@@ -3812,6 +3884,10 @@ struct IOSMetalContext::Impl final {
       return;
     for(auto& frame:frames)
       linearHDRProof->markIdleFailure(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    for(auto& frame:frames)
+      linearHDRProof->markCaptureIdleFailure(frame.linearHDRCapture);
+#endif
     }
 
   void markLinearHDRProofPostSubmitFailure(FrameContext& frame) noexcept {
@@ -3824,7 +3900,44 @@ struct IOSMetalContext::Impl final {
       return;
     for(auto& frame:frames)
       linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    for(auto& frame:frames)
+      linearHDRProof->releaseCaptureAfterTerminal(frame.linearHDRCapture);
+#endif
     }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+  void settleLinearHDRCapturesAfterConfirmedIdle() noexcept {
+    if(linearHDRProof==nullptr)
+      return;
+    for(auto& frame:frames) {
+      if(linearHDRProof->captureRequiresNoTeardown(
+           frame.linearHDRCapture))
+        terminateWithoutTeardown(
+          "RendererIOS HDR capture has permanent start ambiguity");
+      if(!linearHDRProof->settleCaptureAfterConfirmedIdle(
+           frame.linearHDRCapture))
+        terminateWithoutTeardown(
+          "RendererIOS HDR capture could not confirm inactive state");
+      }
+    }
+
+  bool hasLinearHDRCaptureOwners() const noexcept {
+    if(linearHDRProof==nullptr)
+      return false;
+    for(const auto& frame:frames) {
+      if(linearHDRProof->captureHasOwners(frame.linearHDRCapture))
+        return true;
+      }
+    return false;
+    }
+
+  void terminateLinearHDRCaptureOnUnconfirmedIdle() noexcept {
+    if(hasLinearHDRCaptureOwners())
+      terminateWithoutTeardown(
+        "RendererIOS HDR capture idle was not confirmed; retry is forbidden");
+    }
+#endif
 
   bool materializeLinearHDRProofAfterTerminal(
       FrameContext& frame, bool deviceAlreadyIdle = false,
@@ -4154,6 +4267,9 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       markLinearHDRProofIdleFailure();
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      terminateLinearHDRCaptureOnUnconfirmedIdle();
+#endif
       forcePreviewPlaceholder();
       fail(operation,"fault injection: device idle deliberately left unconfirmed once");
       return false;
@@ -4168,6 +4284,9 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       markLinearHDRProofIdleFailure();
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      terminateLinearHDRCaptureOnUnconfirmedIdle();
+#endif
       forcePreviewPlaceholder();
       fail(operation,e.what());
       return false;
@@ -4175,6 +4294,9 @@ struct IOSMetalContext::Impl final {
     catch(...) {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       markLinearHDRProofIdleFailure();
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      terminateLinearHDRCaptureOnUnconfirmedIdle();
 #endif
       forcePreviewPlaceholder();
       fail(operation);
@@ -4202,11 +4324,6 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
     settleShadingPrototypeForwardAfterConfirmedIdle();
 #endif
-
-    // An exception from Metal commit has ambiguous disposition. Only after
-    // waitIdle succeeds may the encoded command be destroyed; do that before
-    // releasing the borrowed buffers' scene/video owners below.
-    discardAmbiguousCommandsAfterConfirmedIdle();
 
     // Metal Device::waitIdle() only waits for completion. Classify every proof
     // slot before any fence or retainedReferences=false owner is released,
@@ -4253,6 +4370,12 @@ struct IOSMetalContext::Impl final {
     for(size_t index=0u; index<frames.size(); ++index)
       (void)materializeLinearHDRProofAfterTerminal(frames[index],true);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    // Numeric classification/materialization happens while the capture,
+    // command and all borrowed-resource owners remain alive. Only a confirmed
+    // inactive capture permits the release chain below.
+    settleLinearHDRCapturesAfterConfirmedIdle();
+#endif
     if(!fencesHealthy) {
       forcePreviewPlaceholder();
       fail(operation,firstFenceFailure.data());
@@ -4282,6 +4405,10 @@ struct IOSMetalContext::Impl final {
       }
 #endif
     neutralizeFences();
+    // A throwing submit or captured pre-submit failure can release its command
+    // only after idle and fence classification, while numeric/capture owners
+    // are still alive.
+    discardAmbiguousCommandsAfterConfirmedIdle();
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     releaseLinearHDRProofFramesAfterTerminal();
 #endif
@@ -4300,8 +4427,14 @@ struct IOSMetalContext::Impl final {
     for(uint32_t attempt=0; attempt<MaxIdleAttempts; ++attempt) {
       bool idleConfirmed = false;
       const bool clean = settleGpu(reason,operation,&idleConfirmed);
-      if(!idleConfirmed)
+      if(!idleConfirmed) {
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+        if(hasLinearHDRCaptureOwners())
+          terminateWithoutTeardown(
+            "RendererIOS HDR capture idle was not confirmed; retry is forbidden");
+#endif
         continue;
+        }
       if(cleanResult!=nullptr)
         *cleanResult = clean;
       return true;
@@ -4796,6 +4929,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool previewAccepted = false;
   bool previewFallback = false;
   bool submissionAttempted = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+  bool captureOnlyFailure = false;
+#endif
   IOSGPUSceneFrameAnimationDrawReport frameAnimationDrawn;
   bool frameAnimationDrawnReady = false;
   IOSGPUSceneUVAnimationDrawReport uvAnimationDrawn;
@@ -4858,6 +4994,38 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     impl->prepareBinkSelfTest();
 #endif
+    const bool sceneVisible = !videoActive &&
+      std::any_of(input.snapshot->entities.begin(),
+                  input.snapshot->entities.end(),
+                  [](const IOSRenderEntity& entity) {
+                    return (entity.visibilityMask&
+                            IOSSceneVisibilityMain)!=0;
+                  });
+    const bool linearHDRSceneActive = sceneVisible &&
+      impl->linearHDRSafety.mode==IOSLinearHDRSafetyMode::Ready &&
+      impl->linearHDRPolicy.ready &&
+      impl->linearHDRTargets.current(
+        impl->swapchain.w(),impl->swapchain.h()) &&
+      impl->gpuScene!=nullptr && impl->linearHDRMetal!=nullptr;
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    if(linearHDRSceneActive && impl->linearHDRProof!=nullptr &&
+       impl->linearHDRProof->captureProfileArmed()) {
+      const IOSLinearHDRCaptureStartResult captureStart =
+          impl->linearHDRProof->beginCapture(
+              frameContext.linearHDRCapture);
+      if(captureStart==IOSLinearHDRCaptureStartResult::AmbiguousActive) {
+        impl->lifecycleState = Impl::LifecycleState::Fatal;
+        impl->frameActive = false;
+        impl->activeSerial = 0;
+        if(impl->linearHDRProof->captureRequiresNoTeardown(
+             frameContext.linearHDRCapture))
+          impl->terminateWithoutTeardown(
+            "RendererIOS HDR capture start observation is permanently ambiguous");
+        throw std::runtime_error(
+          "RendererIOS HDR capture start is ambiguous");
+        }
+      }
+#endif
     auto& command = frameContext.command;
     {
       auto encoder = command.startEncoding(impl->device);
@@ -4884,19 +5052,6 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         }
       auto& drawable = impl->swapchain[impl->swapchain.currentImage()];
 
-      const bool sceneVisible = !videoActive &&
-        std::any_of(input.snapshot->entities.begin(),
-                    input.snapshot->entities.end(),
-                    [](const IOSRenderEntity& entity) {
-                      return (entity.visibilityMask&
-                              IOSSceneVisibilityMain)!=0;
-                    });
-      const bool linearHDRSceneActive = sceneVisible &&
-        impl->linearHDRSafety.mode==IOSLinearHDRSafetyMode::Ready &&
-        impl->linearHDRPolicy.ready &&
-        impl->linearHDRTargets.current(
-          impl->swapchain.w(),impl->swapchain.h()) &&
-        impl->gpuScene!=nullptr && impl->linearHDRMetal!=nullptr;
       const IOSLinearHDRFrameRoute linearHDRRoute =
           videoActive ? IOSLinearHDRFrameRoute::VideoBypass :
           !sceneVisible ? IOSLinearHDRFrameRoute::NoWorldBypass :
@@ -5120,9 +5275,28 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
        impl->linearHDRProof->hasOwners(frameContext.linearHDRProof))
       impl->linearHDRProof->markSubmitted(frameContext.linearHDRProof);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    const bool linearHDRCaptureHealthy =
+        impl->linearHDRProof==nullptr ||
+        !impl->linearHDRProof->captureHasOwners(
+          frameContext.linearHDRCapture) ||
+        impl->linearHDRProof->markCaptureSubmittedAndStop(
+          frameContext.linearHDRCapture);
+#endif
     frameContext.fence = std::move(submittedFence);
     frameContext.submitted = true;
     ++impl->counters.submitAccepted;
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+    if(!linearHDRCaptureHealthy) {
+      // Even when stopCapture returned after the submit, the capture terminal
+      // is failed. Keep the submitted command, numeric frame and capture owner
+      // anchored until the context-wide confirmed-idle release chain.
+      frameContext.discardCommandAfterIdle = true;
+      captureOnlyFailure = true;
+      throw std::runtime_error(
+        "RendererIOS HDR capture stop or inspection failed");
+      }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     impl->acceptBinkSelfTestSubmit(slot);
 #endif
@@ -5207,10 +5381,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     // submitted frame, if any, is settled by resize() before targets are reused.
     if(frameContext.submitted) {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(!captureOnlyFailure)
+#endif
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
 #endif
       }
     else {
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(!submissionAttempted && impl->linearHDRProof!=nullptr &&
+         impl->linearHDRProof->captureHasOwners(
+           frameContext.linearHDRCapture)) {
+        impl->retainLinearHDRCapturePreSubmitFailure(frameContext);
+        (void)completeFrame(completion,false,nullptr,nullptr);
+        }
+      else
+#endif
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
@@ -5225,10 +5411,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   catch(const std::exception& e) {
     if(frameContext.submitted) {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(!captureOnlyFailure)
+#endif
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
 #endif
       }
     else {
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(!submissionAttempted && impl->linearHDRProof!=nullptr &&
+         impl->linearHDRProof->captureHasOwners(
+           frameContext.linearHDRCapture)) {
+        impl->retainLinearHDRCapturePreSubmitFailure(frameContext);
+        (void)completeFrame(completion,false,nullptr,nullptr);
+        }
+      else
+#endif
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }
@@ -5246,10 +5444,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   catch(...) {
     if(frameContext.submitted) {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(!captureOnlyFailure)
+#endif
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
 #endif
       }
     else {
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
+      if(!submissionAttempted && impl->linearHDRProof!=nullptr &&
+         impl->linearHDRProof->captureHasOwners(
+           frameContext.linearHDRCapture)) {
+        impl->retainLinearHDRCapturePreSubmitFailure(frameContext);
+        (void)completeFrame(completion,false,nullptr,nullptr);
+        }
+      else
+#endif
       if(submissionAttempted) {
         abandonFrameKeepingSlotResources();
         }

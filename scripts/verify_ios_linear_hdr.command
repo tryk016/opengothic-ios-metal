@@ -21,6 +21,9 @@ PRODUCER_SOURCES=(
   game/graphics/ioslinearhdrproofproducer.cpp
   ios/tests/ioslinearhdrproofproducer.cpp
 )
+GPU_TRIPLE_DEFINE=(
+  -DOPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE
+)
 
 cd "$REPO"
 
@@ -246,6 +249,72 @@ xcrun clang++ -x objective-c++ -std=c++20 \
   -isystem lib/ZenKit/include \
   -fsyntax-only game/graphics/ioslinearhdrproofproducer.mm
 
+printf '\n### P2.1e0 strict gpudebug exact-triple capture path\n'
+xcrun clang++ -x objective-c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  "${GPU_TRIPLE_DEFINE[@]}" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -fsyntax-only game/graphics/iosmetalcapturesession.mm
+
+xcrun clang++ -x c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  "${GPU_TRIPLE_DEFINE[@]}" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -fsyntax-only game/graphics/iosmetalresourceclearpassprobe.cpp
+
+xcrun clang++ -x objective-c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS \
+  "${GPU_TRIPLE_DEFINE[@]}" \
+  -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=\"0123456789abcdef0123456789abcdef01234567\" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -fsyntax-only game/graphics/ioslinearhdrproofproducer.mm
+
+xcrun clang++ -x c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
+  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS \
+  "${GPU_TRIPLE_DEFINE[@]}" \
+  -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=\"0123456789abcdef0123456789abcdef01234567\" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -isystem lib/TinySoundFont \
+  -isystem lib/miniz \
+  -isystem lib/bullet3/src \
+  -fsyntax-only game/graphics/iosmetalcontext.cpp
+
+xcrun clang++ -E -P -x c++ -std=c++20 \
+  -target arm64-apple-ios16.4 \
+  -isysroot "$IOS_SDK" \
+  -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA=\"0123456789abcdef0123456789abcdef01234567\" \
+  -Igame \
+  -isystem lib/Tempest/Engine/include \
+  -isystem lib/ZenKit/include \
+  -isystem lib/TinySoundFont \
+  -isystem lib/miniz \
+  -isystem lib/bullet3/src \
+  game/graphics/iosmetalcontext.cpp \
+  >"$RUNNER_TEMP/iosmetalcontext-linear-hdr-off.i"
+if grep -Eq 'IOSLinearHDRCapture|RendererIOS HDR capture profile' \
+     "$RUNNER_TEMP/iosmetalcontext-linear-hdr-off.i"; then
+  echo "gpudebug capture leaked into diagnostics-OFF preprocessing" >&2
+  exit 1
+fi
+
 printf '\n### P2.1e0 strict RendererIOS producer integration ON/OFF\n'
 xcrun clang++ -x c++ -std=c++20 \
   -target arm64-apple-ios16.4 \
@@ -276,6 +345,7 @@ xcrun clang++ -x c++ -std=c++20 \
 
 printf '\n### P2.1e0 artifact/log join and guarded runner contracts\n'
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_proof_artifact.py
+PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_gpu_evidence.py
 bash -n ios/device-test/run-linear-hdr-proof-test.sh
 [[ "$(ios/device-test/run-linear-hdr-proof-test.sh --self-test)" == \
    "SELF-TEST PASS" ]]
@@ -294,8 +364,6 @@ required = (
     'require_afc_regular_leaf "$leaf" || return 1',
     'remaining="$(enumerate_owned_temps "$label-after")" || return 1',
     'require_afc_regular_leaf "$FINAL_LEAF" ||',
-    '"$UVX" --python python3.11 pymobiledevice3 apps rm',
-    '--udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf"',
     'require_game_zero pre',
     'require_game_zero post',
     'python3 "$GUARD" run --timeout',
@@ -358,9 +426,17 @@ def validate_guarded_runner(candidate: str) -> None:
     for literal in required:
         if candidate.count(literal) != 1:
             raise ValueError(f"guarded producer runner contract changed: {literal}")
-    for forbidden in ("--remove-existing-content", "GPU PASS"):
+    for forbidden in ("--remove-existing-content",):
         if forbidden in candidate:
             raise ValueError(f"guarded producer runner contains forbidden text: {forbidden}")
+    for literal in (
+        '"$UVX" --python python3.11 pymobiledevice3 apps rm',
+        '--udid "$DEVICE_UDID" --documents "$BUNDLE_ID" "$leaf"',
+    ):
+        if candidate.count(literal) != 2:
+            raise ValueError(
+                f"guarded proof/capture exact-delete coverage changed: {literal}"
+            )
     validate_afc_python_contract(afc_python_source(candidate))
 
 
@@ -417,6 +493,687 @@ except ValueError:
     pass
 else:
     raise SystemExit("AFC dead-code AnnAssign mutation survived")
+PY
+
+printf '\n### P2.1e0 exact gpudebug triple source contracts\n'
+PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import ast
+import json
+import os
+import subprocess
+import tempfile
+from pathlib import Path
+
+
+def sanitize(source: str) -> str:
+    result = list(source)
+    index = 0
+    state = "code"
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if current == '"':
+                state = "string"
+            elif current == "'":
+                state = "character"
+            elif current == "/" and following == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "line-comment"
+            elif current == "/" and following == "*":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "block-comment"
+        elif state in ("string", "character"):
+            terminator = '"' if state == "string" else "'"
+            if current == "\\":
+                index += 1
+            elif current == terminator:
+                state = "code"
+        elif state == "line-comment":
+            if current == "\n":
+                state = "code"
+            else:
+                result[index] = " "
+        elif state == "block-comment":
+            if current == "*" and following == "/":
+                result[index] = result[index + 1] = " "
+                index += 1
+                state = "code"
+            elif current != "\n":
+                result[index] = " "
+        index += 1
+    if state == "block-comment":
+        raise ValueError("unterminated block comment")
+    return "".join(result)
+
+
+def compact(source: str) -> str:
+    return "".join(sanitize(source).split())
+
+
+def scope(source: str, signature: str) -> str:
+    clean = sanitize(source)
+    if clean.count(signature) != 1:
+        raise ValueError(f"scope signature changed: {signature}")
+    start = clean.index(signature)
+    brace = clean.index("{", start + len(signature))
+    depth = 0
+    for index in range(brace, len(clean)):
+        if clean[index] == "{":
+            depth += 1
+        elif clean[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return clean[start:index + 1]
+    raise ValueError(f"unterminated scope: {signature}")
+
+
+def require_once(source: str, literal: str) -> int:
+    if source.count(literal) != 1:
+        raise ValueError(f"exact gpudebug literal count changed: {literal}")
+    return source.index(literal)
+
+
+def ordered(source: str, literals: tuple[str, ...]) -> None:
+    positions = [require_once(source, literal) for literal in literals]
+    if positions != sorted(positions):
+        raise ValueError(f"exact gpudebug order changed: {literals}")
+
+
+def active_cmake(source: str) -> str:
+    active: list[str] = []
+    for line in source.splitlines(keepends=True):
+        newline = "\n" if line.endswith("\n") else ""
+        content = line[:-1] if newline else line
+        quoted = False
+        escaped = False
+        kept: list[str] = []
+        for character in content:
+            if escaped:
+                kept.append(character)
+                escaped = False
+            elif quoted and character == "\\":
+                kept.append(character)
+                escaped = True
+            elif character == '"':
+                quoted = not quoted
+                kept.append(character)
+            elif character == "#" and not quoted:
+                break
+            else:
+                kept.append(character)
+        active.append("".join(kept) + newline)
+    return "".join(active)
+
+
+cmake = active_cmake(Path("CMakeLists.txt").read_text())
+presets = json.loads(Path("CMakePresets.json").read_text())
+base = next(item for item in presets["configurePresets"]
+            if item["name"] == "renderer-ios-base")
+triple = [item for item in presets["configurePresets"]
+          if item["name"] == "renderer-ios-hdr-triple"]
+if len(triple) != 1 or base["cacheVariables"].get(
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE") != "OFF":
+    raise SystemExit("hidden-base gpudebug default contract changed")
+expected = {
+    "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+    "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+    "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+    "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+    "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+    "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+    "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+    "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON",
+}
+if triple[0].get("inherits") != "renderer-ios-base" or \
+        triple[0].get("cacheVariables") != expected:
+    raise SystemExit("renderer-ios-hdr-triple is not the exact tuple")
+builds = [item for item in presets["buildPresets"]
+          if item["name"] == "renderer-ios-hdr-triple"]
+if len(builds) != 1 or builds[0].get("configurePreset") != \
+        "renderer-ios-hdr-triple" or builds[0].get("configuration") != "Release":
+    raise SystemExit("renderer-ios-hdr-triple build preset changed")
+for literal in (
+    'option(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE',
+    '<key>RendererIOSLinearHDRGPUTripleCapture</key>',
+    '<key>MetalCaptureEnabled</key>',
+    'OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE=1',
+    'requires the exact diagnostics=ON, fault=none, causal=none, '
+    'Bink/resource/clear/tile/forward=OFF tuple',
+):
+    if literal not in cmake:
+        raise SystemExit(f"CMake exact-triple contract missing: {literal}")
+
+capture = Path("game/graphics/iosmetalcapturesession.mm").read_text()
+producer = Path("game/graphics/ioslinearhdrproofproducer.mm").read_text()
+context = Path("game/graphics/iosmetalcontext.cpp").read_text()
+header = compact(Path("game/graphics/iosmetalcapturesession.h").read_text())
+capture_code = compact(capture)
+producer_code = compact(producer)
+context_code = compact(context)
+for literal in (
+    "Started,RejectedInactive,AmbiguousActive,",
+    "RemoveExactOwned,RequireAbsent,",
+    "boolstartReturn=false;boolactiveAfter=false;boolcomplete=false;",
+):
+    require_once(header, literal)
+begin = compact(scope(capture, "IOSLinearHDRCaptureStartResult IOSMetalCaptureSession::beginCapture("))
+ordered(begin, (
+    "impl->observation={false,false,true};",
+    "IOSMetalCaptureExistingArtifactPolicy::RequireAbsent",
+    "[managerstartCaptureWithDescriptor:descriptor.get()error:&captureError]",
+    "constBOOLactiveAfter=manager.isCapturing;",
+    "impl->observation={started==YES,activeAfter==YES,true,};",
+    "if(started==NO&&activeAfter==NO)",
+    "if(started==YES&&activeAfter==YES)",
+    'reason=started==NO?"capture-manager-start-ambiguous":',
+))
+if begin.count("returnIOSLinearHDRCaptureStartResult::AmbiguousActive;") != 2:
+    raise SystemExit("capture ambiguity mapping coverage changed")
+if begin.count("impl->observation=") != 3:
+    raise SystemExit("capture start observation coverage changed")
+if "removeItemAtURL" in begin[:begin.index(
+        "IOSMetalCaptureExistingArtifactPolicy::RequireAbsent")]:
+    raise SystemExit("RequireAbsent can reach stale-artifact deletion")
+
+frame = compact(scope(context, "  struct FrameContext final"))
+ordered(frame, (
+    "IOSLinearHDRCaptureFramelinearHDRCapture;",
+    "IOSLinearHDRProofFramelinearHDRProof;",
+    "CommandBuffercommand;",
+    "Fencefence;",
+))
+submit = compact(scope(
+    context, "IOSMetalContext::SubmitResult IOSMetalContext::submitFrame("))
+ordered(submit, (
+    "linearHDRProof->beginCapture(frameContext.linearHDRCapture)",
+    "command.startEncoding(impl->device)",
+    "linearHDRProof->prepareFrame(",
+    "impl->device.submit(command)",
+    "linearHDRProof->markSubmitted(frameContext.linearHDRProof)",
+    "markCaptureSubmittedAndStop(frameContext.linearHDRCapture)",
+    "frameContext.fence=std::move(submittedFence)",
+    "frameContext.discardCommandAfterIdle=true;",
+    "captureOnlyFailure=true;",
+))
+if submit.count("impl->device.submit(command)") != 1:
+    raise SystemExit("exact triple escaped the existing single submit")
+require_once(context_code,
+             compact('"RendererIOS HDR capture profile: v=1 mode=one-shot"'))
+settle = compact(scope(context, "bool settleGpu(SettleReason reason, const char* operation,"))
+ordered(settle, (
+    "device.waitIdle()",
+    "materializeLinearHDRProofAfterTerminal(frames[index],true)",
+    "settleLinearHDRCapturesAfterConfirmedIdle()",
+    "neutralizeFences()",
+    "discardAmbiguousCommandsAfterConfirmedIdle()",
+    "releaseLinearHDRProofFramesAfterTerminal()",
+))
+confirm = compact(scope(context, "bool confirmGpuIdle(SettleReason reason, const char* operation,"))
+ordered(confirm, (
+    "if(!idleConfirmed)",
+    "if(hasLinearHDRCaptureOwners())",
+    "terminateWithoutTeardown(",
+    "continue;",
+))
+capture_failure = compact(scope(
+    producer, "  void captureFailure(IOSLinearHDRCaptureFrame& frame,"))
+if "IOSLinearHDRProofFailureReason" in capture_failure or \
+        "IOSLinearHDRProofProducerEvent" in capture_failure:
+    raise SystemExit("capture failure contaminates numeric proof state")
+retain_capture = compact(scope(
+    context, "  void retainLinearHDRCapturePreSubmitFailure("))
+ordered(retain_capture, (
+    "if(!frame.submitted&&linearHDRProof->hasOwners(frame.linearHDRProof))",
+    "linearHDRProof->abortBeforeSubmit(frame.linearHDRProof)",
+    "linearHDRProof->markCapturePreSubmitFailure(",
+))
+if submit.count("if(!captureOnlyFailure)") != 3:
+    raise SystemExit("capture-only failure can contaminate numeric proof state")
+search_from = 0
+for _ in range(3):
+    guard = submit.index("if(!captureOnlyFailure)", search_from)
+    numeric_fail = submit.index(
+        "impl->markLinearHDRProofPostSubmitFailure(frameContext)", guard)
+    next_guard = submit.find("if(!captureOnlyFailure)", guard + 1)
+    if next_guard >= 0 and next_guard < numeric_fail:
+        raise SystemExit("capture-only numeric-failure guard is disconnected")
+    search_from = numeric_fail + 1
+for literal in (
+    '"RendererIOS HDR capture: v=1 id=%s terminal=F reason=%s"',
+    '"RendererIOS HDR capture: v=1 id=%s file=%s kind=%s bytes=%llu terminal=C"',
+    "IOSMetalCaptureExistingArtifactPolicy::RequireAbsent",
+):
+    require_once(producer_code, compact(literal))
+
+model = Path("game/graphics/ioslinearhdrproofproducer.cpp").read_text()
+observation = compact(scope(
+    model, "iosClassifyLinearHDRCaptureStartObservation("))
+ordered(observation, (
+    "if(!complete||(startReturn&&!activeAfter))",
+    "IOSLinearHDRCaptureObservationDecision::PermanentNoTeardown",
+    "if(startReturn&&activeAfter)",
+    "IOSLinearHDRCaptureObservationDecision::Started",
+    "if(!startReturn&&activeAfter)",
+    "IOSLinearHDRCaptureObservationDecision::ActiveFailure",
+    "IOSLinearHDRCaptureObservationDecision::RejectedInactive",
+))
+profile_model = compact(scope(
+    model, "bool iosLinearHDRCaptureProfileAcceptsExactBoolean("))
+require_once(profile_model, "returnexactCFBoolean&&booleanValue;")
+profile_native = compact(scope(producer, "  void armCaptureProfile() noexcept"))
+for literal in (
+    "CFGetTypeID(static_cast<CFTypeRef>(value))==CFBooleanGetTypeID()",
+    "CFBooleanGetValue(static_cast<CFBooleanRef>(value))",
+    "iosLinearHDRCaptureProfileAcceptsExactBoolean(exactCFBoolean,booleanValue)",
+):
+    require_once(profile_native, literal)
+for forbidden in ("isKindOfClass:[NSNumberclass]", "boolValue"):
+    if forbidden in profile_native:
+        raise SystemExit("capture profile accepts a non-CFBoolean value")
+producer_begin = compact(scope(
+    producer, "  IOSLinearHDRCaptureStartResult beginCapture("))
+for literal in (
+    "iosClassifyLinearHDRCaptureStartObservation(",
+    "IOSLinearHDRCaptureObservationDecision::Started",
+    "IOSLinearHDRCaptureObservationDecision::RejectedInactive",
+    "IOSLinearHDRCaptureObservationDecision::ActiveFailure",
+):
+    require_once(producer_begin, literal)
+
+model_mutation = model.replace(
+    "  if(!complete || (startReturn && !activeAfter))\n",
+    "  if(!complete)\n", 1)
+try:
+    mutated_observation = compact(scope(
+        model_mutation, "iosClassifyLinearHDRCaptureStartObservation("))
+    require_once(mutated_observation,
+                 "if(!complete||(startReturn&&!activeAfter))")
+except ValueError:
+    pass
+else:
+    raise SystemExit("true,false permanent-no-teardown mutation survived")
+
+profile_mutation = producer.replace(
+    "        const bool exactCFBoolean = value!=nil &&\n"
+    "            CFGetTypeID(static_cast<CFTypeRef>(value))==CFBooleanGetTypeID();\n",
+    "        const bool exactCFBoolean = true; // CFGetTypeID(value)==CFBooleanGetTypeID()\n",
+    1)
+mutated_profile = compact(scope(
+    profile_mutation, "  void armCaptureProfile() noexcept"))
+if "CFGetTypeID(static_cast<CFTypeRef>(value))==CFBooleanGetTypeID()" in mutated_profile:
+    raise SystemExit("comment-only exact-CFBoolean mutation survived")
+
+validator = Path("ios/device-test/validate-linear-hdr-gpu-evidence.py").read_text()
+
+
+def ast_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = ast_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def assigned_literal(tree: ast.Module, name: str):
+    matches = [node for node in tree.body
+               if isinstance(node, (ast.Assign, ast.AnnAssign)) and
+               ((isinstance(node, ast.Assign) and len(node.targets) == 1 and
+                 isinstance(node.targets[0], ast.Name) and
+                 node.targets[0].id == name) or
+                (isinstance(node, ast.AnnAssign) and
+                 isinstance(node.target, ast.Name) and node.target.id == name))]
+    if len(matches) != 1:
+        raise ValueError(f"validator assignment changed: {name}")
+    value = matches[0].value
+    def evaluate(node: ast.AST):
+        if isinstance(node, ast.Constant):
+            return node.value
+        if isinstance(node, ast.Tuple):
+            return tuple(evaluate(child) for child in node.elts)
+        if isinstance(node, ast.BinOp):
+            left, right = evaluate(node.left), evaluate(node.right)
+            if isinstance(node.op, ast.Mult):
+                return left * right
+            if isinstance(node.op, ast.Add):
+                return left + right
+            if isinstance(node.op, ast.Sub):
+                return left - right
+            if isinstance(node.op, ast.LShift):
+                return left << right
+        raise ValueError(f"validator assignment is not literal: {name}")
+    return evaluate(value)
+
+
+def function_node(tree: ast.Module, name: str) -> ast.FunctionDef:
+    matches = [node for node in tree.body
+               if isinstance(node, ast.FunctionDef) and node.name == name]
+    if len(matches) != 1:
+        raise ValueError(f"validator function changed: {name}")
+    return matches[0]
+
+
+def calls(node: ast.AST, name: str) -> list[ast.Call]:
+    return [child for child in ast.walk(node)
+            if isinstance(child, ast.Call) and ast_name(child.func) == name]
+
+
+def require_call(node: ast.AST, name: str, count: int = 1) -> list[ast.Call]:
+    matches = calls(node, name)
+    if len(matches) != count:
+        raise ValueError(
+            f"validator call count changed ({len(matches)}): {name}")
+    return matches
+
+
+def validate_validator(candidate: str) -> None:
+    try:
+        tree = ast.parse(candidate)
+    except SyntaxError as error:
+        raise ValueError(f"validator Python is invalid: {error}") from error
+    exact_assignments = {
+        "GPUDEBUG": "/usr/bin/gpudebug",
+        "GPUDEBUG_VERSION": b"gpudebug 1.0\n",
+        "SCHEMA_VERSION": 2,
+        "EVIDENCE_CLASS": "device-gpudebug-lossless",
+        "PRODUCER": "opengothic-linear-hdr-gpu-adapter/2",
+        "MAX_TRANSCRIPT_BYTES": 16 * 1024 * 1024,
+        "COLLECTOR_GLOBAL_TIMEOUT_SECONDS": 720.0,
+        "COLLECTOR_MAIN_TIMEOUT_SECONDS": 600.0,
+        "COLLECTOR_COMMAND_TIMEOUT_SECONDS": 90.0,
+        "COLLECTOR_MINIMUM_TIMEOUT_SECONDS": 1.0,
+    }
+    for name, expected_value in exact_assignments.items():
+        if assigned_literal(tree, name) != expected_value:
+            raise ValueError(f"validator constant changed: {name}")
+    role_values = assigned_literal(tree, "ROLE_ORDER")
+    if not isinstance(role_values, tuple) or len(role_values) != 14:
+        raise ValueError("gpudebug transcript role count changed")
+
+    timeout = function_node(tree, "collector_command_timeout")
+    minimums = calls(timeout, "min")
+    if len(minimums) != 1 or len(minimums[0].args) != 2 or \
+            {ast_name(argument) for argument in minimums[0].args} != {
+                "COLLECTOR_COMMAND_TIMEOUT_SECONDS", "remaining"}:
+        raise ValueError("collector timeout is not min(per-command, remaining global)")
+    timeout_dump = ast.dump(timeout, include_attributes=False)
+    if "COLLECTOR_MINIMUM_TIMEOUT_SECONDS" not in timeout_dump or \
+            "GtE" not in timeout_dump:
+        raise ValueError("collector can start with less than one second remaining")
+    runner_node = function_node(tree, "run_collector_command")
+    if calls(runner_node, "subprocess.run"):
+        raise ValueError("collector uses allocation-unbounded subprocess.run")
+    popen = require_call(runner_node, "subprocess.Popen")[0]
+    keywords = {keyword.arg: keyword.value for keyword in popen.keywords}
+    if not isinstance(keywords.get("start_new_session"), ast.Constant) or \
+            keywords["start_new_session"].value is not True:
+        raise ValueError("collector process group ownership changed")
+    expected_env = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C"}
+    if ast.literal_eval(keywords.get("env")) != expected_env:
+        raise ValueError("collector scrubbed environment changed")
+    if ast_name(keywords.get("stdout")) != "subprocess.PIPE" or \
+            ast_name(keywords.get("stderr")) != "subprocess.PIPE":
+        raise ValueError("collector bounded pipe capture changed")
+    require_call(runner_node, "os.read")
+    require_call(runner_node, "_kill_owned_process_group", 5)
+    runner_dump = ast.dump(runner_node, include_attributes=False)
+    for required in ("MAX_TRANSCRIPT_BYTES", "returncode", "gpudebug exited"):
+        if required not in runner_dump:
+            raise ValueError(f"collector runtime guard changed: {required}")
+
+    killer = function_node(tree, "_kill_owned_process_group")
+    require_call(killer, "os.killpg")
+    if "SIGKILL" not in ast.dump(killer, include_attributes=False):
+        raise ValueError("collector timeout/overflow no longer kills its process group")
+
+    cleanup = function_node(tree, "cleanup_owned_collector_session")
+    cleanup_dump = ast.dump(cleanup, include_attributes=False)
+    if cleanup_dump.count("run_collector_command") != 2 or \
+            "--terminate-all" in cleanup_dump:
+        raise ValueError("owned session cleanup contract changed")
+    if "--terminate" not in cleanup_dump or "--list-sessions" not in cleanup_dump:
+        raise ValueError("owned session cleanup commands changed")
+    if calls(cleanup, "time.monotonic") or cleanup_dump.count(
+            "overall_deadline") < 3:
+        raise ValueError("cleanup created a fresh deadline")
+
+    collect_node = function_node(tree, "collect")
+    finalizers = [part for part in ast.walk(collect_node)
+                  if isinstance(part, ast.Try) and
+                  calls(ast.Module(body=part.finalbody, type_ignores=[]),
+                        "cleanup_owned_collector_session")]
+    if len(finalizers) != 1:
+        raise ValueError("collector cleanup escaped finally")
+    collect_source = ast.unparse(collect_node)
+    for required in (
+        "started = time.monotonic()",
+        "main_deadline = started + COLLECTOR_MAIN_TIMEOUT_SECONDS",
+        "overall_deadline = started + COLLECTOR_GLOBAL_TIMEOUT_SECONDS",
+    ):
+        if required not in collect_source:
+            raise ValueError(f"collector total budget changed: {required}")
+    main_commands = calls(collect_node, "run_collector_command")
+    if len(main_commands) != 2 or any(
+            not call.args or ast_name(call.args[-1]) != "main_deadline"
+            for call in main_commands):
+        raise ValueError("main collection escaped the 600-second deadline")
+    cleanup_calls = calls(collect_node, "cleanup_owned_collector_session")
+    if len(cleanup_calls) != 1 or not cleanup_calls[0].args or \
+            ast_name(cleanup_calls[0].args[-1]) != "overall_deadline":
+        raise ValueError("cleanup does not consume the reserved overall deadline")
+    parse_calls = calls(collect_node, "parse_session")
+    open_entries = [call for call in calls(collect_node, "_transcript_entry")
+                    if call.args and isinstance(call.args[0], ast.Constant) and
+                    call.args[0].value == "open"]
+    if len(parse_calls) != 1 or len(open_entries) != 1 or \
+            parse_calls[0].lineno >= open_entries[0].lineno:
+        raise ValueError("session identity is not retained before transcript write")
+
+    clone = function_node(tree, "clone_capture_no_follow")
+    clone_dump = ast.dump(clone, include_attributes=False)
+    for required in ("O_NOFOLLOW", "dir_fd", "fchmod", "fsync"):
+        if required not in clone_dump:
+            raise ValueError(f"descriptor capture clone guard changed: {required}")
+    digest = function_node(tree, "_file_digest_fd")
+    require_call(digest, "os.read")
+    if calls(digest, "open") or calls(digest, "pathlib.Path.open"):
+        raise ValueError("capture hashing follows a path")
+    rename = function_node(tree, "rename_no_clobber")
+    rename_dump = ast.dump(rename, include_attributes=False)
+    for required in ("source_directory", "destination_directory",
+                     "O_NOFOLLOW", "rename_excl"):
+        if required not in rename_dump:
+            raise ValueError(f"directory-relative rename guard changed: {required}")
+    if any(isinstance(node, ast.FunctionDef) and
+           node.name in ("remove_capture_no_follow",
+                         "_remove_capture_directory_no_follow")
+           for node in tree.body):
+        raise ValueError("validator must retain local capture staging")
+    commit = function_node(tree, "commit_capture_copy")
+    commit_calls = [(call.lineno, ast_name(call.func))
+                    for call in ast.walk(commit) if isinstance(call, ast.Call)]
+    interesting = [name for _, name in sorted(commit_calls)
+                   if name in ("clone_capture_no_follow",
+                               "stable_capture_manifest", "rename_no_clobber")]
+    try:
+        clone_index = interesting.index("clone_capture_no_follow")
+    except ValueError as error:
+        raise ValueError("capture descriptor clone is missing") from error
+    if interesting[clone_index:clone_index + 3] != [
+            "clone_capture_no_follow", "stable_capture_manifest",
+            "rename_no_clobber"]:
+        raise ValueError("capture clone/verify/commit order changed")
+    if calls(commit, "os.chmod") or calls(commit, "os.fchmod"):
+        raise ValueError("commit mutates caller-owned staging")
+    if calls(commit, "remove_capture_no_follow") or calls(commit, "os.unlink") or \
+            calls(commit, "os.rmdir"):
+        raise ValueError("commit deletes retained local staging")
+    summary_commits = calls(commit, "atomic_no_clobber")
+    committed_walks = calls(commit, "stable_capture_manifest")
+    if len(summary_commits) != 1 or not committed_walks or \
+            summary_commits[0].lineno <= max(call.lineno for call in committed_walks):
+        raise ValueError("evidenceCommitted summary precedes final capture verification")
+
+
+validate_validator(validator)
+validator_mutations = (
+    validator.replace(
+        "    return min(COLLECTOR_COMMAND_TIMEOUT_SECONDS, remaining)\n",
+        "    return max(COLLECTOR_COMMAND_TIMEOUT_SECONDS, remaining)\n", 1),
+    validator.replace(
+        "    require(returncode == 0, f\"gpudebug exited {returncode}\")\n",
+        "    if returncode != 0:\n        pass\n", 1),
+    validator.replace(
+        "                cleanup_owned_collector_session(\n"
+        "                    session,transcript_dir,entries,raws,overall_deadline)\n",
+        "                pass  # cleanup_owned_collector_session(session, transcript_dir, entries, raws)\n",
+        1),
+    validator.replace(
+        "                    session,transcript_dir,entries,raws,overall_deadline)\n",
+        "                    session,transcript_dir,entries,raws,time.monotonic()+120.0)\n",
+        1),
+    validator.replace(
+        "    require(remaining >= COLLECTOR_MINIMUM_TIMEOUT_SECONDS,\n"
+        "            \"collector deadline has less than one second remaining\")\n",
+        "    require(remaining > 0.0,\n"
+        "            \"collector deadline has less than one second remaining\")\n",
+        1),
+)
+for index, mutation in enumerate(validator_mutations, 1):
+    try:
+        validate_validator(mutation)
+    except ValueError:
+        pass
+    else:
+        raise SystemExit(f"collector mutation survived: {index}")
+
+runner = Path("ios/device-test/run-linear-hdr-proof-test.sh").read_text()
+
+
+def shell_without_comments(source: str) -> str:
+    result: list[str] = []
+    state = "code"
+    escaped = False
+    index = 0
+    while index < len(source):
+        character = source[index]
+        if state == "comment":
+            if character == "\n":
+                state = "code"
+                result.append(character)
+            index += 1
+            continue
+        if escaped:
+            result.append(character)
+            escaped = False
+            index += 1
+            continue
+        if state != "single" and character == "\\":
+            result.append(character)
+            escaped = True
+        elif state == "code" and character == "'":
+            state = "single"
+            result.append(character)
+        elif state == "single" and character == "'":
+            state = "code"
+            result.append(character)
+        elif state == "code" and character == '"':
+            state = "double"
+            result.append(character)
+        elif state == "double" and character == '"':
+            state = "code"
+            result.append(character)
+        elif state == "code" and character == "#" and \
+                (not result or result[-1].isspace() or result[-1] in ";|&()"):
+            state = "comment"
+        else:
+            result.append(character)
+        index += 1
+    if state in ("single", "double"):
+        raise ValueError("runner contains an unterminated quote")
+    return "".join(result)
+
+
+def runner_failure(candidate: str, arguments: list[str], expected: str) -> None:
+    completed = subprocess.run(
+        ["bash", "-s", "--", *arguments], input=candidate, text=True,
+        capture_output=True, check=False,
+        env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"],
+             "TMPDIR": os.environ.get("TMPDIR", "/tmp")},
+    )
+    if completed.returncode == 0 or expected not in completed.stderr:
+        raise ValueError(
+            f"runner did not enforce {expected!r}: {completed.stderr[-400:]}")
+
+
+def validate_runner(candidate: str) -> None:
+    syntax = subprocess.run(
+        ["bash", "-n"], input=candidate, text=True,
+        capture_output=True, check=False)
+    if syntax.returncode != 0:
+        raise ValueError(f"runner shell grammar is invalid: {syntax.stderr}")
+    runner_code = "".join(shell_without_comments(candidate).split())
+    for literal in (
+        "--gpu-triple)",
+        '[["$SAVE_SLOT"==4]]',
+        'fail"--gpu-triplerejects--new-game"',
+        "RendererIOSLinearHDRGPUTripleCapture",
+        "RendererIOSHDRcaptureprofile:v=1mode=one-shot",
+        'python3"$GPU_VALIDATOR"--commit-capture-copy',
+        '--expected-capture-kind"$DEVICE_CAPTURE_KIND"',
+        'python3"$GPU_VALIDATOR"--collect',
+        '[["$EVIDENCE_DIR"!="$WORK"&&"$EVIDENCE_DIR"!="$WORK/"*]]',
+    ):
+        if literal not in runner_code:
+            raise ValueError(f"active runner contract missing: {literal}")
+    ordered(runner_code, (
+        '[[-f"$CAPTURE_SUMMARY"&&!-L"$CAPTURE_SUMMARY"]]',
+        'delete_exact_device_leaf"$CAPTURE_LEAF"',
+        'python3"$GPU_VALIDATOR"--collect',
+        'cat"$GPU_RESULT"',
+    ))
+    for forbidden in (
+        'rm-rf"$CAPTURE_STAGING"', 'rm-rf"$CAPTURE_STAGING_PARENT"',
+        'unlink"$CAPTURE_STAGING"', 'rmdir"$CAPTURE_STAGING_PARENT"',
+    ):
+        if forbidden in runner_code:
+            raise ValueError("runner deletes retained local capture staging")
+    sha = "0123456789abcdef0123456789abcdef01234567"
+    missing = "/definitely/not-an-opengothic-app"
+    runner_failure(candidate,
+                   ["--gpu-triple", "--save-slot", "5",
+                    "--expected-sha", sha, missing],
+                   "--gpu-triple requires exact save slot 4")
+    runner_failure(candidate,
+                   ["--gpu-triple", "--new-game",
+                    "--expected-sha", sha, missing],
+                   "--gpu-triple rejects --new-game")
+    runner_failure(candidate,
+                   ["--gpu-triple", "--gpu-triple",
+                    "--expected-sha", sha, missing],
+                   "duplicate --gpu-triple")
+
+
+validate_runner(runner)
+save_guard = '    [[ "$SAVE_SLOT" == 4 ]] || fail "--gpu-triple requires exact save slot 4"\n'
+if runner.count(save_guard) != 1:
+    raise SystemExit("save4 guard active structure changed")
+runner_mutation = runner.replace(
+    save_guard,
+    '    true # [[ "$SAVE_SLOT" == 4 ]] || fail "--gpu-triple requires exact save slot 4"\n',
+    1)
+try:
+    validate_runner(runner_mutation)
+except ValueError:
+    pass
+else:
+    raise SystemExit("comment-only save4 guard mutation survived")
+
+print("exact gpudebug triple source contracts: PASS")
 PY
 
 printf '\n### P2.1e0 HDR producer source and mutation contracts\n'
