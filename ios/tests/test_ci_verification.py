@@ -461,6 +461,7 @@ def validate_cmake_presets(
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
+        "renderer-ios-hdr-triple",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -485,6 +486,7 @@ def validate_cmake_presets(
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "OFF",
     }
     if base.get("cacheVariables") != expected_base_cache:
         raise ValueError("shared iOS configure base tuple drifted")
@@ -514,6 +516,27 @@ def validate_cmake_presets(
             raise ValueError(f"{name} profile tuple drifted")
         if tile == "ON" and forward == "ON":
             raise ValueError("Tile and Forward may not be enabled together")
+
+    hdr_triple = configure_by_name["renderer-ios-hdr-triple"]
+    if hdr_triple.get("inherits") != "renderer-ios-base":
+        raise ValueError("hdr-triple does not inherit the shared base")
+    if hdr_triple.get("binaryDir") != (
+        "${sourceDir}/build/local-renderer-ios-hdr-triple"
+    ):
+        raise ValueError("hdr-triple public binaryDir drifted")
+    expected_hdr_triple_cache = {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON",
+    }
+    if hdr_triple.get("cacheVariables") != expected_hdr_triple_cache:
+        raise ValueError("hdr-triple exact capture tuple drifted")
 
     causal_tuple = {
         "causal-none": "none",
@@ -560,6 +583,7 @@ def validate_cmake_presets(
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
+        "renderer-ios-hdr-triple",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -673,7 +697,7 @@ def validate_causal_build_isolation_source(
             raise ValueError(f"causal CI profile source drifted: {literal}")
 
     local_literals = (
-        "off|on|tile|forward|causal-none|causal-a|causal-b",
+        "off|on|tile|forward|hdr-triple|causal-none|causal-a|causal-b",
         'local build="$TMP_GATE/causal-invalid-$mode-$name"',
         "for causal_mode_under_test in causal-a causal-b; do",
         "causal-invalid-non-ios-$causal_mode_under_test",
@@ -1327,24 +1351,29 @@ def test_cmake_presets_contract() -> None:
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][5]["environment"].__setitem__(
+        lambda candidate: candidate["configurePresets"][6]["environment"].__setitem__(
             "PACKAGE_DEVICE_IPA", "1"
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][6]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][7]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE", "none"
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][7]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][8]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS", "OFF"
         )
     )
     mutated_presets(
+        lambda candidate: candidate["configurePresets"][5]["cacheVariables"].__setitem__(
+            "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE", "OFF"
+        )
+    )
+    mutated_presets(
         lambda candidate: candidate["buildPresets"].__setitem__(
-            slice(5, 7),
-            list(reversed(candidate["buildPresets"][5:7])),
+            slice(6, 8),
+            list(reversed(candidate["buildPresets"][6:8])),
         )
     )
     mutations.extend(
@@ -1406,7 +1435,7 @@ def test_cmake_presets_contract() -> None:
             killed += 1
         else:
             raise AssertionError("CMake presets mutation survived")
-    assert killed == 19
+    assert killed == 20
 
 
 def test_causal_build_isolation_source_contract() -> None:
@@ -2502,7 +2531,7 @@ def main() -> None:
         "RendererIOS CI verification tests passed: "
         "11 groups, Bash 3.2 candidate/CI-causal/device-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
-        "19 CMake presets mutations, 14 causal source mutations, "
+        "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
         "17 UI selector mutations, 6 UI harness mutations, "
         "11 ABI8 export mutations"
