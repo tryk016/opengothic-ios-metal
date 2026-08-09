@@ -11,6 +11,7 @@
 #include "iosadditivesourcecensus.h"
 #endif
 
+#include <cmath>
 #include <cstddef>
 #include <limits>
 #include <optional>
@@ -92,6 +93,7 @@ struct IOSSceneExtractionStats final {
   std::size_t planned = 0;
   std::size_t plannedOpaque = 0;
   std::size_t plannedAlphaTest = 0;
+  std::size_t plannedAdditive = 0;
   std::size_t plannedLandscape = 0;
   std::size_t plannedStatic = 0;
   std::size_t plannedMovable = 0;
@@ -113,9 +115,16 @@ struct IOSSceneExtractionStats final {
       default;
 
   constexpr bool hasConsistentPlannedCounts() const noexcept {
-    const bool materialSumValid =
+    const bool firstMaterialSumValid =
         plannedOpaque<=
           std::numeric_limits<std::size_t>::max()-plannedAlphaTest;
+    const std::size_t firstMaterialSum = firstMaterialSumValid
+        ? plannedOpaque+plannedAlphaTest
+        : 0u;
+    const bool materialSumValid =
+        firstMaterialSumValid &&
+        firstMaterialSum<=
+          std::numeric_limits<std::size_t>::max()-plannedAdditive;
     const bool firstKindSumValid =
         plannedLandscape<=
           std::numeric_limits<std::size_t>::max()-plannedStatic;
@@ -126,7 +135,7 @@ struct IOSSceneExtractionStats final {
         firstKindSum<=
           std::numeric_limits<std::size_t>::max()-plannedMovable;
     return materialSumValid && kindSumValid &&
-        planned==plannedOpaque+plannedAlphaTest &&
+        planned==firstMaterialSum+plannedAdditive &&
         planned==firstKindSum+plannedMovable &&
         alphaFallback<=plannedAlphaTest;
     }
@@ -238,15 +247,30 @@ inline constexpr IOSSceneMaterialMapping iosSceneMaterialMapping(
       return {IOSMaterialCategory::Opaque,true};
     case Material::AlphaTest:
       return {IOSMaterialCategory::AlphaTest,true};
+    case Material::AdditiveLight:
+      return {IOSMaterialCategory::Additive,true};
     case Material::Water:
     case Material::Ghost:
     case Material::Multiply:
     case Material::Multiply2:
     case Material::Transparent:
-    case Material::AdditiveLight:
       return {};
     }
   return {};
+  }
+
+inline bool iosSceneMaterialUsesFallbackTexture(
+    const Material* material,
+    IOSSceneMaterialMapping mapping,
+    bool hasFrameAnimation,
+    const Tempest::Texture2d* localFallback) noexcept {
+  if(material==nullptr)
+    return false;
+  if(localFallback!=nullptr && material->tex==localFallback)
+    return true;
+  return mapping==IOSSceneMaterialMapping{
+             IOSMaterialCategory::Opaque,true} &&
+      !hasFrameAnimation && material->tex==nullptr;
   }
 
 inline constexpr IOSSceneMeshKind iosSceneOpaqueMeshKind(
@@ -409,7 +433,8 @@ inline bool recordIOSScenePlanResult(
   switch(result) {
     case IOSSceneSourcePlanResult::Planned: {
       if(plan.materialCategory!=IOSMaterialCategory::Opaque &&
-         plan.materialCategory!=IOSMaterialCategory::AlphaTest) {
+         plan.materialCategory!=IOSMaterialCategory::AlphaTest &&
+         plan.materialCategory!=IOSMaterialCategory::Additive) {
         return recordIOSSceneInvalidSource(stats);
         }
       if(plan.kind!=IOSSceneMeshKind::Landscape &&
@@ -420,13 +445,31 @@ inline bool recordIOSScenePlanResult(
       IOSSceneExtractionStats next = stats;
       if(textureAnimation!=plan.textureAnimation)
         return recordIOSSceneInvalidSource(stats);
+      const bool isAdditive =
+          plan.materialCategory==IOSMaterialCategory::Additive;
+      if(isAdditive &&
+         (plan.kind!=IOSSceneMeshKind::Static ||
+          plan.textureAnimation!=IOSSceneTextureAnimationMode::None ||
+          plan.usesFallbackTexture ||
+          plan.materialFlags!=IOSMaterialFlagStaticAdditiveNone ||
+          !std::isfinite(plan.baseColorAlpha) ||
+          plan.baseColorAlpha<0.f || plan.baseColorAlpha>1.f))
+        return recordIOSSceneInvalidSource(stats);
+      if(!isAdditive &&
+         (plan.materialFlags!=IOSMaterialFlagNone ||
+          plan.baseColorAlpha!=1.f))
+        return recordIOSSceneInvalidSource(stats);
       if(!incrementIOSSceneCounter(next.planned))
         return recordIOSSceneInvalidSource(stats);
       if(plan.materialCategory==IOSMaterialCategory::Opaque) {
         if(!incrementIOSSceneCounter(next.plannedOpaque))
           return recordIOSSceneInvalidSource(stats);
         }
-      else if(!incrementIOSSceneCounter(next.plannedAlphaTest))
+      else if(plan.materialCategory==IOSMaterialCategory::AlphaTest) {
+        if(!incrementIOSSceneCounter(next.plannedAlphaTest))
+          return recordIOSSceneInvalidSource(stats);
+        }
+      else if(!incrementIOSSceneCounter(next.plannedAdditive))
         return recordIOSSceneInvalidSource(stats);
       switch(plan.kind) {
         case IOSSceneMeshKind::Landscape:

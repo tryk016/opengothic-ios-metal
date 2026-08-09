@@ -170,6 +170,11 @@ enum class IOSMaterialCategory : uint8_t {
   Water,
   };
 
+enum IOSMaterialFlag : uint64_t {
+  IOSMaterialFlagNone = 0,
+  IOSMaterialFlagStaticAdditiveNone = uint64_t(1) << 0u,
+  };
+
 enum class IOSSceneMeshKind : uint8_t {
   Unsupported,
   Landscape,

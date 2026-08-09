@@ -199,6 +199,10 @@ int main() {
   static_assert(std::is_nothrow_move_assignable_v<IOSFrameInput>);
   static_assert(!std::is_copy_constructible_v<IOSRenderWorld>);
   static_assert(!std::is_move_constructible_v<IOSRenderWorld>);
+  static_assert(static_cast<uint8_t>(IOSSceneMeshKind::Static)==2u);
+  static_assert(static_cast<uint8_t>(IOSMaterialCategory::Additive)==3u);
+  static_assert(IOSMaterialFlagStaticAdditiveNone==(uint64_t(1) << 0u));
+  static_assert(std::is_standard_layout_v<IOSMaterial>);
 
   IOSMatrix4x4 matrixLayout;
   for(std::size_t row=0; row<4u; ++row) {
@@ -567,6 +571,67 @@ int main() {
     assert(!alpha.isStructurallyValid());
     }
 
+  auto additive = *firstValidAfterRejects;
+  additive.entities[0].kind = IOSSceneMeshKind::Static;
+  additive.materials[0].category = IOSMaterialCategory::Additive;
+  additive.materials[0].flags = IOSMaterialFlagStaticAdditiveNone;
+  additive.materials[0].usesFallbackTexture = false;
+  additive.materials[0].uvOffset = {};
+  additive.materials[0].baseColor.w = 0.375f;
+  assert(additive.isStructurallyValid());
+
+  for(const float alpha:{0.f,1.f}) {
+    auto boundary = additive;
+    boundary.materials[0].baseColor.w = alpha;
+    assert(boundary.isStructurallyValid());
+    }
+
+  auto missingAdditiveFlag = additive;
+  missingAdditiveFlag.materials[0].flags = IOSMaterialFlagNone;
+  assert(!missingAdditiveFlag.isStructurallyValid());
+  auto unknownAdditiveFlag = additive;
+  unknownAdditiveFlag.materials[0].flags |= uint64_t(1) << 63u;
+  assert(!unknownAdditiveFlag.isStructurallyValid());
+  auto forgedOpaqueFlag = additive;
+  forgedOpaqueFlag.materials[0].category = IOSMaterialCategory::Opaque;
+  assert(!forgedOpaqueFlag.isStructurallyValid());
+  auto staleAlphaFlag = additive;
+  staleAlphaFlag.materials[0].category = IOSMaterialCategory::AlphaTest;
+  assert(!staleAlphaFlag.isStructurallyValid());
+  auto orphanedAdditive = additive;
+  orphanedAdditive.entities.clear();
+  assert(!orphanedAdditive.isStructurallyValid());
+
+  for(const auto kind:{
+        IOSSceneMeshKind::Landscape,
+        IOSSceneMeshKind::Movable}) {
+    auto wrongKind = additive;
+    wrongKind.entities[0].kind = kind;
+    assert(!wrongKind.isStructurallyValid());
+    }
+  auto missingAdditiveTexture = additive;
+  missingAdditiveTexture.materials[0].baseColorTexture = {};
+  assert(!missingAdditiveTexture.isStructurallyValid());
+  auto additiveFallback = additive;
+  additiveFallback.materials[0].usesFallbackTexture = true;
+  assert(!additiveFallback.isStructurallyValid());
+  auto additiveUv = additive;
+  additiveUv.materials[0].uvOffset.x = 0.25f;
+  assert(!additiveUv.isStructurallyValid());
+  auto additiveNegativeZeroUv = additive;
+  additiveNegativeZeroUv.materials[0].uvOffset.y = -0.f;
+  assert(!additiveNegativeZeroUv.isStructurallyValid());
+  for(const float alpha:{
+        -0.001f,
+        1.001f,
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()}) {
+    auto invalidAlpha = additive;
+    invalidAlpha.materials[0].baseColor.w = alpha;
+    assert(!invalidAlpha.isStructurallyValid());
+    }
+
   auto fabricatedKindSnapshot = *firstValidAfterRejects;
   fabricatedKindSnapshot.entities[0].kind =
       static_cast<IOSSceneMeshKind>(255u);
@@ -574,7 +639,6 @@ int main() {
   auto fabricatedCategorySnapshot = *firstValidAfterRejects;
   for(const auto category:{
         IOSMaterialCategory::Transparent,
-        IOSMaterialCategory::Additive,
         IOSMaterialCategory::Water,
         static_cast<IOSMaterialCategory>(255u)}) {
     fabricatedCategorySnapshot.materials[0].category = category;

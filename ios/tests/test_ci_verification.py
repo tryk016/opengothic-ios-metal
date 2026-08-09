@@ -87,6 +87,8 @@ def validate_workflow(source: str) -> None:
         "build-on",
         "build-tile",
         "build-forward",
+        "build-additive-a-hdr",
+        "build-additive-b-hdr",
         "required",
     )
     lines = source.splitlines()
@@ -107,7 +109,9 @@ def validate_workflow(source: str) -> None:
         "if: needs.classifier.outputs.build_on == 'true'",
         "if: needs.classifier.outputs.build_tile == 'true'",
         "if: needs.classifier.outputs.build_forward == 'true'",
-        "needs: [classifier, contracts, build-off, build-on, build-tile, build-forward]",
+        "if: needs.classifier.outputs.build_additive_a_hdr == 'true'",
+        "if: needs.classifier.outputs.build_additive_b_hdr == 'true'",
+        "needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr]",
         "if: always()",
         "scripts/ci_verification.py aggregate",
         "--classifier-result \"${{ needs.classifier.result }}\"",
@@ -121,6 +125,16 @@ def validate_workflow(source: str) -> None:
         "--result-build-tile \"${{ needs.build-tile.result }}\"",
         "--expected-build-forward \"${{ needs.classifier.outputs.build_forward }}\"",
         "--result-build-forward \"${{ needs.build-forward.result }}\"",
+        "--expected-build-additive-a-hdr \"${{ needs.classifier.outputs.build_additive_a_hdr }}\"",
+        "--result-build-additive-a-hdr \"${{ needs.build-additive-a-hdr.result }}\"",
+        "--expected-build-additive-b-hdr \"${{ needs.classifier.outputs.build_additive_b_hdr }}\"",
+        "--result-build-additive-b-hdr \"${{ needs.build-additive-b-hdr.result }}\"",
+        "--additive-a-metallib-sha256 \"${{ needs.build-additive-a-hdr.outputs.metallib_sha256 }}\"",
+        "--additive-b-metallib-sha256 \"${{ needs.build-additive-b-hdr.outputs.metallib_sha256 }}\"",
+        "--additive-a-binary-sha256 \"${{ needs.build-additive-a-hdr.outputs.binary_sha256 }}\"",
+        "--additive-b-binary-sha256 \"${{ needs.build-additive-b-hdr.outputs.binary_sha256 }}\"",
+        "--additive-a-binary-marker \"${{ needs.build-additive-a-hdr.outputs.binary_marker }}\"",
+        "--additive-b-binary-marker \"${{ needs.build-additive-b-hdr.outputs.binary_marker }}\"",
     )
     for fragment in required_fragments:
         if source.count(fragment) != 1:
@@ -132,6 +146,8 @@ def validate_workflow(source: str) -> None:
         ("build-on", "build_on", "on"),
         ("build-tile", "build_tile", "tile"),
         ("build-forward", "build_forward", "forward"),
+        ("build-additive-a-hdr", "build_additive_a_hdr", "additive-a-hdr"),
+        ("build-additive-b-hdr", "build_additive_b_hdr", "additive-b-hdr"),
     ):
         scope = workflow_job(source, job)
         required_job_lines = (
@@ -149,6 +165,7 @@ def validate_workflow(source: str) -> None:
 
 
 def validate_extracted_oracles(contracts: str, profile: str) -> None:
+    local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
     for policy_oracle in (
         "scripts/classify_verification.py --validate-policy",
         "ios/tests/test_verification_classifier.py",
@@ -160,6 +177,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     contract_names = (
         "Verify shared CMake presets",
         "Verify P2.1c3b3b causal build isolation",
+        "Verify P2.1e1b additive evidence core",
         "Verify pinned Tempest fork twice",
         "Verify Tempest Metal 2D copy contract",
         "Verify neutral P2.1 scene boundary",
@@ -199,10 +217,62 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
             raise ValueError(f"profile build oracle drifted: {name}")
     if contracts.count("bash ios/patches/apply-patches.sh") != 2:
         raise ValueError("Tempest read-only verifier must run exactly twice")
+    additive_focused = (
+        'RUNNER_TEMP="$RUNNER_TEMP" scripts/verify_ios_additive_gpu.command'
+    )
+    if contracts.splitlines().count(additive_focused) != 1:
+        raise ValueError("CI Additive focused verifier invocation drifted")
+    local_additive_focused = (
+        'RUNNER_TEMP="$TMP_GATE" "$REPO/scripts/verify_ios_additive_gpu.command"'
+    )
+    if local_verify.splitlines().count(local_additive_focused) != 1:
+        raise ValueError("local Additive focused verifier invocation drifted")
+    runtime_focused = "scripts/verify_ios_additive_runtime.command"
+    if contracts.splitlines().count(runtime_focused) != 1:
+        raise ValueError("CI Additive runtime verifier invocation drifted")
+    local_runtime_focused = (
+        '"$REPO/scripts/verify_ios_additive_runtime.command"'
+    )
+    if local_verify.splitlines().count(local_runtime_focused) != 1:
+        raise ValueError("local Additive runtime verifier invocation drifted")
     if "bash ios/patches/apply-patches.sh" in profile:
         raise ValueError("profile builds duplicate the contracts-only Tempest oracle")
     if ".github/workflows/renderer-ios.yml" in contracts:
         raise ValueError("extracted contracts still parse the workflow implementation")
+    for source_membership_oracle in (
+        'source = "iosadditiveinputartifact.cpp"',
+        '"Additive artifact PBXBuildFile membership drifted"',
+        '"Additive artifact target source membership drifted"',
+    ):
+        if contracts.count(source_membership_oracle) != 1:
+            raise ValueError(
+                "Additive artifact source membership oracle drifted: "
+                + source_membership_oracle
+            )
+        if source_membership_oracle in profile:
+            raise ValueError(
+                "Additive artifact contracts-only oracle leaked into profile build"
+            )
+    for profile_binary_oracle in (
+        'binary = Path(sys.argv[1]).read_bytes()',
+        'prefix = b"RIOS_ADDITIVE_CAUSAL_MODE="',
+        'marker_a = prefix + b"additive-a-hdr"',
+        'marker_b = prefix + b"additive-b-hdr"',
+        r'candidate.count(expected + b"\0") != 1',
+        r'binary.replace(expected + b"\0", expected + b"X", 1)',
+        '"RendererIOS Additive binary marker oracle: profile="',
+        'raise SystemExit("Additive binary marker mutation survived")',
+    ):
+        if profile.count(profile_binary_oracle) != 1:
+            raise ValueError(
+                "CI Additive binary marker oracle drifted: "
+                + profile_binary_oracle
+            )
+        if local_verify.count(profile_binary_oracle) != 1:
+            raise ValueError(
+                "local Additive binary marker oracle drifted: "
+                + profile_binary_oracle
+            )
 
     configure = exact_scope(
         profile,
@@ -215,6 +285,8 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         '-DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE"',
         '-DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE='
         '"$CAUSAL_MODE"',
+        '-DOPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE='
+        '"$ADDITIVE_CAUSAL_MODE"',
         '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST='
         '"$SHADING_PROTOTYPE_TILE_SELF_TEST"',
         '-DOPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST='
@@ -237,7 +309,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
-        ')" -eq 18',
+        ')" -eq 19',
         "RendererIOS.candidate.sha256",
     ):
         if candidate.count(literal) != 1:
@@ -462,6 +534,8 @@ def validate_cmake_presets(
         "renderer-ios-tile",
         "renderer-ios-forward",
         "renderer-ios-hdr-triple",
+        "renderer-ios-additive-a-hdr",
+        "renderer-ios-additive-b-hdr",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -481,6 +555,7 @@ def validate_cmake_presets(
         "OPENGOTHIC_METALFX_TEMPORAL": "OFF",
         "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
@@ -538,6 +613,35 @@ def validate_cmake_presets(
     if hdr_triple.get("cacheVariables") != expected_hdr_triple_cache:
         raise ValueError("hdr-triple exact capture tuple drifted")
 
+    additive_tuple = {
+        "additive-a-hdr": "causal-a",
+        "additive-b-hdr": "causal-b",
+    }
+    for name, mode in additive_tuple.items():
+        preset = configure_by_name[f"renderer-ios-{name}"]
+        if preset.get("inherits") != "renderer-ios-base":
+            raise ValueError(f"{name} does not inherit the shared base")
+        if preset.get("binaryDir") != (
+            "${sourceDir}/build/local-renderer-ios-" + name
+        ):
+            raise ValueError(f"{name} public binaryDir drifted")
+        if preset.get("environment") != {"PACKAGE_DEVICE_IPA": "0"}:
+            raise ValueError(f"{name} package tuple drifted")
+        expected_additive_cache = {
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+            "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": mode,
+            "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON",
+        }
+        if preset.get("cacheVariables") != expected_additive_cache:
+            raise ValueError(f"{name} Additive causal HDR tuple drifted")
+
     causal_tuple = {
         "causal-none": "none",
         "causal-a": "causal-a",
@@ -584,6 +688,8 @@ def validate_cmake_presets(
         "renderer-ios-tile",
         "renderer-ios-forward",
         "renderer-ios-hdr-triple",
+        "renderer-ios-additive-a-hdr",
+        "renderer-ios-additive-b-hdr",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -1014,6 +1120,8 @@ def test_classification() -> None:
         "build_on": True,
         "build_tile": True,
         "build_forward": True,
+        "build_additive_a_hdr": True,
+        "build_additive_b_hdr": True,
     }
 
     narrow = {
@@ -1026,6 +1134,8 @@ def test_classification() -> None:
         "build_on": False,
         "build_tile": True,
         "build_forward": False,
+        "build_additive_a_hdr": False,
+        "build_additive_b_hdr": False,
     }
     assert CI.required_jobs({"gates": ["policy-contracts"]}) == {
         "contracts": False,
@@ -1033,6 +1143,8 @@ def test_classification() -> None:
         "build_on": False,
         "build_tile": False,
         "build_forward": False,
+        "build_additive_a_hdr": False,
+        "build_additive_b_hdr": False,
     }
     expect_error(lambda: CI.required_jobs({"gates": []}))
     expect_error(lambda: CI.required_jobs({"gates": ["full", "build-off"]}))
@@ -1086,6 +1198,8 @@ def test_aggregation() -> None:
         "build_on": False,
         "build_tile": True,
         "build_forward": False,
+        "build_additive_a_hdr": False,
+        "build_additive_b_hdr": False,
     }
     passing = {
         "contracts": "success",
@@ -1093,6 +1207,8 @@ def test_aggregation() -> None:
         "build_on": "skipped",
         "build_tile": "success",
         "build_forward": "skipped",
+        "build_additive_a_hdr": "skipped",
+        "build_additive_b_hdr": "skipped",
     }
     CI.aggregate("success", expected, passing)
     expect_error(lambda: CI.aggregate("failure", expected, passing))
@@ -1104,6 +1220,50 @@ def test_aggregation() -> None:
     expect_error(lambda: CI.aggregate("success", expected, cancelled_required))
     unexpected = dict(passing, build_on="success")
     expect_error(lambda: CI.aggregate("success", expected, unexpected))
+
+    exact_sha = "1" * 40
+    additive_expected = dict(expected)
+    additive_expected["build_additive_a_hdr"] = True
+    additive_expected["build_additive_b_hdr"] = True
+    additive_passing = dict(passing)
+    additive_passing["build_additive_a_hdr"] = "success"
+    additive_passing["build_additive_b_hdr"] = "success"
+    additive_a = {
+        "profile": "additive-a-hdr",
+        "parent_sha": exact_sha,
+        "tempest_sha": "2" * 40,
+        "metallib_sha256": "3" * 64,
+        "binary_sha256": "4" * 64,
+        "additive_mode": "causal-a",
+        "binary_marker": "RIOS_ADDITIVE_CAUSAL_MODE=additive-a-hdr",
+    }
+    additive_b = {
+        "profile": "additive-b-hdr",
+        "parent_sha": exact_sha,
+        "tempest_sha": "2" * 40,
+        "metallib_sha256": "3" * 64,
+        "binary_sha256": "5" * 64,
+        "additive_mode": "causal-b",
+        "binary_marker": "RIOS_ADDITIVE_CAUSAL_MODE=additive-b-hdr",
+    }
+    CI.aggregate(
+        "success", additive_expected, additive_passing,
+        exact_sha, additive_a, additive_b,
+    )
+    for key, value in (
+        ("parent_sha", "6" * 40),
+        ("tempest_sha", "7" * 40),
+        ("metallib_sha256", "8" * 64),
+        ("binary_sha256", additive_a["binary_sha256"]),
+        ("additive_mode", "causal-a"),
+        ("binary_marker", "RIOS_ADDITIVE_CAUSAL_MODE=additive-a-hdr"),
+    ):
+        mutant = dict(additive_b)
+        mutant[key] = value
+        expect_error(lambda mutant=mutant: CI.aggregate(
+            "success", additive_expected, additive_passing,
+            exact_sha, additive_a, mutant,
+        ))
 
 
 def test_workflow_contract() -> None:
@@ -1357,7 +1517,7 @@ def test_cmake_presets_contract() -> None:
     )
     mutated_presets(
         lambda candidate: candidate["configurePresets"][7]["cacheVariables"].__setitem__(
-            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE", "none"
+            "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE", "none"
         )
     )
     mutated_presets(
@@ -1524,8 +1684,8 @@ def test_causal_build_isolation_source_contract() -> None:
             cmake,
             replace_once(
                 profile,
-                "(?<![A-Za-z0-9_])",
-                "",
+                "(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_",
+                "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_",
             ),
             local_verify,
             contracts,
@@ -2220,23 +2380,28 @@ def test_bash32_candidate_arguments() -> None:
         ("contracts", CONTRACTS.read_text(encoding="utf-8"), 2),
         ("local", LOCAL_VERIFY.read_text(encoding="utf-8"), 2),
     )
-    tone_exports = ("riosToneResolveVertex", "riosToneResolveFragment")
+    abi9_exports = (
+        "riosToneResolveVertex",
+        "riosToneResolveFragment",
+        "riosLandscapeAdditiveFragment",
+    )
     cross_script_mutations_killed = 0
     for label, source, expected_count in export_oracle_sources:
-        for function in tone_exports:
+        for function in abi9_exports:
             assert source.count(function) == expected_count, (
-                f"{label} exact ABI8 export oracle drifted: {function}"
+                f"{label} exact ABI9 export oracle drifted: {function}"
             )
             mutant = source.replace(function, "riosToneResolveMutant", 1)
             assert mutant.count(function) != expected_count, (
-                f"{label} ABI8 export mutation survived: {function}"
+                f"{label} ABI9 export mutation survived: {function}"
             )
             cross_script_mutations_killed += 1
-    assert cross_script_mutations_killed == 6
+    assert cross_script_mutations_killed == 9
     exports = (
         "riosLandscapeVertex",
         "riosLandscapeFragment",
         "riosLandscapeAlphaTestFragment",
+        "riosLandscapeAdditiveFragment",
         "riosToneResolveVertex",
         "riosToneResolveFragment",
         "riosBinkVertex",
@@ -2253,7 +2418,7 @@ def test_bash32_candidate_arguments() -> None:
         "riosForwardPlusBuildLightList",
         "riosForwardPlusFragment",
     )
-    assert len(exports) == 18
+    assert len(exports) == 19
     metal_nm_output = "".join(f"00000000 T {name}\\n" for name in exports)
     harness = f"""\
 set -Eeuo pipefail
@@ -2320,22 +2485,22 @@ xcrun() {{
         for flag in ("-Wall", "-Wextra", "-Werror")
     )
 
-    old_abi7_exports = tuple(
+    old_abi8_exports = tuple(
         name for name in exports
-        if name not in ("riosToneResolveVertex", "riosToneResolveFragment")
+        if name != "riosLandscapeAdditiveFragment"
     )
-    assert len(old_abi7_exports) == 16
+    assert len(old_abi8_exports) == 18
     export_mutations = (
         (
-            "missing-tone-vertex",
-            tuple(name for name in exports if name != "riosToneResolveVertex"),
+            "missing-additive-fragment",
+            old_abi8_exports,
         ),
         (
             "missing-tone-fragment",
             tuple(name for name in exports if name != "riosToneResolveFragment"),
         ),
-        ("old-abi7-set", old_abi7_exports),
-        ("duplicate-tone-vertex", exports + ("riosToneResolveVertex",)),
+        ("old-abi8-set", old_abi8_exports),
+        ("duplicate-additive-fragment", exports + ("riosLandscapeAdditiveFragment",)),
         ("unexpected-export", exports + ("riosUnexpectedRuntimeShader",)),
     )
     mutations_killed = 0
@@ -2376,7 +2541,7 @@ xcrun() {{
                 check=False,
             )
         assert result.returncode != 0, (
-            "RendererIOS ABI8 export mutation survived: " + label
+            "RendererIOS ABI9 export mutation survived: " + label
         )
         mutations_killed += 1
     assert mutations_killed == 5
@@ -2392,6 +2557,7 @@ def test_bash32_causal_profile_tuple() -> None:
         "DIAGNOSTICS",
         "ACTIVE_FAULT_MODE",
         "CAUSAL_MODE",
+        "ADDITIVE_CAUSAL_MODE",
         "BINK_SELF_TEST",
         "RESOURCE_ALLOCATOR_SELF_TEST",
         "CLEAR_ONLY_PASS_SELF_TEST",
@@ -2404,7 +2570,9 @@ def test_bash32_causal_profile_tuple() -> None:
     for name in raw_names:
         base_environment.pop(name, None)
     base_environment["RUNNER_TEMP"] = tempfile.gettempdir()
-    base_environment["GITHUB_SHA"] = "1" * 40
+    base_environment["GITHUB_SHA"] = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
+    ).strip()
 
     clean = subprocess.run(
         ["/bin/bash", "-s", "--", "causal-a"],
@@ -2423,6 +2591,7 @@ def test_bash32_causal_profile_tuple() -> None:
         DIAGNOSTICS="ON",
         ACTIVE_FAULT_MODE="none",
         CAUSAL_MODE="causal-b",
+        ADDITIVE_CAUSAL_MODE="none",
         BINK_SELF_TEST="OFF",
         RESOURCE_ALLOCATOR_SELF_TEST="OFF",
         CLEAR_ONLY_PASS_SELF_TEST="OFF",
@@ -2447,6 +2616,7 @@ def test_bash32_causal_profile_tuple() -> None:
         ("DIAGNOSTICS", "OFF"),
         ("ACTIVE_FAULT_MODE", "post-submit-suboptimal"),
         ("CAUSAL_MODE", "causal-b"),
+        ("ADDITIVE_CAUSAL_MODE", "causal-a"),
         ("BINK_SELF_TEST", "ON"),
         ("RESOURCE_ALLOCATOR_SELF_TEST", "ON"),
         ("CLEAR_ONLY_PASS_SELF_TEST", "ON"),
@@ -2460,6 +2630,103 @@ def test_bash32_causal_profile_tuple() -> None:
         environment[name] = value
         rejected = subprocess.run(
             ["/bin/bash", "-s", "--", "causal-a"],
+            input=parser,
+            text=True,
+            cwd=REPO,
+            env=environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert rejected.returncode == 2
+        assert rejected.stderr.startswith(
+            f"causal profile raw input mismatch: {name}="
+        )
+
+
+def test_bash32_additive_profile_tuple() -> None:
+    source = PROFILE.read_text(encoding="utf-8")
+    boundary = source.find("\nfor value in \\")
+    if boundary < 0:
+        raise AssertionError("CI Additive profile parser boundary is missing")
+    parser = source[:boundary]
+    raw_names = (
+        "DIAGNOSTICS",
+        "ACTIVE_FAULT_MODE",
+        "CAUSAL_MODE",
+        "ADDITIVE_CAUSAL_MODE",
+        "BINK_SELF_TEST",
+        "RESOURCE_ALLOCATOR_SELF_TEST",
+        "CLEAR_ONLY_PASS_SELF_TEST",
+        "SHADING_PROTOTYPE_TILE_SELF_TEST",
+        "SHADING_PROTOTYPE_FORWARD_SELF_TEST",
+        "TEMPEST_PROFILE",
+        "PACKAGE_DEVICE_IPA",
+    )
+    base_environment = os.environ.copy()
+    for name in raw_names:
+        base_environment.pop(name, None)
+    base_environment["RUNNER_TEMP"] = tempfile.gettempdir()
+    base_environment["GITHUB_SHA"] = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, text=True
+    ).strip()
+    for profile in ("additive-a-hdr", "additive-b-hdr"):
+        clean = subprocess.run(
+            ["/bin/bash", "-s", "--", profile],
+            input=parser,
+            text=True,
+            cwd=REPO,
+            env=base_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        assert clean.returncode == 0, clean.stderr
+
+    matching_environment = dict(
+        base_environment,
+        DIAGNOSTICS="ON",
+        ACTIVE_FAULT_MODE="none",
+        CAUSAL_MODE="none",
+        ADDITIVE_CAUSAL_MODE="causal-b",
+        BINK_SELF_TEST="OFF",
+        RESOURCE_ALLOCATOR_SELF_TEST="OFF",
+        CLEAR_ONLY_PASS_SELF_TEST="OFF",
+        SHADING_PROTOTYPE_TILE_SELF_TEST="OFF",
+        SHADING_PROTOTYPE_FORWARD_SELF_TEST="OFF",
+        TEMPEST_PROFILE="baseline",
+        PACKAGE_DEVICE_IPA="0",
+    )
+    matching = subprocess.run(
+        ["/bin/bash", "-s", "--", "additive-b-hdr"],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        env=matching_environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert matching.returncode == 0, matching.stderr
+
+    conflicts = (
+        ("DIAGNOSTICS", "OFF"),
+        ("ACTIVE_FAULT_MODE", "post-submit-suboptimal"),
+        ("CAUSAL_MODE", "causal-a"),
+        ("ADDITIVE_CAUSAL_MODE", "causal-b"),
+        ("BINK_SELF_TEST", "ON"),
+        ("RESOURCE_ALLOCATOR_SELF_TEST", "ON"),
+        ("CLEAR_ONLY_PASS_SELF_TEST", "ON"),
+        ("SHADING_PROTOTYPE_TILE_SELF_TEST", "ON"),
+        ("SHADING_PROTOTYPE_FORWARD_SELF_TEST", "ON"),
+        ("TEMPEST_PROFILE", "metalfx-spatial"),
+        ("PACKAGE_DEVICE_IPA", "1"),
+    )
+    for name, value in conflicts:
+        environment = dict(base_environment)
+        environment[name] = value
+        rejected = subprocess.run(
+            ["/bin/bash", "-s", "--", "additive-a-hdr"],
             input=parser,
             text=True,
             cwd=REPO,
@@ -2502,6 +2769,20 @@ def test_bash32_local_profile_parser() -> None:
     )
     assert causal.returncode == 0, causal.stderr
 
+    additive = subprocess.run(
+        [
+            "/bin/bash", "-s", "--", "profiles",
+            "additive-a-hdr", "additive-b-hdr",
+        ],
+        input=parser,
+        text=True,
+        cwd=REPO,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert additive.returncode == 0, additive.stderr
+
     duplicate = subprocess.run(
         ["/bin/bash", "-s", "--", "profiles", "on", "on"],
         input=parser,
@@ -2526,15 +2807,16 @@ def main() -> None:
     test_ui_automation_host_contract()
     test_bash32_candidate_arguments()
     test_bash32_causal_profile_tuple()
+    test_bash32_additive_profile_tuple()
     test_bash32_local_profile_parser()
     print(
         "RendererIOS CI verification tests passed: "
-        "11 groups, Bash 3.2 candidate/CI-causal/device-causal/local-profile smokes, "
+        "12 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
         "17 UI selector mutations, 6 UI harness mutations, "
-        "11 ABI8 export mutations"
+        "14 ABI9 export mutations"
     )
 
 

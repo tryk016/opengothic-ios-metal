@@ -169,7 +169,7 @@ required_once = {
         "state,8u,1u,route,prepared",
         "failed,IOSGPUSceneCausalFailureReason::TargetNotObserved));",
         "static_cast<IOSGPUSceneCausalFrameRoute>(255u)",
-        "prepared,route,targetCounts,3u,3u,false,true,true",
+        "prepared,route,targetCounts,4u,4u,true,true,true",
     ),
     "native": (
         "const int* const processArgumentCountAddress = _NSGetArgc();",
@@ -212,39 +212,61 @@ required_once = {
       failCausal(
           causalState.generation,causalState.lastSequence,
           IOSGPUSceneCausalFailureReason::TargetNotObserved);""",
-        "targetDraws.emplace_back(std::move(draw));",
+        "candidateFrame->causalPrepared = causalPrepared;",
+        "candidateFrame->base.reserve(snapshot.entities.size());",
+        "candidateFrame->additive.reserve(snapshot.entities.size());",
         """switch(dispatch.effective) {
-          case IOSGPUScenePipelineSelector::Opaque:
-            effectivePipeline =
-                (id<MTLRenderPipelineState>)
-                    impl->opaquePipelineState;
-            break;
-          case IOSGPUScenePipelineSelector::AlphaTest:
-            effectivePipeline =
-                (id<MTLRenderPipelineState>)
-                    impl->alphaTestPipelineState;
-            break;
-          case IOSGPUScenePipelineSelector::Unsupported:
-            break;
-          }""",
-        "draw.pipelineState = effectivePipeline;",
+        case IOSGPUScenePipelineSelector::Opaque:
+          pipelineState =
+              (id<MTLRenderPipelineState>)impl->opaquePipelineState;
+          break;
+        case IOSGPUScenePipelineSelector::AlphaTest:
+          pipelineState =
+              (id<MTLRenderPipelineState>)impl->alphaTestPipelineState;
+          break;
+        case IOSGPUScenePipelineSelector::Additive:
+          pipelineState =
+              (id<MTLRenderPipelineState>)impl->additivePipelineState;
+          break;
+        case IOSGPUScenePipelineSelector::Unsupported:
+          break;
+        }""",
+        "draw.pipelineState = pipelineState;",
+        "candidateFrame->targetOrdinal,ordinal",
+        "makeIOSGPUSceneCausalDrawIdentity(",
+        "iosGPUSceneCausalDrawIdSignpost(identity)",
+        "iosGPUSceneCausalDrawBindSignpost(identity)",
+        "draw.drawId = OwnedObjectiveC(",
+        "draw.drawBind = OwnedObjectiveC(",
+        "candidateFrame->additive.emplace_back(std::move(draw));",
+        "candidateFrame->base.emplace_back(std::move(draw));",
+        "candidateFrame->targetEncodedMarker =",
+        "prepared.impl = std::move(candidateFrame);",
+        "const auto encodePhase = [&](",
         """[encoder setRenderPipelineState:
-            (id<MTLRenderPipelineState>)draw.pipelineState];""",
-        "targetEncodedMarker = iosGPUSceneCausalEncodedMarker(",
+          (id<MTLRenderPipelineState>)draw.pipelineState];""",
+        "encodePhase(context.prepared->base,context.scene->baseDepthState);",
+        """encodePhase(context.prepared->additive,
+                context.scene->additiveDepthState);""",
+        "context.prepared->nativeCompleted = true;",
+        "context.prepared->nativeException = true;",
         "const bool encoded = Tempest::MetalApi::withActiveRenderEncoder(",
-        "Report failure = makeReport(Result::NativeEncodingFailed);",
-        "recordFailure(failure.failures.nativeEncode,failure);",
+        "context.report.result = Result::NoActiveRenderEncoder;",
+        "if(prepared.impl->nativeException ||",
+        "iosGPUSceneCommitCausalPreparation(",
+        "impl->causalState = committed;",
+        "prepared.impl->targetEncodedMarker.text.data()",
         "IOSGPUSceneCausalFailureReason::MissingAlphaTestDraw",
     ),
 }
 
 expected_draw_operations = [
+    "setRenderPipelineState",
     "setVertexBuffer",
     "setVertexBytes",
     "setFragmentTexture",
     "insertDebugSignpost",
     "insertDebugSignpost",
-    "setRenderPipelineState",
     "drawIndexedPrimitives",
 ]
 
@@ -256,51 +278,134 @@ def validate(candidate):
                 raise ValueError(name + " required-once drift: " + snippet)
     native = candidate["native"]
     header = candidate["header"]
-    if native.count("_NSGetArgc()") != 1 or native.count("_NSGetArgv()") != 1:
-        raise ValueError("process argv is not parsed exactly once")
+    causal_init_start = native.index(
+        "const int* const processArgumentCountAddress = _NSGetArgc();"
+    )
+    causal_init_end = native.index(
+        "Tempest::Log::i(armed.text.data());", causal_init_start
+    )
+    causal_init = native[causal_init_start:causal_init_end]
+    if causal_init.count("_NSGetArgc()") != 1 or \
+       causal_init.count("_NSGetArgv()") != 1:
+        raise ValueError("causal process argv is not parsed exactly once")
     if native.count("Tempest::Log::e(marker.text.data());") != 2:
         raise ValueError("parse/runtime FAIL log sites drifted")
     parse_order = (
-        native.index("_NSGetArgc()"),
-        native.index("_NSGetArgv()"),
-        native.index("iosGPUSceneParseCausalArguments("),
-        native.index("causalArgumentsAccepted = true;"),
-        native.index("Tempest::Log::i(armed.text.data());"),
+        causal_init.index("_NSGetArgc()"),
+        causal_init.index("_NSGetArgv()"),
+        causal_init.index("iosGPUSceneParseCausalArguments("),
+        causal_init.index("causalArgumentsAccepted = true;"),
     )
     if tuple(sorted(parse_order)) != parse_order:
         raise ValueError("causal argv/ARMED order drifted")
-    bridge = native.index(
-        "const bool encoded = Tempest::MetalApi::withActiveRenderEncoder("
+    prepare_start = native.index(
+        "IOSGPUScene::Report IOSGPUScene::prepareFrame("
     )
-    for token in (
-        "recordIOSGPUSceneDrawDispatchForRoute(",
-        "makeIOSGPUSceneCausalDrawIdentity(",
-        "iosGPUSceneCausalDrawIdSignpost(",
-        "iosGPUSceneCausalDrawBindSignpost(",
-        "iosGPUSceneCausalPreparationIsValid(",
-        "targetEncodedMarker = iosGPUSceneCausalEncodedMarker(",
-    ):
-        if native.index(token) > bridge:
-            raise ValueError("causal preflight occurs after native bridge: " + token)
-    target_start = native.index(
-        "if(context.route==IOSGPUSceneCausalFrameRoute::Target)"
+    bridge_start = native.index(
+        "IOSGPUScene::Report IOSGPUScene::encodePrepared("
     )
-    target_end = native.index("#endif", target_start)
-    target_native = native[target_start:target_end]
-    loop_start = target_native.index("for(const auto& draw:")
-    loop_end = target_native.index("restoreEncoderState();", loop_start)
-    draw_loop = target_native[loop_start:loop_end]
+    prepare = native[prepare_start:bridge_start]
+    prepare_order = tuple(
+        prepare.index(token)
+        for token in (
+            "iosGPUScenePrepareCausalObservation(",
+            "for(const auto& entity:snapshot.entities)",
+            "recordIOSGPUSceneDrawDispatchForRoute(",
+            "makeIOSGPUSceneCausalDrawIdentity(",
+            "iosGPUSceneCausalDrawIdSignpost(identity)",
+            "iosGPUSceneCausalDrawBindSignpost(identity)",
+            "draw.drawId = OwnedObjectiveC(",
+            "draw.drawBind = OwnedObjectiveC(",
+            "candidateFrame->additive.emplace_back(std::move(draw));",
+            "iosGPUSceneCausalPreparationIsValid(",
+            "candidateFrame->targetEncodedMarker =",
+            "candidateFrame->ready = true;",
+            "prepared.impl = std::move(candidateFrame);",
+        )
+    )
+    if tuple(sorted(prepare_order)) != prepare_order:
+        raise ValueError("causal frozen preparation order drifted")
+    if prepare.count("for(const auto& entity:snapshot.entities)") != 1:
+        raise ValueError("frozen source-order entity loop drifted")
+    if "startEncoding" in prepare or \
+       "withActiveRenderEncoder" in prepare:
+        raise ValueError("native bridge leaked into prepareFrame")
+
+    native_start = native.index(
+        "void IOSGPUScene::Impl::encodeLandscape("
+    )
+    native_end = native.index("IOSGPUScene::IOSGPUScene(", native_start)
+    native_encode = native[native_start:native_end]
+    phase_start = native_encode.index("const auto encodePhase = [&](")
+    loop_start = native_encode.index("for(const auto& draw:", phase_start)
+    loop_end = native_encode.index("\n    };", loop_start)
+    draw_loop = native_encode[loop_start:loop_end]
     operations = re.findall(r"\[encoder ([A-Za-z]+)", draw_loop)
     if operations != expected_draw_operations:
-        raise ValueError("target native draw operation order drifted")
+        raise ValueError("frozen native draw operation order drifted")
     if draw_loop.index("draw.drawId.get()") > \
        draw_loop.index("draw.drawBind.get()"):
         raise ValueError("target draw-id/draw-bind order drifted")
-    finish = native[native.index("if(context.targetNativeException)"):]
+    phase_order = (
+        native_encode.index(
+            "encodePhase(context.prepared->base,context.scene->baseDepthState);"
+        ),
+        native_encode.index("encodePhase(context.prepared->additive,"),
+        native_encode.index("context.prepared->nativeCompleted = true;"),
+    )
+    if tuple(sorted(phase_order)) != phase_order:
+        raise ValueError("base/Additive frozen phase order drifted")
+    exception_start = native_encode.index("@catch(NSException* exception)")
+    exception_order = (
+        exception_start,
+        native_encode.index(
+            "context.prepared->nativeException = true;", exception_start
+        ),
+        native_encode.index(
+            "context.report.result = IOSGPUScene::Result::NativeEncodingFailed;",
+            exception_start,
+        ),
+        native_encode.index(
+            "recordFailure(context.report.failures.nativeEncode,context.report);",
+            exception_start,
+        ),
+    )
+    if tuple(sorted(exception_order)) != exception_order:
+        raise ValueError("native exception failure order drifted")
+
+    finish = native[bridge_start:]
+    bridge = finish.index(
+        "const bool encoded = Tempest::MetalApi::withActiveRenderEncoder("
+    )
+    no_encoder = finish.index("if(!encoded)")
+    native_catch = finish.index("catch(...)")
+    successful_bridge = finish.index(
+        "if(prepared.impl->nativeException ||"
+    )
+    commit = finish.index("iosGPUSceneCommitCausalPreparation(")
+    if not bridge < no_encoder < native_catch < successful_bridge < commit:
+        raise ValueError("bridge/failure/commit order drifted")
+    no_encoder_block = finish[no_encoder:native_catch]
+    if "IOSGPUSceneCausalFailureReason::NoActiveRenderEncoder" not in \
+       no_encoder_block or "return context.report;" not in no_encoder_block:
+        raise ValueError("no-active-encoder failure is not terminal")
+    catch_block = finish[native_catch:successful_bridge]
+    if "IOSGPUSceneCausalFailureReason::NativeException" not in \
+       catch_block or "return context.report;" not in catch_block:
+        raise ValueError("native bridge exception is not terminal")
+    success_guard = finish[successful_bridge:commit]
+    for token in (
+        "prepared.impl->nativeException",
+        "!prepared.impl->nativeCompleted",
+        "context.report.result!=Result::Success",
+        "return context.report;",
+    ):
+        if token not in success_guard:
+            raise ValueError("successful bridge guard drifted: " + token)
     finish_order = (
-        finish.index("iosGPUSceneCommitCausalPreparation("),
+        commit,
         finish.index("impl->causalState = committed;"),
-        finish.index("Tempest::Log::i(targetEncodedMarker.text.data());"),
+        finish.index("prepared.impl->targetEncodedMarker.text.data()"),
     )
     if tuple(sorted(finish_order)) != finish_order:
         raise ValueError("target commit/ENCODED order drifted")
@@ -331,7 +436,7 @@ for operation in (
     "[encoder insertDebugSignpost:(NSString*)draw.drawId.get()];",
     "[encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];",
     """[encoder setRenderPipelineState:
-            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+          (id<MTLRenderPipelineState>)draw.pipelineState];""",
     "[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle",
 ):
     mutant = dict(sources)
@@ -354,15 +459,23 @@ for old, new in (
     ("processArgumentCount,processArgumentVector,", "processArgumentCount,nullptr,"),
     (
         """[encoder setRenderPipelineState:
-            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+          (id<MTLRenderPipelineState>)draw.pipelineState];""",
         """[encoder setRenderPipelineState:
-            (id<MTLRenderPipelineState>)context.scene->opaquePipelineState];""",
+          (id<MTLRenderPipelineState>)context.scene->opaquePipelineState];""",
     ),
     (
         """[encoder setRenderPipelineState:
-            (id<MTLRenderPipelineState>)draw.pipelineState];""",
+          (id<MTLRenderPipelineState>)draw.pipelineState];""",
         """[encoder setRenderPipelineState:
-            (id<MTLRenderPipelineState>)context.scene->alphaTestPipelineState];""",
+          (id<MTLRenderPipelineState>)context.scene->alphaTestPipelineState];""",
+    ),
+    (
+        """encodePhase(context.prepared->base,context.scene->baseDepthState);
+    encodePhase(context.prepared->additive,
+                context.scene->additiveDepthState);""",
+        """encodePhase(context.prepared->additive,
+                context.scene->additiveDepthState);
+    encodePhase(context.prepared->base,context.scene->baseDepthState);""",
     ),
 ):
     mutant = dict(sources)
@@ -376,9 +489,13 @@ mutations.append(mutant)
 mutant = dict(sources)
 mutant["native"] = native.replace(
     """impl->causalState = committed;
-    Tempest::Log::i(targetEncodedMarker.text.data());""",
-    """Tempest::Log::i(targetEncodedMarker.text.data());
-    impl->causalState = committed;""",
+  if(target)
+    Tempest::Log::i(
+        prepared.impl->targetEncodedMarker.text.data());""",
+    """if(target)
+    Tempest::Log::i(
+        prepared.impl->targetEncodedMarker.text.data());
+  impl->causalState = committed;""",
     1,
 )
 mutations.append(mutant)
@@ -415,14 +532,28 @@ cmake_contract = (
     "RendererIOS native AlphaTest diagnostics-only causal build mode")""",
     "PROPERTY STRINGS ${_renderer_ios_native_alpha_test_causal_modes}",
     "_renderer_ios_native_alpha_test_causal_mode_index EQUAL -1",
-    'STREQUAL "causal-a")',
+    """if(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+       STREQUAL "causal-a")""",
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A=1",
-    'STREQUAL "causal-b")',
+    """elseif(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+         STREQUAL "causal-b")""",
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1",
     "RendererIOS native AlphaTest causal A/B builds require ",
     "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=ON",
     "OPENGOTHIC_RENDERER_IOS_FAULT_MODE=none",
     "exclusive with all other RendererIOS self-tests",
+)
+additive_contract = (
+    'set(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE "none"',
+    "PROPERTY STRINGS ${_renderer_ios_additive_causal_modes}",
+    "_renderer_ios_additive_causal_mode_index EQUAL -1",
+    "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A=1",
+    "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B=1",
+    "RendererIOS Additive causal A/B requires the exact diagnostics=ON, ",
+    """NOT OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+           STREQUAL "none" OR
+       NOT OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE OR""",
+    "native AlphaTest and Additive causal modes are mutually exclusive",
 )
 
 
@@ -435,6 +566,9 @@ def validate_sources(
     for literal in cmake_contract:
         if literal not in candidate_cmake:
             raise ValueError("causal CMake source contract drifted: " + literal)
+    for literal in additive_contract:
+        if literal not in candidate_cmake:
+            raise ValueError("Additive CMake source contract drifted: " + literal)
     if (
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST"
         in candidate_cmake
@@ -448,6 +582,8 @@ def validate_sources(
         "renderer-ios-tile",
         "renderer-ios-forward",
         "renderer-ios-hdr-triple",
+        "renderer-ios-additive-a-hdr",
+        "renderer-ios-additive-b-hdr",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -463,6 +599,10 @@ def validate_sources(
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
     ) != "none":
         raise ValueError("ordinary preset base is not explicit none")
+    if base_cache.get(
+        "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE"
+    ) != "none":
+        raise ValueError("ordinary preset base Additive mode is not explicit none")
     if base_cache.get(
         "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
     ) != "OFF":
@@ -487,6 +627,33 @@ def validate_sources(
     }
     if hdr_triple.get("cacheVariables") != expected_hdr_triple_cache:
         raise ValueError("hdr-triple exact capture tuple drifted")
+    for suffix, mode in (
+        ("additive-a-hdr", "causal-a"),
+        ("additive-b-hdr", "causal-b"),
+    ):
+        preset = configure["renderer-ios-" + suffix]
+        if preset.get("inherits") != "renderer-ios-base":
+            raise ValueError(suffix + " does not inherit base")
+        if preset.get("binaryDir") != (
+            "${sourceDir}/build/local-renderer-ios-" + suffix
+        ):
+            raise ValueError(suffix + " binaryDir drifted")
+        if preset.get("environment") != {"PACKAGE_DEVICE_IPA": "0"}:
+            raise ValueError(suffix + " package tuple drifted")
+        expected_cache = {
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+            "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": mode,
+            "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON",
+        }
+        if preset.get("cacheVariables") != expected_cache:
+            raise ValueError(suffix + " exact cache tuple drifted")
     for suffix, mode in (
         ("causal-none", "none"),
         ("causal-a", "causal-a"),
@@ -520,6 +687,8 @@ def validate_sources(
         "renderer-ios-tile",
         "renderer-ios-forward",
         "renderer-ios-hdr-triple",
+        "renderer-ios-additive-a-hdr",
+        "renderer-ios-additive-b-hdr",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -527,8 +696,10 @@ def validate_sources(
         raise ValueError("causal build preset order drifted")
     for literal in (
         "RAW_ACTIVE_FAULT_MODE_SET",
+        "RAW_ADDITIVE_CAUSAL_MODE_SET",
         "reject_causal_raw_conflict",
         '-DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$CAUSAL_MODE"',
+        '-DOPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE="$ADDITIVE_CAUSAL_MODE"',
         "causal PBX global definitions drifted",
         "RendererIOS causal binary oracle:",
     ):
@@ -536,6 +707,8 @@ def validate_sources(
             raise ValueError("causal CI profile contract drifted: " + literal)
     for literal in (
         "causal-none|causal-a|causal-b",
+        "additive-a-hdr|additive-b-hdr",
+        "RendererIOS Additive causal PBX oracle:",
         "RendererIOS causal PBX oracle:",
         "RendererIOS causal binary oracle:",
         "causal-invalid-non-ios",
@@ -550,28 +723,32 @@ for literal in cmake_contract[:8]:
     source_mutations.append(
         (cmake.replace(literal, "C3B3B_MUTANT", 1), presets, profile, local)
     )
+for literal in additive_contract:
+    source_mutations.append(
+        (cmake.replace(literal, "E1B_MUTANT", 1), presets, profile, local)
+    )
 mutated = deepcopy(presets)
 del mutated["configurePresets"][0]["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ]
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][6]["binaryDir"] = (
+mutated["configurePresets"][8]["binaryDir"] = (
     "${sourceDir}/build/local-renderer-ios-causal-a"
 )
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][7]["cacheVariables"][
+mutated["configurePresets"][9]["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ] = "none"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][8]["cacheVariables"][
+mutated["configurePresets"][10]["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST"
 ] = "ON"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][6]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+mutated["configurePresets"][8]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
 mutated["configurePresets"][0]["cacheVariables"][
@@ -622,9 +799,9 @@ for mutation in source_mutations:
         killed += 1
     else:
         raise SystemExit("causal source mutation survived")
-if killed != 18:
+if killed != 26:
     raise SystemExit("causal source mutation count drifted")
-print("RendererIOS causal source oracle: mutations-killed=18")
+print("RendererIOS causal/Additive source oracle: mutations-killed=26")
 PY
 
 CAUSAL_CONTRACT_ROOT="$RUNNER_TEMP/renderer-ios-causal-contracts"
@@ -886,6 +1063,275 @@ for causal_mode_under_test in causal-a causal-b; do
     exit 1
   fi
 done
+
+ADDITIVE_CONTRACT_ROOT="$RUNNER_TEMP/renderer-ios-additive-contracts"
+for additive_profile in additive-a-hdr additive-b-hdr; do
+  cmake --preset "renderer-ios-$additive_profile" \
+    -B "$ADDITIVE_CONTRACT_ROOT/$additive_profile" \
+    -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA-contract"
+done
+
+python3 - "$ADDITIVE_CONTRACT_ROOT" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+macro_a = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A=1"
+macro_b = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B=1"
+macro_host = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_HOST_TEST"
+token = re.compile(
+    r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_"
+    r"(?:A|B|HOST_TEST)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
+)
+required_cache = {
+    "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": ("BOOL", "ON"),
+    "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": ("STRING", "none"),
+    "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": (
+        "STRING", "none"
+    ),
+    "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": ("BOOL", "OFF"),
+    "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": ("BOOL", "OFF"),
+    "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": ("BOOL", "OFF"),
+    "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": ("BOOL", "OFF"),
+    "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": (
+        "BOOL", "OFF"
+    ),
+    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": ("BOOL", "ON"),
+}
+
+
+def parse_cache(source: str) -> dict[str, tuple[str, str]]:
+    result = {}
+    for line in source.splitlines():
+        match = re.fullmatch(r"([^/#][^:]*):([^=]+)=(.*)", line)
+        if match is not None:
+            result[match.group(1)] = (match.group(2), match.group(3))
+    return result
+
+
+def validate_cache(candidate: dict[str, tuple[str, str]], mode: str) -> None:
+    expected = dict(required_cache)
+    expected["OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE"] = (
+        "STRING", mode
+    )
+    for key, value in expected.items():
+        if candidate.get(key) != value:
+            raise ValueError("Additive cache tuple drifted: " + key)
+
+
+def target_configurations(project: str):
+    target = re.search(
+        r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
+        r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+        project,
+        re.S,
+    )
+    if target is None:
+        raise ValueError("cannot identify Gothic2Notr target")
+    list_id = re.search(
+        r'buildConfigurationList = ([A-F0-9]{24}) /\* '
+        r'Build configuration list for PBXNativeTarget "Gothic2Notr" \*/;',
+        target.group(2),
+    )
+    if list_id is None:
+        raise ValueError("cannot identify Gothic2Notr configuration list")
+    configuration_list = re.search(
+        rf"\b{list_id.group(1)} /\* Build configuration list for "
+        r'PBXNativeTarget "Gothic2Notr" \*/ = \{\n'
+        r"\s*isa = XCConfigurationList;(.*?)\n\s*\};",
+        project,
+        re.S,
+    )
+    if configuration_list is None:
+        raise ValueError("cannot read Gothic2Notr configuration list")
+    configurations = re.findall(
+        r"([A-F0-9]{24}) /\* (Debug|MinSizeRel|Release|RelWithDebInfo) \*/,",
+        configuration_list.group(1),
+    )
+    if [name for _, name in configurations] != [
+        "Debug", "Release", "MinSizeRel", "RelWithDebInfo"
+    ]:
+        raise ValueError("Gothic2Notr configuration entries drifted")
+    return configurations
+
+
+def validate_additive_source_membership(project: str) -> None:
+    source = "iosadditiveinputartifact.cpp"
+    build_files = re.findall(
+        r"/\* [^*\n]*iosadditiveinputartifact\.cpp \*/ = "
+        r"\{isa = PBXBuildFile; fileRef =",
+        project,
+    )
+    if len(build_files) != 1:
+        raise ValueError("Additive artifact PBXBuildFile membership drifted")
+    target = re.search(
+        r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
+        r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+        project,
+        re.S,
+    )
+    if target is None:
+        raise ValueError("cannot identify Gothic2Notr target for Additive source")
+    source_phase = re.search(r"([A-F0-9]{24}) /\* Sources \*/", target.group(2))
+    if source_phase is None:
+        raise ValueError("Gothic2Notr has no Sources phase")
+    phase = re.search(
+        rf"\b{source_phase.group(1)} /\* Sources \*/ = \{{\n"
+        r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+        project,
+        re.S,
+    )
+    if phase is None or phase.group(1).count(source) != 1:
+        raise ValueError("Additive artifact target source membership drifted")
+
+
+def validate_pbx(project: str, mode: str) -> None:
+    validate_additive_source_membership(project)
+    expected = (macro_a,) if mode == "causal-a" else (macro_b,)
+    if token.findall(project) != list(expected) * 4:
+        raise ValueError("Additive PBX global entries drifted")
+    alpha = re.compile(
+        r"OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_(?:A|B|HOST_TEST)"
+    )
+    if alpha.search(project) is not None:
+        raise ValueError("AlphaTest causal macro leaked into Additive profile")
+    for identifier, name in target_configurations(project):
+        configuration = re.search(
+            rf"\b{identifier} /\* {name} \*/ = \{{\n"
+            r"\s*isa = XCBuildConfiguration;\n"
+            r"\s*buildSettings = \{(.*?)\n\s*\};\n"
+            rf"\s*name = {name};\n\s*\}};",
+            project,
+            re.S,
+        )
+        if configuration is None:
+            raise ValueError("cannot read Gothic2Notr " + name)
+        lists = re.findall(
+            r"GCC_PREPROCESSOR_DEFINITIONS = \((.*?)\);",
+            configuration.group(1),
+            re.S,
+        )
+        if len(lists) != 1 or token.findall(lists[0]) != list(expected):
+            raise ValueError("Additive PBX exact list drifted: " + name)
+
+
+cache_mutations = 0
+pbx_mutations = 0
+for profile, mode in (
+    ("additive-a-hdr", "causal-a"),
+    ("additive-b-hdr", "causal-b"),
+):
+    build = root / profile
+    cache = parse_cache((build / "CMakeCache.txt").read_text())
+    validate_cache(cache, mode)
+    expected_cache = {
+        **required_cache,
+        "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": ("STRING", mode),
+    }
+    for key, (_, value) in expected_cache.items():
+        mutation = dict(cache)
+        mutation[key] = ("STRING", value + "-mutant")
+        try:
+            validate_cache(mutation, mode)
+        except ValueError:
+            cache_mutations += 1
+        else:
+            raise SystemExit("Additive cache mutation survived")
+
+    project = (
+        build / "Gothic2Notr.xcodeproj" / "project.pbxproj"
+    ).read_text()
+    validate_pbx(project, mode)
+    expected_additive = macro_a if mode == "causal-a" else macro_b
+    opposite_additive = macro_b if mode == "causal-a" else macro_a
+    quoted = "\"'" + expected_additive + "'\""
+    if project.count(quoted) != 4:
+        raise SystemExit("Additive PBX mutation entries drifted")
+    mutations = (
+        project.replace(quoted, "", 1),
+        project.replace(quoted, quoted + "," + quoted, 1),
+        project.replace(
+            expected_additive, expected_additive[:-1] + "10", 1
+        ),
+        project.replace(
+            expected_additive, "MUTANT_" + expected_additive, 1
+        ),
+        project.replace(
+            quoted, quoted + ",\"'" + opposite_additive + "'\"", 1
+        ),
+        project.replace(
+            quoted, quoted + ",\"'" + macro_host + "=1'\"", 1
+        ),
+        project.replace(quoted, "", 1) + "\n" + quoted + "\n",
+    )
+    for mutation in mutations:
+        try:
+            validate_pbx(mutation, mode)
+        except ValueError:
+            pbx_mutations += 1
+        else:
+            raise SystemExit("Additive PBX mutation survived")
+
+if cache_mutations != 20:
+    raise SystemExit("Additive cache mutation count drifted")
+if pbx_mutations != 14:
+    raise SystemExit("Additive PBX mutation count drifted")
+print("RendererIOS Additive cache oracle: profiles=2 mutations-killed=20")
+print("RendererIOS Additive PBX oracle: profiles=2 mutations-killed=14")
+PY
+
+expect_additive_contract_configure_failure() {
+  local profile="$1"
+  local name="$2"
+  shift 2
+  local build="$ADDITIVE_CONTRACT_ROOT/invalid-$profile-$name"
+  if cmake --preset "renderer-ios-$profile" -B "$build" \
+      "$@" >/dev/null 2>&1; then
+    echo "invalid Additive configure survived: $profile/$name"
+    exit 1
+  fi
+}
+
+expect_additive_contract_configure_failure additive-a-hdr unknown-mode \
+  -DOPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE=unknown
+for additive_profile_under_test in additive-a-hdr additive-b-hdr; do
+  expect_additive_contract_configure_failure \
+    "$additive_profile_under_test" diagnostics-off \
+    -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=OFF
+  expect_additive_contract_configure_failure \
+    "$additive_profile_under_test" fault \
+    -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE=post-submit-suboptimal
+  expect_additive_contract_configure_failure \
+    "$additive_profile_under_test" alpha-causal \
+    -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE=causal-a
+  expect_additive_contract_configure_failure \
+    "$additive_profile_under_test" triple-off \
+    -DOPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE=OFF
+  for option in \
+      BINK_SELF_TEST \
+      RESOURCE_ALLOCATOR_SELF_TEST \
+      CLEAR_ONLY_PASS_SELF_TEST \
+      SHADING_PROTOTYPE_TILE_SELF_TEST \
+      SHADING_PROTOTYPE_FORWARD_SELF_TEST; do
+    expect_additive_contract_configure_failure \
+      "$additive_profile_under_test" "$option" \
+      "-DOPENGOTHIC_RENDERER_IOS_${option}=ON"
+  done
+done
+for additive_mode_under_test in causal-a causal-b; do
+  if cmake -S "$PWD" \
+      -B "$ADDITIVE_CONTRACT_ROOT/invalid-non-ios-$additive_mode_under_test" \
+      -DOPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE="$additive_mode_under_test" \
+      >/dev/null 2>&1; then
+    echo "non-iOS Additive configure survived: $additive_mode_under_test"
+    exit 1
+  fi
+done
+
+printf '\n### CI contract: Verify P2.1e1b additive evidence core\n'
+RUNNER_TEMP="$RUNNER_TEMP" scripts/verify_ios_additive_gpu.command
+scripts/verify_ios_additive_runtime.command
 
 printf '\n### CI contract: Verify neutral P2.1 scene boundary\n'
 set -euo pipefail
@@ -3970,13 +4416,13 @@ grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
 grep -Fq 'opengothic-ios-patch-stack-v15' \
   ios/patches/apply-patches.sh
 
-grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-8.binaryarchive' \
+grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-9.binaryarchive' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'PreviousArchiveFileName' \
   game/graphics/iospipelinearchivepolicy.h
-grep -Fq '"RendererIOS-abi-7.binaryarchive"' \
+grep -Fq '"RendererIOS-abi-8.binaryarchive"' \
   game/graphics/iospipelinearchivepolicy.h
-grep -Fq '"RendererIOS-abi-7.provenance"' \
+grep -Fq '"RendererIOS-abi-8.provenance"' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'NSSearchPathForDirectoriesInDomains(' \
   game/graphics/rendereriosplatform.mm
@@ -4197,10 +4643,11 @@ required = (
     (
         "fallback-provenance",
         """  candidate.usesFallbackTexture =
-      materialMapping==IOSSceneMaterialMapping{
-          IOSMaterialCategory::Opaque,true} &&
-      !hasFrameAnimation &&
-      !candidate.hasBaseColorTexture;""",
+      iosSceneMaterialUsesFallbackTexture(
+          source.material,materialMapping,hasFrameAnimation,
+          source.material!=nullptr
+            ? &Resources::fallbackTexture()
+            : nullptr);""",
         """  candidate.usesFallbackTexture = false;""",
     ),
     (
@@ -4349,10 +4796,42 @@ paths = {
     )
 }
 required = (
-    ("extractor-two-category-admission",
+    ("extractor-three-category-admission",
      "game/graphics/iossceneextractorplan.h",
-     """source.materialCategory!=IOSMaterialCategory::Opaque &&
-     source.materialCategory!=IOSMaterialCategory::AlphaTest"""),
+     """switch(source.materialCategory) {
+    case IOSMaterialCategory::Opaque:
+    case IOSMaterialCategory::AlphaTest:
+    case IOSMaterialCategory::Additive:
+      break;
+    case IOSMaterialCategory::Transparent:
+    case IOSMaterialCategory::Water:
+      return IOSSceneSourcePlanResult::SkippedMaterial;
+    default:
+      return IOSSceneSourcePlanResult::InvalidSource;
+    }"""),
+    ("extractor-additive-static-only",
+     "game/graphics/iossceneextractorplan.h",
+     """if(isAdditive && source.kind!=IOSSceneMeshKind::Static)
+    return IOSSceneSourcePlanResult::SkippedMaterial;"""),
+    ("extractor-additive-no-texture-animation",
+     "game/graphics/iossceneextractorplan.h",
+     """if(isAdditive &&
+     textureAnimation!=IOSSceneTextureAnimationMode::None)
+    return IOSSceneSourcePlanResult::SkippedTextureAnimation;"""),
+    ("extractor-additive-texture-provenance",
+     "game/graphics/iossceneextractorplan.h",
+     """if(isAdditive &&
+     (!source.hasBaseColorTexture || source.usesFallbackTexture ||
+      source.hasValidFrameSequence || source.frameCount!=0 ||
+      !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
+      source.alphaWeight>1.f))
+    return IOSSceneSourcePlanResult::InvalidSource;"""),
+    ("extractor-additive-plan-publication",
+     "game/graphics/iossceneextractorplan.h",
+     """out.baseColorAlpha    = isAdditive ? source.alphaWeight : 1.f;
+  out.materialFlags     = isAdditive
+      ? IOSMaterialFlagStaticAdditiveNone
+      : IOSMaterialFlagNone;"""),
     ("extractor-uv-period-provenance",
      "game/graphics/iossceneextractorplan.h",
      """const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
@@ -4430,10 +4909,47 @@ required = (
     ("gpu-plan-alpha-selector",
      "game/graphics/iosgpusceneplan.h",
      "pipeline==IOSGPUScenePipelineSelector::AlphaTest"),
+    ("gpu-plan-additive-selector-map",
+     "game/graphics/iosgpusceneplan.h",
+     """case IOSMaterialCategory::Opaque:
+      return IOSGPUScenePipelineSelector::Opaque;
+    case IOSMaterialCategory::AlphaTest:
+      return IOSGPUScenePipelineSelector::AlphaTest;
+    case IOSMaterialCategory::Additive:
+      return IOSGPUScenePipelineSelector::Additive;"""),
+    ("gpu-plan-additive-restrictions",
+     "game/graphics/iosgpusceneplan.h",
+     """if(pipeline==IOSGPUScenePipelineSelector::Additive) {
+    if(source.entity.kind!=IOSSceneMeshKind::Static ||
+       source.material.flags!=IOSMaterialFlagStaticAdditiveNone ||
+       source.material.uvOffset.x!=0.f ||
+       source.material.uvOffset.y!=0.f ||
+       std::signbit(source.material.uvOffset.x) ||
+       std::signbit(source.material.uvOffset.y) ||
+       !std::isfinite(source.material.baseColor.w) ||
+       source.material.baseColor.w<0.f ||
+       source.material.baseColor.w>1.f)
+      return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
+    }
+  else if(source.material.flags!=IOSMaterialFlagNone) {
+    return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
+    }"""),
     ("gpu-plan-alpha-texture-provenance",
      "game/graphics/iosgpusceneplan.h",
-     """!source.material.baseColorTexture || !source.hasTexture ||
-       source.material.usesFallbackTexture"""),
+     """if(pipeline==IOSGPUScenePipelineSelector::AlphaTest) {
+    if(!source.material.baseColorTexture || !source.hasTexture ||
+       source.material.usesFallbackTexture)
+      return IOSGPUSceneDrawPlanResult::MissingAlphaTexture;
+    if(source.material.alphaCutoff!=0.5f)
+      return IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff;
+    }"""),
+    ("gpu-plan-additive-texture-provenance",
+     "game/graphics/iosgpusceneplan.h",
+     """else if(pipeline==IOSGPUScenePipelineSelector::Additive) {
+    if(!source.material.baseColorTexture || !source.hasTexture ||
+       source.material.usesFallbackTexture)
+      return IOSGPUSceneDrawPlanResult::MissingTexture;
+    }"""),
     ("gpu-plan-alpha-cutoff",
      "game/graphics/iosgpusceneplan.h",
      "source.material.alphaCutoff!=0.5f"),
@@ -4443,6 +4959,9 @@ required = (
     ("alpha-fragment-abi",
      "game/graphics/iosgpuscene.mm",
      "RendererIOSShader::AlphaTestFragmentFunction.data()"),
+    ("additive-fragment-abi",
+     "game/graphics/iosgpuscene.mm",
+     "RendererIOSShader::AdditiveFragmentFunction.data()"),
     ("explicit-nonblended-pso",
      "game/graphics/iosgpuscene.mm",
      "pipelineDesc.colorAttachments[0].blendingEnabled = NO;"),
@@ -4452,20 +4971,61 @@ required = (
     ("alpha-pso-state",
      "game/graphics/iosgpuscene.mm",
      "alphaTestPipelineState = alphaTestPipelineOwner.relinquish();"),
+    ("additive-pso-and-depth-state",
+     "game/graphics/iosgpuscene.mm",
+     """additivePipelineState  = additivePipelineOwner.relinquish();
+      baseDepthState         = depthOwner.relinquish();
+      additiveDepthState     = additiveDepthOwner.relinquish();"""),
     ("alpha-fragment-descriptor-assignment",
      "game/graphics/iosgpuscene.mm",
      """pipelineDesc.fragmentFunction =
           (id<MTLFunction>)alphaTestFragmentFunction.get();"""),
+    ("additive-fragment-and-blend-descriptor",
+     "game/graphics/iosgpuscene.mm",
+     """pipelineDesc.fragmentFunction =
+          (id<MTLFunction>)additiveFragmentFunction.get();
+      MTLRenderPipelineColorAttachmentDescriptor* additiveColor =
+          pipelineDesc.colorAttachments[0];
+      additiveColor.blendingEnabled = YES;
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      additiveColor.sourceRGBBlendFactor = MTLBlendFactorZero;
+#else
+      additiveColor.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+#endif
+      additiveColor.destinationRGBBlendFactor = MTLBlendFactorOne;
+      additiveColor.rgbBlendOperation = MTLBlendOperationAdd;
+      additiveColor.sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+      additiveColor.destinationAlphaBlendFactor = MTLBlendFactorOne;
+      additiveColor.alphaBlendOperation = MTLBlendOperationAdd;"""),
     ("strict-selector",
      "game/graphics/iosgpuscene.mm",
      """iosGPUScenePipelineSelectionMatches(
-           plan.materialCategory,plan.pipeline)"""),
+             plan.materialCategory,plan.pipeline)"""),
     ("required-functions-availability-map",
      "game/graphics/iosgpuscene.mm",
-     "iosGPUSceneRequiredShaderFunctionsAreAvailable("),
+     """iosGPUSceneRequiredShaderFunctionsAreAvailable(
+             vertexFunction.get()!=nil,
+             fragmentFunction.get()!=nil,
+             alphaTestFragmentFunction.get()!=nil,
+             additiveFragmentFunction.get()!=nil)"""),
     ("required-pso-availability-map",
      "game/graphics/iosgpuscene.mm",
-     "iosGPUSceneProductionPipelineStatesAreAvailable("),
+     """iosGPUSceneProductionPipelineStatesAreAvailable(
+             opaquePipelineOwner.get()!=nil,
+             alphaTestPipelineOwner.get()!=nil,
+             additivePipelineOwner.get()!=nil)"""),
+    ("required-depth-availability-map",
+     "game/graphics/iosgpuscene.mm",
+     """iosGPUSceneProductionDepthStatesAreAvailable(
+             depthOwner.get()!=nil,additiveDepthOwner.get()!=nil)"""),
+    ("runtime-production-state-preflight",
+     "game/graphics/iosgpuscene.mm",
+     """iosGPUSceneProductionPipelineStatesAreAvailable(
+         impl->opaquePipelineState!=nil,
+         impl->alphaTestPipelineState!=nil,
+         impl->additivePipelineState!=nil) ||
+     !iosGPUSceneProductionDepthStatesAreAvailable(
+         impl->baseDepthState!=nil,impl->additiveDepthState!=nil)"""),
     ("pipeline-initialization-success",
      "game/graphics/iosgpuscene.mm",
      "initializationResult   = IOSGPUScene::Result::Success;"),
@@ -4474,45 +5034,81 @@ required = (
      "plan.usesFallbackTexture,false,report.counts.planned"),
     ("drawn-production-count",
      "game/graphics/iosgpuscene.mm",
-     "plan.usesFallbackTexture,true,nextCounts.drawn"),
-    ("production-count-equations",
-     "game/graphics/iosgpuscene.mm",
-     "iosGPUSceneProductionReportCountsAreConsistent("),
+     """recordIOSGPUSceneProductionDrawDispatch(
+              plan.materialCategory,plan.kind,
+              plan.usesFallbackTexture,true,plan.pipeline,
+              report.counts,dispatch)"""),
+    ("production-material-count-equation",
+     "game/graphics/iosgpusceneplan.h",
+     "counts.material.total==firstMaterialSum+counts.material.additive"),
+    ("production-frame-count-equations",
+     "game/graphics/iosgpusceneplan.h",
+     """return iosGPUSceneFrameDrawCountsAreConsistent(counts) &&
+      counts.opaquePsoBinds==counts.drawn.material.opaque &&
+      counts.alphaPsoBinds==counts.drawn.material.alphaTest &&
+      counts.additivePsoBinds==counts.drawn.material.additive &&
+      counts.controlAlphaToOpaqueBinds==0u;"""),
+    ("production-dispatch-count-equations",
+     "game/graphics/iosgpusceneplan.h",
+     """if(next.opaquePsoBinds!=next.drawn.material.opaque ||
+     next.alphaPsoBinds!=next.drawn.material.alphaTest ||
+     next.additivePsoBinds!=next.drawn.material.additive ||
+     next.controlAlphaToOpaqueBinds!=0u)
+    return IOSGPUSceneDrawDispatchResult::InconsistentCounts;"""),
+    ("production-three-pso-dispatch",
+     "game/graphics/iosgpusceneplan.h",
+     """if(logical==IOSGPUScenePipelineSelector::Opaque) {
+    if(!iosGPUSceneCheckedIncrement(next.opaquePsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
+  else if(logical==IOSGPUScenePipelineSelector::AlphaTest) {
+    if(!iosGPUSceneCheckedIncrement(next.alphaPsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
+  else if(logical==IOSGPUScenePipelineSelector::Additive) {
+    if(!iosGPUSceneCheckedIncrement(next.additivePsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }"""),
     ("production-marker-set",
-     "game/graphics/iosmetalcontext.cpp",
-     "const IOSGPUSceneMarker markers[] = {"),
+     "game/graphics/iosgpuscene.mm",
+     "report.markers = {"),
     ("identity-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneIdentityMarker("),
     ("material-planned-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneMaterialPlannedMarker("),
     ("material-drawn-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneMaterialDrawnMarker("),
     ("kind-planned-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneKindPlannedMarker("),
     ("kind-drawn-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneKindDrawnMarker("),
     ("alpha-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneAlphaMarker("),
+    ("additive-marker-call",
+     "game/graphics/iosgpuscene.mm",
+     "iosGPUSceneAdditiveMarker("),
     ("fail-contract-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneFailContractMarker("),
     ("fail-selector-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneFailSelectorMarker("),
     ("fail-execution-marker-call",
-     "game/graphics/iosmetalcontext.cpp",
+     "game/graphics/iosgpuscene.mm",
      "iosGPUSceneFailExecutionMarker("),
     ("failure-marker-before-fatal",
      "game/graphics/iosmetalcontext.cpp",
      """report.result!=IOSGPUScene::Result::Success ||
            forceNativeSceneMarkers ||
-           input.snapshot->sequence.value==1u"""),
+           input.snapshot->sequence.value==1u ||
+           input.snapshot->sequence.value%300u==0u) {
+          if(!report.markersReady)"""),
 )
 marker_order = (
     "iosGPUSceneIdentityMarker(",
@@ -4521,6 +5117,7 @@ marker_order = (
     "iosGPUSceneKindPlannedMarker(",
     "iosGPUSceneKindDrawnMarker(",
     "iosGPUSceneAlphaMarker(",
+    "iosGPUSceneAdditiveMarker(",
     "iosGPUSceneFailContractMarker(",
     "iosGPUSceneFailSelectorMarker(",
     "iosGPUSceneFailExecutionMarker(",
@@ -4531,7 +5128,7 @@ def valid(sources: dict[str, str]) -> bool:
     if not all(sources[path].count(snippet) == 1
                for _, path, snippet in required):
         return False
-    marker_source = sources["game/graphics/iosmetalcontext.cpp"]
+    marker_source = sources["game/graphics/iosgpuscene.mm"]
     return [
         marker_source.index(marker) for marker in marker_order
     ] == sorted(marker_source.index(marker) for marker in marker_order)
@@ -4547,8 +5144,8 @@ if missing:
         + ",".join(missing)
     )
 if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 2:
-    raise SystemExit("RendererIOS C3b2 must create exactly two offline PSOs")
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 3:
+    raise SystemExit("RendererIOS C3b2 must create exactly three offline PSOs")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",
@@ -4577,7 +5174,7 @@ for label, path, snippet in required:
                 + label + "-" + operation
             )
         mutations_killed += 1
-marker_path = "game/graphics/iosmetalcontext.cpp"
+marker_path = "game/graphics/iosgpuscene.mm"
 for index in range(len(marker_order)-1):
     mutant = dict(paths)
     first = marker_order[index]
@@ -5115,6 +5712,7 @@ link_rendererios_metallib \
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
+  riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
@@ -5132,6 +5730,7 @@ require_exact_rendererios_exports() {
   for function in \
       riosLandscapeVertex riosLandscapeFragment \
       riosLandscapeAlphaTestFragment \
+      riosLandscapeAdditiveFragment \
       riosToneResolveVertex riosToneResolveFragment \
       riosBinkVertex riosBinkFragment \
       riosUiColorVertex riosUiColorFragment \
@@ -5147,7 +5746,7 @@ require_exact_rendererios_exports() {
   exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
     awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
   test "$exports" = "$EXPECTED_RIOS_EXPORTS"
-  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 18
+  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 19
 }
 require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
 require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
@@ -5177,7 +5776,7 @@ int main(int argc, char** argv) {
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==8u);
+  static_assert(Archive::MetallibAbiVersion==9u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
   static_assert(
     Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
@@ -5185,7 +5784,7 @@ int main(int argc, char** argv) {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-8.binaryarchive");
+    "RendererIOS-abi-9.binaryarchive");
   if(argc!=3)
     return 1;
   const std::string_view candidate = argv[1];
@@ -5204,9 +5803,9 @@ int main(int argc, char** argv) {
     "provenance-schema=1\n"
     "cache-schema=1\n"
     "pipeline-key-abi=1\n"
-    "metallib-abi=8\n"
+    "metallib-abi=9\n"
     "metallib-sha256="+std::string(candidate)+"\n"
-    "archive-file=RendererIOS-abi-8.binaryarchive\n";
+    "archive-file=RendererIOS-abi-9.binaryarchive\n";
   return record==expected ? 0 : 4;
 }
 CPP
@@ -5390,7 +5989,7 @@ normalized = "".join(source.split())
 needle = (
     "static_assert("
     "RendererIOSShadingPrototypeShader::"
-    "TotalMetallibExportCount==18u);"
+    "TotalMetallibExportCount==19u);"
 )
 print(normalized.count(needle))
 PY
@@ -5972,7 +6571,7 @@ profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
-    "case=tile-prototype-v1 contract=1 metallib-abi=8 "
+    "case=tile-prototype-v1 contract=1 metallib-abi=9 "
     "minimum-apple=4 output=4x4 rgba8-private=1",
     "RendererIOS shading prototype tile self-test: FACTORY READY "
     "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
@@ -6175,7 +6774,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
 TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
 strings "$TILE_BINARY" >"$TILE_STRINGS"
 for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1' \
+    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1' \
     'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
     'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

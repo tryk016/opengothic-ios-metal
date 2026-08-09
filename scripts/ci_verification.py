@@ -21,6 +21,8 @@ PROFILE_OUTPUTS = {
     "build_on": "build-on",
     "build_tile": "build-tile",
     "build_forward": "build-forward",
+    "build_additive_a_hdr": "build-additive-a-hdr",
+    "build_additive_b_hdr": "build-additive-b-hdr",
 }
 RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
 
@@ -34,6 +36,12 @@ def is_sha(value: str, *, zero_allowed: bool = False) -> bool:
         len(value) == 40
         and all(character in "0123456789abcdef" for character in value)
         and (zero_allowed or set(value) != {"0"})
+    )
+
+
+def is_sha256(value: str) -> bool:
+    return len(value) == 64 and all(
+        character in "0123456789abcdef" for character in value
     )
 
 
@@ -241,6 +249,9 @@ def aggregate(
     classifier_result: str,
     expected: Mapping[str, bool],
     actual: Mapping[str, str],
+    expected_sha: str = "",
+    additive_a: Optional[Mapping[str, str]] = None,
+    additive_b: Optional[Mapping[str, str]] = None,
 ) -> None:
     if validate_result(classifier_result, "classifier") != "success":
         raise CIVerificationError(
@@ -257,6 +268,54 @@ def aggregate(
             failures.append(f"{name}: not required but {result}")
     if failures:
         raise CIVerificationError("; ".join(failures))
+    additive_required = expected.get("build_additive_a_hdr", False)
+    if additive_required != expected.get("build_additive_b_hdr", False):
+        raise CIVerificationError("Additive A/B CI jobs are not required together")
+    if additive_required:
+        if not is_sha(expected_sha):
+            raise CIVerificationError("exact workflow SHA is invalid")
+        if additive_a is None or additive_b is None:
+            raise CIVerificationError("Additive A/B profile outputs are missing")
+        exact_keys = {
+            "profile", "parent_sha", "tempest_sha", "metallib_sha256",
+            "binary_sha256", "additive_mode", "binary_marker",
+        }
+        if set(additive_a) != exact_keys or set(additive_b) != exact_keys:
+            raise CIVerificationError("Additive A/B profile output keys drifted")
+        expected_values = (
+            (
+                additive_a, "additive-a-hdr", "causal-a",
+                "RIOS_ADDITIVE_CAUSAL_MODE=additive-a-hdr",
+            ),
+            (
+                additive_b, "additive-b-hdr", "causal-b",
+                "RIOS_ADDITIVE_CAUSAL_MODE=additive-b-hdr",
+            ),
+        )
+        for values, profile, mode, binary_marker in expected_values:
+            if values["profile"] != profile:
+                raise CIVerificationError(f"{profile} identity output drifted")
+            if values["additive_mode"] != mode:
+                raise CIVerificationError(f"{profile} mode output drifted")
+            if values["binary_marker"] != binary_marker:
+                raise CIVerificationError(
+                    f"{profile} binary marker output drifted"
+                )
+            if values["parent_sha"] != expected_sha:
+                raise CIVerificationError(f"{profile} parent SHA is not exact")
+            if not is_sha(values["tempest_sha"]):
+                raise CIVerificationError(f"{profile} Tempest SHA is invalid")
+            for digest_name in ("metallib_sha256", "binary_sha256"):
+                if not is_sha256(values[digest_name]):
+                    raise CIVerificationError(
+                        f"{profile} {digest_name} is invalid"
+                    )
+        if additive_a["tempest_sha"] != additive_b["tempest_sha"]:
+            raise CIVerificationError("Additive A/B Tempest SHAs differ")
+        if additive_a["metallib_sha256"] != additive_b["metallib_sha256"]:
+            raise CIVerificationError("Additive A/B metallib hashes differ")
+        if additive_a["binary_sha256"] == additive_b["binary_sha256"]:
+            raise CIVerificationError("Additive A/B Mach-O hashes are equal")
 
 
 def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -271,9 +330,18 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     aggregate_parser = subparsers.add_parser("aggregate")
     aggregate_parser.add_argument("--classifier-result", required=True)
+    aggregate_parser.add_argument("--expected-sha", default="")
     for name in ("contracts", *PROFILE_OUTPUTS):
         aggregate_parser.add_argument(f"--expected-{name.replace('_', '-')}", required=True)
         aggregate_parser.add_argument(f"--result-{name.replace('_', '-')}", required=True)
+    for profile in ("additive-a", "additive-b"):
+        for field in (
+            "profile", "parent-sha", "tempest-sha", "metallib-sha256",
+            "binary-sha256", "additive-mode", "binary-marker",
+        ):
+            aggregate_parser.add_argument(
+                f"--{profile}-{field}", default=""
+            )
     return parser.parse_args(argv)
 
 
@@ -301,7 +369,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 name: getattr(arguments, f"result_{name}")
                 for name in names
             }
-            aggregate(arguments.classifier_result, expected, actual)
+            def profile_outputs(prefix: str) -> dict[str, str]:
+                return {
+                    field: getattr(arguments, f"{prefix}_{field}")
+                    for field in (
+                        "profile", "parent_sha", "tempest_sha",
+                        "metallib_sha256", "binary_sha256", "additive_mode",
+                        "binary_marker",
+                    )
+                }
+
+            aggregate(
+                arguments.classifier_result,
+                expected,
+                actual,
+                arguments.expected_sha,
+                profile_outputs("additive_a"),
+                profile_outputs("additive_b"),
+            )
             print("RendererIOS required CI gates passed")
         return 0
     except (CIVerificationError, OSError) as error:

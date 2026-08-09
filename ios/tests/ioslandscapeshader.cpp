@@ -18,6 +18,8 @@ namespace {
 
 constexpr std::string_view AlphaTestFunctionName =
     "riosLandscapeAlphaTestFragment";
+constexpr std::string_view AdditiveFunctionName =
+    "riosLandscapeAdditiveFragment";
 
 std::optional<std::string> readFile(const std::filesystem::path& path) {
   std::ifstream input(path,std::ios::binary);
@@ -163,15 +165,30 @@ std::string expectedAlphaTestFunction() {
 })";
 }
 
+std::string expectedAdditiveFunction() {
+  return std::string("fragment float4 ")+
+      std::string(AdditiveFunctionName)+R"(
+(
+    IOSLandscapeVertexOut in [[stage_in]],
+    texture2d<float, access::sample> baseColorTexture [[texture(0)]],
+    sampler baseColorSampler [[sampler(0)]]) {
+  const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
+  const float3 sceneRgb =
+      riosLiftLegacyLdrToScene(texel.rgb*in.color.rgb)*3.0;
+  return float4(sceneRgb,texel.a*in.color.a);
+})";
+}
+
 bool validLandscapeSource(std::string_view rawSource) {
   const std::string source = stripComments(rawSource);
   if(source.empty() ||
      countWord(source,"vertex")!=2u ||
-     countWord(source,"fragment")!=3u ||
+     countWord(source,"fragment")!=4u ||
      countWord(source,"kernel")!=0u ||
      countOccurrences(source,RendererIOSShader::VertexFunction)!=1u ||
      countOccurrences(source,RendererIOSShader::FragmentFunction)!=1u ||
      countOccurrences(source,RendererIOSShader::AlphaTestFragmentFunction)!=1u ||
+     countOccurrences(source,RendererIOSShader::AdditiveFragmentFunction)!=1u ||
      countOccurrences(source,RendererIOSShader::ToneResolveVertexFunction)!=1u ||
      countOccurrences(source,RendererIOSShader::ToneResolveFragmentFunction)!=1u)
     return false;
@@ -182,11 +199,14 @@ bool validLandscapeSource(std::string_view rawSource) {
       source,"fragment",RendererIOSShader::FragmentFunction);
   const auto alphaTest = extractFunction(
       source,"fragment",RendererIOSShader::AlphaTestFragmentFunction);
+  const auto additive = extractFunction(
+      source,"fragment",RendererIOSShader::AdditiveFragmentFunction);
   const auto toneVertex = extractFunction(
       source,"vertex",RendererIOSShader::ToneResolveVertexFunction);
   const auto toneFragment = extractFunction(
       source,"fragment",RendererIOSShader::ToneResolveFragmentFunction);
-  if(!vertex || !fragment || !alphaTest || !toneVertex || !toneFragment)
+  if(!vertex || !fragment || !alphaTest || !additive ||
+     !toneVertex || !toneFragment)
     return false;
 
   constexpr std::string_view ExpectedDrawConstants = R"(
@@ -294,6 +314,7 @@ fragment float4 riosToneResolveFragment(
   if(compact(*vertex)!=compact(ExpectedVertex) ||
      compact(*fragment)!=compact(ExpectedFragment) ||
      compact(*alphaTest)!=compact(expectedAlphaTestFunction()) ||
+     compact(*additive)!=compact(expectedAdditiveFunction()) ||
      compact(*toneVertex)!=compact(ExpectedToneVertex) ||
      compact(*toneFragment)!=compact(ExpectedToneFragment))
     return false;
@@ -413,6 +434,33 @@ bool mutationsAreRejected(const std::string& source) {
     if(mutation.empty() || validLandscapeSource(mutation))
       return false;
 
+  const std::string additiveDeclaration =
+      std::string("fragment float4 ")+std::string(AdditiveFunctionName);
+  const std::array<std::string,8> additiveMutations = {
+    eraseFunction(source,additiveDeclaration),
+    replaceLastOnce(
+        source,
+        "riosLiftLegacyLdrToScene(texel.rgb*in.color.rgb)*3.0",
+        "(texel.rgb*in.color.rgb)*3.0"),
+    replaceLastOnce(source,"*3.0;","*2.0;"),
+    replaceLastOnce(
+        source,"return float4(sceneRgb,texel.a*in.color.a);",
+        "return float4(sceneRgb,texel.a);"),
+    replaceLastOnce(
+        source,"return float4(sceneRgb,texel.a*in.color.a);",
+        "return float4(sceneRgb,in.color.a);"),
+    replaceLastOnce(
+        source,"return float4(sceneRgb,texel.a*in.color.a);",
+        "return float4(sceneRgb,1.0);"),
+    replaceLastOnce(
+        source,"return float4(sceneRgb,texel.a*in.color.a);",
+        "return float4(sceneRgb*texel.a*in.color.a,texel.a*in.color.a);"),
+    source+"\n"+expectedAdditiveFunction()+"\n",
+  };
+  for(const std::string& mutation:additiveMutations)
+    if(mutation.empty() || validLandscapeSource(mutation))
+      return false;
+
   const std::array<std::string,26> toneMutations = {
     eraseFunction(source,"vertex IOSToneResolveVertexOut riosToneResolveVertex"),
     eraseFunction(source,"fragment float4 riosToneResolveFragment"),
@@ -475,6 +523,7 @@ bool symbolAllowlistMatches(const std::filesystem::path& repository) {
     {"scripts/ci_contracts.command",2u},
     {"scripts/ci_build_profile.command",1u},
     {"ios/tests/test_ci_verification.py",1u},
+    {"ios/device-test/specs/p21e1b-static-additive-v1.json",1u},
   };
   const std::map<std::string,size_t> expectedAbiReferences = {
     {"game/graphics/ioslandscapeshaderabi.h",1u},
@@ -558,15 +607,19 @@ bool runtimeReflectionContractMatches(
   constexpr std::string_view ReflectionOptions =
       "options:(MTLPipelineOptionBindingInfo|"
       "MTLPipelineOptionBufferTypeInfo)";
-  return countOccurrences(source,ReflectionOptions)==2u &&
+  return countOccurrences(source,ReflectionOptions)==3u &&
       countOccurrences(source,"reflection:&opaquePipelineReflection")==1u &&
       countOccurrences(source,"reflection:&alphaTestPipelineReflection")==1u &&
+      countOccurrences(source,"reflection:&additivePipelineReflection")==1u &&
       countOccurrences(
           source,"drawConstantsReflectionMatches(opaquePipelineReflection)")==
           1u &&
       countOccurrences(
           source,
           "drawConstantsReflectionMatches(alphaTestPipelineReflection)")==1u &&
+      countOccurrences(
+          source,
+          "drawConstantsReflectionMatches(additivePipelineReflection)")==1u &&
       countOccurrences(source,"binding.index!=NSUInteger(1u)")==1u &&
       countOccurrences(source,"!binding.used")==1u &&
       countOccurrences(source,"!binding.argument")==1u &&
@@ -608,17 +661,18 @@ bool runtimeUVAnimationEvidenceContractMatchesSources(
   return countOccurrences(
              scene,
              "recordIOSGPUSceneUVAnimationDraw("
-             "*context.uvAnimation,draw.plan)")==1u &&
+             "uvAnimationTracker,plan)")==1u &&
       countOccurrences(
           scene,
-          "recordIOSGPUSceneUVAnimationDraw("
-          "*context.uvAnimation,plan)")==1u &&
-      countOccurrences(
-          scene,"finalizeIOSGPUSceneUVAnimationDrawReport(")==3u &&
+          "prepareIOSGPUSceneUVAnimationTracker("
+          "*uvAnimation,snapshot.generation,uvAnimationTracker)")==1u &&
       countOccurrences(
           scene,
-          "context.uvAnimation="
-          "trackUVAnimation?&uvAnimationTracker:nullptr;")==1u &&
+          "finalizeIOSGPUSceneUVAnimationDrawReport("
+          "uvAnimationTracker,report.uvAnimation)")==1u &&
+      countOccurrences(
+          scene,
+          "constbooltrackUVAnimation=uvAnimation!=nullptr;")==1u &&
       countOccurrences(
           header,
           "void*,bool,constIOSGPUSceneFrameAnimationDrawReport*,"
@@ -681,8 +735,9 @@ bool runtimeUVAnimationEvidenceContractMatches(
 
 int main(int argc, char** argv) {
   if(argc!=3 ||
-     RendererIOSShader::AbiVersion!=8u ||
+     RendererIOSShader::AbiVersion!=9u ||
      RendererIOSShader::AlphaTestFragmentFunction!=AlphaTestFunctionName ||
+     RendererIOSShader::AdditiveFragmentFunction!=AdditiveFunctionName ||
      RendererIOSShader::ToneResolveVertexFunction!=
          "riosToneResolveVertex" ||
      RendererIOSShader::ToneResolveFragmentFunction!=

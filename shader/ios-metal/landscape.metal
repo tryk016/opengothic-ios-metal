@@ -93,6 +93,16 @@ fragment float4 riosLandscapeAlphaTestFragment(
   return float4(riosLiftLegacyLdrToScene(currentLdrRgb),1.0);
 }
 
+fragment float4 riosLandscapeAdditiveFragment(
+    IOSLandscapeVertexOut in [[stage_in]],
+    texture2d<float, access::sample> baseColorTexture [[texture(0)]],
+    sampler baseColorSampler [[sampler(0)]]) {
+  const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
+  const float3 sceneRgb =
+      riosLiftLegacyLdrToScene(texel.rgb*in.color.rgb)*3.0;
+  return float4(sceneRgb,texel.a*in.color.a);
+}
+
 vertex IOSToneResolveVertexOut riosToneResolveVertex(
     uint vertexId [[vertex_id]]) {
   constexpr float2 positions[3] = {

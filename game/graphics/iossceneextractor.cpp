@@ -86,10 +86,14 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.hasBaseColorTexture =
       source.material!=nullptr && source.material->tex!=nullptr;
   candidate.usesFallbackTexture =
-      materialMapping==IOSSceneMaterialMapping{
-          IOSMaterialCategory::Opaque,true} &&
-      !hasFrameAnimation &&
-      !candidate.hasBaseColorTexture;
+      iosSceneMaterialUsesFallbackTexture(
+          source.material,materialMapping,hasFrameAnimation,
+          source.material!=nullptr
+            ? &Resources::fallbackTexture()
+            : nullptr);
+  candidate.alphaWeight = source.material!=nullptr
+      ? source.material->alphaWeight
+      : 1.f;
   candidate.hasFrameAnimation = hasFrameAnimation;
   candidate.hasUvAnimation = hasUvAnimation;
   candidate.hasValidFrameSequence =
@@ -198,7 +202,9 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   materialRecord.baseColorTexture = texture;
   materialRecord.usesFallbackTexture = plan.usesFallbackTexture;
   materialRecord.category         = plan.materialCategory;
+  materialRecord.baseColor.w      = plan.baseColorAlpha;
   materialRecord.uvOffset         = plan.uvOffset;
+  materialRecord.flags            = plan.materialFlags;
   context.staging.materials.push_back(materialRecord);
 
   IOSRenderEntityState entityRecord;

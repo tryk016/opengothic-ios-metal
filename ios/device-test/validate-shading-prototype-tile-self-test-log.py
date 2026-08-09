@@ -20,7 +20,7 @@ CAPTURE_NAME = "RendererIOS-tile-prototype-v1.gputrace"
 MAX_MARKER_BYTES = 250
 MAX_CAPTURE_BYTES = 512 * 1024 * 1024
 ARMED = (
-    f"{PREFIX} ARMED case={CASE} contract=1 metallib-abi=8 minimum-apple=4 "
+    f"{PREFIX} ARMED case={CASE} contract=1 metallib-abi=9 minimum-apple=4 "
     "output=4x4 rgba8-private=1"
 )
 FACTORY_READY = (
@@ -568,7 +568,7 @@ def self_test() -> None:
             "unknown": valid.replace(SUBMITTED, f"{PREFIX} UNKNOWN case={CASE}"),
             "wrong-build": valid.replace(build, "f" * 40 + "-local"),
             "wrong-contract": valid.replace("contract=1", "contract=2"),
-            "wrong-abi": valid.replace("metallib-abi=8", "metallib-abi=7"),
+            "wrong-abi": valid.replace("metallib-abi=9", "metallib-abi=8"),
             "forward": valid.replace("forward=0", "forward=1"),
             "extra-pipeline": valid.replace("pipelines=3", "pipelines=4"),
             "extra-pass": valid.replace("pass=1", "pass=2"),

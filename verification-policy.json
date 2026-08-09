@@ -12,6 +12,8 @@
     "build-on",
     "build-tile",
     "build-forward",
+    "build-additive-a-hdr",
+    "build-additive-b-hdr",
     "full"
   ],
   "riskOrder": [

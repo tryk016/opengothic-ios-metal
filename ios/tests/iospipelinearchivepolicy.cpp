@@ -11,7 +11,7 @@ namespace Archive = RendererIOSPipelineArchive;
 int main() {
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==8u);
+  static_assert(Archive::MetallibAbiVersion==9u);
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::TestModeAbiVersion==1u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
@@ -20,15 +20,15 @@ int main() {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-8.binaryarchive");
+    "RendererIOS-abi-9.binaryarchive");
   static_assert(Archive::ArchiveFileName==
-    "RendererIOS-abi-8.binaryarchive");
+    "RendererIOS-abi-9.binaryarchive");
   static_assert(Archive::ProvenanceFileName==
-    "RendererIOS-abi-8.provenance");
+    "RendererIOS-abi-9.provenance");
   static_assert(Archive::PreviousArchiveFileName==
-    "RendererIOS-abi-7.binaryarchive");
+    "RendererIOS-abi-8.binaryarchive");
   static_assert(Archive::PreviousProvenanceFileName==
-    "RendererIOS-abi-7.provenance");
+    "RendererIOS-abi-8.provenance");
   static_assert(Archive::ArchiveFileName!=Archive::PreviousArchiveFileName);
   static_assert(Archive::ProvenanceFileName!=
                 Archive::PreviousProvenanceFileName);
@@ -43,7 +43,7 @@ int main() {
   static_assert(Archive::ProvenancePolicyWorstCase.size()==172u);
   static_assert(Archive::TestModeMarkerWorstCase.size()==203u);
   static_assert(Archive::TestModeTemporaryFileName==
-    "RendererIOS-abi-8.binaryarchive.test-mode.tmp");
+    "RendererIOS-abi-9.binaryarchive.test-mode.tmp");
   static_assert(
     Archive::SnapshotStateWorstCase.size()<
     Archive::LogMarkerPayloadLimit);
@@ -139,9 +139,9 @@ int main() {
   assert(Archive::provenanceMatches(provenance,digest));
   assert(provenance.find("cache-schema=1\n")!=std::string::npos);
   assert(provenance.find("pipeline-key-abi=1\n")!=std::string::npos);
-  assert(provenance.find("metallib-abi=8\n")!=std::string::npos);
+  assert(provenance.find("metallib-abi=9\n")!=std::string::npos);
   assert(provenance.find(
-    "archive-file=RendererIOS-abi-8.binaryarchive\n")!=std::string::npos);
+    "archive-file=RendererIOS-abi-9.binaryarchive\n")!=std::string::npos);
   const auto mutateField =
     [&provenance](std::string_view from, std::string_view to) {
       std::string mutated = provenance;
@@ -159,11 +159,11 @@ int main() {
   assert(!Archive::provenanceMatches(
     mutateField("pipeline-key-abi=1","pipeline-key-abi=2"),digest));
   assert(!Archive::provenanceMatches(
-    mutateField("metallib-abi=8","metallib-abi=7"),digest));
+    mutateField("metallib-abi=9","metallib-abi=8"),digest));
   assert(!Archive::provenanceMatches(
     mutateField(
-      "archive-file=RendererIOS-abi-8.binaryarchive",
-      "archive-file=RendererIOS-abi-7.binaryarchive"),digest));
+      "archive-file=RendererIOS-abi-9.binaryarchive",
+      "archive-file=RendererIOS-abi-8.binaryarchive"),digest));
   assert(!Archive::provenanceMatches(provenance+"trailing-byte",digest));
   assert(!Archive::provenanceMatches(provenance,
     "1123456789abcdef0123456789abcdef"

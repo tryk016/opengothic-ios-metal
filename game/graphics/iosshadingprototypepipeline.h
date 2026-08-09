@@ -14,7 +14,7 @@ class IOSShadingPrototypePipelineNativeAccess;
 namespace RendererIOSShadingPrototypePipeline {
 
 inline constexpr uint32_t ContractVersion = 1u;
-inline constexpr uint32_t OfflineMetallibAbi = 8u;
+inline constexpr uint32_t OfflineMetallibAbi = 9u;
 inline constexpr uint32_t MinimumAppleGPUFamily = 4u;
 inline constexpr uint32_t TileFunctionCount = 3u;
 inline constexpr uint32_t TilePipelineCount = 3u;

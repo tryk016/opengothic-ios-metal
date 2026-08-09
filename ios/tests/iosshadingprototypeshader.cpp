@@ -492,7 +492,7 @@ void runMutationTests(const std::string& source) {
 
 int main(int argc, char** argv) {
   if(argc!=2 ||
-     RendererIOSShader::AbiVersion!=8u ||
+     RendererIOSShader::AbiVersion!=9u ||
      Prototype::ManifestVersion!=1u)
     return 1;
   std::ifstream input(argv[1],std::ios::binary);
@@ -523,7 +523,7 @@ int main(int argc, char** argv) {
   static_assert(Prototype::ForwardLightListThreadsPerThreadgroupDepth==1u);
   static_assert(Prototype::TileMaterialBytesPerSample==4u);
   static_assert(Prototype::TileFinalColorAttachment==0u);
-  static_assert(Prototype::ExistingMetallibExportCount==13u);
-  static_assert(Prototype::TotalMetallibExportCount==18u);
+  static_assert(Prototype::ExistingMetallibExportCount==14u);
+  static_assert(Prototype::TotalMetallibExportCount==19u);
   return 0;
 }

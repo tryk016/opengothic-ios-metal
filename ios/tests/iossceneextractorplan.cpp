@@ -215,16 +215,220 @@ void validatePublicContract() {
           IOSSceneMaterialMapping{IOSMaterialCategory::Opaque,true}));
   assert((iosSceneMaterialMapping(Material::AlphaTest)==
           IOSSceneMaterialMapping{IOSMaterialCategory::AlphaTest,true}));
+  assert((iosSceneMaterialMapping(Material::AdditiveLight)==
+          IOSSceneMaterialMapping{IOSMaterialCategory::Additive,true}));
   for(const auto alpha:{
         Material::Water,
         Material::Ghost,
         Material::Multiply,
         Material::Multiply2,
         Material::Transparent,
-        Material::AdditiveLight,
         static_cast<Material::AlphaFunc>(255u)}) {
     assert(iosSceneMaterialMapping(alpha)==IOSSceneMaterialMapping{});
     }
+  }
+
+void validateStaticAdditiveNoneAdmission() {
+  auto additive = candidate(
+      IOSSceneMeshKind::Static,IOSMaterialCategory::Additive);
+  additive.alphaWeight = 0.375f;
+  IOSSceneOpaqueMeshPlan plan;
+  assert(planIOSOpaqueMeshSource(additive,plan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(plan.kind==IOSSceneMeshKind::Static);
+  assert(plan.materialCategory==IOSMaterialCategory::Additive);
+  assert(plan.textureAnimation==IOSSceneTextureAnimationMode::None);
+  assert(plan.baseColorAlpha==0.375f);
+  assert(plan.materialFlags==IOSMaterialFlagStaticAdditiveNone);
+  assert(!plan.usesFallbackTexture);
+  assert(plan.uvOffset==IOSFloat2{});
+
+  for(const float alpha:{0.f,1.f}) {
+    additive.alphaWeight = alpha;
+    assert(planIOSOpaqueMeshSource(additive,plan)==
+           IOSSceneSourcePlanResult::Planned);
+    assert(plan.baseColorAlpha==alpha);
+    }
+
+  // DEFAULT.TGA provenance is intentionally absent: every resolved,
+  // non-fallback texture follows the same positive path.
+  additive.alphaWeight = 1.f;
+  additive.hasBaseColorTexture = true;
+  additive.usesFallbackTexture = false;
+  assert(planIOSOpaqueMeshSource(additive,plan)==
+         IOSSceneSourcePlanResult::Planned);
+
+  for(const auto kind:{
+        IOSSceneMeshKind::Landscape,
+        IOSSceneMeshKind::Movable}) {
+    auto wrongKind = additive;
+    wrongKind.kind = kind;
+    assert(planIOSOpaqueMeshSource(wrongKind,plan)==
+           IOSSceneSourcePlanResult::SkippedMaterial);
+    }
+  auto unsupportedKind = additive;
+  unsupportedKind.kind = IOSSceneMeshKind::Unsupported;
+  assert(planIOSOpaqueMeshSource(unsupportedKind,plan)==
+         IOSSceneSourcePlanResult::SkippedKind);
+  auto unknownKind = additive;
+  unknownKind.kind = static_cast<IOSSceneMeshKind>(255u);
+  assert(planIOSOpaqueMeshSource(unknownKind,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+
+  alignas(void*) std::array<std::byte,2u> textureIdentities{};
+  const auto* localFallback =
+      reinterpret_cast<const Tempest::Texture2d*>(
+          textureIdentities.data());
+  const auto* regularTexture =
+      reinterpret_cast<const Tempest::Texture2d*>(
+          textureIdentities.data()+1u);
+  Material material;
+  material.alpha = Material::AdditiveLight;
+  material.tex = localFallback;
+  assert(iosSceneMaterialUsesFallbackTexture(
+      &material,iosSceneMaterialMapping(material.alpha),false,
+      localFallback));
+  material.tex = regularTexture;
+  assert(!iosSceneMaterialUsesFallbackTexture(
+      &material,iosSceneMaterialMapping(material.alpha),false,
+      localFallback));
+  material.alpha = Material::Solid;
+  material.tex = nullptr;
+  assert(iosSceneMaterialUsesFallbackTexture(
+      &material,iosSceneMaterialMapping(material.alpha),false,
+      localFallback));
+  assert(!iosSceneMaterialUsesFallbackTexture(
+      &material,iosSceneMaterialMapping(material.alpha),true,
+      localFallback));
+
+  for(const auto mode:{
+        IOSSceneTextureAnimationMode::FrameOnly,
+        IOSSceneTextureAnimationMode::UvOnly,
+        IOSSceneTextureAnimationMode::FrameAndUv}) {
+    auto animated = additive;
+    animated.hasFrameAnimation =
+        mode==IOSSceneTextureAnimationMode::FrameOnly ||
+        mode==IOSSceneTextureAnimationMode::FrameAndUv;
+    animated.hasUvAnimation =
+        mode==IOSSceneTextureAnimationMode::UvOnly ||
+        mode==IOSSceneTextureAnimationMode::FrameAndUv;
+    animated.hasValidFrameSequence = animated.hasFrameAnimation;
+    animated.frameCount = animated.hasFrameAnimation ? 2u : 0u;
+    animated.framePeriodMs = 10u;
+    animated.uvPeriodX = animated.hasUvAnimation ? 4 : 0;
+    animated.hasBaseColorTexture = false;
+    animated.usesFallbackTexture = true;
+    animated.alphaWeight = std::numeric_limits<float>::quiet_NaN();
+    assert(planIOSOpaqueMeshSource(animated,plan)==
+           IOSSceneSourcePlanResult::SkippedTextureAnimation);
+    assert(plan==IOSSceneOpaqueMeshPlan{});
+    IOSSceneExtractionStats skipped;
+    assert(recordIOSSceneRawSource(
+        IOSSceneSourceKind::Static,Material::AdditiveLight,
+        animated.hasFrameAnimation,animated.hasUvAnimation,skipped));
+    assert(recordIOSScenePlanResult(
+        IOSSceneSourcePlanResult::SkippedTextureAnimation,plan,skipped,
+        mode));
+    assert(skipped.skippedTextureAnimation==1u);
+    assert(skipped.plannedAdditive==0u);
+    assert(skipped.hasConsistentSuccessfulCensus());
+    }
+
+  for(const float alpha:{
+        -0.001f,
+        1.001f,
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity(),
+        std::numeric_limits<float>::quiet_NaN()}) {
+    auto invalidAlpha = additive;
+    invalidAlpha.alphaWeight = alpha;
+    assert(planIOSOpaqueMeshSource(invalidAlpha,plan)==
+           IOSSceneSourcePlanResult::InvalidSource);
+    assert(plan==IOSSceneOpaqueMeshPlan{});
+    }
+
+  auto nullTexture = additive;
+  nullTexture.hasBaseColorTexture = false;
+  assert(planIOSOpaqueMeshSource(nullTexture,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  auto fallbackTexture = additive;
+  fallbackTexture.usesFallbackTexture = true;
+  assert(planIOSOpaqueMeshSource(fallbackTexture,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  auto staleFrameStructure = additive;
+  staleFrameStructure.hasValidFrameSequence = true;
+  assert(planIOSOpaqueMeshSource(staleFrameStructure,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  staleFrameStructure = additive;
+  staleFrameStructure.frameCount = 1u;
+  assert(planIOSOpaqueMeshSource(staleFrameStructure,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  auto staleUvStructure = additive;
+  staleUvStructure.uvPeriodY = 1;
+  assert(planIOSOpaqueMeshSource(staleUvStructure,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  auto missingMaterial = additive;
+  missingMaterial.hasMaterial = false;
+  assert(planIOSOpaqueMeshSource(missingMaterial,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  auto unknownMaterial = additive;
+  unknownMaterial.materialCategory =
+      static_cast<IOSMaterialCategory>(255u);
+  assert(planIOSOpaqueMeshSource(unknownMaterial,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  unknownMaterial.hasMappedMaterialCategory = false;
+  assert(planIOSOpaqueMeshSource(unknownMaterial,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+
+  IOSSceneExtractionStats stats;
+  assert(recordIOSSceneRawSource(
+      IOSSceneSourceKind::Static,Material::AdditiveLight,false,false,stats));
+  assert(planIOSOpaqueMeshSource(additive,plan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,plan,stats));
+  assert(stats.planned==1u);
+  assert(stats.plannedAdditive==1u);
+  assert(stats.plannedStatic==1u);
+  assert(stats.hasConsistentSuccessfulCensus());
+
+  for(const auto mutation:{0u,1u,2u,3u,4u}) {
+    auto forged = plan;
+    switch(mutation) {
+      case 0u:
+        forged.materialFlags = IOSMaterialFlagNone;
+        break;
+      case 1u:
+        forged.materialFlags |= uint64_t(1) << 63u;
+        break;
+      case 2u:
+        forged.kind = IOSSceneMeshKind::Movable;
+        break;
+      case 3u:
+        forged.textureAnimation = IOSSceneTextureAnimationMode::UvOnly;
+        break;
+      case 4u:
+        forged.baseColorAlpha =
+            std::numeric_limits<float>::quiet_NaN();
+        break;
+      }
+    IOSSceneExtractionStats rejected;
+    assert(!recordIOSScenePlanResult(
+        IOSSceneSourcePlanResult::Planned,forged,rejected,
+        forged.textureAnimation));
+    assert(rejected.planned==0u);
+    assert(rejected.plannedAdditive==0u);
+    assert(rejected.invalidSource==1u);
+    }
+
+  auto forgedOpaque = acceptedPlan(
+      IOSSceneSourceKind::Static,Material::Solid);
+  forgedOpaque.materialFlags = IOSMaterialFlagStaticAdditiveNone;
+  IOSSceneExtractionStats rejectedOpaque;
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,forgedOpaque,rejectedOpaque));
+  assert(rejectedOpaque.planned==0u);
+  assert(rejectedOpaque.invalidSource==1u);
   }
 
 void validateUVOffsetEvaluation() {
@@ -678,18 +882,21 @@ void validateSkippedSources() {
   auto fabricated = candidate(
       static_cast<IOSSceneMeshKind>(255u));
   assert(planIOSOpaqueMeshSource(fabricated,plan)==
-         IOSSceneSourcePlanResult::SkippedKind);
+         IOSSceneSourcePlanResult::InvalidSource);
 
   for(const auto category:{
         IOSMaterialCategory::Transparent,
-        IOSMaterialCategory::Additive,
-        IOSMaterialCategory::Water,
-        static_cast<IOSMaterialCategory>(255u)}) {
+        IOSMaterialCategory::Water}) {
     auto unsupportedMaterial =
         candidate(IOSSceneMeshKind::Landscape,category);
     assert(planIOSOpaqueMeshSource(unsupportedMaterial,plan)==
            IOSSceneSourcePlanResult::SkippedMaterial);
     }
+  auto fabricatedMaterial = candidate(
+      IOSSceneMeshKind::Landscape,
+      static_cast<IOSMaterialCategory>(255u));
+  assert(planIOSOpaqueMeshSource(fabricatedMaterial,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
 
   for(const auto kind:{
         IOSSceneMeshKind::Landscape,
@@ -895,7 +1102,10 @@ void validateRawKindCensus() {
 
 void validateRawMaterialCensus() {
   IOSSceneExtractionStats stats;
-  for(const auto alpha:{Material::Solid,Material::AlphaTest}) {
+  for(const auto alpha:{
+        Material::Solid,
+        Material::AlphaTest,
+        Material::AdditiveLight}) {
     recordRawOutcome(
         IOSSceneSourceKind::Static,alpha,false,false,
         IOSSceneSourcePlanResult::Planned,stats);
@@ -905,8 +1115,7 @@ void validateRawMaterialCensus() {
         Material::Ghost,
         Material::Multiply,
         Material::Multiply2,
-        Material::Transparent,
-        Material::AdditiveLight}) {
+        Material::Transparent}) {
     recordRawOutcome(
         IOSSceneSourceKind::Static,alpha,false,false,
         IOSSceneSourcePlanResult::SkippedMaterial,stats);
@@ -924,8 +1133,9 @@ void validateRawMaterialCensus() {
   assert(stats.census.materials.additiveLight==1u);
   assert(stats.census.materials.missing==0u);
   assert(stats.census.materials.unknown==0u);
-  assert(stats.planned==2u);
-  assert(stats.skippedMaterial==6u);
+  assert(stats.planned==3u);
+  assert(stats.plannedAdditive==1u);
+  assert(stats.skippedMaterial==5u);
   assert(stats.hasConsistentSuccessfulCensus());
   }
 
@@ -1240,6 +1450,22 @@ void validateCheckedCensusCounters() {
       &IOSSceneExtractionStats::skippedTextureFrameAndUv,
       IOSSceneTextureAnimationMode::FrameAndUv);
 
+  IOSSceneExtractionStats additiveOverflow;
+  additiveOverflow.planned = std::numeric_limits<std::size_t>::max();
+  additiveOverflow.plannedAdditive = additiveOverflow.planned;
+  additiveOverflow.plannedStatic = additiveOverflow.planned;
+  const IOSSceneExtractionStats additiveBefore = additiveOverflow;
+  IOSSceneOpaqueMeshPlan additivePlan;
+  assert(planIOSOpaqueMeshSource(
+      candidate(IOSSceneMeshKind::Static,IOSMaterialCategory::Additive),
+      additivePlan)==IOSSceneSourcePlanResult::Planned);
+  assert(!recordIOSScenePlanResult(
+      IOSSceneSourcePlanResult::Planned,additivePlan,additiveOverflow));
+  assert(additiveOverflow.planned==additiveBefore.planned);
+  assert(additiveOverflow.plannedAdditive==
+         additiveBefore.plannedAdditive);
+  assert(additiveOverflow.invalidSource==1u);
+
   for(const auto mode:{
         IOSSceneTextureAnimationMode::UvOnly,
         IOSSceneTextureAnimationMode::FrameAndUv}) {
@@ -1517,6 +1743,24 @@ void validateAtomicPublication() {
   assert(rejectedStaging.entities.size()==1u);
   assert(rejectedStaging.materials.size()==1u);
 
+  IOSSceneFrameState additiveDestination;
+  additiveDestination.sceneTimeMs = 777u;
+  const IOSSceneFrameState additiveBefore = additiveDestination;
+  IOSSceneFrameState additiveStaging;
+  auto additiveEntity = entity(50u);
+  additiveEntity.kind = IOSSceneMeshKind::Static;
+  auto additiveMaterial = material(52u);
+  additiveMaterial.category = IOSMaterialCategory::Additive;
+  additiveMaterial.flags = IOSMaterialFlagStaticAdditiveNone;
+  additiveStaging.entities.push_back(additiveEntity);
+  additiveStaging.materials.push_back(additiveMaterial);
+  assert(!publishIOSSceneExtraction(
+      IOSSceneExtractionResult::AssetBindFailed,
+      additiveStaging,additiveDestination));
+  assert(sameFrame(additiveDestination,additiveBefore));
+  assert(additiveStaging.entities.size()==1u);
+  assert(additiveStaging.materials.size()==1u);
+
   IOSSceneFrameState destination;
   destination.sceneTimeMs = 789012u;
   destination.camera.position.x = 17.f;
@@ -1553,6 +1797,7 @@ int main() {
   validateAdditiveCensusReportSidecar();
 #endif
   validatePublicContract();
+  validateStaticAdditiveNoneAdmission();
   validateFrameSelection();
   validateUVOffsetEvaluation();
   validateFrameAnimationEvidence();

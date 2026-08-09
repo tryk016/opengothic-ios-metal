@@ -41,8 +41,8 @@ inline constexpr uint32_t ForwardLightListThreadsPerThreadgroupHeight = 1u;
 inline constexpr uint32_t ForwardLightListThreadsPerThreadgroupDepth = 1u;
 inline constexpr uint32_t TileMaterialBytesPerSample = 4u;
 inline constexpr uint32_t TileFinalColorAttachment = 0u;
-inline constexpr uint32_t ExistingMetallibExportCount = 13u;
-inline constexpr uint32_t TotalMetallibExportCount = 18u;
+inline constexpr uint32_t ExistingMetallibExportCount = 14u;
+inline constexpr uint32_t TotalMetallibExportCount = 19u;
 
 static_assert(FunctionNames.size()==5u);
 static_assert(ForwardLightListWordBytes==4u);

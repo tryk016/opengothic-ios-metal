@@ -79,6 +79,8 @@ jobs:
       build_on: ${{ steps.route.outputs.build_on }}
       build_tile: ${{ steps.route.outputs.build_tile }}
       build_forward: ${{ steps.route.outputs.build_forward }}
+      build_additive_a_hdr: ${{ steps.route.outputs.build_additive_a_hdr }}
+      build_additive_b_hdr: ${{ steps.route.outputs.build_additive_b_hdr }}
     steps:
       - name: Checkout full push history
         uses: actions/checkout@v4
@@ -222,9 +224,63 @@ jobs:
           IOS_VERSION: 1.0.${{ github.run_number }}
         run: scripts/ci_build_profile.command forward
 
+  build-additive-a-hdr:
+    name: iOS Release Additive A HDR capture
+    needs: [classifier, contracts]
+    if: needs.classifier.outputs.build_additive_a_hdr == 'true'
+    runs-on: macos-15
+    outputs:
+      profile: ${{ steps.build.outputs.profile }}
+      parent_sha: ${{ steps.build.outputs.parent_sha }}
+      tempest_sha: ${{ steps.build.outputs.tempest_sha }}
+      metallib_sha256: ${{ steps.build.outputs.metallib_sha256 }}
+      binary_sha256: ${{ steps.build.outputs.binary_sha256 }}
+      additive_mode: ${{ steps.build.outputs.additive_mode }}
+      binary_marker: ${{ steps.build.outputs.binary_marker }}
+    steps:
+      - name: Checkout exact SHA with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install build prerequisites
+        run: brew install cmake glslang ripgrep
+      - name: Build and verify exact Additive A HDR profile
+        id: build
+        env:
+          IOS_VERSION: 1.0.${{ github.run_number }}
+        run: scripts/ci_build_profile.command additive-a-hdr
+
+  build-additive-b-hdr:
+    name: iOS Release Additive B HDR capture
+    needs: [classifier, contracts]
+    if: needs.classifier.outputs.build_additive_b_hdr == 'true'
+    runs-on: macos-15
+    outputs:
+      profile: ${{ steps.build.outputs.profile }}
+      parent_sha: ${{ steps.build.outputs.parent_sha }}
+      tempest_sha: ${{ steps.build.outputs.tempest_sha }}
+      metallib_sha256: ${{ steps.build.outputs.metallib_sha256 }}
+      binary_sha256: ${{ steps.build.outputs.binary_sha256 }}
+      additive_mode: ${{ steps.build.outputs.additive_mode }}
+      binary_marker: ${{ steps.build.outputs.binary_marker }}
+    steps:
+      - name: Checkout exact SHA with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install build prerequisites
+        run: brew install cmake glslang ripgrep
+      - name: Build and verify exact Additive B HDR profile
+        id: build
+        env:
+          IOS_VERSION: 1.0.${{ github.run_number }}
+        run: scripts/ci_build_profile.command additive-b-hdr
+
   required:
     name: RendererIOS required gates
-    needs: [classifier, contracts, build-off, build-on, build-tile, build-forward]
+    needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr]
     if: always()
     runs-on: macos-15
     steps:
@@ -235,6 +291,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 scripts/ci_verification.py aggregate \
             --classifier-result "${{ needs.classifier.result }}" \
+            --expected-sha "${{ github.sha }}" \
             --expected-contracts "${{ needs.classifier.outputs.contracts }}" \
             --result-contracts "${{ needs.contracts.result }}" \
             --expected-build-off "${{ needs.classifier.outputs.build_off }}" \
@@ -244,4 +301,22 @@ jobs:
             --expected-build-tile "${{ needs.classifier.outputs.build_tile }}" \
             --result-build-tile "${{ needs.build-tile.result }}" \
             --expected-build-forward "${{ needs.classifier.outputs.build_forward }}" \
-            --result-build-forward "${{ needs.build-forward.result }}"
+            --result-build-forward "${{ needs.build-forward.result }}" \
+            --expected-build-additive-a-hdr "${{ needs.classifier.outputs.build_additive_a_hdr }}" \
+            --result-build-additive-a-hdr "${{ needs.build-additive-a-hdr.result }}" \
+            --expected-build-additive-b-hdr "${{ needs.classifier.outputs.build_additive_b_hdr }}" \
+            --result-build-additive-b-hdr "${{ needs.build-additive-b-hdr.result }}" \
+            --additive-a-profile "${{ needs.build-additive-a-hdr.outputs.profile }}" \
+            --additive-a-parent-sha "${{ needs.build-additive-a-hdr.outputs.parent_sha }}" \
+            --additive-a-tempest-sha "${{ needs.build-additive-a-hdr.outputs.tempest_sha }}" \
+            --additive-a-metallib-sha256 "${{ needs.build-additive-a-hdr.outputs.metallib_sha256 }}" \
+            --additive-a-binary-sha256 "${{ needs.build-additive-a-hdr.outputs.binary_sha256 }}" \
+            --additive-a-additive-mode "${{ needs.build-additive-a-hdr.outputs.additive_mode }}" \
+            --additive-a-binary-marker "${{ needs.build-additive-a-hdr.outputs.binary_marker }}" \
+            --additive-b-profile "${{ needs.build-additive-b-hdr.outputs.profile }}" \
+            --additive-b-parent-sha "${{ needs.build-additive-b-hdr.outputs.parent_sha }}" \
+            --additive-b-tempest-sha "${{ needs.build-additive-b-hdr.outputs.tempest_sha }}" \
+            --additive-b-metallib-sha256 "${{ needs.build-additive-b-hdr.outputs.metallib_sha256 }}" \
+            --additive-b-binary-sha256 "${{ needs.build-additive-b-hdr.outputs.binary_sha256 }}" \
+            --additive-b-additive-mode "${{ needs.build-additive-b-hdr.outputs.additive_mode }}" \
+            --additive-b-binary-marker "${{ needs.build-additive-b-hdr.outputs.binary_marker }}"

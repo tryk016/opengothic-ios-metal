@@ -24,12 +24,14 @@ static_assert(alignof(IOSToneResolveConstants)==16u);
 
 namespace RendererIOSShader {
 
-inline constexpr uint32_t AbiVersion = 8u;
+inline constexpr uint32_t AbiVersion = 9u;
 inline constexpr std::string_view LibraryName = "RendererIOS";
 inline constexpr std::string_view VertexFunction = "riosLandscapeVertex";
 inline constexpr std::string_view FragmentFunction = "riosLandscapeFragment";
 inline constexpr std::string_view AlphaTestFragmentFunction =
     "riosLandscapeAlphaTestFragment";
+inline constexpr std::string_view AdditiveFragmentFunction =
+    "riosLandscapeAdditiveFragment";
 inline constexpr std::string_view ToneResolveVertexFunction =
     "riosToneResolveVertex";
 inline constexpr std::string_view ToneResolveFragmentFunction =

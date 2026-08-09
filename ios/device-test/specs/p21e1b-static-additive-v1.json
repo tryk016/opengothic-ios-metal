@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "renderer-ios-static-additive-gpu-pair",
+  "runnerContract": {
+    "adapter": "plain-save4-linear-hdr-proof-v1",
+    "saveSlot": 4
+  },
+  "artifact": {
+    "magicHex": "52494f5341303900",
+    "version": 1,
+    "endian": 19525,
+    "headerBytes": 64,
+    "recordBytes": 256,
+    "constantsBytes": 160,
+    "minimumBaseRecords": 1,
+    "maximumBaseRecords": 100000,
+    "additiveRecords": 183,
+    "maximumRecords": 100183,
+    "maximumPayloadBytes": 25646848,
+    "filenamePattern": "RendererIOS-additive-input-v1-<a|b>-g<generation>-s<sequence>.bin"
+  },
+  "profiles": {
+    "a": {
+      "mode": "additive-a-hdr",
+      "launchArgument": "-renderer-ios-additive-causal-mode=additive-a-hdr",
+      "binaryMarker": "RIOS_ADDITIVE_CAUSAL_MODE=additive-a-hdr",
+      "terminalPrefix": "RendererIOS additive causal: v=1 mode=additive-a-hdr"
+    },
+    "b": {
+      "mode": "additive-b-hdr",
+      "launchArgument": "-renderer-ios-additive-causal-mode=additive-b-hdr",
+      "binaryMarker": "RIOS_ADDITIVE_CAUSAL_MODE=additive-b-hdr",
+      "terminalPrefix": "RendererIOS additive causal: v=1 mode=additive-b-hdr"
+    }
+  },
+  "tempestSha": "308ec44c501c6ee86c153ba4acd63d44e39cf38d",
+  "metallib": {
+    "abi": 9,
+    "exportCount": 19,
+    "exports": [
+      "riosBinkFragment",
+      "riosBinkVertex",
+      "riosForwardPlusBuildLightList",
+      "riosForwardPlusFragment",
+      "riosInventoryFragment",
+      "riosInventoryVertex",
+      "riosLandscapeAdditiveFragment",
+      "riosLandscapeAlphaTestFragment",
+      "riosLandscapeFragment",
+      "riosLandscapeVertex",
+      "riosShadingPrototypeVertex",
+      "riosTileDeferredLighting",
+      "riosTileDeferredMaterialFragment",
+      "riosToneResolveFragment",
+      "riosToneResolveVertex",
+      "riosUiColorFragment",
+      "riosUiColorVertex",
+      "riosUiTextureFragment",
+      "riosUiTextureVertex"
+    ]
+  },
+  "capture": {
+    "resourceRoles": [
+      "attachment",
+      "proof-blit-source",
+      "tone-resolve-texture0"
+    ],
+    "compareNativeIdsAcrossRuns": false
+  },
+  "losslessRG11B10": {
+    "channelwiseAGreaterOrEqualB": true,
+    "requirePositiveDelta": true,
+    "requireSamePixelDeltaAndAAboveOne": true
+  }
+}

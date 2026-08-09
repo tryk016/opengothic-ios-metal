@@ -8,6 +8,8 @@ RAW_ACTIVE_FAULT_MODE_SET="${ACTIVE_FAULT_MODE+x}"
 RAW_ACTIVE_FAULT_MODE="${ACTIVE_FAULT_MODE-}"
 RAW_CAUSAL_MODE_SET="${CAUSAL_MODE+x}"
 RAW_CAUSAL_MODE="${CAUSAL_MODE-}"
+RAW_ADDITIVE_CAUSAL_MODE_SET="${ADDITIVE_CAUSAL_MODE+x}"
+RAW_ADDITIVE_CAUSAL_MODE="${ADDITIVE_CAUSAL_MODE-}"
 RAW_BINK_SELF_TEST_SET="${BINK_SELF_TEST+x}"
 RAW_BINK_SELF_TEST="${BINK_SELF_TEST-}"
 RAW_RESOURCE_ALLOCATOR_SELF_TEST_SET="${RESOURCE_ALLOCATOR_SELF_TEST+x}"
@@ -29,6 +31,7 @@ case "$PROFILE" in
     DIAGNOSTICS=OFF
     ACTIVE_FAULT_MODE=none
     CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -39,6 +42,7 @@ case "$PROFILE" in
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE="${ACTIVE_FAULT_MODE:-none}"
     CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
     BINK_SELF_TEST="${BINK_SELF_TEST:-OFF}"
     RESOURCE_ALLOCATOR_SELF_TEST="${RESOURCE_ALLOCATOR_SELF_TEST:-OFF}"
     CLEAR_ONLY_PASS_SELF_TEST="${CLEAR_ONLY_PASS_SELF_TEST:-OFF}"
@@ -49,6 +53,7 @@ case "$PROFILE" in
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
     CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -61,6 +66,7 @@ case "$PROFILE" in
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
     CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -73,6 +79,7 @@ case "$PROFILE" in
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
     CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -85,6 +92,7 @@ case "$PROFILE" in
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
     CAUSAL_MODE=causal-a
+    ADDITIVE_CAUSAL_MODE=none
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -97,6 +105,33 @@ case "$PROFILE" in
     DIAGNOSTICS=ON
     ACTIVE_FAULT_MODE=none
     CAUSAL_MODE=causal-b
+    ADDITIVE_CAUSAL_MODE=none
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
+  additive-a-hdr)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=causal-a
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
+  additive-b-hdr)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=causal-b
     BINK_SELF_TEST=OFF
     RESOURCE_ALLOCATOR_SELF_TEST=OFF
     CLEAR_ONLY_PASS_SELF_TEST=OFF
@@ -106,7 +141,7 @@ case "$PROFILE" in
     PACKAGE_DEVICE_IPA=0
     ;;
   *)
-    echo "usage: $0 off|on|tile|forward|causal-none|causal-a|causal-b" >&2
+    echo "usage: $0 off|on|tile|forward|causal-none|causal-a|causal-b|additive-a-hdr|additive-b-hdr" >&2
     exit 2
     ;;
 esac
@@ -130,6 +165,43 @@ if [[ "$PROFILE" == causal-* ]]; then
     "$RAW_ACTIVE_FAULT_MODE" none
   reject_causal_raw_conflict \
     CAUSAL_MODE "$RAW_CAUSAL_MODE_SET" "$RAW_CAUSAL_MODE" "$CAUSAL_MODE"
+  reject_causal_raw_conflict \
+    ADDITIVE_CAUSAL_MODE "$RAW_ADDITIVE_CAUSAL_MODE_SET" \
+    "$RAW_ADDITIVE_CAUSAL_MODE" none
+  reject_causal_raw_conflict \
+    BINK_SELF_TEST "$RAW_BINK_SELF_TEST_SET" "$RAW_BINK_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    RESOURCE_ALLOCATOR_SELF_TEST "$RAW_RESOURCE_ALLOCATOR_SELF_TEST_SET" \
+    "$RAW_RESOURCE_ALLOCATOR_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    CLEAR_ONLY_PASS_SELF_TEST "$RAW_CLEAR_ONLY_PASS_SELF_TEST_SET" \
+    "$RAW_CLEAR_ONLY_PASS_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    SHADING_PROTOTYPE_TILE_SELF_TEST \
+    "$RAW_SHADING_PROTOTYPE_TILE_SELF_TEST_SET" \
+    "$RAW_SHADING_PROTOTYPE_TILE_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST \
+    "$RAW_SHADING_PROTOTYPE_FORWARD_SELF_TEST_SET" \
+    "$RAW_SHADING_PROTOTYPE_FORWARD_SELF_TEST" OFF
+  reject_causal_raw_conflict \
+    TEMPEST_PROFILE "$RAW_TEMPEST_PROFILE_SET" "$RAW_TEMPEST_PROFILE" baseline
+  reject_causal_raw_conflict \
+    PACKAGE_DEVICE_IPA "$RAW_PACKAGE_DEVICE_IPA_SET" \
+    "$RAW_PACKAGE_DEVICE_IPA" 0
+fi
+
+if [[ "$PROFILE" == additive-*-hdr ]]; then
+  reject_causal_raw_conflict \
+    DIAGNOSTICS "$RAW_DIAGNOSTICS_SET" "$RAW_DIAGNOSTICS" ON
+  reject_causal_raw_conflict \
+    ACTIVE_FAULT_MODE "$RAW_ACTIVE_FAULT_MODE_SET" \
+    "$RAW_ACTIVE_FAULT_MODE" none
+  reject_causal_raw_conflict \
+    CAUSAL_MODE "$RAW_CAUSAL_MODE_SET" "$RAW_CAUSAL_MODE" none
+  reject_causal_raw_conflict \
+    ADDITIVE_CAUSAL_MODE "$RAW_ADDITIVE_CAUSAL_MODE_SET" \
+    "$RAW_ADDITIVE_CAUSAL_MODE" "$ADDITIVE_CAUSAL_MODE"
   reject_causal_raw_conflict \
     BINK_SELF_TEST "$RAW_BINK_SELF_TEST_SET" "$RAW_BINK_SELF_TEST" OFF
   reject_causal_raw_conflict \
@@ -155,6 +227,13 @@ fi
 
 : "${RUNNER_TEMP:?RUNNER_TEMP must be set}"
 : "${GITHUB_SHA:?GITHUB_SHA must be set}"
+HEAD_SHA="$(git rev-parse HEAD)"
+if [ "$HEAD_SHA" != "$GITHUB_SHA" ]; then
+  echo "checkout SHA $HEAD_SHA does not match workflow SHA $GITHUB_SHA" >&2
+  exit 1
+fi
+TEMPEST_SHA="$(git -C lib/Tempest rev-parse HEAD)"
+printf '%s\n' "$TEMPEST_SHA" | grep -Eq '^[0-9a-f]{40}$'
 IOS_VERSION="${IOS_VERSION:-1.0.0}"
 TEMPEST_PROFILE="${TEMPEST_PROFILE:-baseline}"
 PACKAGE_DEVICE_IPA="${PACKAGE_DEVICE_IPA:-0}"
@@ -209,6 +288,30 @@ if [[ "$PROFILE" == causal-* ]]; then
   fi
 fi
 
+
+if [[ "$PROFILE" == additive-*-hdr ]]; then
+  EXPECTED_ADDITIVE_CAUSAL_MODE="${PROFILE#additive-}"
+  EXPECTED_ADDITIVE_CAUSAL_MODE="${EXPECTED_ADDITIVE_CAUSAL_MODE%-hdr}"
+  EXPECTED_ADDITIVE_CAUSAL_MODE="causal-$EXPECTED_ADDITIVE_CAUSAL_MODE"
+  if [ "$DIAGNOSTICS" != ON ] ||
+     [ "$ACTIVE_FAULT_MODE" != none ] ||
+     [ "$CAUSAL_MODE" != none ] ||
+     [ "$ADDITIVE_CAUSAL_MODE" != "$EXPECTED_ADDITIVE_CAUSAL_MODE" ] ||
+     [ "$BINK_SELF_TEST" != OFF ] ||
+     [ "$RESOURCE_ALLOCATOR_SELF_TEST" != OFF ] ||
+     [ "$CLEAR_ONLY_PASS_SELF_TEST" != OFF ] ||
+     [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" != OFF ] ||
+     [ "$SHADING_PROTOTYPE_FORWARD_SELF_TEST" != OFF ] ||
+     [ "$TEMPEST_PROFILE" != baseline ] ||
+     [ "$DIRECT_DRAWABLE" != OFF ] ||
+     [ "$METALFX_SPATIAL" != OFF ] ||
+     [ "$METALFX_TEMPORAL" != OFF ] ||
+     [ "$PACKAGE_DEVICE_IPA" != 0 ]; then
+    echo "Additive causal HDR profile tuple mismatch: $PROFILE" >&2
+    exit 2
+  fi
+fi
+
 for value in \
     "$BINK_SELF_TEST" \
     "$RESOURCE_ALLOCATOR_SELF_TEST" \
@@ -232,6 +335,7 @@ cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios \
   -DOPENGOTHIC_METALFX_TEMPORAL="$METALFX_TEMPORAL" \
   -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE" \
   -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$CAUSAL_MODE" \
+  -DOPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE="$ADDITIVE_CAUSAL_MODE" \
   -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="$BINK_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST="$RESOURCE_ALLOCATOR_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST="$CLEAR_ONLY_PASS_SELF_TEST" \
@@ -340,6 +444,96 @@ print(
 PY
 fi
 
+if [[ "$PROFILE" == off || "$PROFILE" == on ||
+      "$PROFILE" == additive-*-hdr ]]; then
+  python3 - \
+    build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj \
+    "$ADDITIVE_CAUSAL_MODE" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+project = Path(sys.argv[1]).read_text()
+mode = sys.argv[2]
+macro_a = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A=1"
+macro_b = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B=1"
+
+target_match = re.search(
+    r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
+    r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if target_match is None:
+    raise SystemExit("Additive causal PBX oracle cannot identify Gothic2Notr target")
+list_match = re.search(
+    r'buildConfigurationList = ([A-F0-9]{24}) /\* '
+    r'Build configuration list for PBXNativeTarget "Gothic2Notr" \*/;',
+    target_match.group(2),
+)
+if list_match is None:
+    raise SystemExit("Additive causal PBX oracle cannot identify target configurations")
+configuration_list = re.search(
+    rf"\b{list_match.group(1)} /\* Build configuration list for "
+    r'PBXNativeTarget "Gothic2Notr" \*/ = \{\n'
+    r"\s*isa = XCConfigurationList;"
+    r"(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if configuration_list is None:
+    raise SystemExit("Additive causal PBX oracle cannot read configuration list")
+configuration_ids = re.findall(
+    r"([A-F0-9]{24}) /\* (Debug|MinSizeRel|Release|RelWithDebInfo) \*/,",
+    configuration_list.group(1),
+)
+if [name for _, name in configuration_ids] != [
+    "Debug", "Release", "MinSizeRel", "RelWithDebInfo"
+]:
+    raise SystemExit("Additive causal PBX target configuration set drifted")
+
+expected = {
+    "none": (),
+    "causal-a": (macro_a,),
+    "causal-b": (macro_b,),
+}[mode]
+token = re.compile(
+    r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_"
+    r"(?:A|B|HOST_TEST)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
+)
+global_entries = token.findall(project)
+if global_entries != list(expected) * 4:
+    raise SystemExit(
+        "Additive causal PBX global definitions drifted: "
+        + ",".join(global_entries)
+    )
+alpha_token = re.compile(
+    r"OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_(?:A|B|HOST_TEST)"
+)
+if alpha_token.search(project) is not None:
+    raise SystemExit("AlphaTest causal macro leaked into Additive/standard profile")
+for identifier, name in configuration_ids:
+    configuration = re.search(
+        rf"\b{identifier} /\* {name} \*/ = \{{\n"
+        r"\s*isa = XCBuildConfiguration;\n"
+        r"\s*buildSettings = \{(.*?)\n\s*\};\n"
+        rf"\s*name = {name};\n\s*\}};",
+        project,
+        re.S,
+    )
+    if configuration is None:
+        raise SystemExit(f"Additive causal PBX cannot read {name}")
+    definitions = re.findall(
+        r"GCC_PREPROCESSOR_DEFINITIONS = \((.*?)\);",
+        configuration.group(1),
+        re.S,
+    )
+    if len(definitions) != 1 or token.findall(definitions[0]) != list(expected):
+        raise SystemExit(f"Additive causal PBX exact entries drifted in {name}")
+print("RendererIOS Additive causal PBX oracle: mode=" + mode + " configurations=4")
+PY
+fi
+
 # CI_PROFILE_CANDIDATE_BEGIN
 for shader in landscape bink ui inventory shading-prototypes; do
   set --
@@ -362,6 +556,7 @@ xcrun --sdk iphoneos metallib \
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
+  riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
@@ -376,7 +571,7 @@ ACTUAL_RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"
-test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 18
+test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 19
 shasum -a 256 "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '{print $1}' >"$RUNNER_TEMP/RendererIOS.candidate.sha256"
 # CI_PROFILE_CANDIDATE_END
@@ -410,6 +605,27 @@ test "$APP_METALLIB_DIGEST" = "$P25C1A_CANDIDATE_DIGEST"
 printf 'RendererIOS %s app metallib matches P2.5c1a candidate: %s\n' \
   "$DIAGNOSTICS" "$APP_METALLIB_DIGEST"
 strings "$APP_BINARY" >"$APP_STRINGS"
+APP_BINARY_DIGEST="$(
+  shasum -a 256 "$APP_BINARY" | awk '{print $1}'
+)"
+printf '%s\n' "$APP_BINARY_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
+if [[ "$PROFILE" == additive-*-hdr ]]; then
+  test "$(/usr/libexec/PlistBuddy -c \
+    'Print :RendererIOSLinearHDRGPUTripleCapture' "$APP_INFO")" = true
+  test "$(/usr/libexec/PlistBuddy -c \
+    'Print :MetalCaptureEnabled' "$APP_INFO")" = true
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    {
+      printf 'profile=%s\n' "$PROFILE"
+      printf 'parent_sha=%s\n' "$HEAD_SHA"
+      printf 'tempest_sha=%s\n' "$TEMPEST_SHA"
+      printf 'metallib_sha256=%s\n' "$APP_METALLIB_DIGEST"
+      printf 'binary_sha256=%s\n' "$APP_BINARY_DIGEST"
+      printf 'additive_mode=%s\n' "$ADDITIVE_CAUSAL_MODE"
+      printf 'binary_marker=RIOS_ADDITIVE_CAUSAL_MODE=%s\n' "$PROFILE"
+    } >>"$GITHUB_OUTPUT"
+  fi
+fi
 if [ "$DIAGNOSTICS" = ON ]; then
   grep -Fxq 'RendererIOS pipeline archive test-mode: mode=' \
     "$APP_STRINGS"
@@ -478,7 +694,7 @@ else
     "$APP_STRINGS"
 fi
 if [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ]; then
-  test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1' \
+  test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1' \
     "$APP_STRINGS" || true)" -eq 1
   test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     "$APP_STRINGS" || true)" -eq 1
@@ -521,7 +737,8 @@ else
   ! grep -Fq -- '-renderer-ios-forward-self-test-nonce=' \
     "$APP_STRINGS"
 fi
-if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
+if [[ "$PROFILE" == additive-*-hdr ]] ||
+   [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
    [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ] ||
    [ "$SHADING_PROTOTYPE_FORWARD_SELF_TEST" = ON ]; then
   test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
@@ -529,6 +746,67 @@ if [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
 else
   ! /usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
     "$APP_INFO" >/dev/null 2>&1
+fi
+
+if [ "$PROFILE" = off ] || [ "$PROFILE" = on ] ||
+   [[ "$PROFILE" == additive-*-hdr ]]; then
+  python3 - "$APP_BINARY" "$PROFILE" <<'PY'
+from pathlib import Path
+import sys
+
+binary = Path(sys.argv[1]).read_bytes()
+profile = sys.argv[2]
+prefix = b"RIOS_ADDITIVE_CAUSAL_MODE="
+marker_a = prefix + b"additive-a-hdr"
+marker_b = prefix + b"additive-b-hdr"
+
+
+def validate(candidate: bytes) -> None:
+    prefix_count = candidate.count(prefix)
+    if profile in ("off", "on"):
+        if prefix_count != 0:
+            raise ValueError("ordinary profile contains Additive causal marker")
+        return
+    expected = marker_a if profile == "additive-a-hdr" else marker_b
+    opposite = marker_b if profile == "additive-a-hdr" else marker_a
+    if (prefix_count != 1 or candidate.count(expected) != 1 or
+            candidate.count(opposite) != 0 or
+            candidate.count(expected + b"\0") != 1):
+        raise ValueError("Additive profile marker is not exact")
+
+
+validate(binary)
+mutations = []
+if profile in ("off", "on"):
+    mutations = (binary + marker_a + b"\0", binary + marker_b + b"\0")
+else:
+    expected = marker_a if profile == "additive-a-hdr" else marker_b
+    opposite = marker_b if profile == "additive-a-hdr" else marker_a
+    mutations = (
+        binary.replace(expected + b"\0", expected + b"X", 1),
+        binary.replace(expected, b"", 1),
+        binary + expected + b"\0",
+        binary + opposite + b"\0",
+        binary.replace(expected, opposite, 1),
+        binary.replace(expected, prefix + b"mutant", 1),
+    )
+killed = 0
+for mutation in mutations:
+    try:
+        validate(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("Additive binary marker mutation survived")
+if killed != len(mutations):
+    raise SystemExit("Additive binary marker mutation count drifted")
+print(
+    "RendererIOS Additive binary marker oracle: profile="
+    + profile
+    + " mutations-killed="
+    + str(killed)
+)
+PY
 fi
 
 if [[ "$PROFILE" == causal-* ]]; then

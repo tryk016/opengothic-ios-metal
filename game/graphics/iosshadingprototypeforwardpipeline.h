@@ -12,7 +12,7 @@ class Device;
 namespace RendererIOSShadingPrototypeForwardPipeline {
 
 inline constexpr uint32_t ContractVersion = 1u;
-inline constexpr uint32_t OfflineMetallibAbi = 8u;
+inline constexpr uint32_t OfflineMetallibAbi = 9u;
 inline constexpr uint32_t MinimumAppleGPUFamily = 4u;
 inline constexpr uint32_t ResolvedFunctionCount = 3u;
 inline constexpr uint32_t SpecializationCount = 2u;

@@ -69,7 +69,7 @@ readonly CLEAR_ONLY_CAPTURE_PREFIX='RendererIOS clear-only capture:'
 readonly CLEAR_ONLY_CAPTURE_ACQUIRED='RendererIOS clear-only capture: ACQUIRED'
 readonly CLEAR_ONLY_CAPTURE_NAME='RendererIOS-pm-clear-v1.gputrace'
 readonly SHADING_PROTOTYPE_TILE_SELF_TEST_PREFIX='RendererIOS shading prototype tile self-test:'
-readonly SHADING_PROTOTYPE_TILE_SELF_TEST_ARMED='RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1'
+readonly SHADING_PROTOTYPE_TILE_SELF_TEST_ARMED='RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1'
 readonly SHADING_PROTOTYPE_TILE_SELF_TEST_FACTORY_READY='RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0'
 readonly SHADING_PROTOTYPE_TILE_SELF_TEST_ENCODED='RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0'
 readonly SHADING_PROTOTYPE_TILE_SELF_TEST_SUBMITTED='RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1'
@@ -5039,15 +5039,15 @@ PY
     fail "clear-only pass self-test summary validation failed"
   CLEAR_ONLY_PASS_SELF_TEST_VALIDATION="passed"
 else
-rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=8' \
+rg -F 'RendererIOS shader library: source=offline-metallib resource=RendererIOS.metallib abi=9' \
   "$WORK/log.txt" >/dev/null || fail "offline metallib marker is missing"
-rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=8 manifest=1 fail-closed=1' \
+rg -F 'RendererIOS builtin shader library: source=offline-metallib resource=RendererIOS.metallib abi=9 manifest=1 fail-closed=1' \
   "$WORK/log.txt" >/dev/null || fail "offline Builtin manifest marker is missing"
-rg -F 'RendererIOS inventory shader manifest: resource=RendererIOS.metallib abi=8 manifest=1 exact-spirv=1 configured=1 fail-closed=1' \
+rg -F 'RendererIOS inventory shader manifest: resource=RendererIOS.metallib abi=9 manifest=1 exact-spirv=1 configured=1 fail-closed=1' \
   "$WORK/log.txt" >/dev/null || fail "offline inventory manifest marker is missing"
-rg -F 'RendererIOS inventory shader pipeline: source=offline-metallib resource=RendererIOS.metallib abi=8 manifest=1 exact-spirv=1 functions-resolved=2 pipeline-wrapper-created=1' \
+rg -F 'RendererIOS inventory shader pipeline: source=offline-metallib resource=RendererIOS.metallib abi=9 manifest=1 exact-spirv=1 functions-resolved=2 pipeline-wrapper-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline inventory pipeline marker is missing"
-rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=8 color=rgba8 sample-count=1 pipeline-created=1' \
+rg -F 'RendererIOS native Bink pipeline: source=offline-metallib resource=RendererIOS.metallib abi=9 color=rgba8 sample-count=1 pipeline-created=1' \
   "$WORK/log.txt" >/dev/null || fail "offline native Bink pipeline marker is missing"
 if ((REQUIRE_BINK_SELF_TEST != 0)); then
   BINK_ARMED_COUNT="$(grep -Fc \

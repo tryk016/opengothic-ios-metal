@@ -90,15 +90,24 @@ bool validMaterialCategory(IOSMaterialCategory category) noexcept {
   }
 
 bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
+  constexpr uint64_t knownFlags = IOSMaterialFlagStaticAdditiveNone;
+  if((material.flags&~knownFlags)!=0)
+    return false;
   switch(material.category) {
     case IOSMaterialCategory::Opaque:
-      return true;
+      return material.flags==IOSMaterialFlagNone;
     case IOSMaterialCategory::AlphaTest:
       return bool(material.baseColorTexture) &&
              !material.usesFallbackTexture &&
-             material.alphaCutoff==0.5f;
-    case IOSMaterialCategory::Transparent:
+             material.alphaCutoff==0.5f &&
+             material.flags==IOSMaterialFlagNone;
     case IOSMaterialCategory::Additive:
+      return bool(material.baseColorTexture) &&
+             !material.usesFallbackTexture &&
+             material.uvOffset==IOSFloat2{} &&
+             material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
+             material.flags==IOSMaterialFlagStaticAdditiveNone;
+    case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Water:
       return false;
     }
@@ -170,14 +179,29 @@ bool idsStrictlyIncrease(const std::vector<T>& values,
   return true;
   }
 
-bool containsMaterial(const std::vector<IOSMaterial>& materials,
-                      IOSMaterialHandle handle) noexcept {
+const IOSMaterial* findMaterial(
+    const std::vector<IOSMaterial>& materials,
+    IOSMaterialHandle handle) noexcept {
   const auto found = std::lower_bound(
     materials.begin(),materials.end(),handle.value,
     [](const IOSMaterial& material, uint64_t value) {
       return material.id.value<value;
       });
-  return found!=materials.end() && found->id==handle;
+  return found!=materials.end() && found->id==handle ? &*found : nullptr;
+  }
+
+bool hasOnlyStaticEntitiesForMaterial(
+    const std::vector<IOSRenderEntity>& entities,
+    IOSMaterialHandle material) noexcept {
+  bool found = false;
+  for(const auto& entity:entities) {
+    if(entity.material!=material)
+      continue;
+    if(entity.kind!=IOSSceneMeshKind::Static)
+      return false;
+    found = true;
+    }
+  return found;
   }
 
 static_assert(std::is_standard_layout_v<IOSFloat2>);
@@ -229,10 +253,12 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
     return false;
 
   for(const auto& entity:entities) {
+    const IOSMaterial* const material =
+        findMaterial(materials,entity.material);
     if(!validHandle(entity.id,generation) ||
        !validHandle(entity.mesh,generation) ||
        !validHandle(entity.material,generation) ||
-       !containsMaterial(materials,entity.material) ||
+       material==nullptr ||
        !validSceneMeshKind(entity.kind) ||
        !isFinite(entity.currentTransform) ||
        !isFinite(entity.previousTransform) ||
@@ -241,11 +267,19 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !validRange(entity.morphRange,currentMorphWeights.size()) ||
        !validVisibility(entity.visibilityMask))
       return false;
+    if(material->category==IOSMaterialCategory::Additive &&
+       entity.kind!=IOSSceneMeshKind::Static)
+      return false;
     if(!historyValid && entity.currentTransform!=entity.previousTransform)
       return false;
     }
   if(!idsStrictlyIncrease(entities,&IOSRenderEntity::id))
     return false;
+  for(const auto& material:materials) {
+    if(material.category==IOSMaterialCategory::Additive &&
+       !hasOnlyStaticEntitiesForMaterial(entities,material.id))
+      return false;
+    }
 
   for(const auto& light:lights) {
     if(!validHandle(light.id,generation) ||

@@ -24,8 +24,12 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #include <chrono>
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 #include <crt_externs.h>
+#endif
 #include <CommonCrypto/CommonDigest.h>
 #endif
 #include <cstdio>
@@ -39,6 +43,10 @@
 #include <utility>
 
 #include "iosgpuscene.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+#include "iosadditiveinputartifact.h"
+#endif
 #include "iosgpubink.h"
 #include "iosdevicefactscollector.h"
 #include "iosfeaturepolicyprovenance.h"
@@ -648,7 +656,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=8 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1246,6 +1254,15 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     FunctionalEvidence         functionalEvidence;
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    IOSGPUScene::AdditiveInputArtifact additiveInput;
+    uint64_t                   additivePreparedSerial = 0;
+    uint64_t                   additiveSubmittedSerial = 0;
+    bool                       additiveSubmitAccepted = false;
+    bool                       additivePresentAccepted = false;
+    bool                       additiveTerminalReported = false;
+#endif
     bool                       submitted = false;
     bool                       discardCommandAfterIdle = false;
     bool                       rebuildCommand = false;
@@ -1316,6 +1333,19 @@ struct IOSMetalContext::Impl final {
         gpuScene.reset();
         }
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    if(gpuScene!=nullptr &&
+       gpuScene->additiveTerminalFailureReported()) {
+      additiveProfileClaimed = true;
+      additiveProfileTerminalReported = true;
+      }
+    else if(gpuScene==nullptr) {
+      additiveProfileClaimed = true;
+      additiveProfileTerminalReported = true;
+      logAdditiveTerminalFailure(0u,0u,"contract","initialization");
+      }
+#endif
     gpuBink = std::make_unique<IOSGPUBink>(device);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     try {
@@ -1855,7 +1885,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==8u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==9u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2644,12 +2674,12 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==8u);
+    static_assert(Pipeline::OfflineMetallibAbi==9u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
-                 RendererIOSShadingPrototypeForwardSelfTestArmed),
+             RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=8 minimum-apple=4");
+             " contract=1 metallib-abi=9 minimum-apple=4");
       }
     catch(...) {
       }
@@ -3279,6 +3309,11 @@ struct IOSMetalContext::Impl final {
     }
 
   [[noreturn]] void terminateWithoutTeardown(const char* operation) noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    for(auto& frame:frames)
+      failAdditiveInput(frame,"gpu","forced-termination");
+#endif
     try {
       Log::e(operation,
              "; terminating without C++ teardown so in-flight GPU owners remain alive");
@@ -3697,6 +3732,10 @@ struct IOSMetalContext::Impl final {
     // Move-assigning an empty wrapper releases it without invoking that wait.
     for(auto& frame:frames) {
       markLinearHDRTerminalFailed(frame);
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      failAdditiveInput(frame,"gpu","terminal-abandoned");
+#endif
       frame.fence     = Fence();
       frame.submitted = false;
       frame.linearHDRSequence = {};
@@ -3759,6 +3798,193 @@ struct IOSMetalContext::Impl final {
     frame.uiPayload = {};
     }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+  static constexpr std::string_view additiveModeName() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A)
+    return "additive-a-hdr";
+#else
+    return "additive-b-hdr";
+#endif
+    }
+
+  static constexpr bool additiveBuildShaIsValid() noexcept {
+    constexpr std::string_view sha = OPENGOTHIC_RENDERER_IOS_BUILD_SHA;
+    if(sha.size()!=40u)
+      return false;
+    for(char value:sha) {
+      if(!((value>='0' && value<='9') ||
+           (value>='a' && value<='f')))
+        return false;
+      }
+    return true;
+    }
+
+  static void clearAdditiveInput(FrameContext& frame) noexcept {
+    frame.additiveInput = {};
+    frame.additivePreparedSerial = 0u;
+    frame.additiveSubmittedSerial = 0u;
+    frame.additiveSubmitAccepted = false;
+    frame.additivePresentAccepted = false;
+    frame.additiveTerminalReported = false;
+    }
+
+  static void logAdditiveTerminalFailure(
+      uint64_t generation, uint64_t sequence,
+      const char* failureClass, const char* reason) noexcept {
+    (void)generation;
+    (void)sequence;
+    try {
+      Log::e("RendererIOS additive causal: v=1 mode=",additiveModeName(),
+             " terminal=F class=",failureClass," reason=",reason);
+      }
+    catch(...) {
+      }
+    }
+
+  void failAdditiveInput(
+      FrameContext& frame,
+      const char* failureClass, const char* reason) noexcept {
+    if(frame.additiveInput && !frame.additiveTerminalReported &&
+       !additiveProfileTerminalReported) {
+      additiveProfileClaimed = true;
+      additiveProfileTerminalReported = true;
+      frame.additiveTerminalReported = true;
+      logAdditiveTerminalFailure(
+          frame.additiveInput.generation,frame.additiveInput.sequence,
+          failureClass,reason);
+      }
+    frame.additiveInput = {};
+    frame.additivePreparedSerial = 0u;
+    frame.additiveSubmittedSerial = 0u;
+    frame.additiveSubmitAccepted = false;
+    frame.additivePresentAccepted = false;
+    }
+
+  void failUnclaimedAdditiveProfile(
+      uint64_t generation, uint64_t sequence,
+      const char* failureClass, const char* reason) noexcept {
+    if(additiveProfileClaimed || additiveProfileTerminalReported)
+      return;
+    additiveProfileClaimed = true;
+    additiveProfileTerminalReported = true;
+    logAdditiveTerminalFailure(
+        generation,sequence,failureClass,reason);
+    }
+
+  static std::array<char,CC_SHA256_DIGEST_LENGTH*2u+1u>
+      additiveArtifactSha256(
+          std::span<const std::byte> bytes) noexcept {
+    std::array<unsigned char,CC_SHA256_DIGEST_LENGTH> digest{};
+    std::array<char,CC_SHA256_DIGEST_LENGTH*2u+1u> encoded{};
+    if(bytes.empty() ||
+       bytes.size()>std::numeric_limits<CC_LONG>::max() ||
+       CC_SHA256(bytes.data(),static_cast<CC_LONG>(bytes.size()),
+                 digest.data())==nullptr)
+      return encoded;
+    constexpr char Hex[] = "0123456789abcdef";
+    for(std::size_t index=0u; index<digest.size(); ++index) {
+      encoded[index*2u] = Hex[digest[index] >> 4u];
+      encoded[index*2u+1u] = Hex[digest[index]&0x0fu];
+      }
+    return encoded;
+    }
+
+  bool publishAdditiveInputAfterTerminal(FrameContext& frame) noexcept {
+    if(!frame.additiveInput)
+      return true;
+    if(!additiveBuildShaIsValid()) {
+      failAdditiveInput(frame,"contract","build-sha");
+      return false;
+      }
+    IOSAdditiveInputArtifactViewV1 view;
+    if(iosParseAdditiveInputArtifactV1(
+           frame.additiveInput.bytes,view)!=
+       IOSAdditiveInputArtifactError::None) {
+      failAdditiveInput(frame,"contract","artifact-parse");
+      return false;
+      }
+    if(!frame.additivePresentAccepted ||
+       !iosAdditiveInputArtifactV1AcceptsPublication(
+           view.header,frame.additivePreparedSerial,
+           frame.additiveSubmittedSerial,frame.submitted,
+           frame.additiveSubmitAccepted,true,true,
+           frame.linearHDRSequence.identity().targetGeneration,
+           frame.linearHDRSequence.identity().snapshotSequence)) {
+      failAdditiveInput(frame,"contract","publication-admission");
+      return false;
+      }
+    const char* home = std::getenv("HOME");
+    if(home==nullptr || home[0]=='\0') {
+      failAdditiveInput(frame,"io","documents-directory");
+      return false;
+      }
+    std::string directory;
+    std::string temporaryTag;
+    try {
+      directory = home;
+      directory += "/Documents";
+      temporaryTag = "runtime-"+
+          std::to_string(frame.additivePreparedSerial);
+      }
+    catch(...) {
+      failAdditiveInput(frame,"io","documents-directory");
+      return false;
+      }
+    const auto sha = additiveArtifactSha256(
+        frame.additiveInput.bytes);
+    if(sha[0]=='\0') {
+      failAdditiveInput(frame,"contract","artifact-sha");
+      return false;
+      }
+    std::string terminal;
+    try {
+      terminal = "RendererIOS additive causal: v=1 mode=";
+      terminal += additiveModeName();
+      terminal += " b=" OPENGOTHIC_RENDERER_IOS_BUILD_SHA " g=";
+      terminal += std::to_string(view.header.targetGeneration);
+      terminal += " s=";
+      terminal += std::to_string(view.header.snapshotSequence);
+      terminal += " base=";
+      terminal += std::to_string(view.header.baseCount);
+      terminal += " additive=";
+      terminal += std::to_string(view.header.additiveCount);
+      terminal += " input=";
+      terminal += sha.data();
+      terminal += " terminal=C";
+      }
+    catch(...) {
+      failAdditiveInput(frame,"contract","terminal-marker");
+      return false;
+      }
+    std::string publishedPath;
+    IOSAdditiveInputPublishResult publishResult =
+        IOSAdditiveInputPublishResult::InvalidArgument;
+    try {
+      publishResult = iosPublishAdditiveInputArtifactV1NoClobber(
+          directory,frame.additiveInput.mode,
+          frame.additiveInput.generation,
+          frame.additiveInput.sequence,
+          frame.additiveInput.bytes,temporaryTag,publishedPath);
+      }
+    catch(...) {
+      publishResult = IOSAdditiveInputPublishResult::PublishFailed;
+      }
+    if(publishResult!=IOSAdditiveInputPublishResult::Published) {
+      failAdditiveInput(frame,"io","artifact-publish");
+      return false;
+      }
+    try {
+      Log::i(terminal);
+      }
+    catch(...) {
+      }
+    additiveProfileTerminalReported = true;
+    clearAdditiveInput(frame);
+    return true;
+    }
+#endif
+
   void discardUnsubmittedCommand(FrameContext& frame) noexcept {
     // Metal command buffers use retainedReferences=false. Once native borrowed
     // VBO/IBO handles have been encoded, an unsubmitted command must not
@@ -3799,6 +4025,10 @@ struct IOSMetalContext::Impl final {
       linearHDRProof->markCaptureSubmitAmbiguous(frame.linearHDRCapture);
 #endif
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    failAdditiveInput(frame,"gpu","submit-ambiguous");
+#endif
     frame.discardCommandAfterIdle = true;
     frameActive  = false;
     activeSerial = 0;
@@ -3815,6 +4045,10 @@ struct IOSMetalContext::Impl final {
         linearHDRProof->markCapturePreSubmitFailure(
             frame.linearHDRCapture);
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    failAdditiveInput(frame,"gpu","pre-submit");
+#endif
     clearPreparedUi(frame);
     frame.discardCommandAfterIdle = true;
     frameActive = false;
@@ -3840,6 +4074,10 @@ struct IOSMetalContext::Impl final {
         linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
         }
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      failAdditiveInput(frame,"gpu","pre-submit");
+#endif
       clearPreparedUi(frame);
       releaseVideoFrame(frame);
       frame.linearHDRSequence = {};
@@ -3855,6 +4093,10 @@ struct IOSMetalContext::Impl final {
 
   void retireSlotAfterTerminal(FrameContext& frame) noexcept {
     markLinearHDRTerminalFailed(frame);
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    failAdditiveInput(frame,"gpu","terminal-retire");
+#endif
     frame.submitted = false;
     clearPreparedUi(frame);
     releaseVideoFrame(frame);
@@ -4390,6 +4632,18 @@ struct IOSMetalContext::Impl final {
           }
         }
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    if(presentHealthy) {
+      for(auto& frame:frames) {
+        if(!publishAdditiveInputAfterTerminal(frame)) {
+          presentHealthy = false;
+          fail("RendererIOS additive input publication failed");
+          break;
+          }
+        }
+      }
+#endif
     releaseRetainedPreviewAfterIdle();
 
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
@@ -4589,6 +4843,11 @@ struct IOSMetalContext::Impl final {
   TextureFormat                                depthFormat = TextureFormat::Depth16;
   bool                                         depthSupported = false;
   std::unique_ptr<IOSGPUScene>                  gpuScene;
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+  bool                                         additiveProfileTerminalReported = false;
+  bool                                         additiveProfileClaimed = false;
+#endif
   std::unique_ptr<IOSGPUBink>                   gpuBink;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   uint64_t                                     realBinkEncodeCount = 0;
@@ -4699,6 +4958,10 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     impl->markLinearHDRProofFenceFailure(frameContext);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    impl->failAdditiveInput(frameContext,"gpu","fence");
+#endif
     frameContext.fence = Fence();
     impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
@@ -4711,6 +4974,10 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     impl->markLinearHDRProofFenceFailure(frameContext);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    impl->failAdditiveInput(frameContext,"gpu","fence");
+#endif
     frameContext.fence = Fence();
     impl->retireSlotAfterTerminal(frameContext);
     impl->forcePreviewPlaceholder();
@@ -4721,14 +4988,24 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   bool proofIdleConfirmed = false;
   if(!impl->materializeLinearHDRProofAfterTerminal(
-       frameContext,false,&proofIdleConfirmed))
-    return std::nullopt;
-  if(!impl->materializeLinearHDREvidenceAfterTerminal(
-       frameContext,proofIdleConfirmed))
-#else
-  if(!impl->materializeLinearHDREvidenceAfterTerminal(frameContext))
+       frameContext,false,&proofIdleConfirmed)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    impl->failAdditiveInput(frameContext,"gpu","proof-completion");
 #endif
     return std::nullopt;
+    }
+  if(!impl->materializeLinearHDREvidenceAfterTerminal(
+       frameContext,proofIdleConfirmed)) {
+#else
+  if(!impl->materializeLinearHDREvidenceAfterTerminal(frameContext)) {
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    impl->failAdditiveInput(frameContext,"gpu","terminal-completion");
+#endif
+    return std::nullopt;
+    }
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
   impl->materializeBinkSelfTestAfterTerminal(
     frameContext,slot,"RendererIOS Bink self-test readback failed");
@@ -4736,6 +5013,13 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   if(!impl->failed)
     impl->emitFunctionalEvidenceAfterTerminal(frameContext,slot);
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+  if(!impl->publishAdditiveInputAfterTerminal(frameContext)) {
+    impl->fail("RendererIOS additive input publication failed");
+    return std::nullopt;
+    }
 #endif
   frameContext.fence = Fence();
   impl->retireSlotAfterTerminal(frameContext);
@@ -4936,6 +5220,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool frameAnimationDrawnReady = false;
   IOSGPUSceneUVAnimationDrawReport uvAnimationDrawn;
   bool uvAnimationDrawnReady = false;
+  IOSGPUScene::PreparedFrame preparedScene;
   IOSLinearHDRFrameSequence linearHDRSequence;
   IOSLinearHDRFrameIdentity linearHDRIdentity;
   bool linearHDRSequenceBegun = false;
@@ -5001,12 +5286,51 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
                     return (entity.visibilityMask&
                             IOSSceneVisibilityMain)!=0;
                   });
-    const bool linearHDRSceneActive = sceneVisible &&
+    bool linearHDRSceneActive = sceneVisible &&
       impl->linearHDRSafety.mode==IOSLinearHDRSafetyMode::Ready &&
       impl->linearHDRPolicy.ready &&
       impl->linearHDRTargets.current(
         impl->swapchain.w(),impl->swapchain.h()) &&
       impl->gpuScene!=nullptr && impl->linearHDRMetal!=nullptr;
+    IOSGPUScene::Report preparedSceneReport;
+    if(linearHDRSceneActive) {
+      preparedSceneReport = impl->gpuScene->prepareFrame(
+          preparedScene,impl->linearHDRTargets.generation,
+          *input.snapshot,assets,
+          frameAnimation,uvAnimation);
+      if(preparedSceneReport.result!=IOSGPUScene::Result::Success ||
+         !preparedScene.ready()) {
+        impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+        linearHDRSceneActive = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+        impl->failUnclaimedAdditiveProfile(
+              input.snapshot->generation.value,
+              input.snapshot->sequence.value,
+              "contract","prepare-frame");
+#endif
+        }
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      else {
+        IOSGPUScene::AdditiveInputArtifact frozenAdditiveInput =
+            preparedScene.takeAdditiveInputArtifact();
+        if(!frozenAdditiveInput) {
+          impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+          linearHDRSceneActive = false;
+          impl->failUnclaimedAdditiveProfile(
+              input.snapshot->generation.value,
+              input.snapshot->sequence.value,
+              "contract","artifact-freeze");
+          }
+        else if(!impl->additiveProfileClaimed) {
+          impl->additiveProfileClaimed = true;
+          frameContext.additiveInput = std::move(frozenAdditiveInput);
+          frameContext.additivePreparedSerial = frame.serial;
+          }
+        }
+#endif
+      }
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     if(linearHDRSceneActive && impl->linearHDRProof!=nullptr &&
        impl->linearHDRProof->captureProfileArmed()) {
@@ -5111,36 +5435,25 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           {{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},
           {impl->linearHDRTargets.depth,1.f,Tempest::Discard});
         const auto report =
-          impl->gpuScene->encode(
-              encoder,*input.snapshot,assets,
-              frameAnimation,uvAnimation);
+          impl->gpuScene->encodePrepared(encoder,preparedScene);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(report.result!=IOSGPUScene::Result::Success ||
            forceNativeSceneMarkers ||
            input.snapshot->sequence.value==1u ||
            input.snapshot->sequence.value%300u==0u) {
-          const IOSGPUSceneMarker markers[] = {
-            iosGPUSceneIdentityMarker(
-                input.snapshot->generation.value,
-                input.snapshot->sequence.value),
-            iosGPUSceneMaterialPlannedMarker(report.counts),
-            iosGPUSceneMaterialDrawnMarker(report.counts),
-            iosGPUSceneKindPlannedMarker(report.counts),
-            iosGPUSceneKindDrawnMarker(report.counts),
-            iosGPUSceneAlphaMarker(report.counts),
-            iosGPUSceneFailContractMarker(report.failures),
-            iosGPUSceneFailSelectorMarker(report.failures),
-            iosGPUSceneFailExecutionMarker(report.failures),
-            };
-          for(const auto& marker:markers) {
+          if(!report.markersReady)
+            throw std::runtime_error(
+                "RendererIOS native scene markers were not prepared");
+          for(const auto& marker:report.markers) {
             if(!marker)
               throw std::runtime_error(
                   "RendererIOS native scene marker formatting failed");
             Log::d(marker.text.data());
             }
-          }
+        }
 #endif
         if(report.result!=IOSGPUScene::Result::Success) {
+          impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
           throw std::runtime_error(
             std::string("RendererIOS native Landscape encode failed: ")+
             iosGPUSceneResultName(report.result)+
@@ -5286,6 +5599,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     frameContext.fence = std::move(submittedFence);
     frameContext.submitted = true;
     ++impl->counters.submitAccepted;
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    if(frameContext.additiveInput) {
+      frameContext.additiveSubmittedSerial = frame.serial;
+      frameContext.additiveSubmitAccepted = true;
+      }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     if(!linearHDRCaptureHealthy) {
       // Even when stopCapture returned after the submit, the capture terminal
@@ -5313,6 +5633,11 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      impl->failAdditiveInput(
+          frameContext,"gpu","history-commit");
+#endif
       impl->fail("RendererIOS accepted frame could not commit scene history");
       return {};
       }
@@ -5322,6 +5647,11 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     ++impl->counters.presentAttempts;
     impl->device.present(impl->swapchain);
     ++impl->counters.presentAccepted;
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    if(frameContext.additiveInput)
+      frameContext.additivePresentAccepted = true;
+#endif
     if(!linearHDRSequenceBegun ||
        iosAdvanceLinearHDRFrameSequence(
          linearHDRSequence,IOSLinearHDRFrameEvent::Present,
@@ -5386,6 +5716,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #endif
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      impl->failAdditiveInput(frameContext,"gpu","post-submit");
+#endif
       }
     else {
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
@@ -5415,6 +5749,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       if(!captureOnlyFailure)
 #endif
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      impl->failAdditiveInput(frameContext,"gpu","post-submit");
 #endif
       }
     else {
@@ -5448,6 +5786,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       if(!captureOnlyFailure)
 #endif
       impl->markLinearHDRProofPostSubmitFailure(frameContext);
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+      impl->failAdditiveInput(frameContext,"gpu","post-submit");
 #endif
       }
     else {

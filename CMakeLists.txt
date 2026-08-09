@@ -52,6 +52,31 @@ if(NOT IOS AND
     "RendererIOS native AlphaTest causal A/B builds are available only for iOS")
 endif()
 
+set(_renderer_ios_additive_causal_modes
+    none
+    causal-a
+    causal-b)
+set(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE "none"
+    CACHE STRING
+    "RendererIOS Static/None Additive diagnostics-only causal build mode")
+set_property(
+  CACHE OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE
+  PROPERTY STRINGS ${_renderer_ios_additive_causal_modes})
+list(
+  FIND _renderer_ios_additive_causal_modes
+  "${OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE}"
+  _renderer_ios_additive_causal_mode_index)
+if(_renderer_ios_additive_causal_mode_index EQUAL -1)
+  message(FATAL_ERROR
+    "Unsupported OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE: "
+    "${OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE}")
+endif()
+if(NOT IOS AND
+   NOT OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE STREQUAL "none")
+  message(FATAL_ERROR
+    "RendererIOS Additive causal A/B builds are available only for iOS")
+endif()
+
 if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
   message(FATAL_ERROR
     "RendererIOS resource allocator self-test is available only for iOS")
@@ -324,6 +349,27 @@ elseif(IOS)
         "RendererIOS native AlphaTest causal A/B builds are mutually "
         "exclusive with all other RendererIOS self-tests")
     endif()
+    if(NOT OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE STREQUAL "none")
+      message(FATAL_ERROR
+        "RendererIOS native AlphaTest and Additive causal modes are mutually exclusive")
+    endif()
+  endif()
+  if(NOT OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE STREQUAL "none")
+    if(NOT OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS OR
+       NOT OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none" OR
+       NOT OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE
+           STREQUAL "none" OR
+       NOT OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE OR
+       OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR
+       OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
+      message(FATAL_ERROR
+        "RendererIOS Additive causal A/B requires the exact diagnostics=ON, "
+        "fault=none, AlphaTest-causal=none, HDR-triple=ON, "
+        "Bink/resource/clear/tile/forward=OFF tuple")
+    endif()
   endif()
   if(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
@@ -357,6 +403,13 @@ elseif(IOS)
          STREQUAL "causal-b")
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE STREQUAL "causal-a")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A=1)
+  elseif(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE STREQUAL "causal-b")
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B=1)
   endif()
 
   if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")

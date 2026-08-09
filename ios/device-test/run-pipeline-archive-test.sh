@@ -17,8 +17,8 @@ readonly DEVICECTL_PROCESS_QUERY_TIMEOUT_SECONDS=30
 readonly DEVICECTL_TERMINATE_TIMEOUT_SECONDS=30
 
 ARCHIVE_DIR="Library/Caches/RendererIOS/PipelineArchives/schema-1"
-ARCHIVE_NAME="RendererIOS-abi-8.binaryarchive"
-PROVENANCE_NAME="RendererIOS-abi-8.provenance"
+ARCHIVE_NAME="RendererIOS-abi-9.binaryarchive"
+PROVENANCE_NAME="RendererIOS-abi-9.provenance"
 ARCHIVE_PATH="$ARCHIVE_DIR/$ARCHIVE_NAME"
 PROVENANCE_PATH="$ARCHIVE_DIR/$PROVENANCE_NAME"
 

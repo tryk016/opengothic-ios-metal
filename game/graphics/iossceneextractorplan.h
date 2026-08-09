@@ -100,6 +100,7 @@ struct IOSSceneOpaqueMeshCandidate final {
   IOSMaterialCategory materialCategory = IOSMaterialCategory::Opaque;
   bool           hasBaseColorTexture = false;
   bool           usesFallbackTexture = false;
+  float          alphaWeight = 1.f;
   bool           hasFrameAnimation = false;
   bool           hasUvAnimation = false;
   bool           hasValidFrameSequence = false;
@@ -126,6 +127,8 @@ struct IOSSceneOpaqueMeshPlan final {
   IOSBounds           localBounds;
   IOSIndexRange       indices;
   IOSMaterialCategory materialCategory = IOSMaterialCategory::Opaque;
+  float               baseColorAlpha = 1.f;
+  uint64_t            materialFlags = IOSMaterialFlagNone;
   uint64_t            visibilityMask = IOSSceneVisibilityMain;
   IOSSceneTextureAnimationMode textureAnimation =
       IOSSceneTextureAnimationMode::None;
@@ -134,6 +137,9 @@ struct IOSSceneOpaqueMeshPlan final {
   int32_t             uvPeriodY = 0;
   IOSFloat2           uvOffset;
   bool                usesFallbackTexture = false;
+
+  constexpr bool operator==(const IOSSceneOpaqueMeshPlan&) const noexcept =
+      default;
   };
 
 inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
@@ -150,20 +156,39 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
       break;
     case IOSSceneMeshKind::Unsupported:
       return IOSSceneSourcePlanResult::SkippedKind;
-    }
-  if(source.kind!=IOSSceneMeshKind::Landscape &&
-     source.kind!=IOSSceneMeshKind::Static &&
-     source.kind!=IOSSceneMeshKind::Movable)
-    return IOSSceneSourcePlanResult::SkippedKind;
+    default:
+      return IOSSceneSourcePlanResult::InvalidSource;
+  }
   if(!source.hasMaterial)
     return IOSSceneSourcePlanResult::InvalidSource;
+  switch(source.materialCategory) {
+    case IOSMaterialCategory::Opaque:
+    case IOSMaterialCategory::AlphaTest:
+    case IOSMaterialCategory::Additive:
+      break;
+    case IOSMaterialCategory::Transparent:
+    case IOSMaterialCategory::Water:
+      return IOSSceneSourcePlanResult::SkippedMaterial;
+    default:
+      return IOSSceneSourcePlanResult::InvalidSource;
+    }
   if(!source.hasMappedMaterialCategory)
     return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(source.materialCategory!=IOSMaterialCategory::Opaque &&
-     source.materialCategory!=IOSMaterialCategory::AlphaTest)
+  const bool isAdditive =
+      source.materialCategory==IOSMaterialCategory::Additive;
+  if(isAdditive && source.kind!=IOSSceneMeshKind::Static)
     return IOSSceneSourcePlanResult::SkippedMaterial;
+  if(isAdditive &&
+     textureAnimation!=IOSSceneTextureAnimationMode::None)
+    return IOSSceneSourcePlanResult::SkippedTextureAnimation;
   const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
   if(source.hasUvAnimation!=periodsHaveUv)
+    return IOSSceneSourcePlanResult::InvalidSource;
+  if(isAdditive &&
+     (!source.hasBaseColorTexture || source.usesFallbackTexture ||
+      source.hasValidFrameSequence || source.frameCount!=0 ||
+      !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
+      source.alphaWeight>1.f))
     return IOSSceneSourcePlanResult::InvalidSource;
   if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&
      (!source.hasBaseColorTexture || source.usesFallbackTexture))
@@ -230,6 +255,10 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.localBounds       = source.localBounds;
   out.indices           = source.indices;
   out.materialCategory  = source.materialCategory;
+  out.baseColorAlpha    = isAdditive ? source.alphaWeight : 1.f;
+  out.materialFlags     = isAdditive
+      ? IOSMaterialFlagStaticAdditiveNone
+      : IOSMaterialFlagNone;
   out.visibilityMask    = IOSSceneVisibilityMain;
   out.textureAnimation  = textureAnimation;
   out.frameOrdinal      = frameOrdinal;

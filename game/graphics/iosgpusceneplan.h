@@ -26,6 +26,11 @@
 #error "RendererIOS native AlphaTest causal host test is mutually exclusive with A and B"
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) && \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+#error "RendererIOS Additive causal A and B are mutually exclusive"
+#endif
+
 inline constexpr std::size_t IOSLandscapeVertexStride = 36u;
 inline constexpr std::size_t IOSLandscapeIndexStride  = sizeof(uint32_t);
 
@@ -47,6 +52,7 @@ enum class IOSGPUScenePipelineSelector : uint8_t {
   Unsupported,
   Opaque,
   AlphaTest,
+  Additive,
   };
 
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
@@ -594,8 +600,9 @@ inline constexpr IOSGPUScenePipelineSelector iosGPUScenePipelineSelector(
       return IOSGPUScenePipelineSelector::Opaque;
     case IOSMaterialCategory::AlphaTest:
       return IOSGPUScenePipelineSelector::AlphaTest;
-    case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Additive:
+      return IOSGPUScenePipelineSelector::Additive;
+    case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Water:
       return IOSGPUScenePipelineSelector::Unsupported;
     }
@@ -609,6 +616,25 @@ inline constexpr bool iosGPUScenePipelineSelectionMatches(
       iosGPUScenePipelineSelector(category);
   return expected!=IOSGPUScenePipelineSelector::Unsupported &&
       selected==expected;
+  }
+
+inline constexpr bool iosGPUSceneMaterialCategoryForPipelineSelector(
+    IOSGPUScenePipelineSelector selector,
+    IOSMaterialCategory& category) noexcept {
+  switch(selector) {
+    case IOSGPUScenePipelineSelector::Opaque:
+      category = IOSMaterialCategory::Opaque;
+      return true;
+    case IOSGPUScenePipelineSelector::AlphaTest:
+      category = IOSMaterialCategory::AlphaTest;
+      return true;
+    case IOSGPUScenePipelineSelector::Additive:
+      category = IOSMaterialCategory::Additive;
+      return true;
+    case IOSGPUScenePipelineSelector::Unsupported:
+      return false;
+    }
+  return false;
   }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
@@ -676,20 +702,29 @@ inline constexpr bool iosGPUSceneEffectivePipelineSelectorForMode(
 inline constexpr bool iosGPUSceneRequiredShaderFunctionsAreAvailable(
     bool vertex,
     bool opaqueFragment,
-    bool alphaTestFragment) noexcept {
-  return vertex && opaqueFragment && alphaTestFragment;
+    bool alphaTestFragment,
+    bool additiveFragment) noexcept {
+  return vertex && opaqueFragment && alphaTestFragment && additiveFragment;
   }
 
 inline constexpr bool iosGPUSceneProductionPipelineStatesAreAvailable(
     bool opaque,
-    bool alphaTest) noexcept {
-  return opaque && alphaTest;
+    bool alphaTest,
+    bool additive) noexcept {
+  return opaque && alphaTest && additive;
+  }
+
+inline constexpr bool iosGPUSceneProductionDepthStatesAreAvailable(
+    bool base,
+    bool additive) noexcept {
+  return base && additive;
   }
 
 struct IOSGPUSceneMaterialCounts final {
   uint64_t total = 0;
   uint64_t opaque = 0;
   uint64_t alphaTest = 0;
+  uint64_t additive = 0;
 
   constexpr bool operator==(const IOSGPUSceneMaterialCounts&) const noexcept =
       default;
@@ -720,6 +755,7 @@ struct IOSGPUSceneFrameCounts final {
   IOSGPUSceneDrawCounts drawn;
   uint64_t              opaquePsoBinds = 0;
   uint64_t              alphaPsoBinds = 0;
+  uint64_t              additivePsoBinds = 0;
   uint64_t              controlAlphaToOpaqueBinds = 0;
 
   constexpr bool operator==(const IOSGPUSceneFrameCounts&) const noexcept =
@@ -872,9 +908,16 @@ inline constexpr bool iosGPUSceneCheckedIncrement(uint64_t& value) noexcept {
 
 inline constexpr bool iosGPUSceneCountsAreConsistent(
     const IOSGPUSceneDrawCounts& counts) noexcept {
-  const bool materialSumValid =
+  const bool firstMaterialSumValid =
       counts.material.opaque<=
         std::numeric_limits<uint64_t>::max()-counts.material.alphaTest;
+  const uint64_t firstMaterialSum = firstMaterialSumValid
+      ? counts.material.opaque+counts.material.alphaTest
+      : 0u;
+  const bool materialSumValid =
+      firstMaterialSumValid &&
+      firstMaterialSum<=
+        std::numeric_limits<uint64_t>::max()-counts.material.additive;
   const bool firstKindSumValid =
       counts.kind.landscape<=
         std::numeric_limits<uint64_t>::max()-counts.kind.staticMeshes;
@@ -886,8 +929,7 @@ inline constexpr bool iosGPUSceneCountsAreConsistent(
       firstKindSumValid &&
       firstKindSum<=std::numeric_limits<uint64_t>::max()-counts.kind.movable;
   return materialSumValid && kindSumValid &&
-      counts.material.total==
-        counts.material.opaque+counts.material.alphaTest &&
+      counts.material.total==firstMaterialSum+counts.material.additive &&
       counts.kind.total==firstKindSum+counts.kind.movable &&
       counts.material.total==counts.kind.total &&
       counts.texturedDraws<=counts.material.total &&
@@ -911,14 +953,17 @@ inline constexpr bool iosGPUSceneProductionFrameCountsAreConsistent(
   return iosGPUSceneFrameDrawCountsAreConsistent(counts) &&
       counts.opaquePsoBinds==counts.drawn.material.opaque &&
       counts.alphaPsoBinds==counts.drawn.material.alphaTest &&
+      counts.additivePsoBinds==counts.drawn.material.additive &&
       counts.controlAlphaToOpaqueBinds==0u;
   }
 
 inline constexpr bool iosGPUSceneCausalBFrameCountsAreConsistent(
     const IOSGPUSceneFrameCounts& counts) noexcept {
   return iosGPUSceneFrameDrawCountsAreConsistent(counts) &&
-      counts.opaquePsoBinds==counts.drawn.material.total &&
+      counts.opaquePsoBinds==
+          counts.drawn.material.opaque+counts.drawn.material.alphaTest &&
       counts.alphaPsoBinds==0u &&
+      counts.additivePsoBinds==counts.drawn.material.additive &&
       counts.controlAlphaToOpaqueBinds==counts.drawn.material.alphaTest;
   }
 
@@ -1322,7 +1367,11 @@ inline IOSGPUSceneMarker iosGPUSceneCausalFailMarker(
 #endif
 
 inline constexpr const char* iosGPUSceneMarkerModeName() noexcept {
-#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A)
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A)
+  return "additive-a";
+#elif defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+  return "additive-b";
+#elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A)
   return "causal-a";
 #elif defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
   return "causal-b";
@@ -1346,22 +1395,24 @@ inline IOSGPUSceneMarker iosGPUSceneMaterialPlannedMarker(
     const IOSGPUSceneFrameCounts& counts) noexcept {
   return iosGPUSceneFormatMarker(
       "RendererIOS native scene material-planned: mode=%s "
-      "total=%llu opaque=%llu alpha=%llu",
+      "total=%llu opaque=%llu alpha=%llu additive=%llu",
       iosGPUSceneMarkerModeName(),
       static_cast<unsigned long long>(counts.planned.material.total),
       static_cast<unsigned long long>(counts.planned.material.opaque),
-      static_cast<unsigned long long>(counts.planned.material.alphaTest));
+      static_cast<unsigned long long>(counts.planned.material.alphaTest),
+      static_cast<unsigned long long>(counts.planned.material.additive));
   }
 
 inline IOSGPUSceneMarker iosGPUSceneMaterialDrawnMarker(
     const IOSGPUSceneFrameCounts& counts) noexcept {
   return iosGPUSceneFormatMarker(
       "RendererIOS native scene material-drawn: mode=%s "
-      "total=%llu opaque=%llu alpha=%llu textured=%llu",
+      "total=%llu opaque=%llu alpha=%llu additive=%llu textured=%llu",
       iosGPUSceneMarkerModeName(),
       static_cast<unsigned long long>(counts.drawn.material.total),
       static_cast<unsigned long long>(counts.drawn.material.opaque),
       static_cast<unsigned long long>(counts.drawn.material.alphaTest),
+      static_cast<unsigned long long>(counts.drawn.material.additive),
       static_cast<unsigned long long>(counts.drawn.texturedDraws));
   }
 
@@ -1401,6 +1452,17 @@ inline IOSGPUSceneMarker iosGPUSceneAlphaMarker(
       static_cast<unsigned long long>(
           counts.controlAlphaToOpaqueBinds),
       static_cast<unsigned long long>(counts.drawn.alphaFallback));
+  }
+
+inline IOSGPUSceneMarker iosGPUSceneAdditiveMarker(
+    const IOSGPUSceneFrameCounts& counts) noexcept {
+  return iosGPUSceneFormatMarker(
+      "RendererIOS native scene additive: mode=%s "
+      "planned=%llu drawn=%llu additive-pso=%llu",
+      iosGPUSceneMarkerModeName(),
+      static_cast<unsigned long long>(counts.planned.material.additive),
+      static_cast<unsigned long long>(counts.drawn.material.additive),
+      static_cast<unsigned long long>(counts.additivePsoBinds));
   }
 
 inline IOSGPUSceneMarker iosGPUSceneFailContractMarker(
@@ -1459,6 +1521,9 @@ inline constexpr IOSGPUSceneCountResult recordIOSGPUSceneDrawCount(
      kind!=IOSSceneMeshKind::Static &&
      kind!=IOSSceneMeshKind::Movable)
     return IOSGPUSceneCountResult::UnknownKind;
+  if(selector==IOSGPUScenePipelineSelector::Additive &&
+     kind!=IOSSceneMeshKind::Static)
+    return IOSGPUSceneCountResult::UnknownKind;
   if(!iosGPUSceneCountsAreConsistent(counts))
     return IOSGPUSceneCountResult::InconsistentCounts;
 
@@ -1470,8 +1535,16 @@ inline constexpr IOSGPUSceneCountResult recordIOSGPUSceneDrawCount(
     if(!iosGPUSceneCheckedIncrement(next.material.opaque))
       return IOSGPUSceneCountResult::Overflow;
     }
-  else if(!iosGPUSceneCheckedIncrement(next.material.alphaTest)) {
-    return IOSGPUSceneCountResult::Overflow;
+  else if(selector==IOSGPUScenePipelineSelector::AlphaTest) {
+    if(!iosGPUSceneCheckedIncrement(next.material.alphaTest))
+      return IOSGPUSceneCountResult::Overflow;
+    }
+  else if(selector==IOSGPUScenePipelineSelector::Additive) {
+    if(!iosGPUSceneCheckedIncrement(next.material.additive))
+      return IOSGPUSceneCountResult::Overflow;
+    }
+  else {
+    return IOSGPUSceneCountResult::UnknownCategory;
     }
   switch(kind) {
     case IOSSceneMeshKind::Landscape:
@@ -1501,9 +1574,6 @@ inline constexpr IOSGPUSceneCountResult recordIOSGPUSceneDrawCount(
   return IOSGPUSceneCountResult::Recorded;
   }
 
-#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
-    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
-    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
 enum class IOSGPUSceneDrawDispatchResult : uint8_t {
   Recorded,
   InvalidMode,
@@ -1524,20 +1594,90 @@ struct IOSGPUSceneDrawDispatch final {
       const IOSGPUSceneDrawDispatch&) const noexcept = default;
   };
 
+inline constexpr IOSGPUSceneDrawDispatchResult
+    recordIOSGPUSceneProductionDrawDispatch(
+        IOSMaterialCategory category,
+        IOSSceneMeshKind kind,
+        bool usesFallbackTexture,
+        bool textured,
+        IOSGPUScenePipelineSelector logical,
+        IOSGPUSceneFrameCounts& counts,
+        IOSGPUSceneDrawDispatch& dispatch) noexcept {
+  if(!iosGPUScenePipelineSelectionMatches(category,logical))
+    return IOSGPUSceneDrawDispatchResult::SelectorMismatch;
+  if(!iosGPUSceneCountsAreConsistent(counts.drawn) ||
+     counts.opaquePsoBinds!=counts.drawn.material.opaque ||
+     counts.alphaPsoBinds!=counts.drawn.material.alphaTest ||
+     counts.additivePsoBinds!=counts.drawn.material.additive ||
+     counts.controlAlphaToOpaqueBinds!=0u)
+    return IOSGPUSceneDrawDispatchResult::InconsistentCounts;
+
+  IOSGPUSceneFrameCounts next = counts;
+  const IOSGPUSceneCountResult countResult =
+      recordIOSGPUSceneDrawCount(
+          category,kind,usesFallbackTexture,textured,next.drawn);
+  switch(countResult) {
+    case IOSGPUSceneCountResult::Recorded:
+      break;
+    case IOSGPUSceneCountResult::UnknownCategory:
+      return IOSGPUSceneDrawDispatchResult::UnknownCategory;
+    case IOSGPUSceneCountResult::UnknownKind:
+      return IOSGPUSceneDrawDispatchResult::UnknownKind;
+    case IOSGPUSceneCountResult::InconsistentCounts:
+      return IOSGPUSceneDrawDispatchResult::InconsistentCounts;
+    case IOSGPUSceneCountResult::Overflow:
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
+  if(logical==IOSGPUScenePipelineSelector::Opaque) {
+    if(!iosGPUSceneCheckedIncrement(next.opaquePsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
+  else if(logical==IOSGPUScenePipelineSelector::AlphaTest) {
+    if(!iosGPUSceneCheckedIncrement(next.alphaPsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
+  else if(logical==IOSGPUScenePipelineSelector::Additive) {
+    if(!iosGPUSceneCheckedIncrement(next.additivePsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
+  else {
+    return IOSGPUSceneDrawDispatchResult::SelectorMismatch;
+    }
+  if(next.opaquePsoBinds!=next.drawn.material.opaque ||
+     next.alphaPsoBinds!=next.drawn.material.alphaTest ||
+     next.additivePsoBinds!=next.drawn.material.additive ||
+     next.controlAlphaToOpaqueBinds!=0u)
+    return IOSGPUSceneDrawDispatchResult::InconsistentCounts;
+
+  IOSGPUSceneDrawDispatch nextDispatch;
+  nextDispatch.logical = logical;
+  nextDispatch.effective = logical;
+  counts = next;
+  dispatch = nextDispatch;
+  return IOSGPUSceneDrawDispatchResult::Recorded;
+  }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
+
 template<IOSGPUSceneMode Mode>
 inline constexpr bool iosGPUScenePipelineBindCountsMatchDrawnForCompileMode(
     const IOSGPUSceneFrameCounts& counts) noexcept {
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_HOST_TEST)
   if constexpr(Mode==IOSGPUSceneMode::CausalB) {
-    return counts.opaquePsoBinds==counts.drawn.material.total &&
+    return counts.opaquePsoBinds==
+            counts.drawn.material.opaque+counts.drawn.material.alphaTest &&
         counts.alphaPsoBinds==0u &&
+        counts.additivePsoBinds==counts.drawn.material.additive &&
         counts.controlAlphaToOpaqueBinds==
             counts.drawn.material.alphaTest;
     }
 #endif
   return counts.opaquePsoBinds==counts.drawn.material.opaque &&
       counts.alphaPsoBinds==counts.drawn.material.alphaTest &&
+      counts.additivePsoBinds==counts.drawn.material.additive &&
       counts.controlAlphaToOpaqueBinds==0u;
   }
 
@@ -1595,6 +1735,10 @@ inline constexpr IOSGPUSceneDrawDispatchResult
     if(!iosGPUSceneCheckedIncrement(next.alphaPsoBinds))
       return IOSGPUSceneDrawDispatchResult::Overflow;
     }
+  else if(effective==IOSGPUScenePipelineSelector::Additive) {
+    if(!iosGPUSceneCheckedIncrement(next.additivePsoBinds))
+      return IOSGPUSceneDrawDispatchResult::Overflow;
+    }
   else {
     return IOSGPUSceneDrawDispatchResult::SelectorMismatch;
     }
@@ -1613,63 +1757,6 @@ inline constexpr IOSGPUSceneDrawDispatchResult
   IOSGPUSceneDrawDispatch nextDispatch;
   nextDispatch.logical = logical;
   nextDispatch.effective = effective;
-  counts = next;
-  dispatch = nextDispatch;
-  return IOSGPUSceneDrawDispatchResult::Recorded;
-  }
-
-inline constexpr IOSGPUSceneDrawDispatchResult
-    recordIOSGPUSceneProductionDrawDispatch(
-        IOSMaterialCategory category,
-        IOSSceneMeshKind kind,
-        bool usesFallbackTexture,
-        bool textured,
-        IOSGPUScenePipelineSelector logical,
-        IOSGPUSceneFrameCounts& counts,
-        IOSGPUSceneDrawDispatch& dispatch) noexcept {
-  if(!iosGPUScenePipelineSelectionMatches(category,logical))
-    return IOSGPUSceneDrawDispatchResult::SelectorMismatch;
-  if(!iosGPUSceneCountsAreConsistent(counts.drawn) ||
-     counts.opaquePsoBinds!=counts.drawn.material.opaque ||
-     counts.alphaPsoBinds!=counts.drawn.material.alphaTest ||
-     counts.controlAlphaToOpaqueBinds!=0u)
-    return IOSGPUSceneDrawDispatchResult::InconsistentCounts;
-
-  IOSGPUSceneFrameCounts next = counts;
-  const IOSGPUSceneCountResult countResult =
-      recordIOSGPUSceneDrawCount(
-          category,kind,usesFallbackTexture,textured,next.drawn);
-  switch(countResult) {
-    case IOSGPUSceneCountResult::Recorded:
-      break;
-    case IOSGPUSceneCountResult::UnknownCategory:
-      return IOSGPUSceneDrawDispatchResult::UnknownCategory;
-    case IOSGPUSceneCountResult::UnknownKind:
-      return IOSGPUSceneDrawDispatchResult::UnknownKind;
-    case IOSGPUSceneCountResult::InconsistentCounts:
-      return IOSGPUSceneDrawDispatchResult::InconsistentCounts;
-    case IOSGPUSceneCountResult::Overflow:
-      return IOSGPUSceneDrawDispatchResult::Overflow;
-    }
-  if(logical==IOSGPUScenePipelineSelector::Opaque) {
-    if(!iosGPUSceneCheckedIncrement(next.opaquePsoBinds))
-      return IOSGPUSceneDrawDispatchResult::Overflow;
-    }
-  else if(logical==IOSGPUScenePipelineSelector::AlphaTest) {
-    if(!iosGPUSceneCheckedIncrement(next.alphaPsoBinds))
-      return IOSGPUSceneDrawDispatchResult::Overflow;
-    }
-  else {
-    return IOSGPUSceneDrawDispatchResult::SelectorMismatch;
-    }
-  if(next.opaquePsoBinds!=next.drawn.material.opaque ||
-     next.alphaPsoBinds!=next.drawn.material.alphaTest ||
-     next.controlAlphaToOpaqueBinds!=0u)
-    return IOSGPUSceneDrawDispatchResult::InconsistentCounts;
-
-  IOSGPUSceneDrawDispatch nextDispatch;
-  nextDispatch.logical = logical;
-  nextDispatch.effective = logical;
   counts = next;
   dispatch = nextDispatch;
   return IOSGPUSceneDrawDispatchResult::Recorded;
@@ -1852,6 +1939,8 @@ inline constexpr const char* iosGPUScenePipelineSelectorName(
       return "opaque";
     case IOSGPUScenePipelineSelector::AlphaTest:
       return "alpha-test";
+    case IOSGPUScenePipelineSelector::Additive:
+      return "additive";
     case IOSGPUScenePipelineSelector::Unsupported:
       break;
     }
@@ -1907,11 +1996,9 @@ inline constexpr IOSGPUSceneCausalDrawIdentityResult
     return IOSGPUSceneCausalDrawIdentityResult::InvalidOrdinal;
   IOSGPUScenePipelineSelector expected =
       IOSGPUScenePipelineSelector::Unsupported;
-  const IOSMaterialCategory category =
-      dispatch.logical==IOSGPUScenePipelineSelector::Opaque
-        ? IOSMaterialCategory::Opaque
-        : IOSMaterialCategory::AlphaTest;
-  if(dispatch.logical==IOSGPUScenePipelineSelector::Unsupported ||
+  IOSMaterialCategory category = IOSMaterialCategory::Opaque;
+  if(!iosGPUSceneMaterialCategoryForPipelineSelector(
+         dispatch.logical,category) ||
      !iosGPUSceneEffectivePipelineSelectorForCompileMode<Mode>(
          category,dispatch.logical,expected) ||
      dispatch.effective!=expected)
@@ -2024,11 +2111,9 @@ inline constexpr bool iosGPUSceneCausalDrawIdentityIsValidForCompileMode(
     return false;
   IOSGPUScenePipelineSelector expected =
       IOSGPUScenePipelineSelector::Unsupported;
-  const IOSMaterialCategory category =
-      identity.logical==IOSGPUScenePipelineSelector::Opaque
-        ? IOSMaterialCategory::Opaque
-        : IOSMaterialCategory::AlphaTest;
-  return identity.logical!=IOSGPUScenePipelineSelector::Unsupported &&
+  IOSMaterialCategory category = IOSMaterialCategory::Opaque;
+  return iosGPUSceneMaterialCategoryForPipelineSelector(
+             identity.logical,category) &&
       iosGPUSceneEffectivePipelineSelectorForCompileMode<Mode>(
           category,identity.logical,expected) &&
       identity.effective==expected;
@@ -2303,6 +2388,7 @@ struct IOSGPUSceneDrawPlan final {
   IOSTextureHandle         baseColorTexture;
   IOSMaterialCategory      materialCategory = IOSMaterialCategory::Opaque;
   IOSSceneMeshKind         kind = IOSSceneMeshKind::Unsupported;
+  uint64_t                 materialFlags = IOSMaterialFlagNone;
   IOSGPUScenePipelineSelector pipeline =
       IOSGPUScenePipelineSelector::Unsupported;
   bool                     usesFallbackTexture = false;
@@ -2342,12 +2428,32 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
      source.entity.kind!=IOSSceneMeshKind::Static &&
      source.entity.kind!=IOSSceneMeshKind::Movable)
     return IOSGPUSceneDrawPlanResult::InvalidMesh;
+  if(pipeline==IOSGPUScenePipelineSelector::Additive) {
+    if(source.entity.kind!=IOSSceneMeshKind::Static ||
+       source.material.flags!=IOSMaterialFlagStaticAdditiveNone ||
+       source.material.uvOffset.x!=0.f ||
+       source.material.uvOffset.y!=0.f ||
+       std::signbit(source.material.uvOffset.x) ||
+       std::signbit(source.material.uvOffset.y) ||
+       !std::isfinite(source.material.baseColor.w) ||
+       source.material.baseColor.w<0.f ||
+       source.material.baseColor.w>1.f)
+      return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
+    }
+  else if(source.material.flags!=IOSMaterialFlagNone) {
+    return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
+    }
   if(pipeline==IOSGPUScenePipelineSelector::AlphaTest) {
     if(!source.material.baseColorTexture || !source.hasTexture ||
        source.material.usesFallbackTexture)
       return IOSGPUSceneDrawPlanResult::MissingAlphaTexture;
     if(source.material.alphaCutoff!=0.5f)
       return IOSGPUSceneDrawPlanResult::InvalidAlphaCutoff;
+    }
+  else if(pipeline==IOSGPUScenePipelineSelector::Additive) {
+    if(!source.material.baseColorTexture || !source.hasTexture ||
+       source.material.usesFallbackTexture)
+      return IOSGPUSceneDrawPlanResult::MissingTexture;
     }
   else if(!source.material.baseColorTexture || !source.hasTexture) {
     return IOSGPUSceneDrawPlanResult::MissingTexture;
@@ -2413,6 +2519,7 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
   out.baseColorTexture         = source.material.baseColorTexture;
   out.materialCategory         = source.material.category;
   out.kind                     = source.entity.kind;
+  out.materialFlags            = source.material.flags;
   out.pipeline                 = pipeline;
   out.usesFallbackTexture      = source.material.usesFallbackTexture;
   out.indexBufferOffset =

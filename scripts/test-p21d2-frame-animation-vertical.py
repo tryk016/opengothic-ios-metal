@@ -144,10 +144,14 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     )
     require_exact_statement(
         errors, extractor, "candidate.usesFallbackTexture",
-        "candidate.usesFallbackTexture = "
-        "materialMapping==IOSSceneMaterialMapping{ "
-        "IOSMaterialCategory::Opaque,true} && !hasFrameAnimation && "
-        "!candidate.hasBaseColorTexture;",
+        normalized("""
+          candidate.usesFallbackTexture =
+              iosSceneMaterialUsesFallbackTexture(
+                  source.material,materialMapping,hasFrameAnimation,
+                  source.material!=nullptr
+                    ? &Resources::fallbackTexture()
+                    : nullptr);
+        """),
         "static-only fallback",
     )
     require_exact_statement(
@@ -355,6 +359,12 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
       const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
       if(source.hasUvAnimation!=periodsHaveUv)
         return IOSSceneSourcePlanResult::InvalidSource;
+      if(isAdditive &&
+         (!source.hasBaseColorTexture || source.usesFallbackTexture ||
+          source.hasValidFrameSequence || source.frameCount!=0 ||
+          !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
+          source.alphaWeight>1.f))
+        return IOSSceneSourcePlanResult::InvalidSource;
       if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&
          (!source.hasBaseColorTexture || source.usesFallbackTexture))
         return IOSSceneSourcePlanResult::InvalidSource;
@@ -412,7 +422,11 @@ def require_production_oracle(extractor: str, header: str, plan: str) -> None:
             plan,
         ),
         "animated-fallback": (
-            extractor.replace("      !hasFrameAnimation &&\n", "", 1),
+            extractor.replace(
+                "source.material,materialMapping,hasFrameAnimation,",
+                "source.material,materialMapping,false,",
+                1,
+            ),
             header,
             plan,
         ),

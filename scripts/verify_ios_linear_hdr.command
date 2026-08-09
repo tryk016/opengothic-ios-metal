@@ -2077,7 +2077,7 @@ def validate(header: str, model: str, native: str, context: str) -> None:
     ordered(submit, (
         "linearHDRProof->prepareFrame(",
         "linearHDRProof->sceneMarker()",
-        "impl->gpuScene->encode(",
+        "impl->gpuScene->encodePrepared(",
         "advanceLinearHDR(IOSLinearHDRFrameEvent::SceneHDR);",
         "linearHDRProof->copyMarker()",
         "linearHDRProof->encodeCopy(",
@@ -2354,11 +2354,11 @@ def validate(renderer: str, context: str, native: str) -> None:
         context,
         "IOSMetalContext::SubmitResult IOSMetalContext::submitFrame("))
     ordered = (
-        "constboollinearHDRSceneActive=sceneVisible&&",
+        "boollinearHDRSceneActive=sceneVisible&&",
         "encoder.setFramebuffer({{impl->linearHDRTargets.color,"
         "Tempest::Vec4(0.f),Tempest::Preserve}},"
         "{impl->linearHDRTargets.depth,1.f,Tempest::Discard});",
-        "impl->gpuScene->encode(",
+        "impl->gpuScene->encodePrepared(",
         "constIOSToneResolveConstantsconstants={tone.brightness,"
         "tone.contrast,tone.gamma,tone.exposure,};",
         "encoder.setFramebuffer({});"
@@ -2380,7 +2380,7 @@ def validate(renderer: str, context: str, native: str) -> None:
     positions = [require_once(submit, value, value) for value in ordered]
     if positions != sorted(positions):
         raise ValueError("scene/resolve/overlay/present order changed")
-    if submit.count("impl->gpuScene->encode(") != 1:
+    if submit.count("impl->gpuScene->encodePrepared(") != 1:
         raise ValueError("native scene encode count changed")
     if submit.count("impl->linearHDRMetal->encodeToneResolve(") != 1:
         raise ValueError("tone resolve encode count changed")
@@ -2391,10 +2391,17 @@ def validate(renderer: str, context: str, native: str) -> None:
         raise ValueError("OFF/ON Proven commit coverage changed")
     if context_code.count("markLinearHDRTerminalFailed(frame);") != 2:
         raise ValueError("terminal failure publication coverage changed")
-    begin_frame = compact(function_scope(
-        context,
+    begin_signature = (
         "std::optional<IOSMetalContext::FrameLease> "
-        "IOSMetalContext::beginFrame()"))
+        "IOSMetalContext::beginFrame()")
+    begin_start = require_once(context, begin_signature, "beginFrame signature")
+    begin_end = require_once(
+        context,
+        "bool IOSMetalContext::frameAdmissionActive() const noexcept",
+        "frameAdmissionActive signature")
+    if begin_end <= begin_start:
+        raise ValueError("beginFrame source region is not ordered")
+    begin_frame = compact(context[begin_start:begin_end])
     begin_order = (
         "frameContext.fence.wait(0)",
         "impl->materializeLinearHDREvidenceAfterTerminal(frameContext)",
