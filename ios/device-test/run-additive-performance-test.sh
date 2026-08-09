@@ -75,7 +75,7 @@ done
   fail "trace seconds must be 30..600"
 [[ "$EVIDENCE_DIR" == /* && "$LIVE_PID_FILE" == /* && -n "$APP" ]] ||
   fail "absolute evidence/live-PID paths and app path are required"
-[[ "$LIVE_PID_FILE" != *[$'\001'-$'\037'$'\177']* &&
+[[ "$(printf '%s' "$LIVE_PID_FILE" | LC_ALL=C tr -d '[:cntrl:]')" == "$LIVE_PID_FILE" &&
    "$(basename "$LIVE_PID_FILE")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] ||
   fail "live PID file path is invalid"
 

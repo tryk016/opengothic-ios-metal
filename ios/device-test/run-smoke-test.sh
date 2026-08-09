@@ -2287,7 +2287,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --app-argument)
-      (($# >= 2)) && [[ -n "$2" && "$2" != *[$'\001'-$'\037'$'\177']* ]] ||
+      (($# >= 2)) && [[ -n "$2" && "$(printf '%s' "$2" | LC_ALL=C tr -d '[:cntrl:]')" == "$2" ]] ||
         fail "--app-argument requires one non-empty control-free literal"
       APP_ARGUMENTS+=("$2"); shift 2 ;;
     --live-pid-file) ((LIVE_PID_FILE_SEEN == 0 && $# >= 2)) && [[ -n "$2" ]] || fail "--live-pid-file requires one value exactly once"; LIVE_PID_FILE="$2"; LIVE_PID_FILE_SEEN=1; shift 2 ;;
@@ -2402,7 +2402,7 @@ if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
   [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
     fail "native alpha-test causal mode requires an empty pipeline archive profile"
 fi
-if [[ -n "$LIVE_PID_FILE" ]]; then [[ "$LIVE_PID_FILE" == /* && "$LIVE_PID_FILE" != *[$'\001'-$'\037'$'\177']* && "$(basename "$LIVE_PID_FILE")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] || fail "live PID file must be an absolute control-free safe leaf"
+if [[ -n "$LIVE_PID_FILE" ]]; then [[ "$LIVE_PID_FILE" == /* && "$(printf '%s' "$LIVE_PID_FILE" | LC_ALL=C tr -d '[:cntrl:]')" == "$LIVE_PID_FILE" && "$(basename "$LIVE_PID_FILE")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] || fail "live PID file must be an absolute control-free safe leaf"
   if ((SELF_TEST == 0)); then
     [[ -d "$(dirname "$LIVE_PID_FILE")" && ! -L "$(dirname "$LIVE_PID_FILE")" ]] || fail "live PID file parent is invalid"
     [[ ! -e "$LIVE_PID_FILE" && ! -L "$LIVE_PID_FILE" ]] || fail "live PID file already exists"

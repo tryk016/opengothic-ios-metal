@@ -440,6 +440,7 @@ def ordered(text: str, tokens: tuple[str, ...]) -> bool:
 
 def validate_collector_source(source: str) -> None:
     once = (
+        '"$(printf \'%s\' "$LIVE_PID_FILE" | LC_ALL=C tr -d \'[:cntrl:]\')" == "$LIVE_PID_FILE"',
         'XCTRACE_IDENTITY="$("$XCTRACE" version)"',
         'XCODE_IDENTITY="$(/usr/bin/xcodebuild -version)"',
         'LIVE_PID_VALUE="$(python3 - "$LIVE_PID_FILE"',
@@ -485,6 +486,8 @@ def source_mutations(source: str) -> int:
     replacements = (
         ('XCTRACE_IDENTITY="$("$XCTRACE" version)"', 'XCTRACE_IDENTITY="xctrace version 27.0 (unknown)"'),
         ('XCODE_IDENTITY="$(/usr/bin/xcodebuild -version)"', 'XCODE_IDENTITY="Xcode 27.0"'),
+        ('"$(printf \'%s\' "$LIVE_PID_FILE" | LC_ALL=C tr -d \'[:cntrl:]\')" == "$LIVE_PID_FILE"',
+         '[[ -n "$LIVE_PID_FILE" ]] # controls accepted'),
         ("except BaseException:", "except Exception:"),
         ("require_exact_process before-settle", ": # removed before-settle"),
         ('/bin/sleep "$SETTLE_SECONDS"', ": # removed settle"),
@@ -673,6 +676,14 @@ def collector_self_test() -> None:
                             check=False)
     require(result.returncode == 0 and result.stdout.startswith("SELF-TEST PASS "),
             "collector parser self-test failed")
+    live_pid_index = command_line.index("--live-pid-file") + 1
+    for value in ("/tmp/control\x01.json", "/tmp/delete\x7f.json"):
+        mutant = list(command_line)
+        mutant[live_pid_index] = value
+        result = subprocess.run(mutant, cwd=ROOT, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL, check=False)
+        require(result.returncode != 0,
+                "collector accepted a control byte in live PID path")
     for index, value in ((command_line.index("30", command_line.index("--trace-seconds")), "29"),
                          (command_line.index(PID), "0")):
         mutant = list(command_line)

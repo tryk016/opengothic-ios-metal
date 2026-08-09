@@ -36,7 +36,7 @@ def validate_sources(candidate: dict[str, str]) -> None:
     smoke = candidate["smoke"]
     adapter = candidate["adapter"]
     parser = """--app-argument)
-      (($# >= 2)) && [[ -n \"$2\" && \"$2\" != *[$'\\001'-$'\\037'$'\\177']* ]] ||
+      (($# >= 2)) && [[ -n \"$2\" && \"$(printf '%s' \"$2\" | LC_ALL=C tr -d '[:cntrl:]')\" == \"$2\" ]] ||
         fail \"--app-argument requires one non-empty control-free literal\"
       APP_ARGUMENTS+=(\"$2\"); shift 2 ;;"""
     required_once = {
@@ -49,7 +49,7 @@ def validate_sources(candidate: dict[str, str]) -> None:
             '--terminate-existing -- "$BUNDLE_ID" "${LAUNCH_ARGS[@]}"',
             'LIVE_PID_FILE=""; LIVE_PID_FILE_SEEN=0',
             '--live-pid-file) ((LIVE_PID_FILE_SEEN == 0 && $# >= 2))',
-            '"$LIVE_PID_FILE" != *[$\'\\001\'-$\'\\037\'$\'\\177\']*',
+            '"$(printf \'%s\' "$LIVE_PID_FILE" | LC_ALL=C tr -d \'[:cntrl:]\')" == "$LIVE_PID_FILE"',
             '[[ ! -e "$LIVE_PID_FILE" && ! -L "$LIVE_PID_FILE" ]]',
             '[[ -d "$(dirname "$LIVE_PID_FILE")" && ! -L "$(dirname "$LIVE_PID_FILE")" ]]',
             'LIVE_PID_VALUE="$(list_game_pids "$WORK/processes-live-pid.json")"',
@@ -60,6 +60,7 @@ def validate_sources(candidate: dict[str, str]) -> None:
         "adapter": (
             "APP_ARGUMENTS=()",
             parser,
+            '"$(printf \'%s\' "$LIVE_PID_FILE" | LC_ALL=C tr -d \'[:cntrl:]\')" == "$LIVE_PID_FILE"',
             'if ((${#APP_ARGUMENTS[@]})); then',
             'for app_argument in "${APP_ARGUMENTS[@]}"; do',
             'SMOKE_ARGS+=(--app-argument "$app_argument")',
@@ -130,7 +131,7 @@ def replace_once(text: str, old: str, new: str) -> str:
 
 def test_mutations(sources: dict[str, str]) -> int:
     parser = """--app-argument)
-      (($# >= 2)) && [[ -n \"$2\" && \"$2\" != *[$'\\001'-$'\\037'$'\\177']* ]] ||
+      (($# >= 2)) && [[ -n \"$2\" && \"$(printf '%s' \"$2\" | LC_ALL=C tr -d '[:cntrl:]')\" == \"$2\" ]] ||
         fail \"--app-argument requires one non-empty control-free literal\"
       APP_ARGUMENTS+=(\"$2\"); shift 2 ;;"""
     mutations: list[dict[str, str]] = []
@@ -203,8 +204,13 @@ def test_mutations(sources: dict[str, str]) -> int:
         ),
         (
             "smoke",
-            '"$LIVE_PID_FILE" != *[$\'\\001\'-$\'\\037\'$\'\\177\']*',
+            '"$(printf \'%s\' "$LIVE_PID_FILE" | LC_ALL=C tr -d \'[:cntrl:]\')" == "$LIVE_PID_FILE"',
             '"$LIVE_PID_FILE" != *[$\'\\177\']* # controls accepted',
+        ),
+        (
+            "adapter",
+            '"$(printf \'%s\' "$LIVE_PID_FILE" | LC_ALL=C tr -d \'[:cntrl:]\')" == "$LIVE_PID_FILE"',
+            '[[ -n "$LIVE_PID_FILE" ]] # controls accepted',
         ),
         (
             "adapter",
@@ -268,7 +274,8 @@ def run_parser_contract(script: Path, sentinel: Path) -> None:
             check=False,
         )
         require(result.returncode != 0, f"{script.name} accepted unsafe literal")
-    for invalid_path in ("", "relative.json", "/tmp/line\nbreak.json", "/tmp/control\x01.json"):
+    for invalid_path in ("", "relative.json", "/tmp/line\nbreak.json",
+                         "/tmp/control\x01.json", "/tmp/delete\x7f.json"):
         result = subprocess.run(
             [str(script), "--self-test", "--live-pid-file", invalid_path],
             cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,

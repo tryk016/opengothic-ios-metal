@@ -79,7 +79,7 @@ while (($#)); do
       shift 2
       ;;
     --app-argument)
-      (($# >= 2)) && [[ -n "$2" && "$2" != *[$'\001'-$'\037'$'\177']* ]] ||
+      (($# >= 2)) && [[ -n "$2" && "$(printf '%s' "$2" | LC_ALL=C tr -d '[:cntrl:]')" == "$2" ]] ||
         fail "--app-argument requires one non-empty control-free literal"
       APP_ARGUMENTS+=("$2"); shift 2 ;;
     --live-pid-file)
@@ -101,7 +101,7 @@ while (($#)); do
 done
 
 if [[ -n "$LIVE_PID_FILE" ]]; then
-  [[ "$LIVE_PID_FILE" == /* && "$LIVE_PID_FILE" != *[$'\001'-$'\037'$'\177']* &&
+  [[ "$LIVE_PID_FILE" == /* && "$(printf '%s' "$LIVE_PID_FILE" | LC_ALL=C tr -d '[:cntrl:]')" == "$LIVE_PID_FILE" &&
      "$(basename "$LIVE_PID_FILE")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] ||
     fail "live PID file must be an absolute control-free safe leaf"
   if ((SELF_TEST == 0)); then
