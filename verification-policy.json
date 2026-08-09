@@ -156,6 +156,48 @@
       "reason": "changed Forward shading prototype"
     },
     {
+      "id": "p21e1b-additive-device-group",
+      "risk": "diagnostics",
+      "paths": [
+        "scripts/verify_ios_additive_device_group.command",
+        "scripts/test-p21e1b-additive-launch-adapter.py",
+        "scripts/test-p21e1b-additive-performance.py",
+        "ios/device-test/run-additive-gpu-group.sh",
+        "ios/device-test/run-additive-performance-test.sh",
+        "ios/device-test/validate-additive-device-group.py",
+        "ios/device-test/validate-additive-gpu-pair.py",
+        "ios/device-test/validate-additive-performance-trace.py",
+        "ios/device-test/specs/p21e1b-static-additive-v1.json",
+        "ios/device-test/specs/p21e1b-static-additive-group-v1.json"
+      ],
+      "gates": [
+        "contracts",
+        "build-off",
+        "build-on",
+        "build-additive-a-hdr",
+        "build-additive-b-hdr"
+      ],
+      "reason": "changed P2.1e1b grouped device, launch, performance, pair, or specification contract"
+    },
+    {
+      "id": "p21e1b-device-integrity",
+      "risk": "shared-runtime",
+      "paths": [
+        "game/graphics/iosdeviceintegritymanifest.h",
+        "game/graphics/iosdeviceintegritymanifest.cpp",
+        "ios/tests/iosdeviceintegritymanifest.cpp"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on",
+        "build-additive-a-hdr",
+        "build-additive-b-hdr"
+      ],
+      "reason": "changed diagnostics-only P2.1e1b product integrity runtime or host contract"
+    },
+    {
       "id": "device-harness",
       "risk": "diagnostics",
       "paths": [
@@ -165,7 +207,14 @@
         "ios/device-test/validate-device-facts-log.py",
         "ios/device-test/validate-shading-prototype-tile-self-test-log.py",
         "ios/device-test/validate-shading-prototype-forward-self-test-log.py",
-        "ios/device-test/validate-shading-prototype-forward-gpudebug-trace.py"
+        "ios/device-test/validate-shading-prototype-forward-gpudebug-trace.py",
+        "ios/device-test/run-additive-gpu-group.sh",
+        "ios/device-test/run-additive-performance-test.sh",
+        "ios/device-test/validate-additive-device-group.py",
+        "ios/device-test/validate-additive-gpu-pair.py",
+        "ios/device-test/validate-additive-performance-trace.py",
+        "ios/device-test/specs/p21e1b-static-additive-v1.json",
+        "ios/device-test/specs/p21e1b-static-additive-group-v1.json"
       ],
       "gates": [
         "contracts",
@@ -210,7 +259,9 @@
         "game/graphics/iosshadingprototypeshaderabi.h",
         "game/graphics/iosshadingprototypetileprobe.*",
         "game/graphics/iosshadingprototypeforwardpipeline*",
-        "game/graphics/iosshadingprototypeforwardprobe.*"
+        "game/graphics/iosshadingprototypeforwardprobe.*",
+        "game/graphics/iosdeviceintegritymanifest.h",
+        "game/graphics/iosdeviceintegritymanifest.cpp"
       ],
       "gates": [
         "contracts",
@@ -238,7 +289,8 @@
         "ios/tests/iosshadingprototypeshader.cpp",
         "ios/tests/iosshadingprototypetileprobe.cpp",
         "ios/tests/iosshadingprototypeforwardpipeline.cpp",
-        "ios/tests/iosshadingprototypeforwardprobe.cpp"
+        "ios/tests/iosshadingprototypeforwardprobe.cpp",
+        "ios/tests/iosdeviceintegritymanifest.cpp"
       ],
       "gates": [
         "contracts",

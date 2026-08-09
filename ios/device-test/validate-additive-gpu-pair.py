@@ -39,6 +39,8 @@ BUNDLE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,254}\Z")
 RESULT_PREFIX = "RendererIOS additive causal: v=1 "
 DEFAULT_SPEC = pathlib.Path(__file__).with_name("specs") / \
     "p21e1b-static-additive-v1.json"
+GPU_EVIDENCE_VALIDATOR = pathlib.Path(__file__).with_name(
+    "validate-linear-hdr-gpu-evidence.py")
 
 
 class ValidationError(RuntimeError):
@@ -57,6 +59,45 @@ def sha256(raw: bytes) -> str:
 def canonical_json(value: Any) -> bytes:
     return (json.dumps(value, ensure_ascii=False, separators=(",", ":")) +
             "\n").encode("utf-8")
+
+
+def atomic_no_clobber(path: pathlib.Path, raw: bytes) -> None:
+    """Publish one regular 0600 file without replacing an existing leaf."""
+    require(path.name not in ("", ".", "..") and path.parent.is_absolute(),
+            "output path must have an absolute safe leaf")
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY |
+                        os.O_CLOEXEC | os.O_NOFOLLOW)
+    temporary = f".{path.name}.{os.getpid()}.{os.urandom(8).hex()}.tmp"
+    descriptor = -1
+    linked = False
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             os.O_CLOEXEC | os.O_NOFOLLOW, 0o600,
+                             dir_fd=directory)
+        offset = 0
+        while offset < len(raw):
+            written = os.write(descriptor, raw[offset:])
+            require(written > 0, "atomic output write made no progress")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.link(temporary, path.name, src_dir_fd=directory,
+                dst_dir_fd=directory, follow_symlinks=False)
+        linked = True
+        os.unlink(temporary, dir_fd=directory)
+        os.fsync(directory)
+    except FileExistsError as error:
+        raise ValidationError(f"output already exists: {path.name}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if not linked:
+            try:
+                os.unlink(temporary, dir_fd=directory)
+            except FileNotFoundError:
+                pass
+        os.close(directory)
 
 
 def _object_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -203,6 +244,196 @@ def checked_meta(value: Any, root: pathlib.Path, label: str,
     require(len(raw) == metadata["bytes"], f"{label} byte count differs")
     require(sha256(raw) == metadata["sha256"], f"{label} hash differs")
     return metadata, raw
+
+
+def _safe_manifest_leaf(value: Any, label: str) -> str:
+    require(type(value) is str and SAFE_LEAF_RE.fullmatch(value) is not None,
+            f"{label} is not a safe evidence leaf")
+    return value
+
+
+def _load_gpu_validator() -> Any:
+    specification = importlib.util.spec_from_file_location(
+        "linear_hdr_gpu_for_additive_pair", GPU_EVIDENCE_VALIDATOR)
+    require(specification is not None and specification.loader is not None,
+            "cannot load the canonical linear-HDR GPU validator")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+def build_capture_identity(gpu_evidence_path: pathlib.Path,
+                           output_path: pathlib.Path) -> dict[str, Any]:
+    """Derive the small A/B identity only from canonical GPU evidence v2."""
+    module = _load_gpu_validator()
+    try:
+        document = module.load_document(gpu_evidence_path, canonical=True)
+        root = module.validate_document(document)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise ValidationError(
+            f"canonical linear-HDR GPU evidence is invalid: {error}") from error
+    identity = root["runIdentity"]
+    resource = root["sceneResource"]
+    command = root["command"]
+    require(command["scene"]["attachment"] == "color0" and
+            command["proofBlit"]["sourceTextureRef"] ==
+            resource["textureRef"] and
+            command["toneResolve"]["fragmentTextureIndex"] == 0 and
+            command["toneResolve"]["textureRef"] == resource["textureRef"],
+            "GPU evidence does not have the canonical SceneHDR identity join")
+    native = {
+        "textureRef": resource["textureRef"],
+        "allocationID": resource["allocationID"],
+        "resourceIndex": resource["resourceIndex"],
+    }
+    capture = {
+        "schemaVersion": 1,
+        "acceptedSnapshot": {
+            "targetGeneration": identity["targetGeneration"],
+            "snapshotSequence": identity["snapshotSequence"],
+        },
+        "sceneResource": {"label": resource["label"], **native},
+        "commands": [
+            {"role": role, **native}
+            for role in ("attachment", "proof-blit-source",
+                         "tone-resolve-texture0")
+        ],
+    }
+    atomic_no_clobber(output_path, canonical_json(capture))
+    return capture
+
+
+def _load_run_builder_manifest(path: pathlib.Path, expected_label: str) -> dict[str, Any]:
+    raw = regular_bytes(path, f"run {expected_label} builder manifest", 1024 * 1024)
+    document = decode_json(raw, f"run {expected_label} builder manifest")
+    require(raw == canonical_json(document),
+            f"run {expected_label} builder manifest is not canonical JSON")
+    manifest = exact_keys(document, (
+        "schemaVersion", "label", "identity", "signedMachOFile",
+        "metallibFile", "exportManifestFile", "inputArtifactFile",
+        "runtimeLogFile", "hdrProofFile", "captureIdentityFile",
+    ), f"run {expected_label} builder manifest")
+    require(manifest["schemaVersion"] == 1 and
+            type(manifest["schemaVersion"]) is int and
+            manifest["label"] == expected_label,
+            f"run {expected_label} builder identity is not exact")
+    identity = exact_keys(manifest["identity"],
+                          ("parentSha", "tempestSha", "bundleId", "teamId"),
+                          f"run {expected_label} builder identity")
+    require(type(identity["parentSha"]) is str and
+            SHA40_RE.fullmatch(identity["parentSha"]) is not None and
+            type(identity["tempestSha"]) is str and
+            SHA40_RE.fullmatch(identity["tempestSha"]) is not None and
+            type(identity["bundleId"]) is str and
+            BUNDLE_RE.fullmatch(identity["bundleId"]) is not None and
+            type(identity["teamId"]) is str and
+            TEAM_RE.fullmatch(identity["teamId"]) is not None,
+            f"run {expected_label} builder identity is malformed")
+    for key in ("signedMachOFile", "metallibFile", "exportManifestFile",
+                "inputArtifactFile", "runtimeLogFile", "hdrProofFile",
+                "captureIdentityFile"):
+        _safe_manifest_leaf(manifest[key], f"run {expected_label} {key}")
+    return manifest
+
+
+def _builder_meta(root: pathlib.Path, leaf: str, label: str,
+                  maximum: int = MAX_EVIDENCE_BYTES) -> tuple[dict[str, Any], bytes]:
+    raw = regular_bytes(root / leaf, label, maximum)
+    return {"file": leaf, "bytes": len(raw), "sha256": sha256(raw)}, raw
+
+
+def _build_attestation_document(spec_path: pathlib.Path,
+                                evidence_root: pathlib.Path,
+                                run_manifest_paths: Sequence[pathlib.Path]) -> dict[str, Any]:
+    spec, spec_raw = validate_spec(spec_path)
+    require(len(run_manifest_paths) == 2,
+            "attestation builder requires exactly two run manifests")
+    runs: list[dict[str, Any]] = []
+    for label, path in zip(("a", "b"), run_manifest_paths):
+        manifest = _load_run_builder_manifest(path, label)
+        profile = spec["profiles"][label]
+        macho_meta, _ = _builder_meta(
+            evidence_root, manifest["signedMachOFile"],
+            f"run {label} signed Mach-O")
+        macho_meta["modeMarker"] = profile["binaryMarker"]
+        metallib_meta, _ = _builder_meta(
+            evidence_root, manifest["metallibFile"], f"run {label} metallib")
+        export_meta, export_raw = _builder_meta(
+            evidence_root, manifest["exportManifestFile"],
+            f"run {label} export manifest", 1024 * 1024)
+        metallib_meta.update({
+            "exportManifestFile": export_meta["file"],
+            "exportManifestBytes": export_meta["bytes"],
+            "exportManifestSha256": export_meta["sha256"],
+            "abi": spec["metallib"]["abi"],
+            "exportCount": spec["metallib"]["exportCount"],
+        })
+        require(export_raw == ("\n".join(spec["metallib"]["exports"]) +
+                               "\n").encode("ascii"),
+                f"run {label} export manifest is not exact export19")
+        input_meta, input_raw = _builder_meta(
+            evidence_root, manifest["inputArtifactFile"],
+            f"run {label} input artifact")
+        artifact = parse_input_artifact(input_raw)
+        input_meta.update({
+            "baseSha256": sha256(artifact["basePayload"]),
+            "additiveSha256": sha256(artifact["additivePayload"]),
+            "targetGeneration": artifact["generation"],
+            "snapshotSequence": artifact["sequence"],
+        })
+        runtime_meta, _ = _builder_meta(
+            evidence_root, manifest["runtimeLogFile"], f"run {label} runtime log")
+        proof_meta, proof_raw = _builder_meta(
+            evidence_root, manifest["hdrProofFile"], f"run {label} HDR proof")
+        proof = parse_hdr_proof(proof_raw)
+        proof_meta.update({
+            "targetGeneration": proof["generation"],
+            "snapshotSequence": proof["sequence"],
+            "proofId": proof["id"],
+        })
+        capture_meta, _ = _builder_meta(
+            evidence_root, manifest["captureIdentityFile"],
+            f"run {label} capture identity", 1024 * 1024)
+        runs.append({
+            "label": label,
+            "mode": profile["mode"],
+            "launchArgument": profile["launchArgument"],
+            "identity": copy.deepcopy(manifest["identity"]),
+            "signedMachO": macho_meta,
+            "metallib": metallib_meta,
+            "inputArtifact": input_meta,
+            "runtimeLog": runtime_meta,
+            "hdrProof": proof_meta,
+            "capture": capture_meta,
+        })
+    return {
+        "schemaVersion": 1,
+        "evidenceClass": spec["evidenceClass"],
+        "specSha256": sha256(spec_raw),
+        "runs": runs,
+    }
+
+
+def build_attestation(spec_path: pathlib.Path, evidence_root: pathlib.Path,
+                      run_a_manifest: pathlib.Path, run_b_manifest: pathlib.Path,
+                      output_path: pathlib.Path, *,
+                      verify_external_tools: bool = True) -> dict[str, Any]:
+    document = _build_attestation_document(
+        spec_path, evidence_root, (run_a_manifest, run_b_manifest))
+    raw = canonical_json(document)
+    require(not output_path.exists() and not output_path.is_symlink(),
+            "attestation output already exists")
+    with tempfile.TemporaryDirectory(prefix="rios-additive-attestation-") as directory:
+        candidate = pathlib.Path(directory) / output_path.name
+        candidate.write_bytes(raw)
+        identity = document["runs"][0]["identity"]
+        validate_pair(spec_path, candidate, evidence_root,
+                      identity["parentSha"], identity["bundleId"],
+                      identity["teamId"],
+                      verify_external_tools=verify_external_tools)
+    atomic_no_clobber(output_path, raw)
+    return document
 
 
 def validate_spec(path: pathlib.Path) -> tuple[dict[str, Any], bytes]:
@@ -780,12 +1011,14 @@ def _capture(proof_id: bytes, generation: int, sequence: int,
     })
 
 
-def _build_fixture(root: pathlib.Path, spec_path: pathlib.Path) -> pathlib.Path:
+def _build_fixture(
+        root: pathlib.Path, spec_path: pathlib.Path, *,
+        parent: str = "0123456789abcdef0123456789abcdef01234567",
+        bundle_id: str = "io.github.tryk016.opengothic",
+        team_id: str = "RMJWWPF379") -> pathlib.Path:
     spec, spec_raw = validate_spec(spec_path)
-    parent = "0123456789abcdef0123456789abcdef01234567"
     identity = {"parentSha": parent, "tempestSha": spec["tempestSha"],
-                "bundleId": "io.github.tryk016.opengothic",
-                "teamId": "RMJWWPF379"}
+                "bundleId": bundle_id, "teamId": team_id}
     export_raw = ("\n".join(spec["metallib"]["exports"]) + "\n").encode("ascii")
     metallib_raw = b"MTLB\0" + b"\0".join(
         item.encode("ascii") for item in spec["metallib"]["exports"])
@@ -861,6 +1094,27 @@ def _store_attestation(path: pathlib.Path, document: dict[str, Any]) -> None:
     _write(path, canonical_json(document))
 
 
+def _write_builder_manifest(root: pathlib.Path, document: dict[str, Any],
+                            index: int) -> pathlib.Path:
+    run = document["runs"][index]
+    value = {
+        "schemaVersion": 1,
+        "label": run["label"],
+        "identity": copy.deepcopy(run["identity"]),
+        "signedMachOFile": run["signedMachO"]["file"],
+        "metallibFile": run["metallib"]["file"],
+        "exportManifestFile": run["metallib"]["exportManifestFile"],
+        "inputArtifactFile": run["inputArtifact"]["file"],
+        "runtimeLogFile": run["runtimeLog"]["file"],
+        "hdrProofFile": run["hdrProof"]["file"],
+        "captureIdentityFile": run["capture"]["file"],
+    }
+    path = root / f"builder-{run['label']}.json"
+    _write(path, canonical_json(value))
+    path.chmod(0o600)
+    return path
+
+
 def _refresh_meta(document: dict[str, Any], root: pathlib.Path,
                   run_index: int, field: str) -> None:
     metadata = document["runs"][run_index][field]
@@ -889,7 +1143,7 @@ def _refresh_input_and_log(document: dict[str, Any], root: pathlib.Path,
 
 
 def self_test(spec_path: pathlib.Path) -> int:
-    validate_spec(spec_path)
+    spec, _ = validate_spec(spec_path)
     expected_parent = "0123456789abcdef0123456789abcdef01234567"
     expected_bundle = "io.github.tryk016.opengothic"
     expected_team = "RMJWWPF379"
@@ -1021,6 +1275,67 @@ def self_test(spec_path: pathlib.Path) -> int:
         baseline.mkdir()
         attestation = _build_fixture(baseline, spec_path)
         baseline_document = _load_attestation(attestation)
+        builder_a = _write_builder_manifest(baseline, baseline_document, 0)
+        builder_b = _write_builder_manifest(baseline, baseline_document, 1)
+        built_attestation = baseline / "built-pair-attestation.json"
+        build_attestation(spec_path, baseline, builder_a, builder_b,
+                          built_attestation, verify_external_tools=False)
+        validate_pair(spec_path, built_attestation, baseline, expected_parent,
+                      expected_bundle, expected_team,
+                      verify_external_tools=False)
+        try:
+            build_attestation(spec_path, baseline, builder_a, builder_b,
+                              built_attestation, verify_external_tools=False)
+        except ValidationError:
+            pass
+        else:
+            raise ValidationError("attestation builder clobbered an existing output")
+
+        gpu_module = _load_gpu_validator()
+        gpu_fixture = pathlib.Path(__file__).resolve().parents[1] / \
+            "tests/fixtures/linear-hdr-gpudebug-transcripts-v2.json"
+        gpu_document = decode_json(
+            regular_bytes(gpu_fixture, "GPU builder fixture", 1024 * 1024),
+            "GPU builder fixture")
+        canonical_gpu = baseline / "linear-hdr-gpu-evidence-v2.json"
+        _write(canonical_gpu, gpu_module.canonical_json_bytes(gpu_document))
+        canonical_gpu.chmod(0o600)
+        capture_output = baseline / "capture-identity-from-gpu.json"
+        build_capture_identity(canonical_gpu, capture_output)
+        fixture_identity = gpu_document["runIdentity"]
+        validate_capture(capture_output.read_bytes(), {
+            "generation": fixture_identity["targetGeneration"],
+            "sequence": fixture_identity["snapshotSequence"],
+            "id": fixture_identity["proofId"],
+        }, spec["capture"]["resourceRoles"])
+        try:
+            build_capture_identity(canonical_gpu, capture_output)
+        except ValidationError:
+            pass
+        else:
+            raise ValidationError("capture builder clobbered an existing output")
+        noncanonical_gpu = baseline / "noncanonical-gpu-evidence.json"
+        _write(noncanonical_gpu, json.dumps(gpu_document, indent=2).encode() + b"\n")
+        noncanonical_gpu.chmod(0o600)
+        try:
+            build_capture_identity(noncanonical_gpu,
+                                   baseline / "noncanonical-capture.json")
+        except ValidationError:
+            pass
+        else:
+            raise ValidationError("capture builder accepted noncanonical GPU evidence")
+        wrong_gpu = copy.deepcopy(gpu_document)
+        wrong_gpu["command"]["proofBlit"]["sourceTextureRef"] = "@tex999"
+        wrong_gpu_path = baseline / "wrong-gpu-evidence.json"
+        _write(wrong_gpu_path, gpu_module.canonical_json_bytes(wrong_gpu))
+        wrong_gpu_path.chmod(0o600)
+        try:
+            build_capture_identity(wrong_gpu_path,
+                                   baseline / "wrong-capture.json")
+        except ValidationError:
+            pass
+        else:
+            raise ValidationError("capture builder accepted a broken resource join")
         try:
             verify_codesign(
                 (baseline / baseline_document["runs"][0]["signedMachO"]["file"]
@@ -1030,7 +1345,6 @@ def self_test(spec_path: pathlib.Path) -> int:
             pass
         else:
             raise ValidationError("unsigned synthetic Mach-O passed codesign")
-        spec, _ = validate_spec(spec_path)
         try:
             verify_metallib(
                 (baseline / baseline_document["runs"][0]["metallib"]["file"]
@@ -1079,6 +1393,19 @@ def parse_arguments(argv: Sequence[str] | None = None) -> argparse.Namespace:
     validate_parser.add_argument("--expected-parent-sha", required=True)
     validate_parser.add_argument("--expected-bundle-id", required=True)
     validate_parser.add_argument("--expected-team-id", required=True)
+    capture_parser = subparsers.add_parser("build-capture-identity")
+    capture_parser.add_argument("--gpu-evidence", required=True,
+                                type=pathlib.Path)
+    capture_parser.add_argument("--output", required=True, type=pathlib.Path)
+    build_parser = subparsers.add_parser("build-attestation")
+    build_parser.add_argument("--spec", required=True, type=pathlib.Path)
+    build_parser.add_argument("--evidence-dir", required=True,
+                              type=pathlib.Path)
+    build_parser.add_argument("--run-a-manifest", required=True,
+                              type=pathlib.Path)
+    build_parser.add_argument("--run-b-manifest", required=True,
+                              type=pathlib.Path)
+    build_parser.add_argument("--output", required=True, type=pathlib.Path)
     return parser.parse_args(argv)
 
 
@@ -1087,6 +1414,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.mode == "self-test":
             return self_test(arguments.spec)
+        if arguments.mode == "build-capture-identity":
+            build_capture_identity(arguments.gpu_evidence, arguments.output)
+            print("ADDITIVE CAPTURE IDENTITY BUILT")
+            return 0
+        if arguments.mode == "build-attestation":
+            build_attestation(arguments.spec, arguments.evidence_dir,
+                              arguments.run_a_manifest,
+                              arguments.run_b_manifest, arguments.output)
+            print("ADDITIVE A/B ATTESTATION BUILT")
+            return 0
         result = validate_pair(
             arguments.spec, arguments.attestation, arguments.evidence_dir,
             arguments.expected_parent_sha, arguments.expected_bundle_id,

@@ -1,29 +1,6 @@
 #!/usr/bin/env bash
-#
-# Sign, install and exercise a diagnostics-enabled RendererIOS build on one
-# connected physical iOS device. The existing suffixed bundle identifier is
-# preserved, so game assets and saves stay in the same data container.
-#
-# Usage:
-#   ios/device-test/run-smoke-test.sh path/to/Gothic2Notr.app
-#   OPENGOTHIC_IOS_DEVICE=<CoreDevice UUID> ... --duration 60 --save-slot 20 APP
-#   ... --new-game APP
-#   ... --require-bink-self-test APP
-#   ... --require-resource-allocator-self-test APP
-#   ... --require-clear-only-pass-self-test APP
-#   ... --require-shading-prototype-tile-self-test APP
-#   ... --require-shading-prototype-forward-self-test APP
-#   ... --require-device-facts-reference-a17 APP
-#   ... --pipeline-archive-test-mode cold APP
-#   ... --expected-fault post-submit-suboptimal APP
-#   ... --expected-fault preview-fence-error-after-terminal APP
-#   ... --expected-fault frame-fence-error-after-terminal APP
-#
-# The phone must be unlocked when the app is launched. No screen interaction is
-# needed: OpenGothic's own -nomenu/-save arguments load the selected save.
-
+# Guarded physical-device smoke runner; preserves the suffixed app container.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"; PLIST_VALIDATOR="$ROOT/ios/device-test/validate-plist-contract.py"
 PROFILE_DIR="$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"
 STUB="$ROOT/ios/device-test/provisioning-stub/Probe.xcodeproj"
@@ -45,6 +22,7 @@ EXPECTED_FAULT_SEEN=0
 EVIDENCE_PATH_FILE=""
 SELF_TEST=0
 APP_INPUT=""
+APP_ARGUMENTS=(); LIVE_PID_FILE=""; LIVE_PID_FILE_SEEN=0
 NATIVE_ALPHA_TEST_CAUSAL_MODE=""
 NATIVE_ALPHA_TEST_CAUSAL_SEQUENCE=""
 NATIVE_ALPHA_TEST_CAUSAL_MODE_SEEN=0
@@ -2308,12 +2286,16 @@ while [[ $# -gt 0 ]]; do
       EVIDENCE_PATH_FILE="${2:?missing evidence path file}"
       shift 2
       ;;
+    --app-argument)
+      (($# >= 2)) && [[ -n "$2" && "$2" != *[$'\001'-$'\037'$'\177']* ]] ||
+        fail "--app-argument requires one non-empty control-free literal"
+      APP_ARGUMENTS+=("$2"); shift 2 ;;
+    --live-pid-file) ((LIVE_PID_FILE_SEEN == 0 && $# >= 2)) && [[ -n "$2" ]] || fail "--live-pid-file requires one value exactly once"; LIVE_PID_FILE="$2"; LIVE_PID_FILE_SEEN=1; shift 2 ;;
     --self-test) SELF_TEST=1; shift ;;
-    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-programmatic-metal-capture|--require-device-facts-reference-a17] [--native-alpha-test-causal-mode causal-a|causal-b --native-alpha-test-causal-sequence canonical-positive-uint64] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--evidence-path-file absolute-path]" ;;
+    -*) fail "usage: $0 [--duration seconds] [--save-slot number|--new-game] [--app-argument literal] [--live-pid-file absolute-path] [--require-bink-self-test|--require-resource-allocator-self-test|--require-clear-only-pass-self-test|--require-shading-prototype-tile-self-test|--require-shading-prototype-forward-self-test|--require-programmatic-metal-capture|--require-device-facts-reference-a17] [--native-alpha-test-causal-mode causal-a|causal-b --native-alpha-test-causal-sequence canonical-positive-uint64] [--pipeline-archive-test-mode cold|corrupt] [--expected-fault none|post-submit-suboptimal|preview-fence-error-after-terminal|frame-fence-error-after-terminal] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app | $0 --self-test [--app-argument literal] [--live-pid-file absolute-path] [--evidence-path-file absolute-path]" ;;
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
-
 [[ "$DURATION" =~ ^[0-9]+$ ]] && ((DURATION >= 10 && DURATION <= 600)) ||
   fail "duration must be 10..600 seconds"
 [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be a non-negative integer"
@@ -2420,6 +2402,11 @@ if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
   [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
     fail "native alpha-test causal mode requires an empty pipeline archive profile"
 fi
+if [[ -n "$LIVE_PID_FILE" ]]; then [[ "$LIVE_PID_FILE" == /* && "$LIVE_PID_FILE" != *[$'\001'-$'\037'$'\177']* && "$(basename "$LIVE_PID_FILE")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] || fail "live PID file must be an absolute control-free safe leaf"
+  if ((SELF_TEST == 0)); then
+    [[ -d "$(dirname "$LIVE_PID_FILE")" && ! -L "$(dirname "$LIVE_PID_FILE")" ]] || fail "live PID file parent is invalid"
+    [[ ! -e "$LIVE_PID_FILE" && ! -L "$LIVE_PID_FILE" ]] || fail "live PID file already exists"
+  fi; fi
 if ((SELF_TEST != 0)); then
   [[ -z "$APP_INPUT" ]] || fail "--self-test does not accept an app"
   run_host_contract_self_test
@@ -4510,6 +4497,9 @@ if [[ -n "$NATIVE_ALPHA_TEST_CAUSAL_MODE" ]]; then
   [[ -f "$WORK/stderr-native-alpha-test-causal-prelaunch.log" ]] ||
     : >"$WORK/stderr-native-alpha-test-causal-prelaunch.log"
 fi
+if ((${#APP_ARGUMENTS[@]})); then
+  LAUNCH_ARGS+=("${APP_ARGUMENTS[@]}")
+fi
 if ((NEW_GAME != 0)); then
   echo "== unattended launch: new game, ${DURATION}s =="
 else
@@ -4525,6 +4515,16 @@ if ! xcrun devicectl device process launch --device "$DEVICE" \
   fi
   tail -30 "$WORK/launch.log" >&2
   fail "application launch failed"
+fi
+if [[ -n "$LIVE_PID_FILE" ]]; then LIVE_PID_VALUE="$(list_game_pids "$WORK/processes-live-pid.json")" || fail "live PID query failed"
+  [[ "$LIVE_PID_VALUE" =~ ^[1-9][0-9]*$ ]] || fail "live PID query did not find exactly one process"
+  python3 - "$LIVE_PID_FILE" "$DEVICE" "$BUNDLE_ID" "$APP_EXECUTABLE" "$LIVE_PID_VALUE" <<'PY' || fail "live PID publication failed"
+import json, os, pathlib, sys
+path=pathlib.Path(sys.argv[1]); raw=(json.dumps({"schemaVersion":1,"deviceUdid":sys.argv[2],"bundleId":sys.argv[3],"executable":sys.argv[4],"processId":int(sys.argv[5])},separators=(",",":"))+"\n").encode(); parent=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW); temporary=f".{path.name}.{os.getpid()}.{os.urandom(8).hex()}.tmp"; descriptor=-1
+try:
+ descriptor=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_CLOEXEC|os.O_NOFOLLOW,0o600,dir_fd=parent); os.write(descriptor,raw)==len(raw) or (_ for _ in ()).throw(OSError("short write")); os.fsync(descriptor); os.close(descriptor); descriptor=-1; os.link(temporary,path.name,src_dir_fd=parent,dst_dir_fd=parent,follow_symlinks=False); os.unlink(temporary,dir_fd=parent); os.fsync(parent)
+finally: descriptor < 0 or os.close(descriptor); os.path.exists(path.parent/temporary) and os.unlink(temporary,dir_fd=parent); os.close(parent)
+PY
 fi
 if [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]]; then
   discover_id3_fault_window_pid ||

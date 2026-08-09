@@ -116,6 +116,11 @@ scripts/verify_ios_feature_policy.command
 RUNNER_TEMP="$TMP_GATE" scripts/verify_ios_linear_hdr.command
 RUNNER_TEMP="$TMP_GATE" scripts/verify_ios_additive_census.command
 
+# P21E1B_ADDITIVE_DEVICE_GROUP_CONTRACT_BEGIN
+printf '\n### Contract: Verify P2.1e1b additive device group host-only\n'
+scripts/verify_ios_additive_device_group.command
+# P21E1B_ADDITIVE_DEVICE_GROUP_CONTRACT_END
+
 echo "### Tempest verifier (2x)"
 bash ios/patches/apply-patches.sh
 bash ios/patches/apply-patches.sh

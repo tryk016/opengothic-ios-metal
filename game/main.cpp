@@ -21,6 +21,9 @@
 #include "graphics/ioslandscapeshaderabi.h"
 #include "graphics/iospipelinearchivepolicy.h"
 #include "graphics/rendereriosplatform.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#include "graphics/iosdeviceintegritymanifest.h"
+#endif
 #include "shader.h"
 #endif
 
@@ -247,6 +250,24 @@ int main(int argc,const char** argv) {
   Workers::setThreadName("Main thread");
 
   try {
+#if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    const auto integrityArguments =
+        RendererIOSDeviceIntegrity::parseArguments(argc,argv);
+    if(!integrityArguments.valid())
+      throw std::runtime_error(
+          "invalid RendererIOS device integrity manifest arguments");
+    if(integrityArguments.requested) {
+      const auto integrity =
+          RendererIOSDeviceIntegrity::createCanonicalManifests(".");
+      if(!integrity.success())
+        throw std::runtime_error(
+            std::string("RendererIOS device integrity manifest failed: ")+
+            RendererIOSDeviceIntegrity::errorName(integrity.error));
+      Tempest::Log::i(
+          RendererIOSDeviceIntegrity::TerminalMarker.data());
+      return 0;
+      }
+#endif
     AudioSession::activate();   // configure the iOS audio session before any SoundDevice
 
     CommandLine          cmd{argc,argv};

@@ -579,6 +579,9 @@ if(IOS)
     "-framework AVFoundation"
     "-framework Security"
     "-weak_framework MetalFX")
+  if(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation")
+  endif()
 elseif(APPLE)
   target_link_libraries(${PROJECT_NAME} "-framework AppKit")
   file(GLOB_RECURSE ObjCSOURCES "game/*.mm")

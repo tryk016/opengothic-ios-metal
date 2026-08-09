@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -14,6 +15,8 @@ import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ci_verification.py"
+CLASSIFIER_SCRIPT = REPO / "scripts" / "classify_verification.py"
+POLICY = REPO / "verification-policy.json"
 WORKFLOW = REPO / ".github" / "workflows" / "renderer-ios.yml"
 CONTRACTS = REPO / "scripts" / "ci_contracts.command"
 PROFILE = REPO / "scripts" / "ci_build_profile.command"
@@ -21,6 +24,12 @@ PRESETS = REPO / "CMakePresets.json"
 CMAKE = REPO / "CMakeLists.txt"
 GITIGNORE = REPO / ".gitignore"
 LOCAL_VERIFY = REPO / "scripts" / "verify-local-build.command"
+ADDITIVE_DEVICE_GROUP_VERIFY = (
+    REPO / "scripts" / "verify_ios_additive_device_group.command"
+)
+ADDITIVE_DEVICE_GROUP_RUNNER = (
+    REPO / "ios" / "device-test" / "run-additive-gpu-group.sh"
+)
 UI_AUTOMATION_HARNESS = (
     REPO / "ios" / "device-test" / "run-ui-automation-test.sh"
 )
@@ -44,6 +53,21 @@ def load_module():
 
 
 CI = load_module()
+
+
+def load_classifier_module():
+    spec = importlib.util.spec_from_file_location(
+        "verification_classifier_for_ci_contract",
+        CLASSIFIER_SCRIPT,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("could not load classify_verification.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CLASSIFIER = load_classifier_module()
 
 
 def expect_error(callback) -> None:
@@ -358,6 +382,240 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     )
     if contracts.splitlines().count(smoke_invocation) != 1:
         raise ValueError("preview-fence save-slot smoke self-test is not exact")
+
+
+def validate_additive_device_group_integration(
+    contracts: str,
+    local_verify: str,
+    profile: str,
+    workflow: str,
+    verifier: str,
+    runner: str,
+) -> None:
+    begin = "# P21E1B_ADDITIVE_DEVICE_GROUP_CONTRACT_BEGIN"
+    end = "# P21E1B_ADDITIVE_DEVICE_GROUP_CONTRACT_END"
+    expected_block = (
+        "\nprintf '\\n### Contract: Verify P2.1e1b additive device group "
+        "host-only\\n'\n"
+        "scripts/verify_ios_additive_device_group.command\n"
+    )
+    contracts_block = exact_scope(
+        contracts,
+        begin,
+        end,
+        "CI P2.1e1b additive device group contract",
+    )
+    local_block = exact_scope(
+        local_verify,
+        begin,
+        end,
+        "local P2.1e1b additive device group contract",
+    )
+    if contracts_block != expected_block or local_block != expected_block:
+        raise ValueError("CI/local additive device group blocks are not byte-exact")
+
+    invocation = "scripts/verify_ios_additive_device_group.command"
+    if contracts.splitlines().count(invocation) != 1:
+        raise ValueError("CI additive device group verifier is not invoked exactly once")
+    if local_verify.splitlines().count(invocation) != 1:
+        raise ValueError("local additive device group verifier is not invoked exactly once")
+    if invocation in profile or invocation in workflow:
+        raise ValueError("additive device group verifier leaked into a profile or workflow")
+
+    contracts_job = workflow_job(workflow, "contracts")
+    if contracts_job.splitlines().count(
+        "        run: scripts/ci_contracts.command"
+    ) != 1:
+        raise ValueError("workflow contracts job does not delegate exactly once")
+    if workflow.count("scripts/ci_contracts.command") != 1:
+        raise ValueError("workflow duplicates the shared contracts entry point")
+
+    verifier_host_tests = (
+        (
+            "integrity",
+            'integrity_output="$("$INTEGRITY_BINARY")" || '
+            'fail "integrity host oracle failed"',
+        ),
+        (
+            "group-runner",
+            'runner_self_test_output="$(PYTHONDONTWRITEBYTECODE=1 '
+            '"$RUNNER" --self-test)" ||\n'
+            '  fail "grouped runner self-test failed"',
+        ),
+        (
+            "launch-path",
+            'LAUNCH_TEST="$ROOT/scripts/test-p21e1b-additive-launch-adapter.py"',
+        ),
+        (
+            "performance-path",
+            'PERFORMANCE_TEST="$ROOT/scripts/test-p21e1b-additive-performance.py"',
+        ),
+        (
+            "launch/performance-required-files",
+            '    "$RUNNER" "$PERFORMANCE" "$LAUNCH_TEST" "$PERFORMANCE_TEST" \\\n'
+            '    "$INTEGRITY_SOURCE" "$INTEGRITY_TEST"; do',
+        ),
+        (
+            "launch",
+            'PYTHONDONTWRITEBYTECODE=1 python3 "$LAUNCH_TEST"',
+        ),
+        (
+            "performance",
+            'PYTHONDONTWRITEBYTECODE=1 python3 "$PERFORMANCE_TEST"',
+        ),
+    )
+    for label, invocation_block in verifier_host_tests:
+        if verifier.count(invocation_block) != 1:
+            raise ValueError(
+                f"additive device group {label} host self-test is not exact-once"
+            )
+    if "[[ -f \"$LAUNCH_TEST\"" in verifier or (
+        "[[ -f \"$PERFORMANCE_TEST\"" in verifier
+    ):
+        raise ValueError("mandatory launch/performance host test became optional")
+
+    runner_host_tests = (
+        (
+            "pair",
+            'PYTHONDONTWRITEBYTECODE=1 python3 "$PAIR_VALIDATOR" self-test '
+            '--spec "$PAIR_SPEC"',
+        ),
+        (
+            "group-validator",
+            'PYTHONDONTWRITEBYTECODE=1 python3 "$GROUP_VALIDATOR" self-test '
+            '--spec "$SPEC"',
+        ),
+    )
+    for label, invocation_block in runner_host_tests:
+        if runner.count(invocation_block) != 1 or invocation_block in verifier:
+            raise ValueError(
+                f"additive device group {label} host self-test is not exact-once"
+            )
+
+    required_host_files = (
+        ADDITIVE_DEVICE_GROUP_VERIFY,
+        REPO / "scripts" / "test-p21e1b-additive-launch-adapter.py",
+        REPO / "scripts" / "test-p21e1b-additive-performance.py",
+        REPO / "game" / "graphics" / "iosdeviceintegritymanifest.cpp",
+        REPO / "ios" / "tests" / "iosdeviceintegritymanifest.cpp",
+        ADDITIVE_DEVICE_GROUP_RUNNER,
+        REPO / "ios" / "device-test" / "validate-additive-device-group.py",
+        REPO / "ios" / "device-test" / "validate-additive-gpu-pair.py",
+        REPO / "ios" / "device-test" / "run-additive-performance-test.sh",
+        REPO / "ios" / "device-test" / "validate-additive-performance-trace.py",
+    )
+    for path in required_host_files:
+        if not path.is_file() or path.is_symlink():
+            raise ValueError(f"additive device group host input is invalid: {path}")
+
+    for forbidden_profile_build in (
+        "scripts/ci_build_profile.command",
+        "scripts/verify-local-build.command",
+        "renderer-ios-off",
+        "renderer-ios-on",
+        "renderer-ios-tile",
+        "renderer-ios-forward",
+    ):
+        if forbidden_profile_build in verifier:
+            raise ValueError(
+                "host-only additive device group verifier duplicates a profile build: "
+                + forbidden_profile_build
+            )
+
+
+def validate_additive_device_group_policy(payload: dict) -> None:
+    policy = CLASSIFIER.validate_policy(payload)
+    harness_paths = (
+        "scripts/verify_ios_additive_device_group.command",
+        "scripts/test-p21e1b-additive-launch-adapter.py",
+        "scripts/test-p21e1b-additive-performance.py",
+        "ios/device-test/run-additive-gpu-group.sh",
+        "ios/device-test/run-additive-performance-test.sh",
+        "ios/device-test/validate-additive-device-group.py",
+        "ios/device-test/validate-additive-gpu-pair.py",
+        "ios/device-test/validate-additive-performance-trace.py",
+        "ios/device-test/specs/p21e1b-static-additive-v1.json",
+        "ios/device-test/specs/p21e1b-static-additive-group-v1.json",
+    )
+    integrity_paths = (
+        "game/graphics/iosdeviceintegritymanifest.h",
+        "game/graphics/iosdeviceintegritymanifest.cpp",
+        "ios/tests/iosdeviceintegritymanifest.cpp",
+    )
+    rules = {rule["id"]: rule for rule in policy["rules"]}
+    expected_rules = {
+        "p21e1b-additive-device-group": {
+            "risk": "diagnostics",
+            "paths": list(harness_paths),
+            "gates": [
+                "contracts",
+                "build-off",
+                "build-on",
+                "build-additive-a-hdr",
+                "build-additive-b-hdr",
+            ],
+        },
+        "p21e1b-device-integrity": {
+            "risk": "shared-runtime",
+            "paths": list(integrity_paths),
+            "gates": [
+                "contracts",
+                "strict-compile",
+                "build-off",
+                "build-on",
+                "build-additive-a-hdr",
+                "build-additive-b-hdr",
+            ],
+        },
+    }
+    for rule_id, expected in expected_rules.items():
+        rule = rules.get(rule_id)
+        if rule is None:
+            raise ValueError(f"verification policy is missing {rule_id}")
+        for key, value in expected.items():
+            if rule[key] != value:
+                raise ValueError(f"verification policy {rule_id} {key} drifted")
+
+    classifications = (
+        (
+            harness_paths,
+            "p21e1b-additive-device-group",
+            "diagnostics",
+            expected_rules["p21e1b-additive-device-group"]["gates"],
+        ),
+        (
+            integrity_paths,
+            "p21e1b-device-integrity",
+            "shared-runtime",
+            expected_rules["p21e1b-device-integrity"]["gates"],
+        ),
+    )
+    for paths, rule_id, risk, gates in classifications:
+        for path in paths:
+            result = CLASSIFIER.classify_paths(policy, [path], validate=False)
+            if result["matches"] != [{"path": path, "rules": [rule_id]}]:
+                raise ValueError(f"verification policy match drifted for {path}")
+            if result["risk"] != risk or result["gates"] != gates:
+                raise ValueError(f"verification policy gates drifted for {path}")
+            required = CI.required_jobs(result)
+            if required != {
+                "contracts": True,
+                "build_off": True,
+                "build_on": True,
+                "build_tile": False,
+                "build_forward": False,
+                "build_additive_a_hdr": True,
+                "build_additive_b_hdr": True,
+            }:
+                raise ValueError(f"CI job routing drifted for {path}")
+
+    unknown = CLASSIFIER.classify_paths(
+        policy,
+        ["scripts/p21e1b-unknown-helper.command"],
+        validate=False,
+    )
+    if not unknown["fallback"] or unknown["gates"] != ["full"]:
+        raise ValueError("unknown P2.1e1b helper does not fail closed to full")
 
 
 def validate_clear_only_admission_contract(contracts: str, context: str) -> None:
@@ -1439,6 +1697,183 @@ def test_workflow_contract() -> None:
         else:
             raise AssertionError("extracted CI/profile mutation survived")
     assert extraction_killed == 12
+
+
+def test_additive_device_group_contract() -> None:
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
+    profile = PROFILE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    verifier = ADDITIVE_DEVICE_GROUP_VERIFY.read_text(encoding="utf-8")
+    runner = ADDITIVE_DEVICE_GROUP_RUNNER.read_text(encoding="utf-8")
+    validate_additive_device_group_integration(
+        contracts,
+        local_verify,
+        profile,
+        workflow,
+        verifier,
+        runner,
+    )
+
+    integration_mutations = (
+        (
+            replace_exact_line_once(
+                contracts,
+                "scripts/verify_ios_additive_device_group.command",
+                "true # additive device group verifier removed",
+            ),
+            local_verify,
+            profile,
+            workflow,
+            verifier,
+            runner,
+        ),
+        (
+            contracts,
+            replace_exact_line_once(
+                local_verify,
+                "scripts/verify_ios_additive_device_group.command",
+                "true # additive device group verifier removed",
+            ),
+            profile,
+            workflow,
+            verifier,
+            runner,
+        ),
+        (
+            contracts + "scripts/verify_ios_additive_device_group.command\n",
+            local_verify,
+            profile,
+            workflow,
+            verifier,
+            runner,
+        ),
+        (
+            contracts,
+            local_verify,
+            profile + "scripts/verify_ios_additive_device_group.command\n",
+            workflow,
+            verifier,
+            runner,
+        ),
+        (
+            contracts,
+            local_verify,
+            profile,
+            workflow + "scripts/verify_ios_additive_device_group.command\n",
+            verifier,
+            runner,
+        ),
+        (
+            contracts,
+            replace_once(
+                local_verify,
+                "Verify P2.1e1b additive device group host-only",
+                "Verify P2.1e1b additive device group drifted",
+            ),
+            profile,
+            workflow,
+            verifier,
+            runner,
+        ),
+    )
+    verifier_self_test_anchors = (
+        'integrity_output="$("$INTEGRITY_BINARY")" || '
+        'fail "integrity host oracle failed"',
+        'runner_self_test_output="$(PYTHONDONTWRITEBYTECODE=1 '
+        '"$RUNNER" --self-test)" ||\n'
+        '  fail "grouped runner self-test failed"',
+        'LAUNCH_TEST="$ROOT/scripts/test-p21e1b-additive-launch-adapter.py"',
+        'PERFORMANCE_TEST="$ROOT/scripts/test-p21e1b-additive-performance.py"',
+        '    "$RUNNER" "$PERFORMANCE" "$LAUNCH_TEST" "$PERFORMANCE_TEST" \\\n'
+        '    "$INTEGRITY_SOURCE" "$INTEGRITY_TEST"; do',
+        'PYTHONDONTWRITEBYTECODE=1 python3 "$LAUNCH_TEST"',
+        'PYTHONDONTWRITEBYTECODE=1 python3 "$PERFORMANCE_TEST"',
+    )
+    integration_mutations += tuple(
+        (
+            contracts,
+            local_verify,
+            profile,
+            workflow,
+            replace_once(
+                verifier,
+                anchor,
+                "true # additive device group host self-test removed",
+            ),
+            runner,
+        )
+        for anchor in verifier_self_test_anchors
+    )
+    runner_self_test_anchors = (
+        'PYTHONDONTWRITEBYTECODE=1 python3 "$PAIR_VALIDATOR" self-test '
+        '--spec "$PAIR_SPEC"',
+        'PYTHONDONTWRITEBYTECODE=1 python3 "$GROUP_VALIDATOR" self-test '
+        '--spec "$SPEC"',
+    )
+    integration_mutations += tuple(
+        (
+            contracts,
+            local_verify,
+            profile,
+            workflow,
+            verifier,
+            replace_once(
+                runner,
+                anchor,
+                "true # additive device group nested self-test removed",
+            ),
+        )
+        for anchor in runner_self_test_anchors
+    )
+    integration_killed = 0
+    for mutated in integration_mutations:
+        try:
+            validate_additive_device_group_integration(*mutated)
+        except ValueError:
+            integration_killed += 1
+        else:
+            raise AssertionError("additive device group integration mutation survived")
+    assert integration_killed == 15
+
+    policy_payload = json.loads(POLICY.read_text(encoding="utf-8"))
+    validate_additive_device_group_policy(policy_payload)
+
+    def policy_rule(candidate: dict, rule_id: str) -> dict:
+        return next(rule for rule in candidate["rules"] if rule["id"] == rule_id)
+
+    policy_mutations = []
+    candidate = copy.deepcopy(policy_payload)
+    policy_rule(candidate, "p21e1b-additive-device-group")["paths"].remove(
+        "scripts/verify_ios_additive_device_group.command"
+    )
+    policy_mutations.append(candidate)
+    candidate = copy.deepcopy(policy_payload)
+    policy_rule(candidate, "p21e1b-additive-device-group")["gates"].remove(
+        "build-off"
+    )
+    policy_mutations.append(candidate)
+    candidate = copy.deepcopy(policy_payload)
+    policy_rule(candidate, "p21e1b-additive-device-group")["gates"].remove(
+        "build-additive-b-hdr"
+    )
+    policy_mutations.append(candidate)
+    candidate = copy.deepcopy(policy_payload)
+    policy_rule(candidate, "p21e1b-device-integrity")["risk"] = "diagnostics"
+    policy_mutations.append(candidate)
+    candidate = copy.deepcopy(policy_payload)
+    candidate["fallback"]["gates"] = ["contracts"]
+    policy_mutations.append(candidate)
+
+    policy_killed = 0
+    for candidate in policy_mutations:
+        try:
+            validate_additive_device_group_policy(candidate)
+        except (ValueError, CLASSIFIER.PolicyError):
+            policy_killed += 1
+        else:
+            raise AssertionError("additive device group policy mutation survived")
+    assert policy_killed == 5
 
 
 def test_cmake_presets_contract() -> None:
@@ -2801,6 +3236,7 @@ def main() -> None:
     test_push_before_to_sha()
     test_aggregation()
     test_workflow_contract()
+    test_additive_device_group_contract()
     test_cmake_presets_contract()
     test_causal_build_isolation_source_contract()
     test_causal_device_harness_source_contract()
@@ -2811,8 +3247,9 @@ def main() -> None:
     test_bash32_local_profile_parser()
     print(
         "RendererIOS CI verification tests passed: "
-        "12 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
+        "13 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
+        "15 additive device group integration mutations, 5 policy mutations, "
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
         "17 UI selector mutations, 6 UI harness mutations, "

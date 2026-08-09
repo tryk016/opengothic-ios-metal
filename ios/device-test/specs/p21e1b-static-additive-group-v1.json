@@ -1,0 +1,124 @@
+{
+  "schemaVersion": 1,
+  "evidenceClass": "renderer-ios-static-additive-device-group",
+  "identities": {
+    "baseParentSha": "82c3d249dd15f15054a7e2feb3c3136c4d67a9c0",
+    "candidateParentSha": "d90905ed7eca80130207825fee71910f11266911",
+    "tempestSha": "308ec44c501c6ee86c153ba4acd63d44e39cf38d",
+    "bundleId": "opengothic.gothic2.RMJWWPF379",
+    "teamId": "RMJWWPF379"
+  },
+  "applications": [
+    {
+      "role": "base-off-performance",
+      "parentSha": "82c3d249dd15f15054a7e2feb3c3136c4d67a9c0",
+      "profile": "off",
+      "launchArgument": null
+    },
+    {
+      "role": "candidate-on",
+      "parentSha": "d90905ed7eca80130207825fee71910f11266911",
+      "profile": "on",
+      "launchArgument": null
+    },
+    {
+      "role": "candidate-off-performance",
+      "parentSha": "d90905ed7eca80130207825fee71910f11266911",
+      "profile": "off",
+      "launchArgument": null
+    },
+    {
+      "role": "additive-a",
+      "parentSha": "d90905ed7eca80130207825fee71910f11266911",
+      "profile": "additive-a-hdr",
+      "launchArgument": "-renderer-ios-additive-causal-mode=additive-a-hdr"
+    },
+    {
+      "role": "additive-b",
+      "parentSha": "d90905ed7eca80130207825fee71910f11266911",
+      "profile": "additive-b-hdr",
+      "launchArgument": "-renderer-ios-additive-causal-mode=additive-b-hdr"
+    }
+  ],
+  "sequence": [
+    "base-off-performance",
+    "candidate-on",
+    "candidate-off-performance",
+    "additive-a",
+    "additive-b"
+  ],
+  "performance": {
+    "summarySchema": "performance-trace-summary-v1",
+    "summaryLeaf": "performance-trace-summary-v1.json",
+    "commitLeaf": "performance-evidence-commit-v1.json",
+    "evidenceDirectoryPattern": "performance-evidence-<role>-<runId>",
+    "template": "Game Performance Overview",
+    "traceManifestDomain": "opengothic-performance-trace-v1\u0000",
+    "evidenceSetDomain": "opengothic-performance-evidence-set-v1\u0000",
+    "xctraceMajorVersion": 27,
+    "modelerBoundaryToleranceNanoseconds": 50,
+    "tocDurationToleranceNanoseconds": 1000,
+    "metricTableSchema": "metal-perf-overview-layer-duration-metric",
+    "metricNameColumn": "name",
+    "metricVariantColumn": "metric-variant",
+    "frameCountColumn": "number-of-frames",
+    "processIdColumn": "process",
+    "frameIntervalMetricName": "0.Frame Interval",
+    "gpuActiveMetricName": "4.GPU Active Time",
+    "valueMillisecondsColumn": "value-in-ms",
+    "thermalTableSchema": "device-thermal-state-intervals",
+    "thermalStateColumn": "thermal-state",
+    "saveSlot": 4,
+    "fpsLimit": 30,
+    "settleSeconds": 12,
+    "minimumTraceSeconds": 30,
+    "minimumMeanFpsAbsolute": 27.0,
+    "minimumMeanFpsRatio": 0.9,
+    "maximumMeanGpuActiveMilliseconds": 33.34,
+    "maximumMeanGpuActiveRatio": 1.2,
+    "forbiddenThermalStates": [
+      "Serious",
+      "Critical"
+    ]
+  },
+  "integrity": {
+    "launchArgument": "-renderer-ios-device-integrity-manifest-v1",
+    "terminal": "RendererIOS device integrity manifest: schema=1 resources=resource-manifest-v1.jsonl saves=protected-save-manifest-v1.jsonl result=PASS terminal=C",
+    "resourceManifestLeaf": "resource-manifest-v1.jsonl",
+    "protectedSaveManifestLeaf": "protected-save-manifest-v1.jsonl",
+    "recoveryJournalLeaf": "device-integrity-recovery-journal-v1.json",
+    "roots": [
+      "Data",
+      "_work/Data",
+      "system"
+    ],
+    "excluded": [
+      "system/Gothic.ini"
+    ],
+    "protectedSlots": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "maximumFiles": 100000,
+    "maximumFileBytes": 8589934592,
+    "maximumTotalBytes": 17179869184
+  },
+  "additivePair": {
+    "specLeaf": "p21e1b-static-additive-v1.json",
+    "attestationLeaf": "additive-gpu-pair-attestation-v1.json",
+    "captureIdentityPattern": "capture-identity-<a|b>.json",
+    "linearHdrAdapter": "run-linear-hdr-proof-test.sh",
+    "saveSlot": 4
+  },
+  "durableZero": {
+    "requiredAfterEveryRun": true,
+    "minimumScans": 10,
+    "minimumStableSeconds": 90,
+    "maximumRespawns": 0,
+    "maximumQueryFailures": 0,
+    "requiredFinalZero": 1,
+    "guardState": "ZERO"
+  }
+}

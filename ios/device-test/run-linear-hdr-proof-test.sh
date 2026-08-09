@@ -27,6 +27,8 @@ NEW_GAME_SEEN=0
 GPU_TRIPLE=0
 EVIDENCE_PATH_FILE=""
 APP=""
+APP_ARGUMENTS=()
+LIVE_PID_FILE=""
 DEVICE=""
 DEVICE_UDID=""
 BUNDLE_ID=""
@@ -76,12 +78,19 @@ while (($#)); do
       EVIDENCE_PATH_FILE="${2:?missing evidence path file}"
       shift 2
       ;;
+    --app-argument)
+      (($# >= 2)) && [[ -n "$2" && "$2" != *[$'\001'-$'\037'$'\177']* ]] ||
+        fail "--app-argument requires one non-empty control-free literal"
+      APP_ARGUMENTS+=("$2"); shift 2 ;;
+    --live-pid-file)
+      [[ -z "$LIVE_PID_FILE" && $# -ge 2 && -n "$2" ]] || fail "--live-pid-file requires one value exactly once"
+      LIVE_PID_FILE="$2"; shift 2 ;;
     --self-test)
       SELF_TEST=1
       shift
       ;;
     -*)
-      fail "usage: $0 --expected-sha 40-lowercase-hex [--duration 10..600] [--save-slot number|--new-game] [--gpu-triple] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
+      fail "usage: $0 --expected-sha 40-lowercase-hex [--duration 10..600] [--save-slot number|--new-game] [--gpu-triple] [--app-argument literal] [--live-pid-file absolute-path] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
       ;;
     *)
       [[ -z "$APP" ]] || fail "only one app path may be supplied"
@@ -90,6 +99,18 @@ while (($#)); do
       ;;
   esac
 done
+
+if [[ -n "$LIVE_PID_FILE" ]]; then
+  [[ "$LIVE_PID_FILE" == /* && "$LIVE_PID_FILE" != *[$'\001'-$'\037'$'\177']* &&
+     "$(basename "$LIVE_PID_FILE")" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] ||
+    fail "live PID file must be an absolute control-free safe leaf"
+  if ((SELF_TEST == 0)); then
+    [[ -d "$(dirname "$LIVE_PID_FILE")" && ! -L "$(dirname "$LIVE_PID_FILE")" ]] ||
+      fail "live PID file parent is invalid"
+    [[ ! -e "$LIVE_PID_FILE" && ! -L "$LIVE_PID_FILE" ]] ||
+      fail "live PID file already exists"
+  fi
+fi
 
 if ((SELF_TEST == 0)); then
   if ((GPU_TRIPLE != 0)); then
@@ -544,6 +565,7 @@ cleanup_owned_temps pre || fail "pre-run allowlisted temp cleanup failed"
 
 SMOKE_EVIDENCE_FILE="$WORK/smoke-evidence-path.txt"
 SMOKE_ARGS=(--duration "$DURATION" --evidence-path-file "$SMOKE_EVIDENCE_FILE")
+[[ -z "$LIVE_PID_FILE" ]] || SMOKE_ARGS+=(--live-pid-file "$LIVE_PID_FILE")
 if ((GPU_TRIPLE != 0)); then
   SMOKE_ARGS+=(--require-programmatic-metal-capture)
 fi
@@ -551,6 +573,11 @@ if ((NEW_GAME != 0)); then
   SMOKE_ARGS+=(--new-game)
 else
   SMOKE_ARGS+=(--save-slot "$SAVE_SLOT")
+fi
+if ((${#APP_ARGUMENTS[@]})); then
+  for app_argument in "${APP_ARGUMENTS[@]}"; do
+    SMOKE_ARGS+=(--app-argument "$app_argument")
+  done
 fi
 
 if ! OPENGOTHIC_IOS_DEVICE="$DEVICE" \
