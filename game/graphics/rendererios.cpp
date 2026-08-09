@@ -10,6 +10,12 @@
 #include <utility>
 #include <vector>
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#include <array>
+#include <cstdio>
+#include <string_view>
+#endif
+
 #include "iosmetalcontext.h"
 #include "gothic.h"
 #include "iosgpusceneplan.h"
@@ -31,6 +37,79 @@ static_assert(std::is_nothrow_move_constructible_v<RendererIOS::FrameTicket>);
 static_assert(std::is_nothrow_move_assignable_v<RendererIOS::FrameTicket>);
 static_assert(!std::is_copy_constructible_v<IOSFrameInput>);
 static_assert(std::is_nothrow_move_constructible_v<IOSFrameInput>);
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+constexpr std::array<std::string_view,7> additiveSourceKindNames = {
+  "Landscape","Static","Movable","Animated","Particle","Morph",
+  "Unsupported",
+  };
+
+bool isLowerHexSha40(std::string_view sha) noexcept {
+  if(sha.size()!=40u)
+    return false;
+  for(const char value:sha)
+    if(!((value>='0' && value<='9') || (value>='a' && value<='f')))
+      return false;
+  return true;
+  }
+
+using IOSAdditiveCensusLogLine = std::array<char,255>;
+
+template<class... Args>
+bool formatAdditiveCensusLogLine(
+    IOSAdditiveCensusLogLine& line,
+    const char* format,
+    Args... arguments) noexcept {
+  const int length = std::snprintf(
+      line.data(),line.size(),format,arguments...);
+  return length>0 && length<=254 &&
+      static_cast<std::size_t>(length)<line.size();
+  }
+
+void logAdditiveSourceCensus(
+    const IOSAdditiveSourceCensusDiagnosticCandidate& candidate) noexcept {
+  constexpr std::string_view buildSha = OPENGOTHIC_RENDERER_IOS_BUILD_SHA;
+  if(!candidate.valid ||
+     candidate.generation==0u || candidate.sequence==0u ||
+     (candidate.sequence!=1u && candidate.sequence%300u!=0u) ||
+     !isLowerHexSha40(buildSha) ||
+     !iosFinalizeAdditiveSourceCensus(
+         candidate.census,candidate.rawAdditiveLight))
+    return;
+
+  std::array<IOSAdditiveCensusLogLine,8> lines{};
+  if(!formatAdditiveCensusLogLine(
+       lines[0],
+       "RendererIOS additive source census: v=1 b=%s g=%llu s=%llu r=%llu t=%llu",
+       buildSha.data(),
+       static_cast<unsigned long long>(candidate.generation),
+       static_cast<unsigned long long>(candidate.sequence),
+       static_cast<unsigned long long>(candidate.rawAdditiveLight),
+       static_cast<unsigned long long>(candidate.census.total)))
+    return;
+  for(std::size_t kind=0; kind<additiveSourceKindNames.size(); ++kind) {
+    const std::size_t first = kind*4u;
+    if(!formatAdditiveCensusLogLine(
+         lines[kind+1u],
+         "RendererIOS additive source census row: v=1 b=%s g=%llu s=%llu k=%s c=%llu,%llu,%llu,%llu",
+         buildSha.data(),
+         static_cast<unsigned long long>(candidate.generation),
+         static_cast<unsigned long long>(candidate.sequence),
+         additiveSourceKindNames[kind].data(),
+         static_cast<unsigned long long>(candidate.census.cells[first]),
+         static_cast<unsigned long long>(candidate.census.cells[first+1u]),
+         static_cast<unsigned long long>(candidate.census.cells[first+2u]),
+         static_cast<unsigned long long>(candidate.census.cells[first+3u])))
+      return;
+    }
+  try {
+    for(const auto& line:lines)
+      Log::d(line.data());
+    }
+  catch(...) {
+    }
+  }
+#endif
 
 }
 
@@ -82,6 +161,9 @@ struct RendererIOS::Impl final {
   uint64_t preparedUVAnimationSerial = 0;
   IOSUVAnimationEvidence preparedUVAnimation;
   IOSUVAnimationDiagnosticState uvAnimationDiagnostics;
+  uint64_t preparedAdditiveSourceCensusSerial = 0;
+  IOSAdditiveSourceCensusDiagnosticCandidate
+      preparedAdditiveSourceCensus;
 #endif
 
   bool matchesPreparedScene(uint64_t serial,
@@ -98,6 +180,8 @@ struct RendererIOS::Impl final {
     preparedScene.reset();
     preparedSceneSerial = 0;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    preparedAdditiveSourceCensus = {};
+    preparedAdditiveSourceCensusSerial = 0;
     preparedFrameAnimation = {};
     preparedFrameAnimationSerial = 0;
     preparedUVAnimation = {};
@@ -126,6 +210,19 @@ struct RendererIOS::Impl final {
 
   void resetUVAnimationDiagnostics() noexcept {
     uvAnimationDiagnostics = {};
+    }
+
+  void commitAdditiveSourceCensusDiagnostics(
+      bool submitted,
+      bool accepted,
+      uint64_t serial,
+      uint64_t generation,
+      uint64_t sequence) noexcept {
+    if(!iosAdditiveSourceCensusCandidateAcceptsCommit(
+         preparedAdditiveSourceCensus,submitted,accepted,
+         preparedAdditiveSourceCensusSerial,serial,generation,sequence))
+      return;
+    logAdditiveSourceCensus(preparedAdditiveSourceCensus);
     }
 
   void commitFrameAnimationDiagnostics(
@@ -287,6 +384,9 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   IOSFrameAnimationEvidence frameAnimation;
   IOSUVAnimationEvidence uvAnimation;
+  IOSAdditiveSourceCensus additiveSourceCensus;
+  uint64_t rawAdditiveLight = 0;
+  bool hasAdditiveSourceCensus = false;
 #endif
 
   if(bool(source)) {
@@ -356,12 +456,24 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
       }
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    additiveSourceCensus = extraction.additiveSourceCensus;
+    rawAdditiveLight = static_cast<uint64_t>(
+        extraction.stats.census.materials.additiveLight);
+    hasAdditiveSourceCensus = true;
     frameAnimation = std::move(extraction.frameAnimation);
     uvAnimation = std::move(extraction.uvAnimation);
 #endif
     }
 
   auto snapshot = impl->renderWorld.buildSnapshot(std::move(scene));
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  impl->preparedAdditiveSourceCensus = hasAdditiveSourceCensus
+      ? prepareIOSAdditiveSourceCensusDiagnosticCandidate(
+          additiveSourceCensus,rawAdditiveLight,
+          snapshot->generation.value,snapshot->sequence.value)
+      : IOSAdditiveSourceCensusDiagnosticCandidate{};
+  impl->preparedAdditiveSourceCensusSerial = frame.serial;
+#endif
   impl->preparedScene       = snapshot;
   impl->preparedSceneSerial = frame.serial;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -494,6 +606,10 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
     const bool accepted = !submitted || state.world->commitAccepted(*state.scene);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     if(submitted && accepted) {
+      state.renderer->commitAdditiveSourceCensusDiagnostics(
+          submitted,accepted,state.serial,
+          (*state.scene)->generation.value,
+          (*state.scene)->sequence.value);
       state.renderer->acceptFrameAnimationGeneration(
           (*state.scene)->generation.value);
       state.renderer->commitFrameAnimationDiagnostics(

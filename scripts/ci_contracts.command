@@ -30,6 +30,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 scripts/verify_ios_linear_hdr.command
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_validate_linear_hdr_log.py
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_gpu_evidence.py
+scripts/verify_ios_additive_census.command
 
 printf '\n### CI contract: Verify P2.1c3b3b causal build isolation\n'
 set -euo pipefail

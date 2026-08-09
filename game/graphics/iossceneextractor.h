@@ -7,6 +7,10 @@
 #include "iosuvanimationevidence.h"
 #include "material.h"
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+#include "iosadditivesourcecensus.h"
+#endif
+
 #include <cstddef>
 #include <limits>
 #include <optional>
@@ -214,6 +218,9 @@ struct IOSSceneExtractionReport final {
   std::optional<IOSSceneAssetBindResult> bindFailure;
   IOSFrameAnimationEvidence frameAnimation;
   IOSUVAnimationEvidence    uvAnimation;
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  IOSAdditiveSourceCensus additiveSourceCensus;
+#endif
   };
 
 struct IOSSceneMaterialMapping final {

@@ -56,6 +56,16 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
       source.material!=nullptr && source.material->hasUvAnimation();
   const IOSSceneTextureAnimationMode textureAnimation =
       iosSceneTextureAnimationMode(hasFrameAnimation,hasUvAnimation);
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  const auto additiveCensusResult = iosRecordAdditiveSourceCensus(
+      source.kind,rawMaterial,textureAnimation,
+      context.report.additiveSourceCensus);
+  if(additiveCensusResult==IOSAdditiveCensusResult::Invalid ||
+     additiveCensusResult==IOSAdditiveCensusResult::Overflow) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return;
+    }
+#endif
   if(!recordIOSSceneRawSource(
        source.kind,rawMaterial,hasFrameAnimation,hasUvAnimation,
        context.report.stats)) {
@@ -244,6 +254,17 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return context.report;
     }
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  static_assert(sizeof(std::size_t)<=sizeof(uint64_t));
+  if(!iosFinalizeAdditiveSourceCensus(
+       context.report.additiveSourceCensus,
+       static_cast<uint64_t>(
+           context.report.stats.census.materials.additiveLight))) {
+    (void)recordIOSSceneInvalidSource(context.report.stats);
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }
+#endif
   if(!finalizeIOSFrameAnimationEvidence(context.report.frameAnimation) ||
      context.report.frameAnimation.admittedFrameOnly!=
          context.report.stats.admittedFrameOnly ||

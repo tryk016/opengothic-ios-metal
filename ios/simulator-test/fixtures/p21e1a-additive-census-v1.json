@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "records": [
+    {"kind":"landscape","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"landscape","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"landscape","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"landscape","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"},
+    {"kind":"static","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"static","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"static","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"static","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"},
+    {"kind":"movable","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"movable","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"movable","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"movable","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"},
+    {"kind":"animated","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"animated","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"animated","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"animated","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"},
+    {"kind":"particle","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"particle","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"particle","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"particle","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"},
+    {"kind":"morph","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"morph","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"morph","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"morph","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"},
+    {"kind":"unsupported","mode":"none","alpha":"additive-light","result":"recorded"},
+    {"kind":"unsupported","mode":"frame-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"unsupported","mode":"uv-only","alpha":"additive-light","result":"recorded"},
+    {"kind":"unsupported","mode":"frame-and-uv","alpha":"additive-light","result":"recorded"}
+  ],
+  "negativeCases": [
+    {"id":"ignored-null-alpha","kind":"static","mode":"none","alpha":null,"result":"ignored"},
+    {"id":"ignored-non-additive","kind":"movable","mode":"frame-only","alpha":"solid","result":"ignored"},
+    {"id":"invalid-kind","kind":"unknown","mode":"none","alpha":"additive-light","result":"invalid"},
+    {"id":"invalid-mode","kind":"static","mode":"unknown","alpha":"additive-light","result":"invalid"},
+    {"id":"invalid-alpha","kind":"static","mode":"none","alpha":"unknown","result":"invalid"}
+  ],
+  "overflowCases": [
+    {"case":"cell-max","kind":"static","mode":"none","alpha":"additive-light","result":"overflow"},
+    {"case":"total-max","kind":"movable","mode":"frame-only","alpha":"additive-light","result":"overflow"}
+  ]
+}

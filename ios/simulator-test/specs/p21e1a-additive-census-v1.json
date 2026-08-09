@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "fixture": "p21e1a-additive-census-v1.json",
+  "scope": "host-neutral-adapter,no-product-save-runtime",
+  "generation": 1,
+  "sequence": 1,
+  "orderedKinds": ["landscape","static","movable","animated","particle","morph","unsupported"],
+  "orderedModes": ["none","frame-only","uv-only","frame-and-uv"],
+  "expectedCells": [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+  "expectedTotal": 28,
+  "expectedIgnored": 2,
+  "expectedInvalid": 3,
+  "expectedOverflow": 2
+}

@@ -172,6 +172,29 @@
       "reason": "changed diagnostics or physical-device harness"
     },
     {
+      "id": "additive-source-census",
+      "risk": "diagnostics",
+      "paths": [
+        "game/graphics/iosadditivesourcecensus.h",
+        "game/graphics/iossceneextractor.h",
+        "game/graphics/iossceneextractor.cpp",
+        "game/graphics/rendererios.cpp",
+        "ios/tests/iosadditivesourcecensus.cpp",
+        "ios/tests/iossceneextractorplan.cpp",
+        "ios/device-test/validate-additive-source-census-log.py",
+        "ios/device-test/specs/p21e1a-additive-census-device-v1.json",
+        "ios/simulator-test/**",
+        "scripts/verify_ios_additive_census.command"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on"
+      ],
+      "reason": "changed diagnostics-only Additive source census or its simulator adapter"
+    },
+    {
       "id": "renderer-ios-runtime",
       "risk": "shared-runtime",
       "paths": [

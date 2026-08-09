@@ -44,6 +44,27 @@ void operator delete[](void* memory, std::size_t) noexcept {
 
 namespace {
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+void validateAdditiveCensusReportSidecar() {
+  IOSSceneExtractionReport report;
+  assert(report.additiveSourceCensus==IOSAdditiveSourceCensus{});
+  assert(iosRecordAdditiveSourceCensus(
+      IOSSceneSourceKind::Movable,Material::AdditiveLight,
+      IOSSceneTextureAnimationMode::FrameAndUv,
+      report.additiveSourceCensus)==IOSAdditiveCensusResult::Recorded);
+  assert(report.additiveSourceCensus.cells[11]==1u);
+  assert(iosFinalizeAdditiveSourceCensus(
+      report.additiveSourceCensus,1u));
+  const auto candidate = prepareIOSAdditiveSourceCensusDiagnosticCandidate(
+      report.additiveSourceCensus,1u,3u,300u);
+  assert(candidate.valid);
+  assert(!iosAdditiveSourceCensusCandidateAcceptsCommit(
+      candidate,true,false,9u,9u,3u,300u));
+  assert(iosAdditiveSourceCensusCandidateAcceptsCommit(
+      candidate,true,true,9u,9u,3u,300u));
+  }
+#endif
+
 // Exact P2.1c2 compositional fixture, mirrored in the history/GPU tests.
 constexpr uint64_t MovableSourceId = 0x21C2u;
 
@@ -1528,6 +1549,9 @@ void validateAtomicPublication() {
 }
 
 int main() {
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  validateAdditiveCensusReportSidecar();
+#endif
   validatePublicContract();
   validateFrameSelection();
   validateUVOffsetEvaluation();

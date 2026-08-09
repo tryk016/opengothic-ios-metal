@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "saveSlot": 4,
+  "sequence": 1,
+  "kinds": [
+    "Landscape",
+    "Static",
+    "Movable",
+    "Animated",
+    "Particle",
+    "Morph",
+    "Unsupported"
+  ],
+  "modes": [
+    "None",
+    "FrameOnly",
+    "UvOnly",
+    "FrameAndUv"
+  ],
+  "boundedKinds": [
+    "Static",
+    "Movable"
+  ],
+  "requiredDurableScans": 10,
+  "requiredStableSeconds": 90
+}
