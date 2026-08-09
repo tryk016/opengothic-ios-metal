@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import hashlib
 import importlib.util
@@ -14,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 from typing import Callable
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -143,20 +146,77 @@ def command(paths: tuple[Path, Path, Path, Path, Path, Path]) -> list[str]:
     ]
 
 
-def run_validator(paths: tuple[Path, Path, Path, Path, Path, Path]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command(paths), cwd=ROOT, text=True,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          check=False)
-
-
-def load_validator():
+def load_validator(*, deterministic_tool_identity: bool = True):
     spec = importlib.util.spec_from_file_location(
         "p21e1b_performance_validator", VALIDATOR)
     require(spec is not None and spec.loader is not None,
             "validator import spec is unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    if deterministic_tool_identity:
+        def verify_fixture_identity(version: str, build: str) -> None:
+            if (version, build) != (TOOL_VERSION, TOOL_BUILD):
+                raise module.ValidationError(
+                    "xctrace runtime identity differs from host fixture")
+        module.verify_tool_identity = verify_fixture_identity
     return module
+
+
+def run_validator_argv(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    module = load_validator()
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        try:
+            returncode = module.main(argv)
+        except SystemExit as error:
+            returncode = error.code if isinstance(error.code, int) else 1
+    return subprocess.CompletedProcess(
+        [sys.executable, str(VALIDATOR), *argv], returncode,
+        stdout.getvalue(), stderr.getvalue())
+
+
+def run_validator(paths: tuple[Path, Path, Path, Path, Path, Path]) -> subprocess.CompletedProcess[str]:
+    return run_validator_argv(command(paths)[2:])
+
+
+def tool_identity_verifier_tests() -> int:
+    module = load_validator(deterministic_tool_identity=False)
+    argv = ("/usr/bin/xctrace", "version")
+    kwargs = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "timeout": 10,
+        "check": False,
+    }
+    valid_stdout = f"xctrace version {TOOL_VERSION} ({TOOL_BUILD})\n".encode()
+
+    def invoke(result: subprocess.CompletedProcess[bytes], *, reject: bool) -> None:
+        with mock.patch.object(module.subprocess, "run", return_value=result) as run:
+            try:
+                module.verify_tool_identity(TOOL_VERSION, TOOL_BUILD)
+            except module.ValidationError:
+                require(reject, "valid xctrace identity was rejected")
+            else:
+                require(not reject, "invalid xctrace identity was accepted")
+            require(run.call_count == 1 and run.call_args.args == (argv,) and
+                    run.call_args.kwargs == kwargs,
+                    "xctrace identity query argv/options differ")
+
+    invoke(subprocess.CompletedProcess(argv, 0, valid_stdout, b""),
+           reject=False)
+    mutants = (
+        subprocess.CompletedProcess(argv, 1, valid_stdout, b""),
+        subprocess.CompletedProcess(argv, 0, valid_stdout, b"warning\n"),
+        subprocess.CompletedProcess(
+            argv, 0, f"xctrace version 27.1 ({TOOL_BUILD})\n".encode(), b""),
+        subprocess.CompletedProcess(
+            argv, 0, f"xctrace version {TOOL_VERSION} (27A0000a)\n".encode(),
+            b""),
+    )
+    for result in mutants:
+        invoke(result, reject=True)
+    return len(mutants)
 
 
 def expected_identity() -> dict[str, object]:
@@ -339,9 +399,8 @@ def mutation_tests() -> int:
         killed += 1
     with tempfile.TemporaryDirectory(prefix="p21e1b-performance-duplicate-") as temporary:
         paths = write_fixture(Path(temporary))
-        result = subprocess.run(command(paths) + ["--role", "base-off-performance"],
-                                cwd=ROOT, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, check=False)
+        result = run_validator_argv(
+            command(paths)[2:] + ["--role", "base-off-performance"])
         require(result.returncode != 0, "duplicate validator option survived")
         killed += 1
     for option, wrong in (("--tool-version", "27.1"),
@@ -349,11 +408,9 @@ def mutation_tests() -> int:
         with tempfile.TemporaryDirectory(
                 prefix="p21e1b-performance-tool-identity-") as temporary:
             paths = write_fixture(Path(temporary))
-            mutant = command(paths)
+            mutant = command(paths)[2:]
             mutant[mutant.index(option) + 1] = wrong
-            result = subprocess.run(mutant, cwd=ROOT,
-                                    stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, check=False)
+            result = run_validator_argv(mutant)
             require(result.returncode != 0,
                     f"wrong xctrace identity survived: {option}")
             killed += 1
@@ -755,6 +812,7 @@ def live_pid_reader_tests(source: str) -> int:
 
 
 def main() -> int:
+    tool_identity_killed = tool_identity_verifier_tests()
     validate_good_summary()
     fake_killed = mutation_tests()
     directory_killed = evidence_directory_mutations()
@@ -771,7 +829,9 @@ def main() -> int:
           f"source-mutations-killed={source_killed} "
           f"durability-mutations-killed={durability_killed} "
           f"publisher-mutations-killed={publisher_killed} "
-          f"live-pid-mutations-killed={live_pid_killed} weighted=1 atomic=1")
+          f"live-pid-mutations-killed={live_pid_killed} "
+          f"tool-identity-mutations-killed={tool_identity_killed} "
+          "weighted=1 atomic=1")
     return 0
 
 
