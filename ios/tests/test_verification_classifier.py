@@ -66,6 +66,25 @@ class VerificationClassifierTests(unittest.TestCase):
                     ["forward-contracts", "build-off", "build-forward"],
                 )
 
+    def test_remaining_material_census_routes_exact_diagnostics_gates(self) -> None:
+        paths = (
+            "game/graphics/iosremainingmaterialcensus.h",
+            "ios/device-test/validate-remaining-material-device-attestation.py",
+            "ios/simulator-test/run-remaining-material-census.sh",
+        )
+        for path in paths:
+            with self.subTest(path=path):
+                result = self.classify(path)
+                self.assertEqual(result["risk"], "diagnostics")
+                self.assertEqual(
+                    result["gates"],
+                    ["contracts", "strict-compile", "build-off", "build-on"],
+                )
+                self.assertIn(
+                    "remaining-material-source-census",
+                    result["matches"][0]["rules"],
+                )
+
     def test_union_preserves_global_gate_order(self) -> None:
         result = self.classify(
             "game/graphics/iosdevicefactscollector.cpp",

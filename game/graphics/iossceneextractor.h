@@ -9,6 +9,7 @@
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #include "iosadditivesourcecensus.h"
+#include "iosremainingmaterialcensus.h"
 #endif
 
 #include <cmath>
@@ -229,6 +230,7 @@ struct IOSSceneExtractionReport final {
   IOSUVAnimationEvidence    uvAnimation;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   IOSAdditiveSourceCensus additiveSourceCensus;
+  IOSRemainingMaterialCensus remainingMaterialCensus;
 #endif
   };
 

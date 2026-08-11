@@ -63,6 +63,31 @@ void validateAdditiveCensusReportSidecar() {
   assert(iosAdditiveSourceCensusCandidateAcceptsCommit(
       candidate,true,true,9u,9u,3u,300u));
   }
+
+void validateRemainingMaterialCensusReportSidecar() {
+  IOSSceneExtractionReport report;
+  assert(report.remainingMaterialCensus==IOSRemainingMaterialCensus{});
+  assert(iosRecordRemainingMaterialCensus(
+      IOSSceneSourceKind::Movable,Material::Transparent,
+      IOSSceneTextureAnimationMode::FrameAndUv,
+      report.remainingMaterialCensus)==
+      IOSRemainingMaterialCensusResult::Recorded);
+  constexpr std::size_t index =
+      (4u*IOSRemainingMaterialKindCount+2u)*
+      IOSRemainingMaterialModeCount+3u;
+  assert(report.remainingMaterialCensus.cells[index]==1u);
+  std::array<uint64_t,IOSRemainingMaterialCount> raw = {0u,0u,0u,0u,1u};
+  assert(iosFinalizeRemainingMaterialCensus(
+      report.remainingMaterialCensus,raw));
+  const auto candidate =
+      prepareIOSRemainingMaterialCensusDiagnosticCandidate(
+          report.remainingMaterialCensus,raw,3u,300u);
+  assert(candidate.valid);
+  assert(!iosRemainingMaterialCensusCandidateAcceptsCommit(
+      candidate,true,false,9u,9u,3u,300u));
+  assert(iosRemainingMaterialCensusCandidateAcceptsCommit(
+      candidate,true,true,9u,9u,3u,300u));
+  }
 #endif
 
 // Exact P2.1c2 compositional fixture, mirrored in the history/GPU tests.
@@ -1795,6 +1820,7 @@ void validateAtomicPublication() {
 int main() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   validateAdditiveCensusReportSidecar();
+  validateRemainingMaterialCensusReportSidecar();
 #endif
   validatePublicContract();
   validateStaticAdditiveNoneAdmission();

@@ -223,6 +223,34 @@
       "reason": "changed diagnostics or physical-device harness"
     },
     {
+      "id": "remaining-material-source-census",
+      "risk": "diagnostics",
+      "paths": [
+        "game/graphics/iosremainingmaterialcensus.h",
+        "game/graphics/iossceneextractor.h",
+        "game/graphics/iossceneextractor.cpp",
+        "game/graphics/rendererios.cpp",
+        "ios/tests/iosremainingmaterialcensus.cpp",
+        "ios/tests/iossceneextractorplan.cpp",
+        "ios/device-test/validate-remaining-material-census-log.py",
+        "ios/device-test/validate-remaining-material-device-attestation.py",
+        "ios/device-test/specs/p21e2a-remaining-material-census-device-v1.json",
+        "ios/simulator-test/RemainingMaterialCensusAdapter/**",
+        "ios/simulator-test/RemainingMaterialCensusAdapter.xcodeproj/**",
+        "ios/simulator-test/fixtures/p21e2a-remaining-material-census-v1.json",
+        "ios/simulator-test/specs/p21e2a-remaining-material-census-v1.json",
+        "ios/simulator-test/run-remaining-material-census.sh",
+        "scripts/verify_ios_remaining_material_census.command"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on"
+      ],
+      "reason": "changed diagnostics-only remaining-material census, validator, or simulator adapter"
+    },
+    {
       "id": "additive-source-census",
       "risk": "diagnostics",
       "paths": [
@@ -261,7 +289,8 @@
         "game/graphics/iosshadingprototypeforwardpipeline*",
         "game/graphics/iosshadingprototypeforwardprobe.*",
         "game/graphics/iosdeviceintegritymanifest.h",
-        "game/graphics/iosdeviceintegritymanifest.cpp"
+        "game/graphics/iosdeviceintegritymanifest.cpp",
+        "game/graphics/iosremainingmaterialcensus.h"
       ],
       "gates": [
         "contracts",
@@ -290,7 +319,8 @@
         "ios/tests/iosshadingprototypetileprobe.cpp",
         "ios/tests/iosshadingprototypeforwardpipeline.cpp",
         "ios/tests/iosshadingprototypeforwardprobe.cpp",
-        "ios/tests/iosdeviceintegritymanifest.cpp"
+        "ios/tests/iosdeviceintegritymanifest.cpp",
+        "ios/tests/iosremainingmaterialcensus.cpp"
       ],
       "gates": [
         "contracts",

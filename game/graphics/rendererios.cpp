@@ -44,6 +44,17 @@ constexpr std::array<std::string_view,7> additiveSourceKindNames = {
   "Unsupported",
   };
 
+constexpr std::array<std::string_view,IOSRemainingMaterialCount>
+    remainingMaterialNames = {
+      "Water","Ghost","Multiply","Multiply2","Transparent",
+      };
+
+constexpr std::array<std::string_view,IOSRemainingMaterialKindCount>
+    remainingMaterialKindNames = {
+      "Landscape","Static","Movable","Animated","Particle","Morph",
+      "Unsupported",
+      };
+
 bool isLowerHexSha40(std::string_view sha) noexcept {
   if(sha.size()!=40u)
     return false;
@@ -109,6 +120,71 @@ void logAdditiveSourceCensus(
   catch(...) {
     }
   }
+
+void logRemainingMaterialCensus(
+    const IOSRemainingMaterialCensusDiagnosticCandidate& candidate) noexcept {
+  constexpr std::string_view buildSha = OPENGOTHIC_RENDERER_IOS_BUILD_SHA;
+  if(!candidate.valid ||
+     !isLowerHexSha40(buildSha) ||
+     !iosFinalizeRemainingMaterialCensus(
+         candidate.census,candidate.rawTotals))
+    return;
+
+  uint64_t globalRaw = 0;
+  for(const uint64_t value:candidate.rawTotals)
+    globalRaw += value;
+
+  std::array<IOSAdditiveCensusLogLine,41> lines{};
+  std::size_t line = 0;
+  if(!formatAdditiveCensusLogLine(
+       lines[line++],
+       "RendererIOS remaining material census: v=1 b=%s g=%llu s=%llu n=5,7,4 r=%llu t=%llu",
+       buildSha.data(),
+       static_cast<unsigned long long>(candidate.generation),
+       static_cast<unsigned long long>(candidate.sequence),
+       static_cast<unsigned long long>(globalRaw),
+       static_cast<unsigned long long>(candidate.census.globalTotal)))
+    return;
+  for(std::size_t material=0; material<remainingMaterialNames.size();
+      ++material) {
+    if(!formatAdditiveCensusLogLine(
+         lines[line++],
+         "RendererIOS remaining material census material: v=1 b=%s g=%llu s=%llu m=%s r=%llu t=%llu",
+         buildSha.data(),
+         static_cast<unsigned long long>(candidate.generation),
+         static_cast<unsigned long long>(candidate.sequence),
+         remainingMaterialNames[material].data(),
+         static_cast<unsigned long long>(candidate.rawTotals[material]),
+         static_cast<unsigned long long>(candidate.census.totals[material])))
+      return;
+    for(std::size_t kind=0; kind<remainingMaterialKindNames.size(); ++kind) {
+      const std::size_t first =
+          (material*IOSRemainingMaterialKindCount+kind)*
+          IOSRemainingMaterialModeCount;
+      if(!formatAdditiveCensusLogLine(
+           lines[line++],
+           "RendererIOS remaining material census row: v=1 b=%s g=%llu s=%llu m=%s k=%s c=%llu,%llu,%llu,%llu",
+           buildSha.data(),
+           static_cast<unsigned long long>(candidate.generation),
+           static_cast<unsigned long long>(candidate.sequence),
+           remainingMaterialNames[material].data(),
+           remainingMaterialKindNames[kind].data(),
+           static_cast<unsigned long long>(candidate.census.cells[first]),
+           static_cast<unsigned long long>(candidate.census.cells[first+1u]),
+           static_cast<unsigned long long>(candidate.census.cells[first+2u]),
+           static_cast<unsigned long long>(candidate.census.cells[first+3u])))
+        return;
+      }
+    }
+  if(line!=lines.size())
+    return;
+  try {
+    for(const auto& value:lines)
+      Log::d(value.data());
+    }
+  catch(...) {
+    }
+  }
 #endif
 
 }
@@ -164,6 +240,9 @@ struct RendererIOS::Impl final {
   uint64_t preparedAdditiveSourceCensusSerial = 0;
   IOSAdditiveSourceCensusDiagnosticCandidate
       preparedAdditiveSourceCensus;
+  uint64_t preparedRemainingMaterialCensusSerial = 0;
+  IOSRemainingMaterialCensusDiagnosticCandidate
+      preparedRemainingMaterialCensus;
 #endif
 
   bool matchesPreparedScene(uint64_t serial,
@@ -182,6 +261,8 @@ struct RendererIOS::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     preparedAdditiveSourceCensus = {};
     preparedAdditiveSourceCensusSerial = 0;
+    preparedRemainingMaterialCensus = {};
+    preparedRemainingMaterialCensusSerial = 0;
     preparedFrameAnimation = {};
     preparedFrameAnimationSerial = 0;
     preparedUVAnimation = {};
@@ -223,6 +304,19 @@ struct RendererIOS::Impl final {
          preparedAdditiveSourceCensusSerial,serial,generation,sequence))
       return;
     logAdditiveSourceCensus(preparedAdditiveSourceCensus);
+    }
+
+  void commitRemainingMaterialCensusDiagnostics(
+      bool submitted,
+      bool accepted,
+      uint64_t serial,
+      uint64_t generation,
+      uint64_t sequence) noexcept {
+    if(!iosRemainingMaterialCensusCandidateAcceptsCommit(
+         preparedRemainingMaterialCensus,submitted,accepted,
+         preparedRemainingMaterialCensusSerial,serial,generation,sequence))
+      return;
+    logRemainingMaterialCensus(preparedRemainingMaterialCensus);
     }
 
   void commitFrameAnimationDiagnostics(
@@ -387,6 +481,9 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
   IOSAdditiveSourceCensus additiveSourceCensus;
   uint64_t rawAdditiveLight = 0;
   bool hasAdditiveSourceCensus = false;
+  IOSRemainingMaterialCensus remainingMaterialCensus;
+  std::array<uint64_t,IOSRemainingMaterialCount> remainingMaterialRawTotals{};
+  bool hasRemainingMaterialCensus = false;
 #endif
 
   if(bool(source)) {
@@ -460,6 +557,15 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
     rawAdditiveLight = static_cast<uint64_t>(
         extraction.stats.census.materials.additiveLight);
     hasAdditiveSourceCensus = true;
+    remainingMaterialCensus = extraction.remainingMaterialCensus;
+    remainingMaterialRawTotals = {
+      static_cast<uint64_t>(extraction.stats.census.materials.water),
+      static_cast<uint64_t>(extraction.stats.census.materials.ghost),
+      static_cast<uint64_t>(extraction.stats.census.materials.multiply),
+      static_cast<uint64_t>(extraction.stats.census.materials.multiply2),
+      static_cast<uint64_t>(extraction.stats.census.materials.transparent),
+      };
+    hasRemainingMaterialCensus = true;
     frameAnimation = std::move(extraction.frameAnimation);
     uvAnimation = std::move(extraction.uvAnimation);
 #endif
@@ -473,6 +579,12 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
           snapshot->generation.value,snapshot->sequence.value)
       : IOSAdditiveSourceCensusDiagnosticCandidate{};
   impl->preparedAdditiveSourceCensusSerial = frame.serial;
+  impl->preparedRemainingMaterialCensus = hasRemainingMaterialCensus
+      ? prepareIOSRemainingMaterialCensusDiagnosticCandidate(
+          remainingMaterialCensus,remainingMaterialRawTotals,
+          snapshot->generation.value,snapshot->sequence.value)
+      : IOSRemainingMaterialCensusDiagnosticCandidate{};
+  impl->preparedRemainingMaterialCensusSerial = frame.serial;
 #endif
   impl->preparedScene       = snapshot;
   impl->preparedSceneSerial = frame.serial;
@@ -607,6 +719,10 @@ RendererIOS::SubmitResult RendererIOS::submitFrame(FrameTicket&& frame,
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     if(submitted && accepted) {
       state.renderer->commitAdditiveSourceCensusDiagnostics(
+          submitted,accepted,state.serial,
+          (*state.scene)->generation.value,
+          (*state.scene)->sequence.value);
+      state.renderer->commitRemainingMaterialCensusDiagnostics(
           submitted,accepted,state.serial,
           (*state.scene)->generation.value,
           (*state.scene)->sequence.value);

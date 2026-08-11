@@ -57,6 +57,17 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   const IOSSceneTextureAnimationMode textureAnimation =
       iosSceneTextureAnimationMode(hasFrameAnimation,hasUvAnimation);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+  const auto remainingMaterialCensusResult =
+      iosRecordRemainingMaterialCensus(
+          source.kind,rawMaterial,textureAnimation,
+          context.report.remainingMaterialCensus);
+  if(remainingMaterialCensusResult==
+         IOSRemainingMaterialCensusResult::Invalid ||
+     remainingMaterialCensusResult==
+         IOSRemainingMaterialCensusResult::Overflow) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return;
+    }
   const auto additiveCensusResult = iosRecordAdditiveSourceCensus(
       source.kind,rawMaterial,textureAnimation,
       context.report.additiveSourceCensus);
@@ -266,6 +277,19 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
        context.report.additiveSourceCensus,
        static_cast<uint64_t>(
            context.report.stats.census.materials.additiveLight))) {
+    (void)recordIOSSceneInvalidSource(context.report.stats);
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return context.report;
+    }
+  const std::array<uint64_t,IOSRemainingMaterialCount> remainingRawTotals = {
+    static_cast<uint64_t>(context.report.stats.census.materials.water),
+    static_cast<uint64_t>(context.report.stats.census.materials.ghost),
+    static_cast<uint64_t>(context.report.stats.census.materials.multiply),
+    static_cast<uint64_t>(context.report.stats.census.materials.multiply2),
+    static_cast<uint64_t>(context.report.stats.census.materials.transparent),
+    };
+  if(!iosFinalizeRemainingMaterialCensus(
+       context.report.remainingMaterialCensus,remainingRawTotals)) {
     (void)recordIOSSceneInvalidSource(context.report.stats);
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return context.report;

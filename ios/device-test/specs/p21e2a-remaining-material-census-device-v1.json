@@ -1,0 +1,1 @@
+{"boundedKinds":["Static","Movable"],"kinds":["Landscape","Static","Movable","Animated","Particle","Morph","Unsupported"],"materials":["Water","Ghost","Multiply","Multiply2","Transparent"],"modes":["None","FrameOnly","UvOnly","FrameAndUv"],"requiredDurableScans":10,"requiredStableSeconds":90,"saveSlot":4,"schemaVersion":1,"sequence":1}
