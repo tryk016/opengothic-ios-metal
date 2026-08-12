@@ -20,6 +20,8 @@ inline constexpr std::string_view ArgumentRoot =
     "-renderer-ios-device-integrity-";
 inline constexpr std::string_view ManifestArgument =
     "-renderer-ios-device-integrity-manifest-v1";
+inline constexpr std::string_view CleanupArgument =
+    "-renderer-ios-device-integrity-cleanup-v1";
 inline constexpr std::string_view ResourceManifestFileName =
     "resource-manifest-v1.jsonl";
 inline constexpr std::string_view ProtectedSaveManifestFileName =
@@ -28,11 +30,15 @@ inline constexpr std::string_view TerminalMarker =
     "RendererIOS device integrity manifest: schema=1 "
     "resources=resource-manifest-v1.jsonl "
     "saves=protected-save-manifest-v1.jsonl result=PASS terminal=C";
+inline constexpr std::string_view CleanupTerminalMarker =
+    "RendererIOS device integrity cleanup: schema=1 "
+    "resources=absent saves=absent result=PASS terminal=C";
 
 static_assert(TerminalMarker.size()<255u);
 
 struct ArgumentParseResult final {
   bool requested = false;
+  bool cleanupRequested = false;
   bool duplicate = false;
   bool unknown = false;
   bool invalidVector = false;
@@ -50,6 +56,7 @@ constexpr ArgumentParseResult parseArguments(
     return result;
     }
   unsigned requested = 0u;
+  unsigned cleanupRequested = 0u;
   for(int index=0; index<argc; ++index) {
     if(argv[index]==nullptr) {
       result.invalidVector = true;
@@ -60,11 +67,17 @@ constexpr ArgumentParseResult parseArguments(
       ++requested;
       continue;
       }
+    if(argument==CleanupArgument) {
+      ++cleanupRequested;
+      continue;
+      }
     if(argument.starts_with(ArgumentRoot))
       result.unknown = true;
     }
   result.requested = requested==1u;
-  result.duplicate = requested>1u;
+  result.cleanupRequested = cleanupRequested==1u;
+  result.duplicate = requested>1u || cleanupRequested>1u ||
+                     (requested!=0u && cleanupRequested!=0u);
   return result;
   }
 
@@ -113,6 +126,13 @@ const char* errorName(Error error) noexcept;
 // Both output leaves are exclusive; an existing file, directory or symlink is
 // a fail-closed collision and is never replaced.
 Result createCanonicalManifests(
+    const std::filesystem::path& documentRoot) noexcept;
+
+// Removes only the two diagnostics-owned manifest leaves. Missing leaves are
+// accepted so cleanup is idempotent; directories, symlinks and all unrelated
+// Documents members are untouched. Success guarantees both leaves are absent
+// and the Documents directory has been synchronized.
+Result removeCanonicalManifests(
     const std::filesystem::path& documentRoot) noexcept;
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)

@@ -259,8 +259,7 @@ def parse_block(lines: list[str], offset: int) -> tuple[dict[str, Any], int]:
              "globalRaw": global_raw, "globalTable": global_table}, cursor)
 
 
-def validate_log(raw: bytes, expected_build: str, expected_generation: int,
-                 expected_sequence: int) -> dict[str, Any]:
+def validated_blocks(raw: bytes, expected_build: str) -> list[dict[str, Any]]:
     require(re.fullmatch(SHA40, expected_build) is not None,
             "expected build is not h40")
     require(b"\r" not in raw and b"\0" not in raw,
@@ -282,10 +281,29 @@ def validate_log(raw: bytes, expected_build: str, expected_generation: int,
     while cursor < len(family):
         block, cursor = parse_block(family, cursor)
         blocks.append(block)
+    return blocks
+
+
+def validate_log(raw: bytes, expected_build: str, expected_generation: int,
+                 expected_sequence: int) -> dict[str, Any]:
+    blocks = validated_blocks(raw, expected_build)
     matches = [block for block in blocks
                if (block["build"], block["generation"], block["sequence"]) ==
                   (expected_build, expected_generation, expected_sequence)]
     require(len(matches) == 1, "expected census block is missing or duplicated")
+    return matches[0]
+
+
+def validate_log_sequence(raw: bytes, expected_build: str,
+                          expected_sequence: int) -> dict[str, Any]:
+    require(type(expected_sequence) is int and expected_sequence > 0,
+            "expected sequence is invalid")
+    blocks = validated_blocks(raw, expected_build)
+    matches = [block for block in blocks
+               if (block["build"], block["sequence"]) ==
+                  (expected_build, expected_sequence)]
+    require(len(matches) == 1,
+            "expected census sequence is missing or generation-ambiguous")
     return matches[0]
 
 
@@ -415,6 +433,18 @@ def self_test() -> None:
     require(len(maximum) <= MAX_LINE_BYTES, "fixture row exceeds bound")
     raw = ("unrelated\n" + "\n".join(lines) + "\n").encode("ascii")
     block = validate_log(raw, build, 7, 1)
+    require(validate_log_sequence(raw, build, 1) == block,
+            "sequence-selected block differs")
+    generation_three = ("\n".join(sample_lines(build, 3, 1, cells)) +
+                        "\n").encode("ascii")
+    require(validate_log_sequence(generation_three, build, 1)["generation"] == 3,
+            "non-unit target generation was rejected")
+    try:
+        validate_log_sequence(raw + generation_three, build, 1)
+    except ValidationError:
+        pass
+    else:
+        raise ValidationError("generation-ambiguous sequence survived")
     artifact = encode_artifact(block)
     require(parse_artifact(artifact) == block, "artifact roundtrip differs")
 

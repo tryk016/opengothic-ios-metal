@@ -1013,6 +1013,71 @@ Result createCanonicalManifests(
   return createCanonicalManifestsImpl(documentRoot,nullptr);
   }
 
+Result removeCanonicalManifests(
+    const std::filesystem::path& documentRoot) noexcept {
+  Result result;
+  try {
+    if(documentRoot.empty()) {
+      result.error = Error::InvalidDocumentRoot;
+      return result;
+      }
+    const int descriptor = ::open(
+        documentRoot.c_str(),O_RDONLY|O_DIRECTORY|O_NOFOLLOW|closeOnExecFlag());
+    FileDescriptor root(descriptor);
+    if(!root) {
+      result.error = Error::OpenFailed;
+      return result;
+      }
+    constexpr std::array<std::string_view,2> leaves = {
+      ResourceManifestFileName,ProtectedSaveManifestFileName,
+      };
+    std::array<bool,2> present{};
+    for(std::size_t index=0u; index<leaves.size(); ++index) {
+      struct stat identity{};
+      const std::string name(leaves[index]);
+      if(::fstatat(root.get(),name.c_str(),&identity,AT_SYMLINK_NOFOLLOW)==0) {
+        if(!S_ISREG(identity.st_mode) || identity.st_nlink!=1) {
+          result.error = Error::NonRegularEntry;
+          return result;
+          }
+        present[index] = true;
+        continue;
+        }
+      if(errno!=ENOENT) {
+        result.error = Error::OpenFailed;
+        return result;
+        }
+      }
+    for(std::size_t index=0u; index<leaves.size(); ++index) {
+      if(!present[index])
+        continue;
+      const std::string name(leaves[index]);
+      if(::unlinkat(root.get(),name.c_str(),0)!=0) {
+        result.error = Error::WriteFailed;
+        return result;
+        }
+      }
+    for(const auto leaf:leaves) {
+      struct stat identity{};
+      const std::string name(leaf);
+      if(::fstatat(root.get(),name.c_str(),&identity,AT_SYMLINK_NOFOLLOW)==0 ||
+         errno!=ENOENT) {
+        result.error = Error::FileChanged;
+        return result;
+        }
+      }
+    if(::fsync(root.get())!=0) {
+      result.error = Error::SyncFailed;
+      return result;
+      }
+    return result;
+    }
+  catch(...) {
+    result.error = Error::OpenFailed;
+    return result;
+    }
+  }
+
 #if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
 Result createCanonicalManifestsForTest(
     const std::filesystem::path& documentRoot,
@@ -1033,6 +1098,13 @@ const char* errorName(Error error) noexcept {
   }
 
 Result createCanonicalManifests(
+    const std::filesystem::path&) noexcept {
+  Result result;
+  result.error = Error::UnsupportedPlatform;
+  return result;
+  }
+
+Result removeCanonicalManifests(
     const std::filesystem::path&) noexcept {
   Result result;
   result.error = Error::UnsupportedPlatform;

@@ -616,7 +616,7 @@ def snapshot(evidence: pathlib.Path, spec_path: pathlib.Path,
     require(sealed_device_spec == spec,
             "phone-ready seal/public device spec join differs")
     log_meta, log_raw = meta(evidence / "log.txt", "source log")
-    block = CORE.validate_log(log_raw, expected_sha, 1, 1)
+    block = CORE.validate_log_sequence(log_raw, expected_sha, spec["sequence"])
     artifact_meta, artifact_raw = meta(evidence / ARTIFACT, "artifact",
                                        maximum=CORE.ARTIFACT_BYTES)
     require(len(artifact_raw) == CORE.ARTIFACT_BYTES and

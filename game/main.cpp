@@ -256,6 +256,17 @@ int main(int argc,const char** argv) {
     if(!integrityArguments.valid())
       throw std::runtime_error(
           "invalid RendererIOS device integrity manifest arguments");
+    if(integrityArguments.cleanupRequested) {
+      const auto integrity =
+          RendererIOSDeviceIntegrity::removeCanonicalManifests(".");
+      if(!integrity.success())
+        throw std::runtime_error(
+            std::string("RendererIOS device integrity cleanup failed: ")+
+            RendererIOSDeviceIntegrity::errorName(integrity.error));
+      Tempest::Log::i(
+          RendererIOSDeviceIntegrity::CleanupTerminalMarker.data());
+      return 0;
+      }
     if(integrityArguments.requested) {
       const auto integrity =
           RendererIOSDeviceIntegrity::createCanonicalManifests(".");

@@ -100,6 +100,13 @@ void testArguments() {
     "Gothic2Notr","-renderer-ios-device-integrity-manifest-v1",
     "-renderer-ios-device-integrity-manifest-v1",
     };
+  constexpr const char* cleanup[] = {
+    "Gothic2Notr","-renderer-ios-device-integrity-cleanup-v1",
+    };
+  constexpr const char* mixed[] = {
+    "Gothic2Notr","-renderer-ios-device-integrity-manifest-v1",
+    "-renderer-ios-device-integrity-cleanup-v1",
+    };
   constexpr const char* unknown[] = {
     "Gothic2Notr","-renderer-ios-device-integrity-manifest-v2",
     };
@@ -109,12 +116,36 @@ void testArguments() {
   static_assert(Integrity::parseArguments(2,valid).requested);
   static_assert(!Integrity::parseArguments(3,duplicate).valid());
   static_assert(Integrity::parseArguments(3,duplicate).duplicate);
+  static_assert(Integrity::parseArguments(2,cleanup).valid());
+  static_assert(Integrity::parseArguments(2,cleanup).cleanupRequested);
+  static_assert(!Integrity::parseArguments(3,mixed).valid());
+  static_assert(Integrity::parseArguments(3,mixed).duplicate);
   static_assert(!Integrity::parseArguments(2,unknown).valid());
   static_assert(Integrity::parseArguments(2,unknown).unknown);
   static_assert(!Integrity::parseArguments(-1,nullptr).valid());
   static_assert(!Integrity::parseArguments(1,nullptr).valid());
   constexpr const char* const invalidVector[] = {nullptr};
   static_assert(!Integrity::parseArguments(1,invalidVector).valid());
+  }
+
+void testCleanup() {
+  Fixture fixture;
+  createBaseFixture(fixture.root);
+  writeBytes(fixture.root/"unrelated.txt","keep");
+  assert(Integrity::createCanonicalManifests(fixture.root).success());
+  assert(Integrity::removeCanonicalManifests(fixture.root).success());
+  assert(!fs::exists(fixture.root/Integrity::ResourceManifestFileName));
+  assert(!fs::exists(fixture.root/Integrity::ProtectedSaveManifestFileName));
+  assert(readBytes(fixture.root/"unrelated.txt")=="keep");
+  assert(Integrity::removeCanonicalManifests(fixture.root).success());
+
+  writeBytes(fixture.root/Integrity::ResourceManifestFileName,"owned");
+  assert(::symlink("unrelated.txt",
+      (fixture.root/Integrity::ProtectedSaveManifestFileName).c_str())==0);
+  const auto collision = Integrity::removeCanonicalManifests(fixture.root);
+  assert(collision.error==Integrity::Error::NonRegularEntry);
+  assert(readBytes(fixture.root/Integrity::ResourceManifestFileName)=="owned");
+  assert(fs::is_symlink(fixture.root/Integrity::ProtectedSaveManifestFileName));
   }
 
 void testCanonicalFixture() {
@@ -346,11 +377,12 @@ struct SourceAnchor final {
   std::string_view snippet;
   };
 
-static constexpr std::array<SourceAnchor,41> SourceAnchors = {{
+static constexpr std::array<SourceAnchor,47> SourceAnchors = {{
   {"header","MaximumFileCount = 100000u"},
   {"header","MaximumTotalBytes = 16ull*1024ull*1024ull*1024ull"},
   {"header","MaximumFileBytes = 8ull*1024ull*1024ull*1024ull"},
   {"header","-renderer-ios-device-integrity-manifest-v1"},
+  {"header","-renderer-ios-device-integrity-cleanup-v1"},
   {"header","inline constexpr std::string_view ResourceManifestFileName =\n    \"resource-manifest-v1.jsonl\";"},
   {"header","inline constexpr std::string_view ProtectedSaveManifestFileName =\n    \"protected-save-manifest-v1.jsonl\";"},
   {"header","using RevalidationTestHook = bool (*)(\n    const std::filesystem::path& documentRoot) noexcept;"},
@@ -382,8 +414,13 @@ static constexpr std::array<SourceAnchor,41> SourceAnchors = {{
   {"implementation","std::strcmp(candidate.sha256.data(),prepared.sha256.data())!=0"},
   {"implementation","O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW"},
   {"implementation","if(!leafIsAbsent(root.get(),ResourceManifestFileName) ||\n       !leafIsAbsent(root.get(),ProtectedSaveManifestFileName))"},
+  {"implementation","Result removeCanonicalManifests(\n    const std::filesystem::path& documentRoot) noexcept {\n  Result result;\n  try {"},
+  {"implementation","::unlinkat(root.get(),name.c_str(),0)"},
+  {"implementation","::fsync(root.get())!=0"},
   {"main","#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)\n#include \"graphics/iosdeviceintegritymanifest.h\"\n#endif"},
   {"main","RendererIOSDeviceIntegrity::createCanonicalManifests(\".\")"},
+  {"main","RendererIOSDeviceIntegrity::removeCanonicalManifests(\".\")"},
+  {"main","RendererIOSDeviceIntegrity::CleanupTerminalMarker.data()"},
   {"main","RendererIOSDeviceIntegrity::TerminalMarker.data()"},
   {"cmake","    \"game/*.cpp\")"},
   {"cmake","\"-framework CoreFoundation\""},
@@ -443,7 +480,7 @@ void testSourceMutationOracle() {
       ++mutationsKilled;
       }
     }
-  assert(mutationsKilled==82u);
+  assert(mutationsKilled==94u);
   }
 
 }
@@ -451,6 +488,7 @@ void testSourceMutationOracle() {
 int main() {
   testArguments();
   testCanonicalFixture();
+  testCleanup();
   testMissingExcludedFile();
   testMissingSave();
   testSingleLeafCollisionPublishesNothing();
@@ -461,6 +499,6 @@ int main() {
   testSourceMutationOracle();
   std::printf(
       "RendererIOS device integrity manifest host oracle: "
-      "PASS mutations-killed=82\n");
+      "PASS mutations-killed=94\n");
   return 0;
   }
