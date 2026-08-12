@@ -377,7 +377,7 @@ struct SourceAnchor final {
   std::string_view snippet;
   };
 
-static constexpr std::array<SourceAnchor,47> SourceAnchors = {{
+static constexpr std::array<SourceAnchor,51> SourceAnchors = {{
   {"header","MaximumFileCount = 100000u"},
   {"header","MaximumTotalBytes = 16ull*1024ull*1024ull*1024ull"},
   {"header","MaximumFileBytes = 8ull*1024ull*1024ull*1024ull"},
@@ -421,6 +421,10 @@ static constexpr std::array<SourceAnchor,47> SourceAnchors = {{
   {"main","RendererIOSDeviceIntegrity::createCanonicalManifests(\".\")"},
   {"main","RendererIOSDeviceIntegrity::removeCanonicalManifests(\".\")"},
   {"main","RendererIOSDeviceIntegrity::CleanupTerminalMarker.data()"},
+  {"main","std::fprintf(stdout,\"%s\\n\","},
+  {"main","std::fflush(stdout)!=0"},
+  {"main","throw std::runtime_error(\n            \"RendererIOS device integrity cleanup terminal write failed\");\n      return 0;"},
+  {"main","if(integrityArguments.cleanupRequested) {\n      const auto integrity =\n          RendererIOSDeviceIntegrity::removeCanonicalManifests(\".\");\n      if(!integrity.success())\n        throw std::runtime_error(\n            std::string(\"RendererIOS device integrity cleanup failed: \")+\n            RendererIOSDeviceIntegrity::errorName(integrity.error));\n      if(std::fprintf(stdout,\"%s\\n\",\n                      RendererIOSDeviceIntegrity::CleanupTerminalMarker.data())<0 ||\n         std::fflush(stdout)!=0)\n        throw std::runtime_error(\n            \"RendererIOS device integrity cleanup terminal write failed\");\n      return 0;\n      }"},
   {"main","RendererIOSDeviceIntegrity::TerminalMarker.data()"},
   {"cmake","    \"game/*.cpp\")"},
   {"cmake","\"-framework CoreFoundation\""},
@@ -480,7 +484,7 @@ void testSourceMutationOracle() {
       ++mutationsKilled;
       }
     }
-  assert(mutationsKilled==94u);
+  assert(mutationsKilled==102u);
   }
 
 }
@@ -499,6 +503,6 @@ int main() {
   testSourceMutationOracle();
   std::printf(
       "RendererIOS device integrity manifest host oracle: "
-      "PASS mutations-killed=94\n");
+      "PASS mutations-killed=102\n");
   return 0;
   }

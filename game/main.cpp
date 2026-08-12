@@ -263,8 +263,11 @@ int main(int argc,const char** argv) {
         throw std::runtime_error(
             std::string("RendererIOS device integrity cleanup failed: ")+
             RendererIOSDeviceIntegrity::errorName(integrity.error));
-      Tempest::Log::i(
-          RendererIOSDeviceIntegrity::CleanupTerminalMarker.data());
+      if(std::fprintf(stdout,"%s\n",
+                      RendererIOSDeviceIntegrity::CleanupTerminalMarker.data())<0 ||
+         std::fflush(stdout)!=0)
+        throw std::runtime_error(
+            "RendererIOS device integrity cleanup terminal write failed");
       return 0;
       }
     if(integrityArguments.requested) {

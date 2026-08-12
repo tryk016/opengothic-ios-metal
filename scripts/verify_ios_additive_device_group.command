@@ -40,7 +40,7 @@ xcrun --sdk macosx clang++ -std=c++20 \
   -o "$INTEGRITY_BINARY"
 integrity_output="$("$INTEGRITY_BINARY")" || fail "integrity host oracle failed"
 [[ "$integrity_output" == \
-   "RendererIOS device integrity manifest host oracle: PASS mutations-killed=94" ]] ||
+   "RendererIOS device integrity manifest host oracle: PASS mutations-killed=102" ]] ||
   fail "integrity host oracle terminal differs"
 printf '%s\n' "$integrity_output"
 
