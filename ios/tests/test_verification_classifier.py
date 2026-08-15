@@ -85,6 +85,31 @@ class VerificationClassifierTests(unittest.TestCase):
                     result["matches"][0]["rules"],
                 )
 
+    def test_multiply2_vertical_routes_both_causal_profiles(self) -> None:
+        expected = [
+            "contracts",
+            "strict-compile",
+            "build-off",
+            "build-on",
+            "build-additive-a-hdr",
+            "build-additive-b-hdr",
+            "build-multiply2-a-hdr",
+            "build-multiply2-b-hdr",
+        ]
+        for path in (
+            "game/graphics/iosgpuscene.mm",
+            "game/graphics/iosmultiply2inputartifact.cpp",
+            "ios/tests/iosmultiply2runtimecontract.cpp",
+            "scripts/verify_ios_multiply2_gpu.command",
+        ):
+            with self.subTest(path=path):
+                result = self.classify(path)
+                self.assertEqual(result["gates"], expected)
+                self.assertIn(
+                    "p21e2b-multiply2-gpu-vertical",
+                    result["matches"][0]["rules"],
+                )
+
     def test_union_preserves_global_gate_order(self) -> None:
         result = self.classify(
             "game/graphics/iosdevicefactscollector.cpp",

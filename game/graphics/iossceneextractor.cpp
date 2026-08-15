@@ -113,9 +113,9 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   candidate.frameCount = source.material!=nullptr
       ? static_cast<uint64_t>(source.material->frames.size())
       : 0u;
-  candidate.framePeriodMs = source.material!=nullptr
-      ? source.material->texAniFPSInv
-      : 0u;
+  candidate.framePeriodMs = iosSceneFramePeriodMs(
+      hasFrameAnimation,
+      source.material!=nullptr ? source.material->texAniFPSInv : 0u);
   candidate.uvPeriodX = source.material!=nullptr
       ? static_cast<int32_t>(source.material->texAniMapDirPeriod.x)
       : 0;

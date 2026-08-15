@@ -159,12 +159,15 @@ bool validateSources(const Sources& sources,
   expect(!encode.empty(),"native frozen encode source body is missing");
   expect(ordered(encode,{
       "encodePhase(context.prepared->base,context.scene->baseDepthState);",
+      "encodePhase(context.prepared->multiply2,",
+      "context.scene->multiply2DepthState);",
       "encodePhase(context.prepared->additive,",
       "context.scene->additiveDepthState);",
-      }),"one SceneHDR encoder must encode base before additive");
+      }),"one SceneHDR encoder must encode base and Multiply2 before additive");
   expect(countOf(encode,"encodePhase(context.prepared->base")==1u &&
+         countOf(encode,"encodePhase(context.prepared->multiply2")==1u &&
          countOf(encode,"encodePhase(context.prepared->additive")==1u,
-         "frozen encoder must contain exactly two phases");
+         "frozen encoder must contain exactly three phases");
   expect(encode.find("lookupMesh")==std::string_view::npos &&
          encode.find("lookupTexture")==std::string_view::npos &&
          encode.find("snapshot")==std::string_view::npos &&
@@ -260,50 +263,50 @@ bool validateSources(const Sources& sources,
       "          throw std::runtime_error(")!=std::string::npos,
       "native encode failure must latch SafeNoScene before throwing");
   expect(sources.context.find(
-      "else if(!impl->additiveProfileClaimed) {\n"
-      "          impl->additiveProfileClaimed = true;\n"
-      "          frameContext.additiveInput = std::move(frozenAdditiveInput);\n"
-      "          frameContext.additivePreparedSerial = frame.serial;")!=
+      "else if(!impl->emissiveProfileClaimed) {\n"
+      "          impl->emissiveProfileClaimed = true;\n"
+      "          frameContext.emissiveInput = std::move(frozenEmissiveInput);\n"
+      "          frameContext.emissivePreparedSerial = frame.serial;")!=
           std::string::npos,
       "first frozen artifact must be claimed before submit");
 
   const std::string_view oneShot = slice(
       sources.context,
-      "void failAdditiveInput(",
+      "void failEmissiveInput(",
       "static std::array<char,CC_SHA256_DIGEST_LENGTH*2u+1u>");
   expect(!oneShot.empty(),"one-shot terminal helpers are missing");
   expect(oneShot.find(
-      "if(frame.additiveInput && !frame.additiveTerminalReported &&\n"
-      "       !additiveProfileTerminalReported)")!=
+      "if(frame.emissiveInput && !frame.emissiveTerminalReported &&\n"
+      "       !emissiveProfileTerminalReported)")!=
           std::string_view::npos,
       "owned artifact failure must emit at most one terminal");
   expect(oneShot.find(
-      "if(additiveProfileClaimed || additiveProfileTerminalReported)\n"
+      "if(emissiveProfileClaimed || emissiveProfileTerminalReported)\n"
       "      return;")!=std::string_view::npos,
       "later frames must not replace the claimed one-shot path");
   expect(oneShot.find(
-      "additiveProfileClaimed = true;\n"
-      "    additiveProfileTerminalReported = true;\n"
-      "    logAdditiveTerminalFailure(")!=std::string_view::npos,
+      "emissiveProfileClaimed = true;\n"
+      "    emissiveProfileTerminalReported = true;\n"
+      "    logEmissiveTerminalFailure(")!=std::string_view::npos,
       "pre-artifact failure must atomically claim terminal F");
   expect(sources.context.find(
       "for(auto& frame:frames)\n"
-      "      failAdditiveInput(frame,\"gpu\",\"forced-termination\");")!=
+      "      failEmissiveInput(frame,\"gpu\",\"forced-termination\");")!=
           std::string::npos,
       "forced termination must close a claimed artifact with terminal F");
 
   const std::string_view publication = slice(
       sources.context,
-      "bool publishAdditiveInputAfterTerminal(FrameContext& frame) noexcept",
+      "bool publishEmissiveInputAfterTerminal(FrameContext& frame) noexcept",
       "void discardUnsubmittedCommand(");
   expect(!publication.empty(),"terminal publication source body is missing");
   expect(ordered(publication,{
       "iosParseAdditiveInputArtifactV1(",
-      "if(!frame.additivePresentAccepted ||\n"
-      "       !iosAdditiveInputArtifactV1AcceptsPublication(",
-      "view.header,frame.additivePreparedSerial,",
-      "frame.additiveSubmittedSerial,frame.submitted,",
-      "frame.additiveSubmitAccepted,true,true,",
+      "if(!frame.emissivePresentAccepted ||",
+      "!iosAdditiveInputArtifactV1AcceptsPublication(",
+      "view.header,frame.emissivePreparedSerial,",
+      "frame.emissiveSubmittedSerial,frame.submitted,",
+      "frame.emissiveSubmitAccepted,true,true,",
       "frame.linearHDRSequence.identity().targetGeneration,",
       "frame.linearHDRSequence.identity().snapshotSequence",
       "terminal += \" terminal=C\";",
@@ -322,7 +325,7 @@ bool validateSources(const Sources& sources,
   expect(ordered(beginFrame,{
       "materializeLinearHDRProofAfterTerminal(",
       "materializeLinearHDREvidenceAfterTerminal(",
-      "publishAdditiveInputAfterTerminal(frameContext)",
+      "publishEmissiveInputAfterTerminal(frameContext)",
       }),"per-slot publication must follow GPU proof and HDR terminal success");
   const std::string_view settle = slice(
       sources.context,
@@ -332,11 +335,11 @@ bool validateSources(const Sources& sources,
   expect(ordered(settle,{
       "materializeLinearHDREvidenceAfterTerminal(frame,true)",
       "if(presentHealthy)",
-      "publishAdditiveInputAfterTerminal(frame)",
+      "publishEmissiveInputAfterTerminal(frame)",
       }),"confirmed-idle publication must follow terminal success");
 
   expect(sources.context.find(
-      "Log::e(\"RendererIOS additive causal: v=1 mode=\",additiveModeName(),\n"
+      "Log::e(\"RendererIOS additive causal: v=1 mode=\",emissiveModeName(),\n"
       "             \" terminal=F class=\",failureClass,\" reason=\",reason);")!=
           std::string::npos,
       "failure terminal must use the exact fail-closed grammar");
@@ -453,10 +456,8 @@ void testSourceMutations(const Sources& original) {
       "if(report.result!=IOSGPUScene::Result::Success) {\n"
       "          throw std::runtime_error(");
   rejected("additive-before-base",original,&Sources::scene,
-      "encodePhase(context.prepared->base,context.scene->baseDepthState);\n"
-      "    encodePhase(context.prepared->additive,",
-      "encodePhase(context.prepared->additive,context.scene->baseDepthState);\n"
-      "    encodePhase(context.prepared->base,");
+      "encodePhase(context.prepared->base,context.scene->baseDepthState);",
+      "encodePhase(context.prepared->additive,context.scene->baseDepthState);");
   rejected("additive-after-resolve",original,&Sources::context,
       "impl->gpuScene->encodePrepared(encoder,preparedScene)",
       "impl->gpuScene->encodePreparedAfterToneResolve(encoder,preparedScene)");
@@ -470,15 +471,16 @@ void testSourceMutations(const Sources& original) {
       "additiveColor.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;",
       "additiveColor.sourceRGBBlendFactor = MTLBlendFactorZero;");
   rejected("partial-publication",original,&Sources::context,
-      "if(!frame.additivePresentAccepted ||\n"
-      "       !iosAdditiveInputArtifactV1AcceptsPublication(",
-      "if(!frame.additivePresentAccepted &&\n"
-      "       !iosAdditiveInputArtifactV1AcceptsPublication(");
+      "!iosAdditiveInputArtifactV1AcceptsPublication(",
+      "iosAdditiveInputArtifactV1AcceptsPublication(");
+  rejected("publication-without-present",original,&Sources::context,
+      "if(!frame.emissivePresentAccepted ||",
+      "if(false ||");
   rejected("publication-wrong-identity",original,&Sources::context,
       "frame.linearHDRSequence.identity().targetGeneration,",
-      "frame.additiveInput.generation,");
+      "frame.emissiveInput.generation,");
   rejected("one-shot-retry",original,&Sources::context,
-      "else if(!impl->additiveProfileClaimed) {",
+      "else if(!impl->emissiveProfileClaimed) {",
       "else if(true) {");
   rejected("wrong-success-terminal",original,&Sources::context,
       "terminal += \" terminal=C\";",

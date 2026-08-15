@@ -606,11 +606,11 @@ void testSceneMarkerGrammar(
   assertMarkerParts(
       iosGPUSceneMaterialPlannedMarker(counts),
       "RendererIOS native scene material-planned: mode=",modeName,
-      " total=4 opaque=1 alpha=2 additive=1");
+      " total=4 opaque=1 alpha=2 additive=1 multiply2=0");
   assertMarkerParts(
       iosGPUSceneMaterialDrawnMarker(counts),
       "RendererIOS native scene material-drawn: mode=",modeName,
-      " total=4 opaque=1 alpha=2 additive=1 textured=4");
+      " total=4 opaque=1 alpha=2 additive=1 multiply2=0 textured=4");
   assertMarkerParts(
       iosGPUSceneKindPlannedMarker(counts),
       "RendererIOS native scene kind-planned: mode=",modeName,
@@ -909,6 +909,16 @@ IOSGPUSceneMeshCandidate validAdditiveCandidate(float alpha = 0.375f) {
   source.material.baseColor.w = alpha;
   source.material.uvOffset = {};
   source.material.flags = IOSMaterialFlagStaticAdditiveNone;
+  return source;
+  }
+
+IOSGPUSceneMeshCandidate validMultiply2Candidate(float alpha = 0.375f) {
+  auto source = validCandidate();
+  source.entity.kind = IOSSceneMeshKind::Static;
+  source.material.category = IOSMaterialCategory::Multiply2;
+  source.material.baseColor.w = alpha;
+  source.material.uvOffset = {};
+  source.material.flags = IOSMaterialFlagStaticMultiply2None;
   return source;
   }
 
@@ -1424,6 +1434,52 @@ int main() {
   }
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  {
+    IOSGPUSceneMultiply2DrawIdentity identity;
+    assert(makeIOSGPUSceneMultiply2DrawIdentity(
+        3u,1u,7u,8u,9u,10u,12u,30u,
+        IOSGPUScenePipelineSelector::Multiply2,
+        IOSSceneMeshKind::Static,identity));
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A)
+    assert(identity.mode=='a');
+#else
+    assert(identity.mode=='b');
+#endif
+    assert(iosGPUSceneMultiply2DrawIdentityIsValid(identity));
+    const auto drawId = iosGPUSceneMultiply2DrawIdSignpost(identity);
+    const auto drawBind = iosGPUSceneMultiply2DrawBindSignpost(identity);
+    assert(drawId);
+    assert(drawBind);
+    assert(std::string_view(drawId.text.data(),drawId.length)==
+        std::string_view(
+          "RendererIOS multiply2 causal draw-id: v=1 mode="
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A)
+          "a"
+#else
+          "b"
+#endif
+          " generation=3 sequence=1 source=7"));
+    assert(std::string_view(drawBind.text.data(),drawBind.length)==
+        "RendererIOS multiply2 causal draw-bind: src=7 sel=multiply2 "
+        "kind=static tex=10 mesh=8 mat=9 off=12 count=30 "
+        "pso=multiply2 depth=ro target=SceneHDR");
+    auto invalid = identity;
+    invalid.texture = 0u;
+    assert(!iosGPUSceneMultiply2DrawIdentityIsValid(invalid));
+    assert(!iosGPUSceneMultiply2DrawIdSignpost(invalid));
+    assert(!iosGPUSceneMultiply2DrawBindSignpost(invalid));
+    const auto before = identity;
+    assert(!makeIOSGPUSceneMultiply2DrawIdentity(
+        3u,1u,7u,8u,9u,10u,12u,30u,
+        IOSGPUScenePipelineSelector::Additive,
+        IOSSceneMeshKind::Static,identity));
+    assert(identity.mode==before.mode && identity.source==before.source &&
+           identity.texture==before.texture);
+  }
+#endif
+
   {
     auto source = validCandidate();
     source.entity.id.value = MovableSourceId;
@@ -1486,6 +1542,8 @@ int main() {
            IOSGPUScenePipelineSelector::AlphaTest);
     assert(iosGPUScenePipelineSelector(IOSMaterialCategory::Additive)==
            IOSGPUScenePipelineSelector::Additive);
+    assert(iosGPUScenePipelineSelector(IOSMaterialCategory::Multiply2)==
+           IOSGPUScenePipelineSelector::Multiply2);
     assert(iosGPUScenePipelineSelectionMatches(
         IOSMaterialCategory::Opaque,
         IOSGPUScenePipelineSelector::Opaque));
@@ -1495,6 +1553,9 @@ int main() {
     assert(iosGPUScenePipelineSelectionMatches(
         IOSMaterialCategory::Additive,
         IOSGPUScenePipelineSelector::Additive));
+    assert(iosGPUScenePipelineSelectionMatches(
+        IOSMaterialCategory::Multiply2,
+        IOSGPUScenePipelineSelector::Multiply2));
     assert(!iosGPUScenePipelineSelectionMatches(
         IOSMaterialCategory::Opaque,
         IOSGPUScenePipelineSelector::AlphaTest));
@@ -1513,7 +1574,9 @@ int main() {
           std::pair{IOSGPUScenePipelineSelector::AlphaTest,
                     IOSMaterialCategory::AlphaTest},
           std::pair{IOSGPUScenePipelineSelector::Additive,
-                    IOSMaterialCategory::Additive}}) {
+                    IOSMaterialCategory::Additive},
+          std::pair{IOSGPUScenePipelineSelector::Multiply2,
+                    IOSMaterialCategory::Multiply2}}) {
       IOSMaterialCategory category = IOSMaterialCategory::Water;
       assert(iosGPUSceneMaterialCategoryForPipelineSelector(
           entry.first,category));
@@ -1535,18 +1598,27 @@ int main() {
                  vertex,opaqueFragment,alphaTestFragment,
                  additiveFragment)==(mask==15u));
       }
+    for(unsigned mask=0u; mask<16u; ++mask) {
+      const bool opaque = (mask&1u)!=0u;
+      const bool alphaTest = (mask&2u)!=0u;
+      const bool additive = (mask&4u)!=0u;
+      const bool multiply2 = (mask&8u)!=0u;
+      assert(iosGPUSceneProductionPipelineStatesAreAvailable(
+                 opaque,alphaTest,additive,multiply2)==(mask==15u));
+      }
     for(unsigned mask=0u; mask<8u; ++mask) {
       const bool opaque = (mask&1u)!=0u;
       const bool alphaTest = (mask&2u)!=0u;
       const bool additive = (mask&4u)!=0u;
-      assert(iosGPUSceneProductionPipelineStatesAreAvailable(
+      assert(iosGPUSceneInitialPipelineStatesAreAvailable(
                  opaque,alphaTest,additive)==(mask==7u));
       }
-    for(unsigned mask=0u; mask<4u; ++mask) {
+    for(unsigned mask=0u; mask<8u; ++mask) {
       const bool base = (mask&1u)!=0u;
       const bool additive = (mask&2u)!=0u;
+      const bool multiply2 = (mask&4u)!=0u;
       assert(iosGPUSceneProductionDepthStatesAreAvailable(
-                 base,additive)==(mask==3u));
+                 base,additive,multiply2)==(mask==7u));
       }
     for(const auto category:{
           IOSMaterialCategory::Transparent,
@@ -1644,6 +1716,66 @@ int main() {
     fallback.material.usesFallbackTexture = true;
     assert(planIOSGPUSceneDraw(camera,fallback,plan)==
            IOSGPUSceneDrawPlanResult::MissingTexture);
+  }
+
+  {
+    IOSGPUSceneDrawPlan plan;
+    const auto source = validMultiply2Candidate();
+    assert(planIOSGPUSceneDraw(camera,source,plan)==
+           IOSGPUSceneDrawPlanResult::Draw);
+    assert(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2);
+    assert(plan.materialCategory==IOSMaterialCategory::Multiply2);
+    assert(plan.kind==IOSSceneMeshKind::Static);
+    assert(plan.materialFlags==IOSMaterialFlagStaticMultiply2None);
+    assert(plan.constants.baseColor.w==0.375f);
+    assert(plan.constants.uvOffset==IOSFloat2{});
+    assert(!plan.usesFallbackTexture);
+
+    for(const auto kind:{IOSSceneMeshKind::Landscape,
+                         IOSSceneMeshKind::Movable}) {
+      auto invalid = validMultiply2Candidate();
+      invalid.entity.kind = kind;
+      assert(planIOSGPUSceneDraw(camera,invalid,plan)==
+             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+      }
+    auto wrongFlag = validMultiply2Candidate();
+    wrongFlag.material.flags = IOSMaterialFlagStaticAdditiveNone;
+    assert(planIOSGPUSceneDraw(camera,wrongFlag,plan)==
+           IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+    auto missing = validMultiply2Candidate();
+    missing.material.baseColorTexture = {};
+    assert(planIOSGPUSceneDraw(camera,missing,plan)==
+           IOSGPUSceneDrawPlanResult::MissingTexture);
+    auto fallback = validMultiply2Candidate();
+    fallback.material.usesFallbackTexture = true;
+    assert(planIOSGPUSceneDraw(camera,fallback,plan)==
+           IOSGPUSceneDrawPlanResult::MissingTexture);
+    auto nonzeroUv = validMultiply2Candidate();
+    nonzeroUv.material.uvOffset.x = 0.25f;
+    assert(planIOSGPUSceneDraw(camera,nonzeroUv,plan)==
+           IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+    for(const float alpha:{-0.001f,1.001f,
+                           std::numeric_limits<float>::infinity(),
+                           std::numeric_limits<float>::quiet_NaN()}) {
+      const auto invalid = validMultiply2Candidate(alpha);
+      assert(planIOSGPUSceneDraw(camera,invalid,plan)==
+             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+      }
+
+    IOSGPUSceneFrameCounts counts;
+    assert(recordIOSGPUSceneDrawCount(
+        IOSMaterialCategory::Multiply2,IOSSceneMeshKind::Static,
+        false,false,counts.planned)==IOSGPUSceneCountResult::Recorded);
+    IOSGPUSceneDrawDispatch dispatch;
+    assert(recordIOSGPUSceneProductionDrawDispatch(
+        IOSMaterialCategory::Multiply2,IOSSceneMeshKind::Static,
+        false,true,IOSGPUScenePipelineSelector::Multiply2,
+        counts,dispatch)==IOSGPUSceneDrawDispatchResult::Recorded);
+    assert(dispatch.logical==IOSGPUScenePipelineSelector::Multiply2);
+    assert(dispatch.effective==IOSGPUScenePipelineSelector::Multiply2);
+    assert(counts.drawn.material.multiply2==1u);
+    assert(counts.multiply2PsoBinds==1u);
+    assert(iosGPUSceneProductionFrameCountsAreConsistent(counts));
   }
 
   {
@@ -1971,15 +2103,19 @@ int main() {
     assert(recordIOSGPUSceneDrawCount(
         IOSMaterialCategory::Additive,IOSSceneMeshKind::Static,
         false,true,counts)==IOSGPUSceneCountResult::Recorded);
-    assert(counts.material.total==4u);
+    assert(recordIOSGPUSceneDrawCount(
+        IOSMaterialCategory::Multiply2,IOSSceneMeshKind::Static,
+        false,true,counts)==IOSGPUSceneCountResult::Recorded);
+    assert(counts.material.total==5u);
     assert(counts.material.opaque==1u);
     assert(counts.material.alphaTest==2u);
     assert(counts.material.additive==1u);
-    assert(counts.kind.total==4u);
+    assert(counts.material.multiply2==1u);
+    assert(counts.kind.total==5u);
     assert(counts.kind.landscape==1u);
-    assert(counts.kind.staticMeshes==2u);
+    assert(counts.kind.staticMeshes==3u);
     assert(counts.kind.movable==1u);
-    assert(counts.texturedDraws==3u);
+    assert(counts.texturedDraws==4u);
     assert(counts.alphaFallback==1u);
     assert(iosGPUSceneCountsAreConsistent(counts));
 
@@ -2007,6 +2143,10 @@ int main() {
           IOSSceneMeshKind::Movable}) {
       assert(recordIOSGPUSceneDrawCount(
           IOSMaterialCategory::Additive,kind,
+          false,true,counts)==IOSGPUSceneCountResult::UnknownKind);
+      assert(counts==before);
+      assert(recordIOSGPUSceneDrawCount(
+          IOSMaterialCategory::Multiply2,kind,
           false,true,counts)==IOSGPUSceneCountResult::UnknownKind);
       assert(counts==before);
       }
@@ -2249,7 +2389,7 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=additive-a "
-        "total=4 opaque=1 alpha=2 additive=1");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
     assertMarker(
         iosGPUSceneAdditiveMarker(counts),
         "RendererIOS native scene additive: mode=additive-a "
@@ -2263,7 +2403,7 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=additive-b "
-        "total=4 opaque=1 alpha=2 additive=1");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
     assertMarker(
         iosGPUSceneAdditiveMarker(counts),
         "RendererIOS native scene additive: mode=additive-b "
@@ -2271,6 +2411,34 @@ int main() {
     assertMarker(
         iosGPUSceneFailContractMarker(failures),
         "RendererIOS native scene fail-contract: mode=additive-b "
+        "unknown-category=0 unknown-kind=0 invalid-cutoff=0 "
+        "missing-alpha-texture=0");
+#elif defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A)
+    assertMarker(
+        iosGPUSceneIdentityMarker(7u,300u),
+        "RendererIOS native scene identity: mode=multiply2-a "
+        "generation=7 sequence=300");
+    assertMarker(
+        iosGPUSceneMaterialPlannedMarker(counts),
+        "RendererIOS native scene material-planned: mode=multiply2-a "
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+    assertMarker(
+        iosGPUSceneFailContractMarker(failures),
+        "RendererIOS native scene fail-contract: mode=multiply2-a "
+        "unknown-category=0 unknown-kind=0 invalid-cutoff=0 "
+        "missing-alpha-texture=0");
+#elif defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+    assertMarker(
+        iosGPUSceneIdentityMarker(7u,300u),
+        "RendererIOS native scene identity: mode=multiply2-b "
+        "generation=7 sequence=300");
+    assertMarker(
+        iosGPUSceneMaterialPlannedMarker(counts),
+        "RendererIOS native scene material-planned: mode=multiply2-b "
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+    assertMarker(
+        iosGPUSceneFailContractMarker(failures),
+        "RendererIOS native scene fail-contract: mode=multiply2-b "
         "unknown-category=0 unknown-kind=0 invalid-cutoff=0 "
         "missing-alpha-texture=0");
 #else
@@ -2281,11 +2449,11 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=production "
-        "total=4 opaque=1 alpha=2 additive=1");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
     assertMarker(
         iosGPUSceneMaterialDrawnMarker(counts),
         "RendererIOS native scene material-drawn: mode=production "
-        "total=4 opaque=1 alpha=2 additive=1 textured=4");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 textured=4");
     assertMarker(
         iosGPUSceneKindPlannedMarker(counts),
         "RendererIOS native scene kind-planned: mode=production "

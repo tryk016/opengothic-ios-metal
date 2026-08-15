@@ -84,13 +84,15 @@ bool validMaterialCategory(IOSMaterialCategory category) noexcept {
     case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Additive:
     case IOSMaterialCategory::Water:
+    case IOSMaterialCategory::Multiply2:
       return true;
     }
   return false;
   }
 
 bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
-  constexpr uint64_t knownFlags = IOSMaterialFlagStaticAdditiveNone;
+  constexpr uint64_t knownFlags = IOSMaterialFlagStaticAdditiveNone |
+      IOSMaterialFlagStaticMultiply2None;
   if((material.flags&~knownFlags)!=0)
     return false;
   switch(material.category) {
@@ -107,6 +109,12 @@ bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
              material.uvOffset==IOSFloat2{} &&
              material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
              material.flags==IOSMaterialFlagStaticAdditiveNone;
+    case IOSMaterialCategory::Multiply2:
+      return bool(material.baseColorTexture) &&
+             !material.usesFallbackTexture &&
+             material.uvOffset==IOSFloat2{} &&
+             material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
+             material.flags==IOSMaterialFlagStaticMultiply2None;
     case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Water:
       return false;
@@ -267,7 +275,8 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !validRange(entity.morphRange,currentMorphWeights.size()) ||
        !validVisibility(entity.visibilityMask))
       return false;
-    if(material->category==IOSMaterialCategory::Additive &&
+    if((material->category==IOSMaterialCategory::Additive ||
+        material->category==IOSMaterialCategory::Multiply2) &&
        entity.kind!=IOSSceneMeshKind::Static)
       return false;
     if(!historyValid && entity.currentTransform!=entity.previousTransform)
@@ -276,7 +285,8 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
   if(!idsStrictlyIncrease(entities,&IOSRenderEntity::id))
     return false;
   for(const auto& material:materials) {
-    if(material.category==IOSMaterialCategory::Additive &&
+    if((material.category==IOSMaterialCategory::Additive ||
+        material.category==IOSMaterialCategory::Multiply2) &&
        !hasOnlyStaticEntitiesForMaterial(entities,material.id))
       return false;
     }

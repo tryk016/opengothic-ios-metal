@@ -57,6 +57,11 @@ inline constexpr IOSSceneTextureAnimationMode iosSceneTextureAnimationMode(
       : IOSSceneTextureAnimationMode::None;
   }
 
+inline constexpr uint64_t iosSceneFramePeriodMs(
+    bool hasFrameAnimation, uint64_t materialFramePeriodMs) noexcept {
+  return hasFrameAnimation ? materialFramePeriodMs : 0u;
+  }
+
 inline IOSSceneUVOffsetResult evaluateIOSSceneUVOffset(
     uint64_t sceneTimeMs,
     int32_t periodX,
@@ -165,6 +170,7 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     case IOSMaterialCategory::Opaque:
     case IOSMaterialCategory::AlphaTest:
     case IOSMaterialCategory::Additive:
+    case IOSMaterialCategory::Multiply2:
       break;
     case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Water:
@@ -176,17 +182,21 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     return IOSSceneSourcePlanResult::SkippedMaterial;
   const bool isAdditive =
       source.materialCategory==IOSMaterialCategory::Additive;
-  if(isAdditive && source.kind!=IOSSceneMeshKind::Static)
+  const bool isMultiply2 =
+      source.materialCategory==IOSMaterialCategory::Multiply2;
+  if((isAdditive || isMultiply2) &&
+     source.kind!=IOSSceneMeshKind::Static)
     return IOSSceneSourcePlanResult::SkippedMaterial;
-  if(isAdditive &&
+  if((isAdditive || isMultiply2) &&
      textureAnimation!=IOSSceneTextureAnimationMode::None)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;
   const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
   if(source.hasUvAnimation!=periodsHaveUv)
     return IOSSceneSourcePlanResult::InvalidSource;
-  if(isAdditive &&
+  if((isAdditive || isMultiply2) &&
      (!source.hasBaseColorTexture || source.usesFallbackTexture ||
       source.hasValidFrameSequence || source.frameCount!=0 ||
+      source.framePeriodMs!=0 ||
       !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
       source.alphaWeight>1.f))
     return IOSSceneSourcePlanResult::InvalidSource;
@@ -255,9 +265,12 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.localBounds       = source.localBounds;
   out.indices           = source.indices;
   out.materialCategory  = source.materialCategory;
-  out.baseColorAlpha    = isAdditive ? source.alphaWeight : 1.f;
+  out.baseColorAlpha    = (isAdditive || isMultiply2)
+      ? source.alphaWeight : 1.f;
   out.materialFlags     = isAdditive
       ? IOSMaterialFlagStaticAdditiveNone
+      : isMultiply2
+      ? IOSMaterialFlagStaticMultiply2None
       : IOSMaterialFlagNone;
   out.visibilityMask    = IOSSceneVisibilityMain;
   out.textureAnimation  = textureAnimation;

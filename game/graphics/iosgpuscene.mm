@@ -4,6 +4,10 @@
     defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
 #include "iosadditiveinputartifact.h"
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+#include "iosmultiply2inputartifact.h"
+#endif
 #include "iosgpusceneplan.h"
 #include "ioslandscapeshaderabi.h"
 #include "iossceneassetregistry.h"
@@ -21,7 +25,9 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
     defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
-    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
 #include <crt_externs.h>
 #endif
 
@@ -102,6 +108,18 @@ const std::array<std::string_view,3>
     };
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A)
+constexpr std::string_view IOSGPUSceneMultiply2Mode = "multiply2-a-hdr";
+__attribute__((used,retain))
+const char IOSGPUSceneMultiply2BinaryContract[] =
+    "RIOS_MULTIPLY2_CAUSAL_MODE=multiply2-a-hdr";
+#elif defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+constexpr std::string_view IOSGPUSceneMultiply2Mode = "multiply2-b-hdr";
+__attribute__((used,retain))
+const char IOSGPUSceneMultiply2BinaryContract[] =
+    "RIOS_MULTIPLY2_CAUSAL_MODE=multiply2-b-hdr";
+#endif
+
 #if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
 #if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A)
@@ -137,6 +155,35 @@ bool iosGPUSceneAdditiveArgumentsAccepted() noexcept {
       continue;
     if(argument.substr(IOSGPUSceneAdditiveArgumentPrefix.size())!=
        IOSGPUSceneAdditiveMode)
+      return false;
+    ++matching;
+    }
+  return matching==1u;
+  }
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+constexpr std::string_view IOSGPUSceneMultiply2ArgumentPrefix =
+    "-renderer-ios-multiply2-causal-mode=";
+
+bool iosGPUSceneMultiply2ArgumentsAccepted() noexcept {
+  const int* countAddress = _NSGetArgc();
+  char*** vectorAddress = _NSGetArgv();
+  if(countAddress==nullptr || vectorAddress==nullptr ||
+     *vectorAddress==nullptr || *countAddress<1)
+    return false;
+  const char* const* arguments =
+      const_cast<const char* const*>(*vectorAddress);
+  std::size_t matching = 0u;
+  for(int index=1; index<*countAddress; ++index) {
+    if(arguments[index]==nullptr)
+      return false;
+    const std::string_view argument(arguments[index]);
+    if(!argument.starts_with(IOSGPUSceneMultiply2ArgumentPrefix))
+      continue;
+    if(argument.substr(IOSGPUSceneMultiply2ArgumentPrefix.size())!=
+       IOSGPUSceneMultiply2Mode)
       return false;
     ++matching;
     }
@@ -442,7 +489,9 @@ struct IOSGPUSceneNativePreparedDraw final {
   id                  indexBuffer = nil;
   id                  baseColorTexture = nil;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
-    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
   OwnedObjectiveC     drawId;
   OwnedObjectiveC     drawBind;
 #endif
@@ -478,6 +527,51 @@ bool materializeReportMarkers(
         return bool(marker);
         });
   return report.markersReady;
+  }
+
+template<class Animation>
+bool emissiveArtifactAnimation(
+    IOSTextureHandle selectedTexture,
+    const IOSFrameAnimationEvidence* frameAnimation,
+    const IOSUVAnimationEvidence* uvAnimation,
+    Animation& output) noexcept {
+  const IOSFrameAnimationSelection* frame = nullptr;
+  if(frameAnimation!=nullptr) {
+    for(const auto& selection:frameAnimation->selections) {
+      if(selection.selectedHandle!=selectedTexture)
+        continue;
+      if(frame!=nullptr)
+        return false;
+      frame = &selection;
+      }
+    }
+  const IOSUVAnimationSelection* uv = nullptr;
+  if(uvAnimation!=nullptr) {
+    for(const auto& selection:uvAnimation->selections) {
+      if(selection.selectedHandle!=selectedTexture)
+        continue;
+      if(uv!=nullptr)
+        return false;
+      uv = &selection;
+      }
+    }
+  if(frame!=nullptr && uv!=nullptr)
+    return false;
+  if(frame!=nullptr) {
+    output = Animation::FrameOnly;
+    return true;
+    }
+  if(uv!=nullptr) {
+    if(uv->mode==IOSSceneTextureAnimationMode::UvOnly)
+      output = Animation::UvOnly;
+    else if(uv->mode==IOSSceneTextureAnimationMode::FrameAndUv)
+      output = Animation::FrameAndUv;
+    else
+      return false;
+    return true;
+    }
+  output = Animation::None;
+  return true;
   }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
@@ -535,57 +629,12 @@ bool additiveArtifactCategory(
     case IOSMaterialCategory::Additive:
       output = IOSAdditiveInputCategory::Additive;
       return true;
+    case IOSMaterialCategory::Multiply2:
     case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Water:
       return false;
     }
   return false;
-  }
-
-bool additiveArtifactAnimation(
-    uint64_t sourceId,
-    const IOSFrameAnimationEvidence* frameAnimation,
-    const IOSUVAnimationEvidence* uvAnimation,
-    IOSAdditiveInputAnimation& output) noexcept {
-  const IOSFrameAnimationSelection* frame = nullptr;
-  if(frameAnimation!=nullptr) {
-    const auto found = std::lower_bound(
-        frameAnimation->selections.begin(),frameAnimation->selections.end(),
-        sourceId,
-        [](const IOSFrameAnimationSelection& selection, uint64_t value) {
-          return selection.sourceId<value;
-          });
-    if(found!=frameAnimation->selections.end() && found->sourceId==sourceId)
-      frame = &*found;
-    }
-  const IOSUVAnimationSelection* uv = nullptr;
-  if(uvAnimation!=nullptr) {
-    const auto found = std::lower_bound(
-        uvAnimation->selections.begin(),uvAnimation->selections.end(),
-        sourceId,
-        [](const IOSUVAnimationSelection& selection, uint64_t value) {
-          return selection.sourceId<value;
-          });
-    if(found!=uvAnimation->selections.end() && found->sourceId==sourceId)
-      uv = &*found;
-    }
-  if(frame!=nullptr && uv!=nullptr)
-    return false;
-  if(frame!=nullptr) {
-    output = IOSAdditiveInputAnimation::FrameOnly;
-    return true;
-    }
-  if(uv!=nullptr) {
-    if(uv->mode==IOSSceneTextureAnimationMode::UvOnly)
-      output = IOSAdditiveInputAnimation::UvOnly;
-    else if(uv->mode==IOSSceneTextureAnimationMode::FrameAndUv)
-      output = IOSAdditiveInputAnimation::FrameAndUv;
-    else
-      return false;
-    return true;
-    }
-  output = IOSAdditiveInputAnimation::None;
-  return true;
   }
 
 bool makeAdditiveArtifactRecord(
@@ -620,11 +669,98 @@ bool makeAdditiveArtifactRecord(
          texture.metadata.format,record.textureFormat) ||
      !additiveArtifactKind(plan.kind,record.kind) ||
      !additiveArtifactCategory(plan.materialCategory,record.category) ||
-     !additiveArtifactAnimation(
-         entity.id.value,frameAnimation,uvAnimation,record.animation))
+     !emissiveArtifactAnimation(
+         plan.baseColorTexture,frameAnimation,uvAnimation,record.animation))
     return false;
   std::memcpy(record.constants.data(),&plan.constants,
               sizeof(plan.constants));
+  output = record;
+  return true;
+  }
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+bool makeMultiply2ArtifactRecord(
+    const IOSRenderEntity& entity,
+    const IOSGPUSceneDrawPlan& plan,
+    const IOSSceneMeshAsset& mesh,
+    const IOSSceneTextureAsset& texture,
+    const IOSFrameAnimationEvidence* frameAnimation,
+    const IOSUVAnimationEvidence* uvAnimation,
+    IOSMultiply2InputRecordV1& output) noexcept {
+  static_assert(sizeof(IOSGPUSceneDrawConstants)==
+                IOSMultiply2InputV1ConstantsBytes);
+  IOSMultiply2InputRecordV1 record;
+  record.sourceId = entity.id.value;
+  record.meshId = entity.mesh.value;
+  record.materialId = entity.material.value;
+  record.textureId = plan.baseColorTexture.value;
+  record.indexByteOffset = static_cast<uint64_t>(plan.indexBufferOffset);
+  record.indexCount = static_cast<uint64_t>(plan.indexCount);
+  record.vertexBufferBytes =
+      static_cast<uint64_t>(mesh.metadata.vertexBufferByteSize);
+  record.indexBufferBytes =
+      static_cast<uint64_t>(mesh.metadata.indexBufferByteSize);
+  record.materialFlags = plan.materialFlags;
+  record.vertexStride = static_cast<uint32_t>(mesh.metadata.vertexStride);
+  record.textureWidth = texture.metadata.width;
+  record.textureHeight = texture.metadata.height;
+  record.textureMipCount = texture.metadata.mipCount;
+  switch(texture.metadata.format) {
+    case IOSSceneTextureFormat::Rgba8Unorm:
+      record.textureFormat = IOSMultiply2InputTextureFormat::Rgba8Unorm;
+      break;
+    case IOSSceneTextureFormat::Bc1Rgba:
+      record.textureFormat = IOSMultiply2InputTextureFormat::Bc1Rgba;
+      break;
+    case IOSSceneTextureFormat::Bc2Rgba:
+      record.textureFormat = IOSMultiply2InputTextureFormat::Bc2Rgba;
+      break;
+    case IOSSceneTextureFormat::Bc3Rgba:
+      record.textureFormat = IOSMultiply2InputTextureFormat::Bc3Rgba;
+      break;
+    case IOSSceneTextureFormat::Invalid:
+      return false;
+    }
+  switch(plan.kind) {
+    case IOSSceneMeshKind::Landscape:
+      record.kind = IOSMultiply2InputKind::Landscape;
+      break;
+    case IOSSceneMeshKind::Static:
+      record.kind = IOSMultiply2InputKind::Static;
+      break;
+    case IOSSceneMeshKind::Movable:
+      record.kind = IOSMultiply2InputKind::Movable;
+      break;
+    case IOSSceneMeshKind::Unsupported:
+      return false;
+    }
+  switch(plan.materialCategory) {
+    case IOSMaterialCategory::Opaque:
+      record.category = IOSMultiply2InputCategory::Opaque;
+      record.phase = IOSMultiply2InputPhase::Base;
+      break;
+    case IOSMaterialCategory::AlphaTest:
+      record.category = IOSMultiply2InputCategory::AlphaTest;
+      record.phase = IOSMultiply2InputPhase::Base;
+      break;
+    case IOSMaterialCategory::Multiply2:
+      record.category = IOSMultiply2InputCategory::Multiply2;
+      record.phase = IOSMultiply2InputPhase::Multiply2;
+      break;
+    case IOSMaterialCategory::Additive:
+    case IOSMaterialCategory::Transparent:
+    case IOSMaterialCategory::Water:
+      return false;
+  }
+  if(!emissiveArtifactAnimation(
+       plan.baseColorTexture,frameAnimation,uvAnimation,record.animation))
+    return false;
+  std::memcpy(record.constants.data(),&plan.constants,sizeof(plan.constants));
+  if(iosValidateMultiply2InputRecordV1(record)!=
+     IOSMultiply2InputArtifactError::None)
+    return false;
   output = record;
   return true;
   }
@@ -635,9 +771,11 @@ bool makeAdditiveArtifactRecord(
 struct IOSGPUScene::PreparedFrame::Impl final {
   const void* owner = nullptr;
   std::vector<IOSGPUSceneNativePreparedDraw> base;
+  std::vector<IOSGPUSceneNativePreparedDraw> multiply2;
   std::vector<IOSGPUSceneNativePreparedDraw> additive;
   IOSGPUScene::Report report;
   IOSGPUScene::AdditiveInputArtifact additiveInput;
+  IOSGPUScene::Multiply2InputArtifact multiply2Input;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
   IOSGPUSceneCausalFrameRoute causalRoute =
@@ -647,6 +785,8 @@ struct IOSGPUScene::PreparedFrame::Impl final {
   uint64_t targetOrdinal = 0u;
 #endif
   bool nativeCompleted = false;
+  bool nativeBaseMultiplyCompleted = false;
+  bool nativeAdditiveCompleted = false;
   bool nativeException = false;
   bool ready = false;
   };
@@ -656,6 +796,7 @@ struct IOSGPUScene::Impl final {
     Impl*                    scene = nullptr;
     PreparedFrame::Impl*     prepared = nullptr;
     IOSGPUScene::Report      report;
+    uint8_t                  phase = 0u;
     };
 
   static void encodeLandscape(void* opaque,
@@ -670,6 +811,18 @@ struct IOSGPUScene::Impl final {
 
   Impl(Tempest::Device& owner, TargetLayout target)
     : owner(owner), nativeDevice(Tempest::MetalApi::borrowDevice(owner)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+    if(!iosGPUSceneMultiply2ArgumentsAccepted()) {
+      Tempest::Log::e(
+          "RendererIOS multiply2 causal: v=1 mode=",
+          IOSGPUSceneMultiply2Mode,
+          " terminal=F class=contract reason=launch-argument");
+      initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
+      emissiveTerminalReported = true;
+      return;
+      }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
     if(!iosGPUSceneAdditiveArgumentsAccepted()) {
@@ -678,7 +831,7 @@ struct IOSGPUScene::Impl final {
           IOSGPUSceneAdditiveMode,
           " terminal=F class=contract reason=launch-argument");
       initializationResult = IOSGPUScene::Result::NativeEncodingFailed;
-      additiveTerminalReported = true;
+      emissiveTerminalReported = true;
       return;
       }
 #endif
@@ -1005,7 +1158,7 @@ struct IOSGPUScene::Impl final {
               MTLPipelineOptionBufferTypeInfo)
                                             reflection:&additivePipelineReflection
                                                  error:&additivePipelineError]);
-      if(!iosGPUSceneProductionPipelineStatesAreAvailable(
+      if(!iosGPUSceneInitialPipelineStatesAreAvailable(
              opaquePipelineOwner.get()!=nil,
              alphaTestPipelineOwner.get()!=nil,
              additivePipelineOwner.get()!=nil) ||
@@ -1032,6 +1185,53 @@ struct IOSGPUScene::Impl final {
         return;
         }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+      additiveColor.sourceRGBBlendFactor = MTLBlendFactorZero;
+#else
+      additiveColor.sourceRGBBlendFactor = MTLBlendFactorDestinationColor;
+#endif
+      additiveColor.destinationRGBBlendFactor = MTLBlendFactorSourceColor;
+      additiveColor.rgbBlendOperation = MTLBlendOperationAdd;
+      additiveColor.sourceAlphaBlendFactor = MTLBlendFactorDestinationColor;
+      additiveColor.destinationAlphaBlendFactor = MTLBlendFactorSourceColor;
+      additiveColor.alphaBlendOperation = MTLBlendOperationAdd;
+      NSError* multiply2PipelineError = nil;
+      MTLRenderPipelineReflection* multiply2PipelineReflection = nil;
+      OwnedObjectiveC multiply2PipelineOwner(
+          [device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                               options:(
+              MTLPipelineOptionBindingInfo |
+              MTLPipelineOptionBufferTypeInfo)
+                                            reflection:&multiply2PipelineReflection
+                                                 error:&multiply2PipelineError]);
+      if(!iosGPUSceneProductionPipelineStatesAreAvailable(
+             opaquePipelineOwner.get()!=nil,
+             alphaTestPipelineOwner.get()!=nil,
+             additivePipelineOwner.get()!=nil,
+             multiply2PipelineOwner.get()!=nil) ||
+         !drawConstantsReflectionMatches(multiply2PipelineReflection)) {
+        if(multiply2PipelineOwner.get()==nil)
+          Tempest::Log::e(
+            metalFailure(
+                "RendererIOS IOSGPUScene initialization: "
+                "result=pipeline-unavailable reason=multiply2-pso",
+                multiply2PipelineError));
+        else
+          Tempest::Log::e(
+              "RendererIOS IOSGPUScene initialization: "
+              "result=pipeline-unavailable "
+              "reason=multiply2-draw-constants-reflection");
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+        failCausal(
+            0u,0u,
+            IOSGPUSceneCausalFailureReason::PipelinePreflight);
+        initializationResult =
+            IOSGPUScene::Result::NativeEncodingFailed;
+#endif
+        return;
+        }
+
       OwnedObjectiveC depthDescriptor(
           [[MTLDepthStencilDescriptor alloc] init]);
       MTLDepthStencilDescriptor* depthDesc =
@@ -1043,8 +1243,11 @@ struct IOSGPUScene::Impl final {
       depthDesc.depthWriteEnabled = NO;
       OwnedObjectiveC additiveDepthOwner(
           [device newDepthStencilStateWithDescriptor:depthDesc]);
+      OwnedObjectiveC multiply2DepthOwner(
+          [device newDepthStencilStateWithDescriptor:depthDesc]);
       if(!iosGPUSceneProductionDepthStatesAreAvailable(
-             depthOwner.get()!=nil,additiveDepthOwner.get()!=nil)) {
+             depthOwner.get()!=nil,additiveDepthOwner.get()!=nil,
+             multiply2DepthOwner.get()!=nil)) {
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
         failCausal(
@@ -1094,8 +1297,10 @@ struct IOSGPUScene::Impl final {
       opaquePipelineState    = opaquePipelineOwner.relinquish();
       alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
       additivePipelineState  = additivePipelineOwner.relinquish();
+      multiply2PipelineState = multiply2PipelineOwner.relinquish();
       baseDepthState         = depthOwner.relinquish();
       additiveDepthState     = additiveDepthOwner.relinquish();
+      multiply2DepthState    = multiply2DepthOwner.relinquish();
       samplerState           = samplerOwner.relinquish();
       initializationResult   = IOSGPUScene::Result::Success;
       }
@@ -1112,8 +1317,10 @@ struct IOSGPUScene::Impl final {
           IOSGPUSceneCausalFailureReason::TargetNotObserved);
 #endif
     [samplerState release];
+    [multiply2DepthState release];
     [additiveDepthState release];
     [baseDepthState release];
+    [multiply2PipelineState release];
     [additivePipelineState release];
     [alphaTestPipelineState release];
     [opaquePipelineState release];
@@ -1124,13 +1331,15 @@ struct IOSGPUScene::Impl final {
   id                               opaquePipelineState = nil;
   id                               alphaTestPipelineState = nil;
   id                               additivePipelineState = nil;
+  id                               multiply2PipelineState = nil;
   id                               baseDepthState = nil;
   id                               additiveDepthState = nil;
+  id                               multiply2DepthState = nil;
   id                               samplerState = nil;
   IOSGPUScene::Result              initializationResult =
       IOSGPUScene::Result::PipelineUnavailable;
   NativeTextureValidationCache     textureValidation;
-  bool                              additiveTerminalReported = false;
+  bool                              emissiveTerminalReported = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
   IOSGPUSceneCausalRuntimeState     causalState;
@@ -1173,6 +1382,8 @@ void IOSGPUScene::Impl::encodeLandscape(
 
   id<MTLRenderCommandEncoder> encoder =
       (id<MTLRenderCommandEncoder>)(void*)nativeEncoder;
+  context.report.encodedPhaseDrawCount = 0u;
+  context.report.encodedPhaseTexturedDrawCount = 0u;
   const auto restoreEncoderState = [&]() {
     [encoder setFragmentTexture:nil atIndex:0u];
     [encoder setFragmentSamplerState:nil atIndex:0u];
@@ -1197,8 +1408,19 @@ void IOSGPUScene::Impl::encodeLandscape(
                            atIndex:0u];
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
-      if(context.prepared->causalRoute==
-           IOSGPUSceneCausalFrameRoute::Target) {
+      const bool emitDrawSignposts =
+          context.prepared->causalRoute==
+              IOSGPUSceneCausalFrameRoute::Target;
+#elif defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+      defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+      const bool emitDrawSignposts =
+          draw.drawId.get()!=nil && draw.drawBind.get()!=nil;
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+      if(emitDrawSignposts) {
         [encoder insertDebugSignpost:(NSString*)draw.drawId.get()];
         [encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];
         }
@@ -1211,6 +1433,9 @@ void IOSGPUScene::Impl::encodeLandscape(
                        instanceCount:1u
                           baseVertex:0
                         baseInstance:0u];
+      ++context.report.encodedPhaseDrawCount;
+      if(draw.baseColorTexture!=nil)
+        ++context.report.encodedPhaseTexturedDrawCount;
       }
     };
 
@@ -1220,12 +1445,29 @@ void IOSGPUScene::Impl::encodeLandscape(
     [encoder setFragmentSamplerState:
         (id<MTLSamplerState>)context.scene->samplerState
                             atIndex:0u];
-    encodePhase(context.prepared->base,context.scene->baseDepthState);
-    encodePhase(context.prepared->additive,
-                context.scene->additiveDepthState);
+    if(context.phase==0u || context.phase==1u) {
+      encodePhase(context.prepared->base,context.scene->baseDepthState);
+      encodePhase(context.prepared->multiply2,
+                  context.scene->multiply2DepthState);
+      context.prepared->nativeBaseMultiplyCompleted = true;
+      }
+    if(context.phase==0u || context.phase==2u) {
+      encodePhase(context.prepared->additive,
+                  context.scene->additiveDepthState);
+      context.prepared->nativeAdditiveCompleted = true;
+      }
     restoreEncoderState();
-    context.prepared->nativeCompleted = true;
+    context.prepared->nativeCompleted =
+        context.prepared->nativeBaseMultiplyCompleted &&
+        context.prepared->nativeAdditiveCompleted;
+    const uint64_t encodedPhaseDrawCount =
+        context.report.encodedPhaseDrawCount;
+    const uint64_t encodedPhaseTexturedDrawCount =
+        context.report.encodedPhaseTexturedDrawCount;
     context.report = context.prepared->report;
+    context.report.encodedPhaseDrawCount = encodedPhaseDrawCount;
+    context.report.encodedPhaseTexturedDrawCount =
+        encodedPhaseTexturedDrawCount;
     }
   @catch(NSException* exception) {
     (void)exception;
@@ -1247,7 +1489,7 @@ bool IOSGPUScene::pipelinesReady() const noexcept {
   }
 
 bool IOSGPUScene::additiveTerminalFailureReported() const noexcept {
-  return impl!=nullptr && impl->additiveTerminalReported;
+  return impl!=nullptr && impl->emissiveTerminalReported;
   }
 
 IOSGPUScene::PreparedFrame::PreparedFrame() noexcept = default;
@@ -1268,6 +1510,17 @@ IOSGPUScene::AdditiveInputArtifact
   IOSGPUScene::AdditiveInputArtifact result =
       std::move(impl->additiveInput);
   impl->additiveInput = {};
+  return result;
+  }
+
+IOSGPUScene::Multiply2InputArtifact
+    IOSGPUScene::PreparedFrame::takeMultiply2InputArtifact() noexcept {
+  if(impl==nullptr || !impl->ready || impl->nativeException ||
+     impl->report.result!=IOSGPUScene::Result::Success)
+    return {};
+  IOSGPUScene::Multiply2InputArtifact result =
+      std::move(impl->multiply2Input);
+  impl->multiply2Input = {};
   return result;
   }
 
@@ -1297,9 +1550,11 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
   if(!iosGPUSceneProductionPipelineStatesAreAvailable(
          impl->opaquePipelineState!=nil,
          impl->alphaTestPipelineState!=nil,
-         impl->additivePipelineState!=nil) ||
+         impl->additivePipelineState!=nil,
+         impl->multiply2PipelineState!=nil) ||
      !iosGPUSceneProductionDepthStatesAreAvailable(
-         impl->baseDepthState!=nil,impl->additiveDepthState!=nil) ||
+         impl->baseDepthState!=nil,impl->additiveDepthState!=nil,
+         impl->multiply2DepthState!=nil) ||
      impl->samplerState==nil) {
     report.result = Result::PipelineUnavailable;
     recordFailure(report.failures.psoUnavailable,report);
@@ -1377,6 +1632,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     candidateFrame->causalPrepared = causalPrepared;
 #endif
     candidateFrame->base.reserve(snapshot.entities.size());
+    candidateFrame->multiply2.reserve(snapshot.entities.size());
     candidateFrame->additive.reserve(snapshot.entities.size());
 #if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
@@ -1384,6 +1640,13 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     std::vector<IOSAdditiveInputRecordV1> additiveRecords;
     baseRecords.reserve(snapshot.entities.size());
     additiveRecords.reserve(snapshot.entities.size());
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+    std::vector<IOSMultiply2InputRecordV1> multiply2BaseRecords;
+    std::vector<IOSMultiply2InputRecordV1> multiply2Records;
+    multiply2BaseRecords.reserve(snapshot.entities.size());
+    multiply2Records.reserve(1u);
 #endif
 
     for(const auto& entity:snapshot.entities) {
@@ -1492,6 +1755,10 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
           pipelineState =
               (id<MTLRenderPipelineState>)impl->additivePipelineState;
           break;
+        case IOSGPUScenePipelineSelector::Multiply2:
+          pipelineState =
+              (id<MTLRenderPipelineState>)impl->multiply2PipelineState;
+          break;
         case IOSGPUScenePipelineSelector::Unsupported:
           break;
         }
@@ -1586,23 +1853,93 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         }
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+      if(plan.pipeline!=IOSGPUScenePipelineSelector::Additive) {
+        IOSGPUSceneMultiply2DrawIdentity identity;
+        if(!makeIOSGPUSceneMultiply2DrawIdentity(
+               targetGeneration,snapshot.sequence.value,
+               entity.id.value,entity.mesh.value,entity.material.value,
+               plan.baseColorTexture.value,
+               static_cast<uint64_t>(plan.indexBufferOffset),
+               static_cast<uint64_t>(plan.indexCount),
+               plan.pipeline,plan.kind,identity)) {
+          report.result = Result::NativeEncodingFailed;
+          report.failingHandle = entity.id.value;
+          recordFailure(report.failures.nativeEncode,report);
+          return report;
+          }
+        const IOSGPUSceneMarker drawId =
+            iosGPUSceneMultiply2DrawIdSignpost(identity);
+        const IOSGPUSceneMarker drawBind =
+            iosGPUSceneMultiply2DrawBindSignpost(identity);
+        if(!drawId || !drawBind) {
+          report.result = Result::NativeEncodingFailed;
+          report.failingHandle = entity.id.value;
+          recordFailure(report.failures.nativeEncode,report);
+          return report;
+          }
+        OwnedObjectiveC multiply2DrawId(
+            [[NSString alloc]
+                initWithBytes:drawId.text.data()
+                       length:drawId.length
+                     encoding:NSUTF8StringEncoding]);
+        OwnedObjectiveC multiply2DrawBind(
+            [[NSString alloc]
+                initWithBytes:drawBind.text.data()
+                       length:drawBind.length
+                     encoding:NSUTF8StringEncoding]);
+        if(multiply2DrawId.get()==nil || multiply2DrawBind.get()==nil) {
+          report.result = Result::NativeEncodingFailed;
+          report.failingHandle = entity.id.value;
+          recordFailure(report.failures.nativeEncode,report);
+          return report;
+          }
+        draw.drawId = std::move(multiply2DrawId);
+        draw.drawBind = std::move(multiply2DrawBind);
+        }
+#endif
+
 #if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B)
-      IOSAdditiveInputRecordV1 artifactRecord;
-      if(!makeAdditiveArtifactRecord(
-             entity,plan,*mesh,*texture,frameAnimation,uvAnimation,
-             artifactRecord)) {
-        report.result = Result::AnimationEvidenceMismatch;
-        report.failingHandle = entity.id.value;
-        return report;
+      if(plan.pipeline!=IOSGPUScenePipelineSelector::Multiply2) {
+        IOSAdditiveInputRecordV1 artifactRecord;
+        if(!makeAdditiveArtifactRecord(
+               entity,plan,*mesh,*texture,frameAnimation,uvAnimation,
+               artifactRecord)) {
+          report.result = Result::AnimationEvidenceMismatch;
+          report.failingHandle = entity.id.value;
+          return report;
+          }
+        if(plan.pipeline==IOSGPUScenePipelineSelector::Additive)
+          additiveRecords.emplace_back(std::move(artifactRecord));
+        else
+          baseRecords.emplace_back(std::move(artifactRecord));
+      }
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+      if(plan.pipeline==IOSGPUScenePipelineSelector::Opaque ||
+         plan.pipeline==IOSGPUScenePipelineSelector::AlphaTest ||
+         plan.pipeline==IOSGPUScenePipelineSelector::Multiply2) {
+        IOSMultiply2InputRecordV1 artifactRecord;
+        if(!makeMultiply2ArtifactRecord(
+               entity,plan,*mesh,*texture,frameAnimation,uvAnimation,
+               artifactRecord)) {
+          report.result = Result::AnimationEvidenceMismatch;
+          report.failingHandle = entity.id.value;
+          return report;
+          }
+        if(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2)
+          multiply2Records.emplace_back(std::move(artifactRecord));
+        else
+          multiply2BaseRecords.emplace_back(std::move(artifactRecord));
         }
-      if(plan.pipeline==IOSGPUScenePipelineSelector::Additive)
-        additiveRecords.emplace_back(std::move(artifactRecord));
-      else
-        baseRecords.emplace_back(std::move(artifactRecord));
 #endif
       if(plan.pipeline==IOSGPUScenePipelineSelector::Additive)
         candidateFrame->additive.emplace_back(std::move(draw));
+      else if(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2)
+        candidateFrame->multiply2.emplace_back(std::move(draw));
       else
         candidateFrame->base.emplace_back(std::move(draw));
       }
@@ -1649,7 +1986,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
             IOSGPUSceneCausalFailureReason::MissingAlphaTestDraw);
       const uint64_t preparedDraws =
           static_cast<uint64_t>(candidateFrame->base.size())+
-          static_cast<uint64_t>(candidateFrame->additive.size());
+          static_cast<uint64_t>(candidateFrame->additive.size())+
+          static_cast<uint64_t>(candidateFrame->multiply2.size());
       if(!iosGPUSceneCausalPreparationIsValid(
              causalPrepared,causalRoute,report.counts,
              preparedDraws,candidateFrame->targetOrdinal,
@@ -1704,6 +2042,31 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     candidateFrame->additiveInput.sequence = snapshot.sequence.value;
     candidateFrame->additiveInput.mode = IOSGPUSceneAdditiveModeLeaf;
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+    if(targetGeneration==0u) {
+      report.result = Result::NativeEncodingFailed;
+      recordFailure(report.failures.nativeEncode,report);
+      return report;
+      }
+    std::vector<std::byte> multiply2Artifact;
+    if(iosBuildMultiply2InputArtifactV1(
+           targetGeneration,snapshot.sequence.value,
+           multiply2BaseRecords,multiply2Records,multiply2Artifact)!=
+       IOSMultiply2InputArtifactError::None) {
+      report.result = Result::NativeEncodingFailed;
+      recordFailure(report.failures.nativeEncode,report);
+      return report;
+      }
+    candidateFrame->multiply2Input.bytes = std::move(multiply2Artifact);
+    candidateFrame->multiply2Input.generation = targetGeneration;
+    candidateFrame->multiply2Input.sequence = snapshot.sequence.value;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A)
+    candidateFrame->multiply2Input.mode = 'a';
+#else
+    candidateFrame->multiply2Input.mode = 'b';
+#endif
+#endif
     candidateFrame->report = report;
     candidateFrame->ready = true;
     prepared.impl = std::move(candidateFrame);
@@ -1726,7 +2089,38 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
 IOSGPUScene::Report IOSGPUScene::encodePrepared(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,
     PreparedFrame& prepared) noexcept {
+  return encodePreparedPhase(encoder,prepared,0u);
+  }
+
+IOSGPUScene::Report IOSGPUScene::encodePreparedThroughMultiply2(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    PreparedFrame& prepared) noexcept {
+  return encodePreparedPhase(encoder,prepared,1u);
+  }
+
+IOSGPUScene::Report IOSGPUScene::encodePreparedAdditive(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    PreparedFrame& prepared) noexcept {
+  return encodePreparedPhase(encoder,prepared,2u);
+  }
+
+IOSGPUScene::Report IOSGPUScene::encodePreparedPhase(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    PreparedFrame& prepared,
+    uint8_t phase) noexcept {
   Report report = makeReport(Result::NativeEncodingFailed);
+  if(phase>2u ||
+     (phase==0u && prepared.impl!=nullptr &&
+      (prepared.impl->nativeBaseMultiplyCompleted ||
+       prepared.impl->nativeAdditiveCompleted)) ||
+     (phase==1u && prepared.impl!=nullptr &&
+      prepared.impl->nativeBaseMultiplyCompleted) ||
+     (phase==2u && (prepared.impl==nullptr ||
+      !prepared.impl->nativeBaseMultiplyCompleted ||
+      prepared.impl->nativeAdditiveCompleted))) {
+    recordFailure(report.failures.nativeEncode,report);
+    return report;
+    }
   if(impl==nullptr || prepared.impl==nullptr ||
      prepared.impl->owner!=impl.get() || !prepared.impl->ready) {
     recordFailure(report.failures.nativeEncode,report);
@@ -1737,6 +2131,7 @@ IOSGPUScene::Report IOSGPUScene::encodePrepared(
   context.scene = impl.get();
   context.prepared = prepared.impl.get();
   context.report = report;
+  context.phase = phase;
   try {
     const bool encoded = Tempest::MetalApi::withActiveRenderEncoder(
         impl->owner,encoder,&context,&Impl::encodeLandscape);
@@ -1778,8 +2173,10 @@ IOSGPUScene::Report IOSGPUScene::encodePrepared(
     return context.report;
     }
 
-  if(prepared.impl->nativeException ||
-     !prepared.impl->nativeCompleted ||
+  const bool phaseCompleted = phase==1u
+      ? prepared.impl->nativeBaseMultiplyCompleted
+      : prepared.impl->nativeCompleted;
+  if(prepared.impl->nativeException || !phaseCompleted ||
      context.report.result!=Result::Success) {
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -1797,11 +2194,15 @@ IOSGPUScene::Report IOSGPUScene::encodePrepared(
     return context.report;
     }
 
+  if(phase==1u)
+    return context.report;
+
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
   const uint64_t drawCount =
       static_cast<uint64_t>(prepared.impl->base.size())+
-      static_cast<uint64_t>(prepared.impl->additive.size());
+      static_cast<uint64_t>(prepared.impl->additive.size())+
+      static_cast<uint64_t>(prepared.impl->multiply2.size());
   IOSGPUSceneCausalRuntimeState committed;
   const bool target =
       prepared.impl->causalRoute==IOSGPUSceneCausalFrameRoute::Target;

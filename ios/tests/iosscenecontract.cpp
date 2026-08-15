@@ -201,7 +201,9 @@ int main() {
   static_assert(!std::is_move_constructible_v<IOSRenderWorld>);
   static_assert(static_cast<uint8_t>(IOSSceneMeshKind::Static)==2u);
   static_assert(static_cast<uint8_t>(IOSMaterialCategory::Additive)==3u);
+  static_assert(static_cast<uint8_t>(IOSMaterialCategory::Multiply2)==5u);
   static_assert(IOSMaterialFlagStaticAdditiveNone==(uint64_t(1) << 0u));
+  static_assert(IOSMaterialFlagStaticMultiply2None==(uint64_t(1) << 1u));
   static_assert(std::is_standard_layout_v<IOSMaterial>);
 
   IOSMatrix4x4 matrixLayout;
@@ -601,6 +603,29 @@ int main() {
   auto orphanedAdditive = additive;
   orphanedAdditive.entities.clear();
   assert(!orphanedAdditive.isStructurallyValid());
+
+  auto multiply2 = additive;
+  multiply2.materials[0].category = IOSMaterialCategory::Multiply2;
+  multiply2.materials[0].flags = IOSMaterialFlagStaticMultiply2None;
+  assert(multiply2.isStructurallyValid());
+  auto multiplyWrongFlag = multiply2;
+  multiplyWrongFlag.materials[0].flags = IOSMaterialFlagStaticAdditiveNone;
+  assert(!multiplyWrongFlag.isStructurallyValid());
+  auto multiplyFallback = multiply2;
+  multiplyFallback.materials[0].usesFallbackTexture = true;
+  assert(!multiplyFallback.isStructurallyValid());
+  auto multiplyUv = multiply2;
+  multiplyUv.materials[0].uvOffset.y = 0.25f;
+  assert(!multiplyUv.isStructurallyValid());
+  auto multiplyMissingTexture = multiply2;
+  multiplyMissingTexture.materials[0].baseColorTexture = {};
+  assert(!multiplyMissingTexture.isStructurallyValid());
+  for(const auto kind:{IOSSceneMeshKind::Landscape,
+                       IOSSceneMeshKind::Movable}) {
+    auto invalid = multiply2;
+    invalid.entities[0].kind = kind;
+    assert(!invalid.isStructurallyValid());
+    }
 
   for(const auto kind:{
         IOSSceneMeshKind::Landscape,

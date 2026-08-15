@@ -23,6 +23,8 @@ PROFILE_OUTPUTS = {
     "build_forward": "build-forward",
     "build_additive_a_hdr": "build-additive-a-hdr",
     "build_additive_b_hdr": "build-additive-b-hdr",
+    "build_multiply2_a_hdr": "build-multiply2-a-hdr",
+    "build_multiply2_b_hdr": "build-multiply2-b-hdr",
 }
 RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
 
@@ -252,6 +254,8 @@ def aggregate(
     expected_sha: str = "",
     additive_a: Optional[Mapping[str, str]] = None,
     additive_b: Optional[Mapping[str, str]] = None,
+    multiply2_a: Optional[Mapping[str, str]] = None,
+    multiply2_b: Optional[Mapping[str, str]] = None,
 ) -> None:
     if validate_result(classifier_result, "classifier") != "success":
         raise CIVerificationError(
@@ -316,6 +320,44 @@ def aggregate(
             raise CIVerificationError("Additive A/B metallib hashes differ")
         if additive_a["binary_sha256"] == additive_b["binary_sha256"]:
             raise CIVerificationError("Additive A/B Mach-O hashes are equal")
+    multiply2_required = expected.get("build_multiply2_a_hdr", False)
+    if multiply2_required != expected.get("build_multiply2_b_hdr", False):
+        raise CIVerificationError("Multiply2 A/B CI jobs are not required together")
+    if multiply2_required:
+        if not is_sha(expected_sha):
+            raise CIVerificationError("exact workflow SHA is invalid")
+        if multiply2_a is None or multiply2_b is None:
+            raise CIVerificationError("Multiply2 A/B profile outputs are missing")
+        exact_keys = {
+            "profile", "parent_sha", "tempest_sha", "metallib_sha256",
+            "binary_sha256", "multiply2_mode", "binary_marker",
+        }
+        if set(multiply2_a) != exact_keys or set(multiply2_b) != exact_keys:
+            raise CIVerificationError("Multiply2 A/B profile output keys drifted")
+        expected_values = (
+            (multiply2_a, "multiply2-a-hdr", "causal-a"),
+            (multiply2_b, "multiply2-b-hdr", "causal-b"),
+        )
+        for values, profile, mode in expected_values:
+            if values["profile"] != profile:
+                raise CIVerificationError(f"{profile} identity output drifted")
+            if values["multiply2_mode"] != mode:
+                raise CIVerificationError(f"{profile} mode output drifted")
+            if values["binary_marker"] != f"RIOS_MULTIPLY2_CAUSAL_MODE={profile}":
+                raise CIVerificationError(f"{profile} binary marker output drifted")
+            if values["parent_sha"] != expected_sha:
+                raise CIVerificationError(f"{profile} parent SHA is not exact")
+            if not is_sha(values["tempest_sha"]):
+                raise CIVerificationError(f"{profile} Tempest SHA is invalid")
+            for digest_name in ("metallib_sha256", "binary_sha256"):
+                if not is_sha256(values[digest_name]):
+                    raise CIVerificationError(f"{profile} {digest_name} is invalid")
+        if multiply2_a["tempest_sha"] != multiply2_b["tempest_sha"]:
+            raise CIVerificationError("Multiply2 A/B Tempest SHAs differ")
+        if multiply2_a["metallib_sha256"] != multiply2_b["metallib_sha256"]:
+            raise CIVerificationError("Multiply2 A/B metallib hashes differ")
+        if multiply2_a["binary_sha256"] == multiply2_b["binary_sha256"]:
+            raise CIVerificationError("Multiply2 A/B Mach-O hashes are equal")
 
 
 def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -342,6 +384,12 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
             aggregate_parser.add_argument(
                 f"--{profile}-{field}", default=""
             )
+    for profile in ("multiply2-a", "multiply2-b"):
+        for field in (
+            "profile", "parent-sha", "tempest-sha", "metallib-sha256",
+            "binary-sha256", "multiply2-mode", "binary-marker",
+        ):
+            aggregate_parser.add_argument(f"--{profile}-{field}", default="")
     return parser.parse_args(argv)
 
 
@@ -386,6 +434,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 arguments.expected_sha,
                 profile_outputs("additive_a"),
                 profile_outputs("additive_b"),
+                {
+                    field: getattr(arguments, f"multiply2_a_{field}")
+                    for field in (
+                        "profile", "parent_sha", "tempest_sha",
+                        "metallib_sha256", "binary_sha256",
+                        "multiply2_mode", "binary_marker",
+                    )
+                },
+                {
+                    field: getattr(arguments, f"multiply2_b_{field}")
+                    for field in (
+                        "profile", "parent_sha", "tempest_sha",
+                        "metallib_sha256", "binary_sha256",
+                        "multiply2_mode", "binary_marker",
+                    )
+                },
             )
             print("RendererIOS required CI gates passed")
         return 0

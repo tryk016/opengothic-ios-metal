@@ -113,6 +113,8 @@ def validate_workflow(source: str) -> None:
         "build-forward",
         "build-additive-a-hdr",
         "build-additive-b-hdr",
+        "build-multiply2-a-hdr",
+        "build-multiply2-b-hdr",
         "required",
     )
     lines = source.splitlines()
@@ -135,7 +137,9 @@ def validate_workflow(source: str) -> None:
         "if: needs.classifier.outputs.build_forward == 'true'",
         "if: needs.classifier.outputs.build_additive_a_hdr == 'true'",
         "if: needs.classifier.outputs.build_additive_b_hdr == 'true'",
-        "needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr]",
+        "if: needs.classifier.outputs.build_multiply2_a_hdr == 'true'",
+        "if: needs.classifier.outputs.build_multiply2_b_hdr == 'true'",
+        "needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr, build-multiply2-a-hdr, build-multiply2-b-hdr]",
         "if: always()",
         "scripts/ci_verification.py aggregate",
         "--classifier-result \"${{ needs.classifier.result }}\"",
@@ -153,12 +157,20 @@ def validate_workflow(source: str) -> None:
         "--result-build-additive-a-hdr \"${{ needs.build-additive-a-hdr.result }}\"",
         "--expected-build-additive-b-hdr \"${{ needs.classifier.outputs.build_additive_b_hdr }}\"",
         "--result-build-additive-b-hdr \"${{ needs.build-additive-b-hdr.result }}\"",
+        "--expected-build-multiply2-a-hdr \"${{ needs.classifier.outputs.build_multiply2_a_hdr }}\"",
+        "--result-build-multiply2-a-hdr \"${{ needs.build-multiply2-a-hdr.result }}\"",
+        "--expected-build-multiply2-b-hdr \"${{ needs.classifier.outputs.build_multiply2_b_hdr }}\"",
+        "--result-build-multiply2-b-hdr \"${{ needs.build-multiply2-b-hdr.result }}\"",
         "--additive-a-metallib-sha256 \"${{ needs.build-additive-a-hdr.outputs.metallib_sha256 }}\"",
         "--additive-b-metallib-sha256 \"${{ needs.build-additive-b-hdr.outputs.metallib_sha256 }}\"",
         "--additive-a-binary-sha256 \"${{ needs.build-additive-a-hdr.outputs.binary_sha256 }}\"",
         "--additive-b-binary-sha256 \"${{ needs.build-additive-b-hdr.outputs.binary_sha256 }}\"",
         "--additive-a-binary-marker \"${{ needs.build-additive-a-hdr.outputs.binary_marker }}\"",
         "--additive-b-binary-marker \"${{ needs.build-additive-b-hdr.outputs.binary_marker }}\"",
+        "--multiply2-a-metallib-sha256 \"${{ needs.build-multiply2-a-hdr.outputs.metallib_sha256 }}\"",
+        "--multiply2-b-metallib-sha256 \"${{ needs.build-multiply2-b-hdr.outputs.metallib_sha256 }}\"",
+        "--multiply2-a-binary-sha256 \"${{ needs.build-multiply2-a-hdr.outputs.binary_sha256 }}\"",
+        "--multiply2-b-binary-sha256 \"${{ needs.build-multiply2-b-hdr.outputs.binary_sha256 }}\"",
     )
     for fragment in required_fragments:
         if source.count(fragment) != 1:
@@ -172,6 +184,8 @@ def validate_workflow(source: str) -> None:
         ("build-forward", "build_forward", "forward"),
         ("build-additive-a-hdr", "build_additive_a_hdr", "additive-a-hdr"),
         ("build-additive-b-hdr", "build_additive_b_hdr", "additive-b-hdr"),
+        ("build-multiply2-a-hdr", "build_multiply2_a_hdr", "multiply2-a-hdr"),
+        ("build-multiply2-b-hdr", "build_multiply2_b_hdr", "multiply2-b-hdr"),
     ):
         scope = workflow_job(source, job)
         required_job_lines = (
@@ -284,7 +298,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         'marker_b = prefix + b"additive-b-hdr"',
         r'candidate.count(expected + b"\0") != 1',
         r'binary.replace(expected + b"\0", expected + b"X", 1)',
-        '"RendererIOS Additive binary marker oracle: profile="',
+        '"RendererIOS blend binary marker oracle: profile="',
         'raise SystemExit("Additive binary marker mutation survived")',
     ):
         if profile.count(profile_binary_oracle) != 1:
@@ -606,6 +620,8 @@ def validate_additive_device_group_policy(payload: dict) -> None:
                 "build_forward": False,
                 "build_additive_a_hdr": True,
                 "build_additive_b_hdr": True,
+                "build_multiply2_a_hdr": False,
+                "build_multiply2_b_hdr": False,
             }:
                 raise ValueError(f"CI job routing drifted for {path}")
 
@@ -794,6 +810,8 @@ def validate_cmake_presets(
         "renderer-ios-hdr-triple",
         "renderer-ios-additive-a-hdr",
         "renderer-ios-additive-b-hdr",
+        "renderer-ios-multiply2-a-hdr",
+        "renderer-ios-multiply2-b-hdr",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -814,6 +832,7 @@ def validate_cmake_presets(
         "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
@@ -900,6 +919,34 @@ def validate_cmake_presets(
         if preset.get("cacheVariables") != expected_additive_cache:
             raise ValueError(f"{name} Additive causal HDR tuple drifted")
 
+    multiply2_tuple = {
+        "multiply2-a-hdr": "causal-a",
+        "multiply2-b-hdr": "causal-b",
+    }
+    for name, mode in multiply2_tuple.items():
+        preset = configure_by_name[f"renderer-ios-{name}"]
+        if preset.get("inherits") != "renderer-ios-base":
+            raise ValueError(f"{name} does not inherit the shared base")
+        if preset.get("binaryDir") != "${sourceDir}/build/local-renderer-ios-" + name:
+            raise ValueError(f"{name} public binaryDir drifted")
+        if preset.get("environment") != {"PACKAGE_DEVICE_IPA": "0"}:
+            raise ValueError(f"{name} package tuple drifted")
+        expected_multiply2_cache = {
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+            "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE": mode,
+            "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON",
+        }
+        if preset.get("cacheVariables") != expected_multiply2_cache:
+            raise ValueError(f"{name} Multiply2 causal HDR tuple drifted")
+
     causal_tuple = {
         "causal-none": "none",
         "causal-a": "causal-a",
@@ -948,6 +995,8 @@ def validate_cmake_presets(
         "renderer-ios-hdr-triple",
         "renderer-ios-additive-a-hdr",
         "renderer-ios-additive-b-hdr",
+        "renderer-ios-multiply2-a-hdr",
+        "renderer-ios-multiply2-b-hdr",
         "renderer-ios-causal-none",
         "renderer-ios-causal-a",
         "renderer-ios-causal-b",
@@ -1380,6 +1429,8 @@ def test_classification() -> None:
         "build_forward": True,
         "build_additive_a_hdr": True,
         "build_additive_b_hdr": True,
+        "build_multiply2_a_hdr": True,
+        "build_multiply2_b_hdr": True,
     }
 
     narrow = {
@@ -1394,6 +1445,8 @@ def test_classification() -> None:
         "build_forward": False,
         "build_additive_a_hdr": False,
         "build_additive_b_hdr": False,
+        "build_multiply2_a_hdr": False,
+        "build_multiply2_b_hdr": False,
     }
     assert CI.required_jobs({"gates": ["policy-contracts"]}) == {
         "contracts": False,
@@ -1403,6 +1456,8 @@ def test_classification() -> None:
         "build_forward": False,
         "build_additive_a_hdr": False,
         "build_additive_b_hdr": False,
+        "build_multiply2_a_hdr": False,
+        "build_multiply2_b_hdr": False,
     }
     expect_error(lambda: CI.required_jobs({"gates": []}))
     expect_error(lambda: CI.required_jobs({"gates": ["full", "build-off"]}))
@@ -1458,6 +1513,8 @@ def test_aggregation() -> None:
         "build_forward": False,
         "build_additive_a_hdr": False,
         "build_additive_b_hdr": False,
+        "build_multiply2_a_hdr": False,
+        "build_multiply2_b_hdr": False,
     }
     passing = {
         "contracts": "success",
@@ -1467,6 +1524,8 @@ def test_aggregation() -> None:
         "build_forward": "skipped",
         "build_additive_a_hdr": "skipped",
         "build_additive_b_hdr": "skipped",
+        "build_multiply2_a_hdr": "skipped",
+        "build_multiply2_b_hdr": "skipped",
     }
     CI.aggregate("success", expected, passing)
     expect_error(lambda: CI.aggregate("failure", expected, passing))
@@ -1522,6 +1581,34 @@ def test_aggregation() -> None:
             "success", additive_expected, additive_passing,
             exact_sha, additive_a, mutant,
         ))
+
+    multiply2_expected = dict(expected)
+    multiply2_expected["build_multiply2_a_hdr"] = True
+    multiply2_expected["build_multiply2_b_hdr"] = True
+    multiply2_passing = dict(passing)
+    multiply2_passing["build_multiply2_a_hdr"] = "success"
+    multiply2_passing["build_multiply2_b_hdr"] = "success"
+    multiply2_a = {
+        "profile": "multiply2-a-hdr", "parent_sha": exact_sha,
+        "tempest_sha": "2" * 40, "metallib_sha256": "3" * 64,
+        "binary_sha256": "6" * 64, "multiply2_mode": "causal-a",
+        "binary_marker": "RIOS_MULTIPLY2_CAUSAL_MODE=multiply2-a-hdr",
+    }
+    multiply2_b = {
+        "profile": "multiply2-b-hdr", "parent_sha": exact_sha,
+        "tempest_sha": "2" * 40, "metallib_sha256": "3" * 64,
+        "binary_sha256": "7" * 64, "multiply2_mode": "causal-b",
+        "binary_marker": "RIOS_MULTIPLY2_CAUSAL_MODE=multiply2-b-hdr",
+    }
+    CI.aggregate(
+        "success", multiply2_expected, multiply2_passing, exact_sha,
+        None, None, multiply2_a, multiply2_b,
+    )
+    mutant = dict(multiply2_b, binary_sha256=multiply2_a["binary_sha256"])
+    expect_error(lambda: CI.aggregate(
+        "success", multiply2_expected, multiply2_passing, exact_sha,
+        None, None, multiply2_a, mutant,
+    ))
 
 
 def test_workflow_contract() -> None:

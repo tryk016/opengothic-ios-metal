@@ -607,10 +607,11 @@ bool runtimeReflectionContractMatches(
   constexpr std::string_view ReflectionOptions =
       "options:(MTLPipelineOptionBindingInfo|"
       "MTLPipelineOptionBufferTypeInfo)";
-  return countOccurrences(source,ReflectionOptions)==3u &&
+  return countOccurrences(source,ReflectionOptions)==4u &&
       countOccurrences(source,"reflection:&opaquePipelineReflection")==1u &&
       countOccurrences(source,"reflection:&alphaTestPipelineReflection")==1u &&
       countOccurrences(source,"reflection:&additivePipelineReflection")==1u &&
+      countOccurrences(source,"reflection:&multiply2PipelineReflection")==1u &&
       countOccurrences(
           source,"drawConstantsReflectionMatches(opaquePipelineReflection)")==
           1u &&
@@ -620,6 +621,9 @@ bool runtimeReflectionContractMatches(
       countOccurrences(
           source,
           "drawConstantsReflectionMatches(additivePipelineReflection)")==1u &&
+      countOccurrences(
+          source,
+          "drawConstantsReflectionMatches(multiply2PipelineReflection)")==1u &&
       countOccurrences(source,"binding.index!=NSUInteger(1u)")==1u &&
       countOccurrences(source,"!binding.used")==1u &&
       countOccurrences(source,"!binding.argument")==1u &&

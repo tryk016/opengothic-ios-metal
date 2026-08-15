@@ -81,6 +81,8 @@ jobs:
       build_forward: ${{ steps.route.outputs.build_forward }}
       build_additive_a_hdr: ${{ steps.route.outputs.build_additive_a_hdr }}
       build_additive_b_hdr: ${{ steps.route.outputs.build_additive_b_hdr }}
+      build_multiply2_a_hdr: ${{ steps.route.outputs.build_multiply2_a_hdr }}
+      build_multiply2_b_hdr: ${{ steps.route.outputs.build_multiply2_b_hdr }}
     steps:
       - name: Checkout full push history
         uses: actions/checkout@v4
@@ -278,9 +280,63 @@ jobs:
           IOS_VERSION: 1.0.${{ github.run_number }}
         run: scripts/ci_build_profile.command additive-b-hdr
 
+  build-multiply2-a-hdr:
+    name: iOS Release Multiply2 A HDR capture
+    needs: [classifier, contracts]
+    if: needs.classifier.outputs.build_multiply2_a_hdr == 'true'
+    runs-on: macos-15
+    outputs:
+      profile: ${{ steps.build.outputs.profile }}
+      parent_sha: ${{ steps.build.outputs.parent_sha }}
+      tempest_sha: ${{ steps.build.outputs.tempest_sha }}
+      metallib_sha256: ${{ steps.build.outputs.metallib_sha256 }}
+      binary_sha256: ${{ steps.build.outputs.binary_sha256 }}
+      multiply2_mode: ${{ steps.build.outputs.multiply2_mode }}
+      binary_marker: ${{ steps.build.outputs.binary_marker }}
+    steps:
+      - name: Checkout exact SHA with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install build prerequisites
+        run: brew install cmake glslang ripgrep
+      - name: Build and verify exact Multiply2 A HDR profile
+        id: build
+        env:
+          IOS_VERSION: 1.0.${{ github.run_number }}
+        run: scripts/ci_build_profile.command multiply2-a-hdr
+
+  build-multiply2-b-hdr:
+    name: iOS Release Multiply2 B HDR capture
+    needs: [classifier, contracts]
+    if: needs.classifier.outputs.build_multiply2_b_hdr == 'true'
+    runs-on: macos-15
+    outputs:
+      profile: ${{ steps.build.outputs.profile }}
+      parent_sha: ${{ steps.build.outputs.parent_sha }}
+      tempest_sha: ${{ steps.build.outputs.tempest_sha }}
+      metallib_sha256: ${{ steps.build.outputs.metallib_sha256 }}
+      binary_sha256: ${{ steps.build.outputs.binary_sha256 }}
+      multiply2_mode: ${{ steps.build.outputs.multiply2_mode }}
+      binary_marker: ${{ steps.build.outputs.binary_marker }}
+    steps:
+      - name: Checkout exact SHA with submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install build prerequisites
+        run: brew install cmake glslang ripgrep
+      - name: Build and verify exact Multiply2 B HDR profile
+        id: build
+        env:
+          IOS_VERSION: 1.0.${{ github.run_number }}
+        run: scripts/ci_build_profile.command multiply2-b-hdr
+
   required:
     name: RendererIOS required gates
-    needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr]
+    needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr, build-multiply2-a-hdr, build-multiply2-b-hdr]
     if: always()
     runs-on: macos-15
     steps:
@@ -306,6 +362,10 @@ jobs:
             --result-build-additive-a-hdr "${{ needs.build-additive-a-hdr.result }}" \
             --expected-build-additive-b-hdr "${{ needs.classifier.outputs.build_additive_b_hdr }}" \
             --result-build-additive-b-hdr "${{ needs.build-additive-b-hdr.result }}" \
+            --expected-build-multiply2-a-hdr "${{ needs.classifier.outputs.build_multiply2_a_hdr }}" \
+            --result-build-multiply2-a-hdr "${{ needs.build-multiply2-a-hdr.result }}" \
+            --expected-build-multiply2-b-hdr "${{ needs.classifier.outputs.build_multiply2_b_hdr }}" \
+            --result-build-multiply2-b-hdr "${{ needs.build-multiply2-b-hdr.result }}" \
             --additive-a-profile "${{ needs.build-additive-a-hdr.outputs.profile }}" \
             --additive-a-parent-sha "${{ needs.build-additive-a-hdr.outputs.parent_sha }}" \
             --additive-a-tempest-sha "${{ needs.build-additive-a-hdr.outputs.tempest_sha }}" \
@@ -319,4 +379,18 @@ jobs:
             --additive-b-metallib-sha256 "${{ needs.build-additive-b-hdr.outputs.metallib_sha256 }}" \
             --additive-b-binary-sha256 "${{ needs.build-additive-b-hdr.outputs.binary_sha256 }}" \
             --additive-b-additive-mode "${{ needs.build-additive-b-hdr.outputs.additive_mode }}" \
-            --additive-b-binary-marker "${{ needs.build-additive-b-hdr.outputs.binary_marker }}"
+            --additive-b-binary-marker "${{ needs.build-additive-b-hdr.outputs.binary_marker }}" \
+            --multiply2-a-profile "${{ needs.build-multiply2-a-hdr.outputs.profile }}" \
+            --multiply2-a-parent-sha "${{ needs.build-multiply2-a-hdr.outputs.parent_sha }}" \
+            --multiply2-a-tempest-sha "${{ needs.build-multiply2-a-hdr.outputs.tempest_sha }}" \
+            --multiply2-a-metallib-sha256 "${{ needs.build-multiply2-a-hdr.outputs.metallib_sha256 }}" \
+            --multiply2-a-binary-sha256 "${{ needs.build-multiply2-a-hdr.outputs.binary_sha256 }}" \
+            --multiply2-a-multiply2-mode "${{ needs.build-multiply2-a-hdr.outputs.multiply2_mode }}" \
+            --multiply2-a-binary-marker "${{ needs.build-multiply2-a-hdr.outputs.binary_marker }}" \
+            --multiply2-b-profile "${{ needs.build-multiply2-b-hdr.outputs.profile }}" \
+            --multiply2-b-parent-sha "${{ needs.build-multiply2-b-hdr.outputs.parent_sha }}" \
+            --multiply2-b-tempest-sha "${{ needs.build-multiply2-b-hdr.outputs.tempest_sha }}" \
+            --multiply2-b-metallib-sha256 "${{ needs.build-multiply2-b-hdr.outputs.metallib_sha256 }}" \
+            --multiply2-b-binary-sha256 "${{ needs.build-multiply2-b-hdr.outputs.binary_sha256 }}" \
+            --multiply2-b-multiply2-mode "${{ needs.build-multiply2-b-hdr.outputs.multiply2_mode }}" \
+            --multiply2-b-binary-marker "${{ needs.build-multiply2-b-hdr.outputs.binary_marker }}"

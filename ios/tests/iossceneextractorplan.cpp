@@ -211,6 +211,9 @@ void validatePublicContract() {
          IOSSceneTextureAnimationMode::UvOnly);
   assert(iosSceneTextureAnimationMode(true,true)==
          IOSSceneTextureAnimationMode::FrameAndUv);
+  assert(iosSceneFramePeriodMs(false,1u)==0u);
+  assert(iosSceneFramePeriodMs(false,0u)==0u);
+  assert(iosSceneFramePeriodMs(true,10u)==10u);
 
   using Extract = IOSSceneExtractionReport (IOSSceneExtractor::*)(
       const IOSSceneSourceProvider&,const Tempest::Device&,IOSRenderWorld&,
@@ -242,14 +245,62 @@ void validatePublicContract() {
           IOSSceneMaterialMapping{IOSMaterialCategory::AlphaTest,true}));
   assert((iosSceneMaterialMapping(Material::AdditiveLight)==
           IOSSceneMaterialMapping{IOSMaterialCategory::Additive,true}));
+  assert((iosSceneMaterialMapping(Material::Multiply2)==
+          IOSSceneMaterialMapping{IOSMaterialCategory::Multiply2,true}));
   for(const auto alpha:{
         Material::Water,
         Material::Ghost,
         Material::Multiply,
-        Material::Multiply2,
         Material::Transparent,
         static_cast<Material::AlphaFunc>(255u)}) {
     assert(iosSceneMaterialMapping(alpha)==IOSSceneMaterialMapping{});
+    }
+  }
+
+void validateStaticMultiply2NoneAdmission() {
+  auto multiply2 = candidate(
+      IOSSceneMeshKind::Static,IOSMaterialCategory::Multiply2);
+  multiply2.alphaWeight = 0.375f;
+  IOSSceneOpaqueMeshPlan plan;
+  assert(planIOSOpaqueMeshSource(multiply2,plan)==
+         IOSSceneSourcePlanResult::Planned);
+  assert(plan.kind==IOSSceneMeshKind::Static);
+  assert(plan.materialCategory==IOSMaterialCategory::Multiply2);
+  assert(plan.textureAnimation==IOSSceneTextureAnimationMode::None);
+  assert(plan.baseColorAlpha==0.375f);
+  assert(plan.materialFlags==IOSMaterialFlagStaticMultiply2None);
+  assert(!plan.usesFallbackTexture);
+  assert(plan.uvOffset==IOSFloat2{});
+
+  for(const auto kind:{IOSSceneMeshKind::Landscape,
+                       IOSSceneMeshKind::Movable}) {
+    auto invalid = multiply2;
+    invalid.kind = kind;
+    assert(planIOSOpaqueMeshSource(invalid,plan)==
+           IOSSceneSourcePlanResult::SkippedMaterial);
+    }
+  auto animated = multiply2;
+  animated.hasFrameAnimation = true;
+  animated.hasValidFrameSequence = true;
+  animated.frameCount = 2u;
+  animated.framePeriodMs = 10u;
+  assert(planIOSOpaqueMeshSource(animated,plan)==
+         IOSSceneSourcePlanResult::SkippedTextureAnimation);
+  auto missing = multiply2;
+  missing.hasBaseColorTexture = false;
+  assert(planIOSOpaqueMeshSource(missing,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  auto fallback = multiply2;
+  fallback.usesFallbackTexture = true;
+  assert(planIOSOpaqueMeshSource(fallback,plan)==
+         IOSSceneSourcePlanResult::InvalidSource);
+  for(const float alpha:{-0.001f,1.001f,
+                         std::numeric_limits<float>::infinity(),
+                         std::numeric_limits<float>::quiet_NaN()}) {
+    auto invalid = multiply2;
+    invalid.alphaWeight = alpha;
+    assert(planIOSOpaqueMeshSource(invalid,plan)==
+           IOSSceneSourcePlanResult::InvalidSource);
     }
   }
 
@@ -1824,6 +1875,7 @@ int main() {
 #endif
   validatePublicContract();
   validateStaticAdditiveNoneAdmission();
+  validateStaticMultiply2NoneAdmission();
   validateFrameSelection();
   validateUVOffsetEvaluation();
   validateFrameAnimationEvidence();

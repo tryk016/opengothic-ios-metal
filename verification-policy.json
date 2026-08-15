@@ -14,6 +14,8 @@
     "build-forward",
     "build-additive-a-hdr",
     "build-additive-b-hdr",
+    "build-multiply2-a-hdr",
+    "build-multiply2-b-hdr",
     "full"
   ],
   "riskOrder": [
@@ -272,6 +274,39 @@
         "build-on"
       ],
       "reason": "changed diagnostics-only Additive source census or its simulator adapter"
+    },
+    {
+      "id": "p21e2b-multiply2-gpu-vertical",
+      "risk": "shared-runtime",
+      "paths": [
+        "game/graphics/iosgpuscene.h",
+        "game/graphics/iosgpuscene.mm",
+        "game/graphics/iosgpusceneplan.h",
+        "game/graphics/iosmetalcontext.cpp",
+        "game/graphics/iosmultiply2inputartifact.h",
+        "game/graphics/iosmultiply2inputartifact.cpp",
+        "game/graphics/iossceneextractor.h",
+        "game/graphics/iossceneextractorplan.h",
+        "game/graphics/iosscenesnapshot.h",
+        "game/graphics/iosscenesnapshot.cpp",
+        "ios/tests/iosmultiply2inputartifact.cpp",
+        "ios/tests/iosmultiply2runtimecontract.cpp",
+        "ios/tests/iosgpusceneplan.cpp",
+        "ios/tests/iosscenecontract.cpp",
+        "ios/tests/iossceneextractorplan.cpp",
+        "scripts/verify_ios_multiply2_gpu.command"
+      ],
+      "gates": [
+        "contracts",
+        "strict-compile",
+        "build-off",
+        "build-on",
+        "build-additive-a-hdr",
+        "build-additive-b-hdr",
+        "build-multiply2-a-hdr",
+        "build-multiply2-b-hdr"
+      ],
+      "reason": "changed P2.1e2b Static/None Multiply2 GPU vertical"
     },
     {
       "id": "renderer-ios-runtime",

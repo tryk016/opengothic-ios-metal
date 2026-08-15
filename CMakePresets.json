@@ -20,6 +20,7 @@
         "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
@@ -120,6 +121,48 @@
         "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
         "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "causal-b",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON"
+      }
+    },
+    {
+      "name": "renderer-ios-multiply2-a-hdr",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-multiply2-a-hdr",
+      "environment": {
+        "PACKAGE_DEVICE_IPA": "0"
+      },
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE": "causal-a",
+        "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": "ON"
+      }
+    },
+    {
+      "name": "renderer-ios-multiply2-b-hdr",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-multiply2-b-hdr",
+      "environment": {
+        "PACKAGE_DEVICE_IPA": "0"
+      },
+      "cacheVariables": {
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE": "causal-b",
         "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": "OFF",
         "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": "OFF",
@@ -259,6 +302,30 @@
     {
       "name": "renderer-ios-additive-b-hdr",
       "configurePreset": "renderer-ios-additive-b-hdr",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-multiply2-a-hdr",
+      "configurePreset": "renderer-ios-multiply2-a-hdr",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-multiply2-b-hdr",
+      "configurePreset": "renderer-ios-multiply2-b-hdr",
       "configuration": "Release",
       "nativeToolOptions": [
         "-sdk",

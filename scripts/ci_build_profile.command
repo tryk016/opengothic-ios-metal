@@ -10,6 +10,8 @@ RAW_CAUSAL_MODE_SET="${CAUSAL_MODE+x}"
 RAW_CAUSAL_MODE="${CAUSAL_MODE-}"
 RAW_ADDITIVE_CAUSAL_MODE_SET="${ADDITIVE_CAUSAL_MODE+x}"
 RAW_ADDITIVE_CAUSAL_MODE="${ADDITIVE_CAUSAL_MODE-}"
+RAW_MULTIPLY2_CAUSAL_MODE_SET="${MULTIPLY2_CAUSAL_MODE+x}"
+RAW_MULTIPLY2_CAUSAL_MODE="${MULTIPLY2_CAUSAL_MODE-}"
 RAW_BINK_SELF_TEST_SET="${BINK_SELF_TEST+x}"
 RAW_BINK_SELF_TEST="${BINK_SELF_TEST-}"
 RAW_RESOURCE_ALLOCATOR_SELF_TEST_SET="${RESOURCE_ALLOCATOR_SELF_TEST+x}"
@@ -26,6 +28,7 @@ RAW_PACKAGE_DEVICE_IPA_SET="${PACKAGE_DEVICE_IPA+x}"
 RAW_PACKAGE_DEVICE_IPA="${PACKAGE_DEVICE_IPA-}"
 
 PROFILE="${1:-}"
+MULTIPLY2_CAUSAL_MODE=none
 case "$PROFILE" in
   off)
     DIAGNOSTICS=OFF
@@ -140,8 +143,36 @@ case "$PROFILE" in
     TEMPEST_PROFILE=baseline
     PACKAGE_DEVICE_IPA=0
     ;;
+  multiply2-a-hdr)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
+    MULTIPLY2_CAUSAL_MODE=causal-a
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
+  multiply2-b-hdr)
+    DIAGNOSTICS=ON
+    ACTIVE_FAULT_MODE=none
+    CAUSAL_MODE=none
+    ADDITIVE_CAUSAL_MODE=none
+    MULTIPLY2_CAUSAL_MODE=causal-b
+    BINK_SELF_TEST=OFF
+    RESOURCE_ALLOCATOR_SELF_TEST=OFF
+    CLEAR_ONLY_PASS_SELF_TEST=OFF
+    SHADING_PROTOTYPE_TILE_SELF_TEST=OFF
+    SHADING_PROTOTYPE_FORWARD_SELF_TEST=OFF
+    TEMPEST_PROFILE=baseline
+    PACKAGE_DEVICE_IPA=0
+    ;;
   *)
-    echo "usage: $0 off|on|tile|forward|causal-none|causal-a|causal-b|additive-a-hdr|additive-b-hdr" >&2
+    echo "usage: $0 off|on|tile|forward|causal-none|causal-a|causal-b|additive-a-hdr|additive-b-hdr|multiply2-a-hdr|multiply2-b-hdr" >&2
     exit 2
     ;;
 esac
@@ -191,7 +222,14 @@ if [[ "$PROFILE" == causal-* ]]; then
     "$RAW_PACKAGE_DEVICE_IPA" 0
 fi
 
-if [[ "$PROFILE" == additive-*-hdr ]]; then
+if [[ "$PROFILE" == multiply2-*-hdr ]]; then
+  reject_causal_raw_conflict \
+    MULTIPLY2_CAUSAL_MODE "$RAW_MULTIPLY2_CAUSAL_MODE_SET" \
+    "$RAW_MULTIPLY2_CAUSAL_MODE" "$MULTIPLY2_CAUSAL_MODE"
+fi
+
+if [[ "$PROFILE" == additive-*-hdr ||
+      "$PROFILE" == multiply2-*-hdr ]]; then
   reject_causal_raw_conflict \
     DIAGNOSTICS "$RAW_DIAGNOSTICS_SET" "$RAW_DIAGNOSTICS" ON
   reject_causal_raw_conflict \
@@ -312,6 +350,25 @@ if [[ "$PROFILE" == additive-*-hdr ]]; then
   fi
 fi
 
+if [[ "$PROFILE" == multiply2-*-hdr ]]; then
+  EXPECTED_MULTIPLY2_CAUSAL_MODE="${PROFILE#multiply2-}"
+  EXPECTED_MULTIPLY2_CAUSAL_MODE="${EXPECTED_MULTIPLY2_CAUSAL_MODE%-hdr}"
+  EXPECTED_MULTIPLY2_CAUSAL_MODE="causal-$EXPECTED_MULTIPLY2_CAUSAL_MODE"
+  if [ "$DIAGNOSTICS" != ON ] ||
+     [ "$ACTIVE_FAULT_MODE" != none ] ||
+     [ "$CAUSAL_MODE" != none ] ||
+     [ "$ADDITIVE_CAUSAL_MODE" != none ] ||
+     [ "$MULTIPLY2_CAUSAL_MODE" != "$EXPECTED_MULTIPLY2_CAUSAL_MODE" ] ||
+     [ "$TEMPEST_PROFILE" != baseline ] ||
+     [ "$DIRECT_DRAWABLE" != OFF ] ||
+     [ "$METALFX_SPATIAL" != OFF ] ||
+     [ "$METALFX_TEMPORAL" != OFF ] ||
+     [ "$PACKAGE_DEVICE_IPA" != 0 ]; then
+    echo "Multiply2 causal HDR profile tuple mismatch: $PROFILE" >&2
+    exit 2
+  fi
+fi
+
 for value in \
     "$BINK_SELF_TEST" \
     "$RESOURCE_ALLOCATOR_SELF_TEST" \
@@ -336,6 +393,7 @@ cmake --preset "renderer-ios-$PROFILE" -B build-renderer-ios \
   -DOPENGOTHIC_RENDERER_IOS_FAULT_MODE="$ACTIVE_FAULT_MODE" \
   -DOPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE="$CAUSAL_MODE" \
   -DOPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE="$ADDITIVE_CAUSAL_MODE" \
+  -DOPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE="$MULTIPLY2_CAUSAL_MODE" \
   -DOPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST="$BINK_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST="$RESOURCE_ALLOCATOR_SELF_TEST" \
   -DOPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST="$CLEAR_ONLY_PASS_SELF_TEST" \
@@ -445,18 +503,22 @@ PY
 fi
 
 if [[ "$PROFILE" == off || "$PROFILE" == on ||
-      "$PROFILE" == additive-*-hdr ]]; then
+      "$PROFILE" == additive-*-hdr ||
+      "$PROFILE" == multiply2-*-hdr ]]; then
   python3 - \
     build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj \
-    "$ADDITIVE_CAUSAL_MODE" <<'PY'
+    "$ADDITIVE_CAUSAL_MODE" "$MULTIPLY2_CAUSAL_MODE" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 project = Path(sys.argv[1]).read_text()
 mode = sys.argv[2]
+multiply2_mode = sys.argv[3]
 macro_a = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A=1"
 macro_b = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B=1"
+multiply2_a = "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A=1"
+multiply2_b = "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B=1"
 
 target_match = re.search(
     r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
@@ -497,6 +559,11 @@ expected = {
     "causal-a": (macro_a,),
     "causal-b": (macro_b,),
 }[mode]
+expected_multiply2 = {
+    "none": (),
+    "causal-a": (multiply2_a,),
+    "causal-b": (multiply2_b,),
+}[multiply2_mode]
 token = re.compile(
     r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_"
     r"(?:A|B|HOST_TEST)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
@@ -506,6 +573,16 @@ if global_entries != list(expected) * 4:
     raise SystemExit(
         "Additive causal PBX global definitions drifted: "
         + ",".join(global_entries)
+    )
+multiply2_token = re.compile(
+    r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_"
+    r"(?:A|B)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
+)
+multiply2_entries = multiply2_token.findall(project)
+if multiply2_entries != list(expected_multiply2) * 4:
+    raise SystemExit(
+        "Multiply2 causal PBX global definitions drifted: "
+        + ",".join(multiply2_entries)
     )
 alpha_token = re.compile(
     r"OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_(?:A|B|HOST_TEST)"
@@ -528,9 +605,15 @@ for identifier, name in configuration_ids:
         configuration.group(1),
         re.S,
     )
-    if len(definitions) != 1 or token.findall(definitions[0]) != list(expected):
+    if (len(definitions) != 1 or
+            token.findall(definitions[0]) != list(expected) or
+            multiply2_token.findall(definitions[0]) !=
+            list(expected_multiply2)):
         raise SystemExit(f"Additive causal PBX exact entries drifted in {name}")
-print("RendererIOS Additive causal PBX oracle: mode=" + mode + " configurations=4")
+print(
+    "RendererIOS blend causal PBX oracle: additive-mode=" + mode
+    + " multiply2-mode=" + multiply2_mode + " configurations=4"
+)
 PY
 fi
 
@@ -609,7 +692,8 @@ APP_BINARY_DIGEST="$(
   shasum -a 256 "$APP_BINARY" | awk '{print $1}'
 )"
 printf '%s\n' "$APP_BINARY_DIGEST" | grep -Eq '^[0-9a-f]{64}$'
-if [[ "$PROFILE" == additive-*-hdr ]]; then
+if [[ "$PROFILE" == additive-*-hdr ||
+      "$PROFILE" == multiply2-*-hdr ]]; then
   test "$(/usr/libexec/PlistBuddy -c \
     'Print :RendererIOSLinearHDRGPUTripleCapture' "$APP_INFO")" = true
   test "$(/usr/libexec/PlistBuddy -c \
@@ -621,8 +705,13 @@ if [[ "$PROFILE" == additive-*-hdr ]]; then
       printf 'tempest_sha=%s\n' "$TEMPEST_SHA"
       printf 'metallib_sha256=%s\n' "$APP_METALLIB_DIGEST"
       printf 'binary_sha256=%s\n' "$APP_BINARY_DIGEST"
-      printf 'additive_mode=%s\n' "$ADDITIVE_CAUSAL_MODE"
-      printf 'binary_marker=RIOS_ADDITIVE_CAUSAL_MODE=%s\n' "$PROFILE"
+      if [[ "$PROFILE" == additive-*-hdr ]]; then
+        printf 'additive_mode=%s\n' "$ADDITIVE_CAUSAL_MODE"
+        printf 'binary_marker=RIOS_ADDITIVE_CAUSAL_MODE=%s\n' "$PROFILE"
+      else
+        printf 'multiply2_mode=%s\n' "$MULTIPLY2_CAUSAL_MODE"
+        printf 'binary_marker=RIOS_MULTIPLY2_CAUSAL_MODE=%s\n' "$PROFILE"
+      fi
     } >>"$GITHUB_OUTPUT"
   fi
 fi
@@ -737,7 +826,8 @@ else
   ! grep -Fq -- '-renderer-ios-forward-self-test-nonce=' \
     "$APP_STRINGS"
 fi
-if [[ "$PROFILE" == additive-*-hdr ]] ||
+if [[ "$PROFILE" == additive-*-hdr ||
+      "$PROFILE" == multiply2-*-hdr ]] ||
    [ "$CLEAR_ONLY_PASS_SELF_TEST" = ON ] ||
    [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ] ||
    [ "$SHADING_PROTOTYPE_FORWARD_SELF_TEST" = ON ]; then
@@ -749,7 +839,8 @@ else
 fi
 
 if [ "$PROFILE" = off ] || [ "$PROFILE" = on ] ||
-   [[ "$PROFILE" == additive-*-hdr ]]; then
+   [[ "$PROFILE" == additive-*-hdr ]] ||
+   [[ "$PROFILE" == multiply2-*-hdr ]]; then
   python3 - "$APP_BINARY" "$PROFILE" <<'PY'
 from pathlib import Path
 import sys
@@ -759,36 +850,56 @@ profile = sys.argv[2]
 prefix = b"RIOS_ADDITIVE_CAUSAL_MODE="
 marker_a = prefix + b"additive-a-hdr"
 marker_b = prefix + b"additive-b-hdr"
+multiply2_prefix = b"RIOS_MULTIPLY2_CAUSAL_MODE="
+multiply2_a = multiply2_prefix + b"multiply2-a-hdr"
+multiply2_b = multiply2_prefix + b"multiply2-b-hdr"
 
 
 def validate(candidate: bytes) -> None:
     prefix_count = candidate.count(prefix)
+    multiply2_count = candidate.count(multiply2_prefix)
     if profile in ("off", "on"):
-        if prefix_count != 0:
-            raise ValueError("ordinary profile contains Additive causal marker")
+        if prefix_count != 0 or multiply2_count != 0:
+            raise ValueError("ordinary profile contains blend causal marker")
         return
-    expected = marker_a if profile == "additive-a-hdr" else marker_b
-    opposite = marker_b if profile == "additive-a-hdr" else marker_a
-    if (prefix_count != 1 or candidate.count(expected) != 1 or
+    additive = profile.startswith("additive-")
+    expected = ((marker_a if profile == "additive-a-hdr" else marker_b)
+                if additive else
+                (multiply2_a if profile == "multiply2-a-hdr" else multiply2_b))
+    opposite = ((marker_b if profile == "additive-a-hdr" else marker_a)
+                if additive else
+                (multiply2_b if profile == "multiply2-a-hdr" else multiply2_a))
+    if ((prefix_count if additive else multiply2_count) != 1 or
+            (multiply2_count if additive else prefix_count) != 0 or
+            candidate.count(expected) != 1 or
             candidate.count(opposite) != 0 or
             candidate.count(expected + b"\0") != 1):
-        raise ValueError("Additive profile marker is not exact")
+        raise ValueError("blend profile marker is not exact")
 
 
 validate(binary)
 mutations = []
 if profile in ("off", "on"):
-    mutations = (binary + marker_a + b"\0", binary + marker_b + b"\0")
+    mutations = (
+        binary + marker_a + b"\0", binary + marker_b + b"\0",
+        binary + multiply2_a + b"\0", binary + multiply2_b + b"\0",
+    )
 else:
-    expected = marker_a if profile == "additive-a-hdr" else marker_b
-    opposite = marker_b if profile == "additive-a-hdr" else marker_a
+    additive = profile.startswith("additive-")
+    expected = ((marker_a if profile == "additive-a-hdr" else marker_b)
+                if additive else
+                (multiply2_a if profile == "multiply2-a-hdr" else multiply2_b))
+    opposite = ((marker_b if profile == "additive-a-hdr" else marker_a)
+                if additive else
+                (multiply2_b if profile == "multiply2-a-hdr" else multiply2_a))
+    other = multiply2_a if additive else marker_a
     mutations = (
         binary.replace(expected + b"\0", expected + b"X", 1),
         binary.replace(expected, b"", 1),
         binary + expected + b"\0",
         binary + opposite + b"\0",
         binary.replace(expected, opposite, 1),
-        binary.replace(expected, prefix + b"mutant", 1),
+        binary + other + b"\0",
     )
 killed = 0
 for mutation in mutations:
@@ -801,7 +912,7 @@ for mutation in mutations:
 if killed != len(mutations):
     raise SystemExit("Additive binary marker mutation count drifted")
 print(
-    "RendererIOS Additive binary marker oracle: profile="
+    "RendererIOS blend binary marker oracle: profile="
     + profile
     + " mutations-killed="
     + str(killed)

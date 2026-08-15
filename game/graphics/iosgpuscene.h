@@ -65,6 +65,8 @@ class IOSGPUScene final {
       Result                       result = Result::Empty;
       uint64_t                     drawCount = 0;
       uint64_t                     texturedDrawCount = 0;
+      uint64_t                     encodedPhaseDrawCount = 0;
+      uint64_t                     encodedPhaseTexturedDrawCount = 0;
       uint64_t                     failingHandle = 0;
       IOSGPUSceneFrameCounts       counts;
       IOSGPUSceneFailureCounts     failures;
@@ -75,6 +77,18 @@ class IOSGPUScene final {
       };
 
     struct AdditiveInputArtifact final {
+      std::vector<std::byte> bytes;
+      uint64_t               generation = 0;
+      uint64_t               sequence = 0;
+      char                   mode = '\0';
+
+      explicit operator bool() const noexcept {
+        return !bytes.empty() && generation!=0u && sequence!=0u &&
+               (mode=='a' || mode=='b');
+        }
+      };
+
+    struct Multiply2InputArtifact final {
       std::vector<std::byte> bytes;
       uint64_t               generation = 0;
       uint64_t               sequence = 0;
@@ -99,6 +113,7 @@ class IOSGPUScene final {
 
         bool ready() const noexcept;
         AdditiveInputArtifact takeAdditiveInputArtifact() noexcept;
+        Multiply2InputArtifact takeMultiply2InputArtifact() noexcept;
 
       private:
         friend class IOSGPUScene;
@@ -129,8 +144,18 @@ class IOSGPUScene final {
     Report encodePrepared(
         Tempest::Encoder<Tempest::CommandBuffer>& encoder,
         PreparedFrame& prepared) noexcept;
+    Report encodePreparedThroughMultiply2(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        PreparedFrame& prepared) noexcept;
+    Report encodePreparedAdditive(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        PreparedFrame& prepared) noexcept;
 
   private:
+    Report encodePreparedPhase(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        PreparedFrame& prepared,
+        uint8_t phase) noexcept;
     struct Impl;
     std::unique_ptr<Impl> impl;
   };

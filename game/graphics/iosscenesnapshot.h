@@ -168,11 +168,13 @@ enum class IOSMaterialCategory : uint8_t {
   Transparent,
   Additive,
   Water,
+  Multiply2,
   };
 
 enum IOSMaterialFlag : uint64_t {
   IOSMaterialFlagNone = 0,
   IOSMaterialFlagStaticAdditiveNone = uint64_t(1) << 0u,
+  IOSMaterialFlagStaticMultiply2None = uint64_t(1) << 1u,
   };
 
 enum class IOSSceneMeshKind : uint8_t {

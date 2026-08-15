@@ -95,6 +95,7 @@ struct IOSSceneExtractionStats final {
   std::size_t plannedOpaque = 0;
   std::size_t plannedAlphaTest = 0;
   std::size_t plannedAdditive = 0;
+  std::size_t plannedMultiply2 = 0;
   std::size_t plannedLandscape = 0;
   std::size_t plannedStatic = 0;
   std::size_t plannedMovable = 0;
@@ -122,10 +123,15 @@ struct IOSSceneExtractionStats final {
     const std::size_t firstMaterialSum = firstMaterialSumValid
         ? plannedOpaque+plannedAlphaTest
         : 0u;
-    const bool materialSumValid =
+    const bool secondMaterialSumValid =
         firstMaterialSumValid &&
         firstMaterialSum<=
           std::numeric_limits<std::size_t>::max()-plannedAdditive;
+    const std::size_t secondMaterialSum = secondMaterialSumValid
+        ? firstMaterialSum+plannedAdditive : 0u;
+    const bool materialSumValid = secondMaterialSumValid &&
+        secondMaterialSum<=
+          std::numeric_limits<std::size_t>::max()-plannedMultiply2;
     const bool firstKindSumValid =
         plannedLandscape<=
           std::numeric_limits<std::size_t>::max()-plannedStatic;
@@ -136,7 +142,7 @@ struct IOSSceneExtractionStats final {
         firstKindSum<=
           std::numeric_limits<std::size_t>::max()-plannedMovable;
     return materialSumValid && kindSumValid &&
-        planned==firstMaterialSum+plannedAdditive &&
+        planned==secondMaterialSum+plannedMultiply2 &&
         planned==firstKindSum+plannedMovable &&
         alphaFallback<=plannedAlphaTest;
     }
@@ -251,10 +257,11 @@ inline constexpr IOSSceneMaterialMapping iosSceneMaterialMapping(
       return {IOSMaterialCategory::AlphaTest,true};
     case Material::AdditiveLight:
       return {IOSMaterialCategory::Additive,true};
+    case Material::Multiply2:
+      return {IOSMaterialCategory::Multiply2,true};
     case Material::Water:
     case Material::Ghost:
     case Material::Multiply:
-    case Material::Multiply2:
     case Material::Transparent:
       return {};
     }
@@ -436,7 +443,8 @@ inline bool recordIOSScenePlanResult(
     case IOSSceneSourcePlanResult::Planned: {
       if(plan.materialCategory!=IOSMaterialCategory::Opaque &&
          plan.materialCategory!=IOSMaterialCategory::AlphaTest &&
-         plan.materialCategory!=IOSMaterialCategory::Additive) {
+         plan.materialCategory!=IOSMaterialCategory::Additive &&
+         plan.materialCategory!=IOSMaterialCategory::Multiply2) {
         return recordIOSSceneInvalidSource(stats);
         }
       if(plan.kind!=IOSSceneMeshKind::Landscape &&
@@ -449,6 +457,8 @@ inline bool recordIOSScenePlanResult(
         return recordIOSSceneInvalidSource(stats);
       const bool isAdditive =
           plan.materialCategory==IOSMaterialCategory::Additive;
+      const bool isMultiply2 =
+          plan.materialCategory==IOSMaterialCategory::Multiply2;
       if(isAdditive &&
          (plan.kind!=IOSSceneMeshKind::Static ||
           plan.textureAnimation!=IOSSceneTextureAnimationMode::None ||
@@ -457,7 +467,15 @@ inline bool recordIOSScenePlanResult(
           !std::isfinite(plan.baseColorAlpha) ||
           plan.baseColorAlpha<0.f || plan.baseColorAlpha>1.f))
         return recordIOSSceneInvalidSource(stats);
-      if(!isAdditive &&
+      if(isMultiply2 &&
+         (plan.kind!=IOSSceneMeshKind::Static ||
+          plan.textureAnimation!=IOSSceneTextureAnimationMode::None ||
+          plan.usesFallbackTexture ||
+          plan.materialFlags!=IOSMaterialFlagStaticMultiply2None ||
+          !std::isfinite(plan.baseColorAlpha) ||
+          plan.baseColorAlpha<0.f || plan.baseColorAlpha>1.f))
+        return recordIOSSceneInvalidSource(stats);
+      if(!isAdditive && !isMultiply2 &&
          (plan.materialFlags!=IOSMaterialFlagNone ||
           plan.baseColorAlpha!=1.f))
         return recordIOSSceneInvalidSource(stats);
@@ -471,7 +489,11 @@ inline bool recordIOSScenePlanResult(
         if(!incrementIOSSceneCounter(next.plannedAlphaTest))
           return recordIOSSceneInvalidSource(stats);
         }
-      else if(!incrementIOSSceneCounter(next.plannedAdditive))
+      else if(plan.materialCategory==IOSMaterialCategory::Additive &&
+              !incrementIOSSceneCounter(next.plannedAdditive))
+        return recordIOSSceneInvalidSource(stats);
+      else if(plan.materialCategory==IOSMaterialCategory::Multiply2 &&
+              !incrementIOSSceneCounter(next.plannedMultiply2))
         return recordIOSSceneInvalidSource(stats);
       switch(plan.kind) {
         case IOSSceneMeshKind::Landscape:

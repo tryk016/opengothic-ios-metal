@@ -166,8 +166,9 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     )
     require_exact_statement(
         errors, extractor, "candidate.framePeriodMs",
-        "candidate.framePeriodMs = source.material!=nullptr ? "
-        "source.material->texAniFPSInv : 0u;",
+        "candidate.framePeriodMs = iosSceneFramePeriodMs( "
+        "hasFrameAnimation, source.material!=nullptr ? "
+        "source.material->texAniFPSInv : 0u);",
         "frame period",
     )
     require_exact_statement(
@@ -359,9 +360,10 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
       const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
       if(source.hasUvAnimation!=periodsHaveUv)
         return IOSSceneSourcePlanResult::InvalidSource;
-      if(isAdditive &&
+      if((isAdditive || isMultiply2) &&
          (!source.hasBaseColorTexture || source.usesFallbackTexture ||
           source.hasValidFrameSequence || source.frameCount!=0 ||
+          source.framePeriodMs!=0 ||
           !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
           source.alphaWeight>1.f))
         return IOSSceneSourcePlanResult::InvalidSource;

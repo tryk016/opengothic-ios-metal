@@ -2523,8 +2523,8 @@ mutations.append((
     renderer,
     replace_once(
         context,
-        "{{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},",
-        "{{drawable,Tempest::Vec4(0.f),Tempest::Preserve}},"),
+        "        encoder.setFramebuffer({{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});\n",
+        "        encoder.setFramebuffer({{drawable,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});\n"),
     native,
 ))
 ui_draw = "      frameContext.uiMesh.draw(encoder);\n"
