@@ -44,6 +44,12 @@ int main(int argc, char** argv) {
   const std::string plan = read(root/"game/graphics/iosgpusceneplan.h");
   const std::string scene = read(root/"game/graphics/iosgpuscene.mm");
   const std::string context = read(root/"game/graphics/iosmetalcontext.cpp");
+  const std::string coverageHeader =
+      read(root/"game/graphics/iosmultiply2coverageproof.h");
+  const std::string coverageModel =
+      read(root/"game/graphics/iosmultiply2coverageproof.cpp");
+  const std::string coverageProducer =
+      read(root/"game/graphics/iosmultiply2coverageproof.mm");
   const std::string cmake = read(root/"CMakeLists.txt");
   const std::string presets = read(root/"CMakePresets.json");
 
@@ -72,6 +78,10 @@ int main(int argc, char** argv) {
   assert(context.find(
       "IOSGPUScene::Multiply2InputArtifact emissiveInput;")!=
          std::string::npos);
+  assert(context.find("IOSMultiply2CoverageFrame multiply2Coverage;")!=
+         std::string::npos);
+  assert(context.find("IOSMultiply2CoverageProofProducer")!=
+         std::string::npos);
   assert(count(scene,"#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)\n"
                      "      additiveColor.sourceRGBBlendFactor") == 1u);
   assert(ordered(scene,{
@@ -84,19 +94,28 @@ int main(int argc, char** argv) {
       "additiveColor.destinationAlphaBlendFactor = MTLBlendFactorSourceColor;",
       "OwnedObjectiveC multiply2PipelineOwner("}));
   assert(ordered(scene,{
-      "encodePhase(context.prepared->base,context.scene->baseDepthState);",
-      "encodePhase(context.prepared->multiply2,",
-      "context.scene->multiply2DepthState);",
-      "encodePhase(context.prepared->additive,",
-      "context.scene->additiveDepthState);"}));
-  assert(scene.find(
-      "(phase==0u && prepared.impl!=nullptr &&\n"
-      "      (prepared.impl->nativeBaseMultiplyCompleted ||\n"
-      "       prepared.impl->nativeAdditiveCompleted))")!=
+      "depthDesc.depthWriteEnabled    = YES;",
+      "OwnedObjectiveC depthOwner(",
+      "depthDesc.depthWriteEnabled = NO;",
+      "OwnedObjectiveC additiveDepthOwner(",
+      "OwnedObjectiveC stencilDescriptor(",
+      "depthDesc.frontFaceStencil = stencilDesc;",
+      "OwnedObjectiveC multiply2DepthOwner("}));
+  assert(scene.find("stencilDesc.stencilCompareFunction = MTLCompareFunctionAlways;")!=
          std::string::npos);
-  assert(scene.find("++context.report.encodedPhaseDrawCount;")!=
+  assert(scene.find("stencilDesc.stencilFailureOperation = MTLStencilOperationKeep;")!=
          std::string::npos);
-  assert(scene.find("++context.report.encodedPhaseTexturedDrawCount;")!=
+  assert(scene.find("stencilDesc.depthFailureOperation = MTLStencilOperationKeep;")!=
+         std::string::npos);
+  assert(scene.find("stencilDesc.depthStencilPassOperation = MTLStencilOperationReplace;")!=
+         std::string::npos);
+  assert(scene.find("stencilDesc.readMask = 0xffu;")!=std::string::npos);
+  assert(scene.find("stencilDesc.writeMask = 0xffu;")!=std::string::npos);
+  assert(scene.find("pipelineDesc.stencilAttachmentPixelFormat    = depthFormat;")!=
+         std::string::npos);
+  assert(scene.find("target.depth!=IOSGPUScene::DepthFormat::Depth32FloatStencil8")!=
+         std::string::npos);
+  assert(scene.find("context.prepared->markNativeException();")!=
          std::string::npos);
   assert(scene.find(
       "entity,plan,*mesh,*texture,frameAnimation,uvAnimation,\n"
@@ -111,48 +130,60 @@ int main(int argc, char** argv) {
          std::string::npos);
   assert(scene.find("insertDebugSignpost:(NSString*)draw.drawId.get()")!=
          std::string::npos);
+  assert(count(scene,"Tempest::MetalApi::withActiveCommandBuffer(")==1u);
+  assert(ordered(scene,{
+      "first.colorAttachments[0].texture = sceneHDR;",
+      "first.depthAttachment.texture = depthStencil;",
+      "first.stencilAttachment.texture = depthStencil;",
+      "first.stencilAttachment.clearStencil = 0u;",
+      "@\"RendererIOS.Multiply2.BaseAndCausal.v1\"",
+      "context.scene->baseDepthState,0u",
+      "context.scene->multiply2DepthState,1u",
+      "context.prepared->markNativeBaseMultiplyCompleted();",
+      "@\"RendererIOS.HDRProofCopy.Multiply2.v1\"",
+      "copyFromTexture:sceneHDR",
+      "@\"RendererIOS.Multiply2.CoverageStencilCopy.v1\"",
+      "copyFromTexture:depthStencil",
+      "options:MTLBlitOptionStencilFromDepthStencil",
+      "second.colorAttachments[0].loadAction = MTLLoadActionLoad;",
+      "second.depthAttachment.loadAction = MTLLoadActionLoad;",
+      "second.stencilAttachment.loadAction = MTLLoadActionLoad;",
+      "@\"RendererIOS.Multiply2.AdditiveAfterProof.v1\"",
+      "context.scene->additiveDepthState,0u",
+      "context.prepared->markNativeAdditiveCompleted();",
+      "context.prepared->nativeCompleted = true;"}));
   assert(ordered(context,{
-      "encodePreparedThroughMultiply2(",
-      "const auto failMultiply2SplitPhase =",
-      "RendererIOS native scene markers were not prepared",
-      "RendererIOS native Landscape texture coverage failed",
-      "RendererIOS native Landscape frame-animation evidence was not finalized",
-      "RendererIOS native Landscape UV-animation evidence was not finalized",
-      "encoder.setFramebuffer({});",
-      "impl->linearHDRProof->encodeCopy(",
-      "encodePreparedAdditive(encoder,preparedScene)",
+      "impl->linearHDRProof->nativeCopyView(",
+      "impl->gpuScene->multiply2CoverageMetadata(",
+      "impl->multiply2Coverage->prepareFrame(",
+      "impl->multiply2Coverage->nativeView(",
+      "impl->gpuScene->encodePreparedMultiply2Causal(",
+      "impl->linearHDRProof->markNativeCopyEncoded(",
+      "impl->multiply2Coverage->markEncoded(",
       "impl->linearHDRMetal->encodeToneResolve("}));
-  assert(count(context,"failMultiply2SplitPhase(")>=9u);
-  assert(ordered(context,{
-      "bool multiply2SplitPhaseStarted = false;",
-      "const auto latchMultiply2SplitPhasePreSubmitFailure =",
-      "multiply2SplitPhaseStarted = true;",
-      "encodePreparedThroughMultiply2("}));
-  assert(count(context,"latchMultiply2SplitPhasePreSubmitFailure();")==3u);
   assert(context.find(
       "impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;\n"
       "          throw std::runtime_error(std::move(message));")!=
          std::string::npos);
   assert(context.find(
-      "{{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},\n"
-      "          {impl->linearHDRTargets.depth,1.f,Tempest::Preserve}")!=
+      "IOSGPUScene::DepthFormat::Depth32FloatStencil8")!=
          std::string::npos);
   assert(context.find(
-      "{impl->linearHDRTargets.depth,\n"
-      "            Tempest::Preserve,Tempest::Preserve}")!=
+      "return !color.isEmpty() && !depth.isEmpty() &&")!=
          std::string::npos);
   assert(context.find(
-      "report.encodedPhaseDrawCount!=baseMultiply2Planned")!=
+      "next.depth = device.zbuffer(depthFormat,w,h);")!=
+         std::string::npos);
+  assert(ordered(context,{
+      "const bool currentInventoryDepth =",
+      "if(currentInventoryDepth) {",
+      "{impl->linearHDRTargets.depth,1.f,Tempest::Discard}",
+      "inventory.draw(encoder)"}));
+  assert(context.find(
+      "report.encodedPhaseDrawCount!=report.drawCount")!=
          std::string::npos);
   assert(context.find(
-      "additiveReport.encodedPhaseDrawCount!=additivePlanned")!=
-         std::string::npos);
-  assert(scene.find(
-      "const uint64_t encodedPhaseDrawCount =\n"
-      "        context.report.encodedPhaseDrawCount;")!=
-         std::string::npos);
-  assert(scene.find(
-      "context.report.encodedPhaseDrawCount = encodedPhaseDrawCount;")!=
+      "report.encodedPhaseTexturedDrawCount!=report.texturedDrawCount")!=
          std::string::npos);
   assert(scene.find(
       "additiveColor.rgbBlendOperation = MTLBlendOperationAdd;\n"
@@ -179,6 +210,27 @@ int main(int argc, char** argv) {
          std::string::npos);
   assert(context.find("materializeEmissiveTerminal(publishedBytes)")!=
          std::string::npos);
+  assert(coverageHeader.find(
+      "IOSMultiply2CoverageProofV1HeaderBytes = 160u")!=std::string::npos);
+  assert(coverageModel.find(
+      "std::byte{'M'},std::byte{'C'},std::byte{'9'},std::byte{0}")!=
+         std::string::npos);
+  assert(coverageModel.find("writeU16(candidate,10u,0x4c45u);")!=
+         std::string::npos);
+  assert(coverageModel.find("metadata.bytesPerRow!=metadata.width")!=
+         std::string::npos);
+  assert(coverageModel.find("metadata.sampleCount!=1u")!=
+         std::string::npos);
+  assert(coverageModel.find("byte>1u")!=std::string::npos);
+  assert(coverageModel.find("IOSMultiply2CoverageProofError::MissingCoverage")!=
+         std::string::npos);
+  assert(coverageProducer.find(
+      "RendererIOS-multiply2-coverage-v1.bin")!=std::string::npos);
+  assert(coverageProducer.find(
+      "MTLPixelFormatDepth32Float_Stencil8")!=std::string::npos);
+  assert(coverageProducer.find(
+      "RendererIOS.Multiply2.CausalStencil.v1")!=std::string::npos);
+  assert(coverageProducer.find("RENAME_EXCL")!=std::string::npos);
   assert(cmake.find("OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A=1")!=
          std::string::npos);
   assert(cmake.find("OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B=1")!=

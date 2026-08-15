@@ -404,7 +404,10 @@ def validate(candidate):
     if tuple(sorted(exception_order)) != exception_order:
         raise ValueError("native exception failure order drifted")
 
-    finish = native[bridge_start:]
+    phase_bridge_start = native.index(
+        "IOSGPUScene::Report IOSGPUScene::encodePreparedPhase("
+    )
+    finish = native[phase_bridge_start:]
     bridge = finish.index(
         "const bool encoded = Tempest::MetalApi::withActiveRenderEncoder("
     )
@@ -463,6 +466,15 @@ for name, snippets in required_once.items():
         mutant[name] = sources[name].replace(snippet, "", 1)
         mutations.append(mutant)
 native = sources["native"]
+
+def replace_legacy_native_encode(source: str, old: str, new: str) -> str:
+    start = source.index("void IOSGPUScene::Impl::encodeLandscape(")
+    end = source.index("IOSGPUScene::IOSGPUScene(", start)
+    block = source[start:end]
+    if block.count(old) != 1:
+        raise ValueError("legacy native mutation anchor drifted: " + old)
+    return source[:start] + block.replace(old, new, 1) + source[end:]
+
 for operation in (
     "[encoder insertDebugSignpost:(NSString*)draw.drawId.get()];",
     "[encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];",
@@ -471,18 +483,20 @@ for operation in (
     "[encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle",
 ):
     mutant = dict(sources)
-    mutant["native"] = native.replace(operation, "", 1)
+    mutant["native"] = replace_legacy_native_encode(native, operation, "")
     mutations.append(mutant)
     mutant = dict(sources)
-    mutant["native"] = native.replace(operation, operation + "\n" + operation, 1)
+    mutant["native"] = replace_legacy_native_encode(
+        native, operation, operation + "\n" + operation
+    )
     mutations.append(mutant)
 mutant = dict(sources)
-mutant["native"] = native.replace(
+mutant["native"] = replace_legacy_native_encode(
+    native,
     """[encoder insertDebugSignpost:(NSString*)draw.drawId.get()];
         [encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];""",
     """[encoder insertDebugSignpost:(NSString*)draw.drawBind.get()];
         [encoder insertDebugSignpost:(NSString*)draw.drawId.get()];""",
-    1,
 )
 mutations.append(mutant)
 for old, new in (
@@ -6621,13 +6635,46 @@ grep -Fq 'static_assert(sizeof(Report)==172u);' \
 grep -Fq 'static_assert(offsetof(Report,operations)==168u);' \
   ios/tests/iosshadingprototypetileprobe.cpp
 
-if grep -Eq \
-    'newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|MTLCommandBuffer|gapi/metal/mt' \
-    game/graphics/iosgpuscene.mm \
-    game/graphics/iosgpubink.mm; then
-  echo 'A native RendererIOS path bypasses the scoped Tempest Metal encoder bridge'
-  exit 1
-fi
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+scene = Path("game/graphics/iosgpuscene.mm").read_text()
+bink = Path("game/graphics/iosgpubink.mm").read_text()
+start = scene.index("void IOSGPUScene::Impl::encodeMultiply2Causal(")
+end_marker = "\n}\n#endif\n\nvoid IOSGPUScene::Impl::encodeLandscape("
+end = scene.index(end_marker, start) + len("\n}")
+causal = scene[start:end]
+caller_start = scene.index(
+    "IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal("
+)
+caller_end = scene.index(
+    "IOSGPUScene::Report IOSGPUScene::encodePreparedPhase(", caller_start
+)
+caller = scene[caller_start:caller_end]
+bridge = """const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
+        impl->owner,encoder,&context,&Impl::encodeMultiply2Causal);"""
+if scene.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1 or \
+   caller.count(bridge) != 1:
+    raise SystemExit("Multiply2 command-buffer bridge call drift")
+allowed = {
+    "id<MTLCommandBuffer>": 2,
+    "[renderEncoder endEncoding];": 1,
+    "[blitEncoder endEncoding];": 1,
+}
+for token, count in allowed.items():
+    if causal.count(token) != count:
+        raise SystemExit("Multiply2 command-buffer bridge allowlist drift: " + token)
+    causal = causal.replace(token, "")
+residual = scene[:start] + causal + scene[end:] + bink
+deny = re.compile(
+    r"newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|"
+    r"endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|"
+    r"MTLCommandBuffer|gapi/metal/mt"
+)
+if deny.search(residual):
+    raise SystemExit("A native RendererIOS path bypasses the scoped Tempest Metal encoder bridge")
+PY
 if grep -Eq \
     'newLibraryWithSource|compileSource|MTLCompileOptions' \
     game/graphics/iosgpuscene.mm \

@@ -10,7 +10,9 @@ umask 077
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SMOKE="$ROOT/ios/device-test/run-smoke-test.sh"
 VALIDATOR="$ROOT/ios/device-test/validate-linear-hdr-proof-artifact.py"
+COVERAGE_VALIDATOR="$ROOT/ios/device-test/validate-multiply2-coverage-proof.py"
 GPU_VALIDATOR="$ROOT/ios/device-test/validate-linear-hdr-gpu-evidence.py"
+DRAW_COLLECTOR="$ROOT/ios/device-test/collect-multiply2-draw-evidence.py"
 PLIST_VALIDATOR="$ROOT/ios/device-test/validate-plist-contract.py"
 GUARD="$HOME/OpenGothic-RendererIOS-Handoff/current/private-tools/device_guard.py"
 BASE_BUNDLE_ID="opengothic.gothic2"
@@ -18,6 +20,11 @@ APP_EXECUTABLE="Gothic2Notr"
 FINAL_LEAF="RendererIOS-linear-hdr-proof-v1.bin"
 CAPTURE_LEAF="RendererIOS-linear-hdr-proof-v1.gputrace"
 CAPTURE_SUMMARY_LEAF="capture-copy-summary-v1.json"
+GPU_EVIDENCE_LEAF="linear-hdr-gpu-evidence-v2.json"
+GPU_TRANSCRIPT_DIRECTORY_LEAF="gpudebug-transcripts-v1"
+DRAW_TRANSCRIPT_DIRECTORY_LEAF="multiply2-draw-gpudebug-transcripts-v1"
+COVERAGE_DIRECTORY_LEAF="RendererIOS-multiply2-evidence"
+COVERAGE_LEAF="RendererIOS-multiply2-coverage-v1.bin"
 EXPECTED_SHA="${OPENGOTHIC_IOS_EXPECTED_SHA:-}"
 DURATION=45
 SAVE_SLOT=20
@@ -35,6 +42,10 @@ BUNDLE_ID=""
 WORK=""
 POST_BOUNDARY_DONE=0
 SELF_TEST=0
+SEALED_OUTER_GUARD=0
+SEALED_OUTER_GUARD_SEEN=0
+MULTIPLY2_CAUSAL=0
+MULTIPLY2_LABEL=""
 SELF_TEST_AFC_TYPE=""
 SELF_TEST_DELETE_CALLED=0
 SELF_TEST_DELETE_ARGUMENT=""
@@ -89,8 +100,14 @@ while (($#)); do
       SELF_TEST=1
       shift
       ;;
+    --sealed-outer-guard)
+      ((SEALED_OUTER_GUARD_SEEN == 0)) || fail "duplicate --sealed-outer-guard"
+      SEALED_OUTER_GUARD=1
+      SEALED_OUTER_GUARD_SEEN=1
+      shift
+      ;;
     -*)
-      fail "usage: $0 --expected-sha 40-lowercase-hex [--duration 10..600] [--save-slot number|--new-game] [--gpu-triple] [--app-argument literal] [--live-pid-file absolute-path] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
+      fail "usage: $0 --expected-sha 40-lowercase-hex [--duration 10..600] [--save-slot number|--new-game] [--gpu-triple] [--sealed-outer-guard] [--app-argument literal] [--live-pid-file absolute-path] [--evidence-path-file absolute-path] path/to/Gothic2Notr.app"
       ;;
     *)
       [[ -z "$APP" ]] || fail "only one app path may be supplied"
@@ -99,6 +116,43 @@ while (($#)); do
       ;;
   esac
 done
+
+sealed_outer_guard_contract() {
+  local flag="$1" handshake="$2"
+  if [[ "$flag" == 1 ]]; then
+    [[ "$handshake" == 1 ]]
+  else
+    [[ "$handshake" != 1 ]]
+  fi
+}
+
+sealed_outer_guard_contract \
+  "$SEALED_OUTER_GUARD" "${OPENGOTHIC_MULTIPLY2_SEALED_OUTER_GUARD:-}" ||
+  fail "--sealed-outer-guard and exact outer H2 handshake must be paired"
+
+classify_multiply2_causal_argument() {
+  case "$1" in
+    -renderer-ios-multiply2-causal-mode=multiply2-a-hdr) printf 'a\n'; return 0 ;;
+    -renderer-ios-multiply2-causal-mode=multiply2-b-hdr) printf 'b\n'; return 0 ;;
+    -renderer-ios-multiply2-causal-mode=*) return 2 ;;
+    *) return 1 ;;
+  esac
+}
+
+if (( ${#APP_ARGUMENTS[@]} > 0 )); then
+  for causal_argument in "${APP_ARGUMENTS[@]}"; do
+    if candidate_label="$(classify_multiply2_causal_argument "$causal_argument")"; then
+      ((MULTIPLY2_CAUSAL == 0)) ||
+        fail "duplicate Multiply2 causal launch argument"
+      MULTIPLY2_CAUSAL=1
+      MULTIPLY2_LABEL="$candidate_label"
+    else
+      classify_status="$?"
+      ((classify_status == 1)) ||
+        fail "invalid Multiply2 causal launch argument"
+    fi
+  done
+fi
 
 if [[ -n "$LIVE_PID_FILE" ]]; then
   [[ "$LIVE_PID_FILE" == /* && "$(printf '%s' "$LIVE_PID_FILE" | LC_ALL=C tr -d '[:cntrl:]')" == "$LIVE_PID_FILE" &&
@@ -130,7 +184,9 @@ if ((SELF_TEST == 0)); then
   [[ -n "$APP" && -d "$APP" && ! -L "$APP" ]] || fail "app path is invalid"
   [[ -x "$APP/$APP_EXECUTABLE" ]] || fail "app executable is missing"
   [[ -x "$SMOKE" && -x "$GUARD" && -f "$VALIDATOR" &&
-     -f "$GPU_VALIDATOR" && -f "$PLIST_VALIDATOR" ]] ||
+     -f "$COVERAGE_VALIDATOR" && -f "$GPU_VALIDATOR" &&
+     -f "$DRAW_COLLECTOR" &&
+     -f "$PLIST_VALIDATOR" ]] ||
     fail "required guarded-runner tools are missing"
   if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
     [[ "$EVIDENCE_PATH_FILE" == /* &&
@@ -395,6 +451,28 @@ cleanup_owned_temps() {
 }
 
 run_host_contract_self_test() {
+  sealed_outer_guard_contract 0 "" ||
+    fail "default nested-guard self-test failed"
+  sealed_outer_guard_contract 1 1 ||
+    fail "sealed outer-guard acceptance self-test failed"
+  if sealed_outer_guard_contract 1 "" ||
+     sealed_outer_guard_contract 0 1; then
+    fail "sealed outer-guard mismatch mutation survived"
+  fi
+  [[ "$(classify_multiply2_causal_argument \
+      -renderer-ios-multiply2-causal-mode=multiply2-a-hdr)" == a &&
+     "$(classify_multiply2_causal_argument \
+      -renderer-ios-multiply2-causal-mode=multiply2-b-hdr)" == b ]] ||
+    fail "exact Multiply2 causal launch arguments were rejected"
+  if classify_multiply2_causal_argument \
+       -renderer-ios-multiply2-causal-mode=multiply2-c-hdr >/dev/null 2>&1 ||
+     [[ "$?" -ne 2 ]]; then
+    fail "malformed Multiply2 causal launch argument mutation survived"
+  fi
+  if classify_multiply2_causal_argument -unrelated=value >/dev/null 2>&1 ||
+     [[ "$?" -ne 1 ]]; then
+    fail "unrelated launch argument classification drifted"
+  fi
   local candidate
   local cleanup_label="type-$$"
   WORK="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
@@ -580,12 +658,16 @@ if ((${#APP_ARGUMENTS[@]})); then
   done
 fi
 
+SMOKE_COMMAND=("$SMOKE" "${SMOKE_ARGS[@]}" "$APP")
+if ((SEALED_OUTER_GUARD == 0)); then
+  SMOKE_COMMAND=(python3 "$GUARD" run --timeout "$((DURATION + 900))" --
+                 "${SMOKE_COMMAND[@]}")
+fi
 if ! OPENGOTHIC_IOS_DEVICE="$DEVICE" \
     OPENGOTHIC_IOS_BUNDLE_ID="$BUNDLE_ID" \
     OPENGOTHIC_IOS_EXPECTED_SHA="$EXPECTED_SHA" \
     OPENGOTHIC_IOS_EXPECTED_BUILD="$EXPECTED_SHA" \
-    python3 "$GUARD" run --timeout "$((DURATION + 900))" -- \
-      "$SMOKE" "${SMOKE_ARGS[@]}" "$APP" \
+    "${SMOKE_COMMAND[@]}" \
       >"$WORK/smoke.stdout" 2>"$WORK/smoke.stderr"; then
   tail -80 "$WORK/smoke.stdout" >&2 || true
   tail -80 "$WORK/smoke.stderr" >&2 || true
@@ -607,7 +689,8 @@ xcrun devicectl device info files --device "$DEVICE" \
   --username mobile --subdirectory Documents --no-recurse \
   --json-output "$WORK/documents-artifact.json" >/dev/null ||
   fail "could not enumerate the proof artifact"
-python3 - "$WORK/documents-artifact.json" "$FINAL_LEAF" "$CAPTURE_LEAF" "$GPU_TRIPLE" <<'PY' ||
+python3 - "$WORK/documents-artifact.json" "$FINAL_LEAF" "$CAPTURE_LEAF" \
+    "$GPU_TRIPLE" "$MULTIPLY2_CAUSAL" "$COVERAGE_DIRECTORY_LEAF" <<'PY' ||
 import json
 import sys
 
@@ -627,6 +710,14 @@ if sys.argv[4] == "1":
     resources = captures[0].get("resources", {})
     if resources.get("isSymbolicLink") is not False or resources.get("isDirectory") not in (True, False):
         raise SystemExit("capture leaf is a symlink or lacks exact kind booleans")
+if sys.argv[5] == "1":
+    directories = [entry for entry in files
+                   if isinstance(entry, dict) and entry.get("name") == sys.argv[6]]
+    if len(directories) != 1:
+        raise SystemExit(f"expected exactly one Multiply2 evidence directory, found {len(directories)}")
+    resources = directories[0].get("resources", {})
+    if resources.get("isDirectory") is not True or resources.get("isSymbolicLink") is not False:
+        raise SystemExit("Multiply2 evidence leaf is not one exact non-symlink directory")
 PY
   fail "final proof artifact type check failed"
 require_afc_regular_leaf "$FINAL_LEAF" ||
@@ -643,6 +734,75 @@ xcrun devicectl device copy from --device "$DEVICE" \
   fail "copied proof artifact is not regular"
 chmod 600 "$ARTIFACT" || fail "could not secure proof evidence"
 
+if ((MULTIPLY2_CAUSAL != 0)); then
+  xcrun devicectl device info files --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
+    --username mobile --subdirectory "Documents/$COVERAGE_DIRECTORY_LEAF" \
+    --no-recurse --json-output "$WORK/multiply2-evidence.json" >/dev/null ||
+    fail "could not enumerate the Multiply2 evidence directory"
+  MULTIPLY2_INPUT_LEAF="$(python3 - "$WORK/multiply2-evidence.json" \
+      "$COVERAGE_LEAF" "$MULTIPLY2_LABEL" <<'PY'
+import json
+import re
+import sys
+
+files = json.load(open(sys.argv[1], encoding="utf-8")).get("result", {}).get("files")
+if not isinstance(files, list):
+    raise SystemExit("Multiply2 evidence provider returned no files array")
+coverage_leaf, label = sys.argv[2:]
+input_pattern = re.compile(
+    rf"RendererIOS-multiply2-input-v1-{re.escape(label)}-"
+    r"g[1-9][0-9]*-s[1-9][0-9]*\.bin"
+)
+coverage = []
+inputs = []
+for entry in files:
+    if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+        raise SystemExit("Multiply2 evidence provider returned a malformed entry")
+    name = entry["name"]
+    resources = entry.get("resources", {})
+    if resources.get("isDirectory") is not False or resources.get("isSymbolicLink") is not False:
+        raise SystemExit(f"Multiply2 evidence member lacks exact regular-file booleans: {name!r}")
+    if name == coverage_leaf:
+        coverage.append(name)
+    elif input_pattern.fullmatch(name):
+        inputs.append(name)
+    else:
+        raise SystemExit(f"unexpected Multiply2 evidence member: {name!r}")
+if len(coverage) != 1 or len(inputs) != 1 or len(files) != 2:
+    raise SystemExit(
+        f"expected coverage plus one input artifact, found coverage={len(coverage)} input={len(inputs)} total={len(files)}")
+print(inputs[0])
+PY
+  )" || fail "Multiply2 evidence inventory is not exact"
+  [[ "$MULTIPLY2_INPUT_LEAF" =~ ^RendererIOS-multiply2-input-v1-${MULTIPLY2_LABEL}-g[1-9][0-9]*-s[1-9][0-9]*\.bin$ ]] ||
+    fail "Multiply2 input artifact leaf is not canonical"
+  require_afc_regular_leaf "$COVERAGE_DIRECTORY_LEAF/$COVERAGE_LEAF" ||
+    fail "coverage artifact has no explicit AFC S_IFREG type"
+  require_afc_regular_leaf "$COVERAGE_DIRECTORY_LEAF/$MULTIPLY2_INPUT_LEAF" ||
+    fail "Multiply2 input artifact has no explicit AFC S_IFREG type"
+  COVERAGE_ARTIFACT="$EVIDENCE_DIR/$COVERAGE_LEAF"
+  MULTIPLY2_INPUT_ARTIFACT="$EVIDENCE_DIR/$MULTIPLY2_INPUT_LEAF"
+  [[ ! -e "$COVERAGE_ARTIFACT" && ! -L "$COVERAGE_ARTIFACT" &&
+     ! -e "$MULTIPLY2_INPUT_ARTIFACT" && ! -L "$MULTIPLY2_INPUT_ARTIFACT" ]] ||
+    fail "Multiply2 evidence destination already exists"
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "Documents/$COVERAGE_DIRECTORY_LEAF/$COVERAGE_LEAF" \
+    --destination "$COVERAGE_ARTIFACT" >/dev/null ||
+    fail "could not copy the coverage artifact"
+  xcrun devicectl device copy from --device "$DEVICE" \
+    --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
+    --source "Documents/$COVERAGE_DIRECTORY_LEAF/$MULTIPLY2_INPUT_LEAF" \
+    --destination "$MULTIPLY2_INPUT_ARTIFACT" >/dev/null ||
+    fail "could not copy the Multiply2 input artifact"
+  [[ -f "$COVERAGE_ARTIFACT" && ! -L "$COVERAGE_ARTIFACT" &&
+     -f "$MULTIPLY2_INPUT_ARTIFACT" && ! -L "$MULTIPLY2_INPUT_ARTIFACT" ]] ||
+    fail "copied Multiply2 evidence is not regular"
+  chmod 600 "$COVERAGE_ARTIFACT" "$MULTIPLY2_INPUT_ARTIFACT" ||
+    fail "could not secure copied Multiply2 evidence"
+fi
+
 if ((GPU_TRIPLE != 0)); then
   DEVICE_CAPTURE_TYPE="$(afc_file_type "$CAPTURE_LEAF")" ||
     fail "capture leaf has no explicit AFC regular/directory type"
@@ -655,8 +815,8 @@ if ((GPU_TRIPLE != 0)); then
   CAPTURE_STAGING_PARENT="$EVIDENCE_DIR/gpudebug-capture-staging"
   CAPTURE_STAGING="$CAPTURE_STAGING_PARENT/$CAPTURE_LEAF"
   CAPTURE_SUMMARY="$EVIDENCE_DIR/$CAPTURE_SUMMARY_LEAF"
-  TRANSCRIPT_DIR="$EVIDENCE_DIR/gpudebug-transcripts-v1"
-  GPU_EVIDENCE="$EVIDENCE_DIR/linear-hdr-gpu-evidence-v2.json"
+  TRANSCRIPT_DIR="$EVIDENCE_DIR/$GPU_TRANSCRIPT_DIRECTORY_LEAF"
+  GPU_EVIDENCE="$EVIDENCE_DIR/$GPU_EVIDENCE_LEAF"
   [[ ! -e "$CAPTURE_FINAL" && ! -L "$CAPTURE_FINAL" &&
      ! -e "$CAPTURE_STAGING_PARENT" && ! -L "$CAPTURE_STAGING_PARENT" &&
      ! -e "$CAPTURE_SUMMARY" && ! -L "$CAPTURE_SUMMARY" &&
@@ -694,6 +854,37 @@ if ((GPU_TRIPLE != 0)); then
      "$(wc -l <"$GPU_RESULT" | tr -d '[:space:]')" -eq 1 ]] ||
     fail "GPU collector emitted an unexpected result"
   chmod 600 "$GPU_RESULT" || fail "could not secure GPU result evidence"
+  if ((MULTIPLY2_CAUSAL != 0)); then
+    [[ "$MULTIPLY2_INPUT_LEAF" =~ ^RendererIOS-multiply2-input-v1-${MULTIPLY2_LABEL}-g([1-9][0-9]*)-s([1-9][0-9]*)\.bin$ ]] ||
+      fail "could not derive the canonical Multiply2 draw evidence identity"
+    MULTIPLY2_GENERATION="${BASH_REMATCH[1]}"
+    MULTIPLY2_SEQUENCE="${BASH_REMATCH[2]}"
+    DRAW_EVIDENCE_LEAF="RendererIOS-multiply2-draw-evidence-v1-${MULTIPLY2_LABEL}-g${MULTIPLY2_GENERATION}-s${MULTIPLY2_SEQUENCE}.json"
+    DRAW_EVIDENCE="$EVIDENCE_DIR/$DRAW_EVIDENCE_LEAF"
+    DRAW_TRANSCRIPT_DIR="$EVIDENCE_DIR/$DRAW_TRANSCRIPT_DIRECTORY_LEAF"
+    DRAW_RESULT="$EVIDENCE_DIR/multiply2-draw-evidence-result.txt"
+    [[ ! -e "$DRAW_EVIDENCE" && ! -L "$DRAW_EVIDENCE" &&
+       ! -e "$DRAW_TRANSCRIPT_DIR" && ! -L "$DRAW_TRANSCRIPT_DIR" &&
+       ! -e "$DRAW_RESULT" && ! -L "$DRAW_RESULT" ]] ||
+      fail "Multiply2 draw evidence destination already exists"
+    mkdir -m 700 "$DRAW_TRANSCRIPT_DIR" ||
+      fail "could not create private Multiply2 draw transcript directory"
+    if ! PYTHONDONTWRITEBYTECODE=1 python3 "$DRAW_COLLECTOR" --collect \
+        --capture "$CAPTURE_FINAL" --gpu-evidence "$GPU_EVIDENCE" \
+        --input-artifact "$MULTIPLY2_INPUT_ARTIFACT" \
+        --coverage "$COVERAGE_ARTIFACT" \
+        --transcript-dir "$DRAW_TRANSCRIPT_DIR" \
+        --evidence "$DRAW_EVIDENCE" --label "$MULTIPLY2_LABEL" \
+        >"$DRAW_RESULT"; then
+      fail "owned Multiply2 gpudebug draw collection/join failed"
+    fi
+    [[ "$(grep -Fxc 'MULTIPLY2 DRAW EVIDENCE PASS' "$DRAW_RESULT" || true)" -eq 1 &&
+       "$(wc -l <"$DRAW_RESULT" | tr -d '[:space:]')" -eq 1 &&
+       -f "$DRAW_EVIDENCE" && ! -L "$DRAW_EVIDENCE" ]] ||
+      fail "Multiply2 draw collector emitted unexpected evidence/result"
+    chmod 600 "$DRAW_RESULT" ||
+      fail "could not secure Multiply2 draw evidence result"
+  fi
 fi
 
 post_boundary || fail "post-run game ZERO or allowlisted temp cleanup failed"
@@ -708,6 +899,20 @@ fi
   fail "proof validator emitted an unexpected result"
 chmod 600 "$RESULT_FILE" ||
   fail "could not secure proof result evidence"
+if ((MULTIPLY2_CAUSAL != 0)); then
+  COVERAGE_RESULT_FILE="$EVIDENCE_DIR/multiply2-coverage-result.txt"
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 "$COVERAGE_VALIDATOR" \
+      --coverage "$COVERAGE_ARTIFACT" --hdr-artifact "$ARTIFACT" \
+      --runtime-log "$EVIDENCE_DIR/log.txt" --expected-sha "$EXPECTED_SHA" \
+      >"$COVERAGE_RESULT_FILE"; then
+    fail "coverage artifact/HDR/log join failed"
+  fi
+  [[ "$(grep -Fxc 'COVERAGE PASS' "$COVERAGE_RESULT_FILE" || true)" -eq 1 &&
+     "$(wc -l <"$COVERAGE_RESULT_FILE" | tr -d '[:space:]')" -eq 1 ]] ||
+    fail "coverage validator emitted an unexpected result"
+  chmod 600 "$COVERAGE_RESULT_FILE" ||
+    fail "could not secure coverage result evidence"
+fi
 if [[ -n "$EVIDENCE_PATH_FILE" ]]; then
   printf '%s\n' "$EVIDENCE_DIR" >"$EVIDENCE_PATH_FILE" ||
     fail "could not publish proof evidence path"

@@ -18,18 +18,27 @@ compile_and_run() {
   "$output"
 }
 
-compile_and_run "$TMP_ROOT/artifact" \
-  -Igame ios/tests/iosmultiply2inputartifact.cpp \
-  game/graphics/iosmultiply2inputartifact.cpp
-compile_and_run "$TMP_ROOT/artifact-asan" \
-  -fsanitize=address -fno-omit-frame-pointer \
-  -Igame ios/tests/iosmultiply2inputartifact.cpp \
-  game/graphics/iosmultiply2inputartifact.cpp
-compile_and_run "$TMP_ROOT/artifact-ubsan" \
-  -fsanitize=undefined -fno-sanitize-recover=undefined \
-  -fno-omit-frame-pointer \
-  -Igame ios/tests/iosmultiply2inputartifact.cpp \
-  game/graphics/iosmultiply2inputartifact.cpp
+for sanitizer in plain asan ubsan; do
+  sanitizer_flags=(-fno-omit-frame-pointer)
+  [[ "$sanitizer" != asan ]] ||
+    sanitizer_flags=(-fsanitize=address -fno-omit-frame-pointer)
+  [[ "$sanitizer" != ubsan ]] ||
+    sanitizer_flags=(-fsanitize=undefined -fno-sanitize-recover=undefined
+                     -fno-omit-frame-pointer)
+  compile_and_run "$TMP_ROOT/input-$sanitizer" \
+    "${sanitizer_flags[@]}" -Igame \
+    ios/tests/iosmultiply2inputartifact.cpp \
+    game/graphics/iosmultiply2inputartifact.cpp
+  compile_and_run "$TMP_ROOT/coverage-$sanitizer" \
+    "${sanitizer_flags[@]}" -Igame \
+    ios/tests/iosmultiply2coverageproof.cpp \
+    game/graphics/iosmultiply2coverageproof.cpp
+done
+
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+  ios.tests.test_multiply2_coverage_proof \
+  ios.tests.test_multiply2_draw_evidence
+
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame ios/tests/iosmultiply2runtimecontract.cpp \
@@ -56,115 +65,109 @@ from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
-cmake = (root / "CMakeLists.txt").read_text()
-presets = (root / "CMakePresets.json").read_text()
-scene = (root / "game/graphics/iosgpuscene.mm").read_text()
-context = (root / "game/graphics/iosmetalcontext.cpp").read_text()
-header = (root / "game/graphics/iosgpuscene.h").read_text()
-plan = (root / "game/graphics/iosgpusceneplan.h").read_text()
-ci_profile = (root / "scripts/ci_build_profile.command").read_text()
-policy = (root / "verification-policy.json").read_text()
-
-required = {
-    "cmake-mode": (cmake, 'OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE', 11),
-    "cmake-a": (cmake, 'OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A=1', 1),
-    "cmake-b": (cmake, 'OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B=1', 1),
-    "preset-a": (presets, 'renderer-ios-multiply2-a-hdr', 4),
-    "preset-b": (presets, 'renderer-ios-multiply2-b-hdr', 4),
-    "rgb-a": (scene, 'additiveColor.sourceRGBBlendFactor = MTLBlendFactorDestinationColor;', 1),
-    "rgb-b": (scene, 'additiveColor.sourceRGBBlendFactor = MTLBlendFactorZero;', 2),
-    "alpha-source": (scene, 'additiveColor.sourceAlphaBlendFactor = MTLBlendFactorDestinationColor;', 1),
-    "alpha-destination": (scene, 'additiveColor.destinationAlphaBlendFactor = MTLBlendFactorSourceColor;', 1),
-    "phase-copy": (context, 'encodePreparedThroughMultiply2(', 1),
-    "phase-additive": (context, 'encodePreparedAdditive(encoder,preparedScene)', 1),
-    "phase0-reentry": (scene, '(phase==0u && prepared.impl!=nullptr &&', 1),
-    "phase-draw-count": (scene, '++context.report.encodedPhaseDrawCount;', 1),
-    "phase-textured-count": (scene, '++context.report.encodedPhaseTexturedDrawCount;', 1),
-    "phase-count-preserve": (scene, 'context.report.encodedPhaseDrawCount = encodedPhaseDrawCount;', 1),
-    "phase-textured-preserve": (scene, 'context.report.encodedPhaseTexturedDrawCount =\n        encodedPhaseTexturedDrawCount;', 1),
-    "base-count-check": (context, 'report.encodedPhaseDrawCount!=baseMultiply2Planned', 1),
-    "additive-count-check": (context, 'additiveReport.encodedPhaseDrawCount!=additivePlanned', 1),
-    "depth-first-preserve": (context, '{impl->linearHDRTargets.depth,1.f,Tempest::Preserve}', 1),
-    "depth-second-preserve": (context, '{impl->linearHDRTargets.depth,\n            Tempest::Preserve,Tempest::Preserve});', 1),
-    "artifact-parse": (context, 'iosParseMultiply2InputArtifactV1(', 1),
-    "artifact-publish": (context, 'iosPublishMultiply2InputArtifactV1NoClobber(', 1),
-    "distinct-artifact": (header, 'struct Multiply2InputArtifact final', 1),
-    "distinct-frame-carrier": (context, 'IOSGPUScene::Multiply2InputArtifact emissiveInput;', 1),
-    "marker-a": (plan, 'return "multiply2-a";', 1),
-    "marker-b": (plan, 'return "multiply2-b";', 1),
-    "initial-pso-preflight": (scene, 'iosGPUSceneInitialPipelineStatesAreAvailable(', 1),
-    "artifact-animation": (scene, 'emissiveArtifactAnimation(\n       plan.baseColorTexture,frameAnimation,uvAnimation,record.animation)', 1),
-    "draw-id-signpost": (scene, 'iosGPUSceneMultiply2DrawIdSignpost(identity)', 1),
-    "draw-bind-signpost": (scene, 'iosGPUSceneMultiply2DrawBindSignpost(identity)', 1),
-    "private-evidence-directory": (context, '/Documents/RendererIOS-multiply2-evidence', 1),
-    "published-byte-sha": (context, 'materializeEmissiveTerminal(publishedBytes)', 1),
-    "ci-output-profile": (ci_profile, 'if [[ "$PROFILE" == additive-*-hdr ||\n      "$PROFILE" == multiply2-*-hdr ]]; then', 2),
-    "policy-a": (policy, '"build-multiply2-a-hdr"', 2),
-    "policy-b": (policy, '"build-multiply2-b-hdr"', 2),
-}
-for label, (source, token, expected) in required.items():
-    if source.count(token) != expected:
-        raise SystemExit(f"Multiply2 source contract drifted: {label}")
-if 'using Multiply2InputArtifact =' in header:
-    raise SystemExit("Multiply2 artifact carrier aliases Additive")
-if '#define OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A 1' in context or \
-   '#define OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B 1' in context:
-    raise SystemExit("Multiply2 lifecycle aliases Additive compile mode")
-
-ordered = (
-    context.index('encodePreparedThroughMultiply2('),
-    context.index('impl->linearHDRProof->encodeCopy('),
-    context.index('encodePreparedAdditive(encoder,preparedScene)'),
-    context.index('impl->linearHDRMetal->encodeToneResolve('),
-)
-if ordered != tuple(sorted(ordered)):
-    raise SystemExit("Multiply2 HDR phase ordering drifted")
-
 texts = {
-    "scene": scene,
-    "context": context,
-    "header": header,
-    "plan": plan,
-    "ci": ci_profile,
-    "policy": policy,
-}
-mutation_requirements = {
-    "counter-restore": ("scene", 'context.report.encodedPhaseDrawCount = encodedPhaseDrawCount;', 1),
-    "textured-counter-restore": ("scene", 'context.report.encodedPhaseTexturedDrawCount =\n        encodedPhaseTexturedDrawCount;', 1),
-    "rgb-source": ("scene", 'additiveColor.sourceRGBBlendFactor = MTLBlendFactorDestinationColor;', 1),
-    "rgb-destination": ("scene", 'additiveColor.destinationRGBBlendFactor = MTLBlendFactorSourceColor;', 1),
-    "rgb-operation": ("scene", 'additiveColor.rgbBlendOperation = MTLBlendOperationAdd;', 2),
-    "alpha-source": ("scene", 'additiveColor.sourceAlphaBlendFactor = MTLBlendFactorDestinationColor;', 1),
-    "alpha-destination": ("scene", 'additiveColor.destinationAlphaBlendFactor = MTLBlendFactorSourceColor;', 1),
-    "phase-reentry": ("scene", '(phase==0u && prepared.impl!=nullptr &&', 1),
-    "base-count": ("context", 'report.encodedPhaseDrawCount!=baseMultiply2Planned', 1),
-    "additive-count": ("context", 'additiveReport.encodedPhaseDrawCount!=additivePlanned', 1),
-    "depth-first": ("context", '{impl->linearHDRTargets.depth,1.f,Tempest::Preserve}', 1),
-    "depth-second": ("context", '{impl->linearHDRTargets.depth,\n            Tempest::Preserve,Tempest::Preserve});', 1),
-    "carrier": ("context", 'IOSGPUScene::Multiply2InputArtifact emissiveInput;', 1),
-    "marker-a": ("plan", 'return "multiply2-a";', 1),
-    "marker-b": ("plan", 'return "multiply2-b";', 1),
-    "ci-outputs": ("ci", 'if [[ "$PROFILE" == additive-*-hdr ||\n      "$PROFILE" == multiply2-*-hdr ]]; then', 2),
-    "policy-a": ("policy", '"build-multiply2-a-hdr"', 2),
-    "policy-b": ("policy", '"build-multiply2-b-hdr"', 2),
+    "cmake": (root / "CMakeLists.txt").read_text(),
+    "presets": (root / "CMakePresets.json").read_text(),
+    "scene": (root / "game/graphics/iosgpuscene.mm").read_text(),
+    "context": (root / "game/graphics/iosmetalcontext.cpp").read_text(),
+    "header": (root / "game/graphics/iosgpuscene.h").read_text(),
+    "coverage-h": (root / "game/graphics/iosmultiply2coverageproof.h").read_text(),
+    "coverage-cpp": (root / "game/graphics/iosmultiply2coverageproof.cpp").read_text(),
+    "coverage-mm": (root / "game/graphics/iosmultiply2coverageproof.mm").read_text(),
+    "hdr-h": (root / "game/graphics/ioslinearhdrproofproducer.h").read_text(),
+    "hdr-mm": (root / "game/graphics/ioslinearhdrproofproducer.mm").read_text(),
+    "runner": (root / "ios/device-test/run-linear-hdr-proof-test.sh").read_text(),
+    "validator": (root / "ios/device-test/validate-multiply2-coverage-proof.py").read_text(),
+    "draw-collector": (root / "ios/device-test/collect-multiply2-draw-evidence.py").read_text(),
+    "local-gate": (root / "scripts/verify-local-build.command").read_text(),
 }
 
-def accepts(candidate):
+requirements = {
+    "mode-a": ("cmake", "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A=1", 1),
+    "mode-b": ("cmake", "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B=1", 1),
+    "preset-a": ("presets", "renderer-ios-multiply2-a-hdr", 4),
+    "preset-b": ("presets", "renderer-ios-multiply2-b-hdr", 4),
+    "rgb-a": ("scene", "additiveColor.sourceRGBBlendFactor = MTLBlendFactorDestinationColor;", 1),
+    "rgb-b": ("scene", "additiveColor.sourceRGBBlendFactor = MTLBlendFactorZero;", 2),
+    "depth-target": ("context", "IOSGPUScene::DepthFormat::Depth32FloatStencil8", 1),
+    "stencil-format": ("scene", "pipelineDesc.stencilAttachmentPixelFormat    = depthFormat;", 1),
+    "stencil-always": ("scene", "stencilDesc.stencilCompareFunction = MTLCompareFunctionAlways;", 1),
+    "stencil-replace": ("scene", "stencilDesc.depthStencilPassOperation = MTLStencilOperationReplace;", 1),
+    "stencil-read-mask": ("scene", "stencilDesc.readMask = 0xffu;", 1),
+    "stencil-write-mask": ("scene", "stencilDesc.writeMask = 0xffu;", 1),
+    "callback": ("scene", "Tempest::MetalApi::withActiveCommandBuffer(", 1),
+    "first-marker": ("scene", "RendererIOS.Multiply2.BaseAndCausal.v1", 1),
+    "proof-marker": ("scene", "RendererIOS.HDRProofCopy.Multiply2.v1", 1),
+    "coverage-marker": ("scene", "RendererIOS.Multiply2.CoverageStencilCopy.v1", 2),
+    "stencil-blit": ("scene", "options:MTLBlitOptionStencilFromDepthStencil", 1),
+    "second-marker": ("scene", "RendererIOS.Multiply2.AdditiveAfterProof.v1", 2),
+    "coverage-metadata": ("scene", "bool IOSGPUScene::multiply2CoverageMetadata(", 1),
+    "causal-entry": ("scene", "IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal(", 1),
+    "hdr-view": ("context", "impl->linearHDRProof->nativeCopyView(", 1),
+    "coverage-prepare": ("context", "impl->multiply2Coverage->prepareFrame(", 1),
+    "coverage-encoded": ("context", "impl->multiply2Coverage->markEncoded(", 1),
+    "coverage-submitted": ("context", "impl->multiply2Coverage->markSubmitted(", 1),
+    "coverage-terminal": ("context", "multiply2Coverage->completeAfterTerminal(", 1),
+    "magic": ("coverage-cpp", "std::byte{'M'},std::byte{'C'},std::byte{'9'},std::byte{0}", 1),
+    "header-160": ("coverage-h", "IOSMultiply2CoverageProofV1HeaderBytes = 160u", 1),
+    "payload-domain": ("coverage-cpp", "if(byte>1u)", 1),
+    "coverage-required": ("coverage-cpp", "IOSMultiply2CoverageProofError::MissingCoverage", 1),
+    "private-ds": ("coverage-mm", "MTLPixelFormatDepth32Float_Stencil8", 2),
+    "final-leaf": ("coverage-mm", "RendererIOS-multiply2-coverage-v1.bin", 1),
+    "hdr-native-view": ("hdr-h", "struct IOSLinearHDRProofNativeView final", 1),
+    "hdr-native-transition": ("hdr-mm", "markNativeCopyEncoded", 4),
+    "sealed-handshake": ("runner", "OPENGOTHIC_MULTIPLY2_SEALED_OUTER_GUARD", 1),
+    "coverage-copy": ("runner", "RendererIOS-multiply2-coverage-v1.bin", 1),
+    "coverage-cli": ("validator", 'print("COVERAGE PASS")', 1),
+    "draw-collector-runner": ("runner", 'python3 "$DRAW_COLLECTOR" --collect', 1),
+    "draw-evidence-leaf": ("runner", "RendererIOS-multiply2-draw-evidence-v1-", 1),
+    "draw-transcript-leaf": ("runner", "multiply2-draw-gpudebug-transcripts-v1", 1),
+    "draw-ds-join": ("draw-collector", 'observed["depth"] == observed["stencil"] ==', 1),
+    "draw-constants-index": ("draw-collector", '"constantsBufferIndex": 1', 1),
+    "draw-inline-storage": ("draw-collector", '"constantsStorage": "inline"', 1),
+    "draw-stencil-option": ("draw-collector", '"StencilFromDepthStencil"', 3),
+    "draw-coverage-strip": ("draw-collector", "stripped == payload", 1),
+    "draw-code-provenance": ("draw-collector", '"coverage-artifact+code-contract"', 2),
+    "draw-pso-label": ("draw-collector", '"RendererIOS.Static.Multiply2"', 3),
+    "inventory-cpp": ("local-gate", 'iosmultiply2coverageproof.cpp', 2),
+    "inventory-mm": ("local-gate", 'iosmultiply2coverageproof.mm', 2),
+}
+
+def accepts(candidate: dict[str, str]) -> bool:
     if any(candidate[source].count(token) != expected
-           for source, token, expected in mutation_requirements.values()):
+           for source, token, expected in requirements.values()):
         return False
-    positions = (
-        candidate["context"].find('encodePreparedThroughMultiply2('),
-        candidate["context"].find('impl->linearHDRProof->encodeCopy('),
-        candidate["context"].find('encodePreparedAdditive(encoder,preparedScene)'),
-        candidate["context"].find('impl->linearHDRMetal->encodeToneResolve('),
+    scene_order = (
+        candidate["scene"].find("first.colorAttachments[0].texture = sceneHDR;"),
+        candidate["scene"].find("context.scene->multiply2DepthState,1u"),
+        candidate["scene"].find("RendererIOS.HDRProofCopy.Multiply2.v1"),
+        candidate["scene"].find("RendererIOS.Multiply2.CoverageStencilCopy.v1"),
+        candidate["scene"].find("options:MTLBlitOptionStencilFromDepthStencil"),
+        candidate["scene"].find("RendererIOS.Multiply2.AdditiveAfterProof.v1"),
+        candidate["scene"].find("context.scene->additiveDepthState,0u"),
     )
-    return positions == tuple(sorted(positions))
+    context_order = (
+        candidate["context"].find("impl->linearHDRProof->nativeCopyView("),
+        candidate["context"].find("impl->gpuScene->multiply2CoverageMetadata("),
+        candidate["context"].find("impl->multiply2Coverage->prepareFrame("),
+        candidate["context"].find("impl->gpuScene->encodePreparedMultiply2Causal("),
+        candidate["context"].find("impl->linearHDRProof->markNativeCopyEncoded("),
+        candidate["context"].find("impl->linearHDRMetal->encodeToneResolve("),
+    )
+    return (all(position >= 0 for position in scene_order + context_order) and
+            scene_order == tuple(sorted(scene_order)) and
+            context_order == tuple(sorted(context_order)))
 
 if not accepts(texts):
-    raise SystemExit("Multiply2 mutation oracle rejected the canonical source")
+    for label, (source, token, expected) in requirements.items():
+        actual = texts[source].count(token)
+        if actual != expected:
+            raise SystemExit(
+                f"Multiply2 source contract drifted: {label} expected={expected} actual={actual}")
+    raise SystemExit("Multiply2 causal ordering drifted")
+
 killed = 0
-for label, (source, token, _expected) in mutation_requirements.items():
+for label, (source, token, _expected) in requirements.items():
     mutant = dict(texts)
     mutant[source] = mutant[source].replace(token, f"MUTATED_{label}", 1)
     if accepts(mutant):
@@ -172,6 +175,6 @@ for label, (source, token, _expected) in mutation_requirements.items():
     killed += 1
 print(
     "RendererIOS Multiply2 focused contract passed: "
-    f"source-cases={len(required)} order=4 mutations-killed={killed}"
+    f"source-cases={len(requirements)} order=13 mutations-killed={killed}"
 )
 PY

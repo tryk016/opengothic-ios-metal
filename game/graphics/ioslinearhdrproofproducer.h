@@ -83,6 +83,16 @@ struct IOSLinearHDRProofMetadata final {
   std::array<uint8_t,20u> buildSha{};
   };
 
+// Borrowed only across the synchronous Metal command-buffer callback. The
+// frame retains both native resources until its terminal release.
+struct IOSLinearHDRProofNativeView final {
+  void* sourceTexture = nullptr;
+  void* destinationBuffer = nullptr;
+  std::string_view sceneMarker;
+  std::string_view copyMarker;
+  IOSLinearHDRProofMetadata metadata;
+  };
+
 bool iosAdvanceLinearHDRProofProducerState(
     IOSLinearHDRProofProducerState& state,
     IOSLinearHDRProofProducerEvent event) noexcept;
@@ -224,6 +234,11 @@ class IOSLinearHDRProofProducer final {
         IOSLinearHDRProofFrame& frame,
         Tempest::Encoder<Tempest::CommandBuffer>& encoder,
         const Tempest::Attachment& source) noexcept;
+    bool nativeCopyView(
+        const IOSLinearHDRProofFrame& frame,
+        const Tempest::Attachment& source,
+        IOSLinearHDRProofNativeView& view) noexcept;
+    bool markNativeCopyEncoded(IOSLinearHDRProofFrame& frame) noexcept;
     void markSubmitted(IOSLinearHDRProofFrame& frame) noexcept;
     void markSubmitAmbiguous(IOSLinearHDRProofFrame& frame) noexcept;
     void abortBeforeSubmit(IOSLinearHDRProofFrame& frame) noexcept;

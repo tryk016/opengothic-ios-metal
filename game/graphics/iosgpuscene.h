@@ -11,12 +11,17 @@
 namespace Tempest {
 class CommandBuffer;
 class Device;
+class Attachment;
 template<class T>
 class Encoder;
 }
 
 class IOSSceneAssetRegistry;
 struct IOSSceneSnapshot;
+struct IOSLinearHDRProofMetadata;
+struct IOSLinearHDRProofNativeView;
+struct IOSMultiply2CoverageProofMetadata;
+struct IOSMultiply2CoverageNativeView;
 
 class IOSGPUScene final {
   public:
@@ -30,6 +35,7 @@ class IOSGPUScene final {
     enum class DepthFormat : uint8_t {
       Depth16Unorm,
       Depth32Float,
+      Depth32FloatStencil8,
       };
 
     struct TargetLayout final {
@@ -150,6 +156,18 @@ class IOSGPUScene final {
     Report encodePreparedAdditive(
         Tempest::Encoder<Tempest::CommandBuffer>& encoder,
         PreparedFrame& prepared) noexcept;
+    bool multiply2CoverageMetadata(
+        const PreparedFrame& prepared,
+        const IOSLinearHDRProofMetadata& hdrProof,
+        uint32_t width,
+        uint32_t height,
+        IOSMultiply2CoverageProofMetadata& metadata) const noexcept;
+    Report encodePreparedMultiply2Causal(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        PreparedFrame& prepared,
+        const Tempest::Attachment& sceneHDR,
+        const IOSLinearHDRProofNativeView& hdrProof,
+        const IOSMultiply2CoverageNativeView& coverage) noexcept;
 
   private:
     Report encodePreparedPhase(

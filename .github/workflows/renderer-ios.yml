@@ -65,7 +65,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: renderer-ios-${{ github.ref }}-${{ github.event_name }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}
+  group: renderer-ios-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.tempest_profile || 'baseline' }}-${{ github.event_name == 'workflow_dispatch' && inputs.fault_mode || 'none' }}-${{ github.event_name == 'workflow_dispatch' && inputs.package_device_ipa && 'device-ipa' || 'build-only' }}-${{ github.event_name == 'workflow_dispatch' && inputs.bink_self_test && 'bink' || 'no-bink' }}-${{ github.event_name == 'workflow_dispatch' && inputs.resource_allocator_self_test && 'allocator' || 'no-allocator' }}-${{ github.event_name == 'workflow_dispatch' && inputs.clear_only_pass_self_test && 'clear' || 'no-clear' }}-${{ github.event_name == 'workflow_dispatch' && inputs.shading_prototype_tile_self_test && 'tile' || 'no-tile' }}-${{ github.event_name == 'workflow_dispatch' && inputs.shading_prototype_forward_self_test && 'forward' || 'no-forward' }}
   cancel-in-progress: true
 
 jobs:

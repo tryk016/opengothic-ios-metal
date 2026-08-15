@@ -61,6 +61,7 @@
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
 #include "iosmultiply2inputartifact.h"
+#include "iosmultiply2coverageproof.h"
 #else
 #include "iosadditiveinputartifact.h"
 #endif
@@ -263,6 +264,7 @@ constexpr char RendererIOSLinearHDRCaptureProfileEvidence[] =
 
 namespace {
 
+#if !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
 IOSGPUScene::DepthFormat iosGPUSceneDepthFormat(TextureFormat format) {
   switch(format) {
     case TextureFormat::Depth16:
@@ -274,6 +276,7 @@ IOSGPUScene::DepthFormat iosGPUSceneDepthFormat(TextureFormat format) {
         "RendererIOS IOSGPUScene requires Depth16 or Depth32F");
     }
   }
+#endif
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 const char* rendererIOSUISurfaceEvidenceName(
@@ -1275,6 +1278,7 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
     IOSGPUScene::Multiply2InputArtifact emissiveInput;
+    IOSMultiply2CoverageFrame multiply2Coverage;
 #else
     IOSGPUScene::AdditiveInputArtifact emissiveInput;
 #endif
@@ -1346,7 +1350,11 @@ struct IOSMetalContext::Impl final {
           device,
           IOSGPUScene::TargetLayout{
             IOSGPUScene::ColorFormat::Rg11B10Float,
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+            IOSGPUScene::DepthFormat::Depth32FloatStencil8,
+#else
             iosGPUSceneDepthFormat(depthFormat),
+#endif
             1u,
             });
         }
@@ -1379,6 +1387,17 @@ struct IOSMetalContext::Impl final {
       catch(...) {
         }
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    try {
+      multiply2Coverage =
+          std::make_unique<IOSMultiply2CoverageProofProducer>(device);
+      if(!multiply2Coverage->armed())
+        multiply2Coverage.reset();
+      }
+    catch(...) {
+      multiply2Coverage.reset();
+      }
+#endif
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
     armBinkSelfTest();
@@ -4118,6 +4137,11 @@ struct IOSMetalContext::Impl final {
     if(linearHDRProof!=nullptr &&
        linearHDRProof->hasOwners(frame.linearHDRProof))
       linearHDRProof->markSubmitAmbiguous(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr &&
+       multiply2Coverage->hasOwners(frame.multiply2Coverage))
+      multiply2Coverage->markSubmitAmbiguous(frame.multiply2Coverage);
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     if(linearHDRProof!=nullptr &&
        linearHDRProof->captureHasOwners(frame.linearHDRCapture))
@@ -4143,6 +4167,11 @@ struct IOSMetalContext::Impl final {
         linearHDRProof->markCapturePreSubmitFailure(
             frame.linearHDRCapture);
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr && !frame.submitted &&
+       multiply2Coverage->hasOwners(frame.multiply2Coverage))
+      multiply2Coverage->abortBeforeSubmit(frame.multiply2Coverage);
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
     failEmissiveInput(frame,"gpu","pre-submit");
 #endif
@@ -4170,6 +4199,13 @@ struct IOSMetalContext::Impl final {
         discardUnsubmittedCommand(frame);
         linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
         }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+      if(multiply2Coverage!=nullptr &&
+         multiply2Coverage->hasOwners(frame.multiply2Coverage)) {
+        multiply2Coverage->abortBeforeSubmit(frame.multiply2Coverage);
+        multiply2Coverage->releaseAfterTerminal(frame.multiply2Coverage);
+        }
+#endif
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
       failEmissiveInput(frame,"gpu","pre-submit");
@@ -4203,6 +4239,10 @@ struct IOSMetalContext::Impl final {
     frame.functionalEvidence = {};
     if(linearHDRProof!=nullptr)
       linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr)
+      multiply2Coverage->releaseAfterTerminal(frame.multiply2Coverage);
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     if(linearHDRProof!=nullptr)
       linearHDRProof->releaseCaptureAfterTerminal(frame.linearHDRCapture);
@@ -4214,6 +4254,10 @@ struct IOSMetalContext::Impl final {
   void markLinearHDRProofFenceFailure(FrameContext& frame) noexcept {
     if(linearHDRProof!=nullptr)
       linearHDRProof->markFenceFailure(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr)
+      multiply2Coverage->markPostSubmitFailure(frame.multiply2Coverage);
+#endif
     }
 
   void markLinearHDRProofIdleFailure() noexcept {
@@ -4221,6 +4265,12 @@ struct IOSMetalContext::Impl final {
       return;
     for(auto& frame:frames)
       linearHDRProof->markIdleFailure(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr) {
+      for(auto& frame:frames)
+        multiply2Coverage->markIdleFailure(frame.multiply2Coverage);
+      }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     for(auto& frame:frames)
       linearHDRProof->markCaptureIdleFailure(frame.linearHDRCapture);
@@ -4230,6 +4280,10 @@ struct IOSMetalContext::Impl final {
   void markLinearHDRProofPostSubmitFailure(FrameContext& frame) noexcept {
     if(linearHDRProof!=nullptr)
       linearHDRProof->markPostSubmitFailure(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr)
+      multiply2Coverage->markPostSubmitFailure(frame.multiply2Coverage);
+#endif
     }
 
   void releaseLinearHDRProofFramesAfterTerminal() noexcept {
@@ -4237,6 +4291,12 @@ struct IOSMetalContext::Impl final {
       return;
     for(auto& frame:frames)
       linearHDRProof->releaseAfterTerminal(frame.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage!=nullptr) {
+      for(auto& frame:frames)
+        multiply2Coverage->releaseAfterTerminal(frame.multiply2Coverage);
+      }
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     for(auto& frame:frames)
       linearHDRProof->releaseCaptureAfterTerminal(frame.linearHDRCapture);
@@ -4308,6 +4368,13 @@ struct IOSMetalContext::Impl final {
     linearHDRProof->completeAfterTerminal(
         frame.linearHDRProof,linearHDRTargets.generation,
         linearHDRTargets.extent.width,linearHDRTargets.extent.height);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(multiply2Coverage==nullptr ||
+       !multiply2Coverage->completeAfterTerminal(
+           frame.multiply2Coverage,linearHDRTargets.generation,
+           linearHDRTargets.extent.width,linearHDRTargets.extent.height))
+      return false;
+#endif
     return presentHealthy;
     }
 #endif
@@ -4921,6 +4988,10 @@ struct IOSMetalContext::Impl final {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   std::unique_ptr<IOSLinearHDRProofProducer>    linearHDRProof;
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+  std::unique_ptr<IOSMultiply2CoverageProofProducer>
+                                               multiply2Coverage;
+#endif
   std::array<FrameContext,Resources::MaxFramesInFlight> frames;
   uint64_t                                      sceneRetainCount  = 0;
   uint64_t                                      sceneReleaseCount = 0;
@@ -5504,10 +5575,20 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
                 "RendererIOS linear HDR frame sequence order failed");
             };
       if(linearHDRSceneActive) {
-        if(impl->linearHDRTargets.depth.isEmpty() ||
-           impl->linearHDRTargets.color.isEmpty())
+        if(impl->linearHDRTargets.color.isEmpty()
+#if !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+           || impl->linearHDRTargets.depth.isEmpty()
+#endif
+           )
           throw std::runtime_error(
             "RendererIOS native Landscape pass has no current HDR target pair");
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+        const auto failMultiply2SplitPhase =
+            [this](std::string message) -> void {
+          impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+          throw std::runtime_error(std::move(message));
+          };
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         bool linearHDRProofPrepared = false;
         if(impl->linearHDRProof!=nullptr &&
@@ -5530,24 +5611,42 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setDebugMarker("RendererIOS native Landscape HDR");
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
-        encoder.setFramebuffer(
-          {{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},
-          {impl->linearHDRTargets.depth,1.f,Tempest::Preserve});
+        if(!linearHDRProofPrepared || impl->multiply2Coverage==nullptr)
+          failMultiply2SplitPhase(
+              "RendererIOS Multiply2 causal proof producers are unavailable");
+        IOSLinearHDRProofNativeView hdrNative;
+        IOSMultiply2CoverageProofMetadata coverageMetadata;
+        IOSMultiply2CoverageNativeView coverageNative;
+        if(!impl->linearHDRProof->nativeCopyView(
+               frameContext.linearHDRProof,
+               impl->linearHDRTargets.color,hdrNative) ||
+           !impl->gpuScene->multiply2CoverageMetadata(
+               preparedScene,hdrNative.metadata,
+               impl->swapchain.w(),impl->swapchain.h(),
+               coverageMetadata) ||
+           !impl->multiply2Coverage->prepareFrame(
+               frameContext.multiply2Coverage,
+               impl->linearHDRTargets.color,coverageMetadata) ||
+           !impl->multiply2Coverage->nativeView(
+               frameContext.multiply2Coverage,coverageNative))
+          failMultiply2SplitPhase(
+              "RendererIOS Multiply2 causal coverage preflight failed");
         multiply2SplitPhaseStarted = true;
         const auto report =
-          impl->gpuScene->encodePreparedThroughMultiply2(
-              encoder,preparedScene);
+          impl->gpuScene->encodePreparedMultiply2Causal(
+              encoder,preparedScene,impl->linearHDRTargets.color,
+              hdrNative,coverageNative);
+        if(report.result==IOSGPUScene::Result::Success &&
+           (!impl->linearHDRProof->markNativeCopyEncoded(
+                frameContext.linearHDRProof) ||
+            !impl->multiply2Coverage->markEncoded(
+                frameContext.multiply2Coverage)))
+          failMultiply2SplitPhase(
+              "RendererIOS Multiply2 causal copy transition failed");
 #else
         encoder.setFramebuffer({{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});
         const auto report =
           impl->gpuScene->encodePrepared(encoder,preparedScene);
-#endif
-#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
-        const auto failMultiply2SplitPhase =
-            [this](std::string message) -> void {
-          impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
-          throw std::runtime_error(std::move(message));
-          };
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(report.result!=IOSGPUScene::Result::Success ||
@@ -5628,39 +5727,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           }
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-        const uint64_t additivePlanned =
-            report.counts.drawn.material.additive;
-        if(additivePlanned>report.drawCount)
+        if(report.encodedPhaseDrawCount!=report.drawCount ||
+           report.encodedPhaseTexturedDrawCount!=report.texturedDrawCount)
           failMultiply2SplitPhase(
-              "RendererIOS Multiply2 phase count underflow");
-        const uint64_t baseMultiply2Planned =
-            report.drawCount-additivePlanned;
-        if(report.encodedPhaseDrawCount!=baseMultiply2Planned ||
-           report.encodedPhaseTexturedDrawCount!=baseMultiply2Planned)
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 base phase count mismatch");
-        if(!linearHDRProofPrepared)
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 causal proof was not prepared");
-        encoder.setFramebuffer({});
-        encoder.setDebugMarker(impl->linearHDRProof->copyMarker());
-        if(!impl->linearHDRProof->encodeCopy(
-             frameContext.linearHDRProof,encoder,
-             impl->linearHDRTargets.color))
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 intermediate HDR proof copy failed");
-        encoder.setFramebuffer(
-          {{impl->linearHDRTargets.color,
-            Tempest::Preserve,Tempest::Preserve}},
-          {impl->linearHDRTargets.depth,
-            Tempest::Preserve,Tempest::Preserve});
-        const auto additiveReport =
-            impl->gpuScene->encodePreparedAdditive(encoder,preparedScene);
-        if(additiveReport.result!=IOSGPUScene::Result::Success ||
-           additiveReport.encodedPhaseDrawCount!=additivePlanned ||
-           additiveReport.encodedPhaseTexturedDrawCount!=additivePlanned)
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 additive phase encode failed");
+              "RendererIOS Multiply2 native causal phase count mismatch");
 #else
 #error "Multiply2 causal lifecycle requires diagnostics"
 #endif
@@ -5773,6 +5843,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     if(impl->linearHDRProof!=nullptr &&
        impl->linearHDRProof->hasOwners(frameContext.linearHDRProof))
       impl->linearHDRProof->markSubmitted(frameContext.linearHDRProof);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+    if(impl->multiply2Coverage!=nullptr &&
+       impl->multiply2Coverage->hasOwners(
+           frameContext.multiply2Coverage))
+      impl->multiply2Coverage->markSubmitted(
+          frameContext.multiply2Coverage);
+#endif
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
     const bool linearHDRCaptureHealthy =

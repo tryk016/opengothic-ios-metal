@@ -606,6 +606,24 @@ struct IOSLinearHDRProofProducer::Impl final {
   bool encodeCopy(IOSLinearHDRProofFrame& frame,
                   Tempest::Encoder<Tempest::CommandBuffer>& encoder,
                   const Tempest::Attachment& source) noexcept {
+    IOSLinearHDRProofNativeView nativeView;
+    if(!this->nativeCopyView(frame,source,nativeView))
+      return false;
+    (void)nativeView;
+    try {
+      encoder.copy(source,0u,frame.impl->buffer,0u);
+      }
+    catch(...) {
+      fail(IOSLinearHDRProofFailureReason::CopyEncode);
+      return false;
+      }
+    return markNativeCopyEncoded(frame);
+    }
+
+  bool nativeCopyView(const IOSLinearHDRProofFrame& frame,
+                      const Tempest::Attachment& source,
+                      IOSLinearHDRProofNativeView& view) noexcept {
+    view = {};
     if(state!=IOSLinearHDRProofProducerState::Armed ||
        activeFrame!=&frame || frame.impl==nullptr ||
        frame.impl->source==nil || frame.impl->mapped==nullptr) {
@@ -621,10 +639,31 @@ struct IOSLinearHDRProofProducer::Impl final {
         fail(IOSLinearHDRProofFailureReason::Stale);
         return false;
         }
-      encoder.copy(source,0u,frame.impl->buffer,0u);
+      const auto borrowedBuffer =
+          Tempest::MetalApi::borrowBuffer(owner,frame.impl->buffer);
+      if(!borrowedBuffer) {
+        fail(IOSLinearHDRProofFailureReason::Stale);
+        return false;
+        }
+      view.sourceTexture = (void*)borrowed.get();
+      view.destinationBuffer = (void*)borrowedBuffer.get();
+      view.sceneMarker = sceneMarkerText;
+      view.copyMarker = copyMarkerText;
+      view.metadata = frame.impl->metadata;
       }
     catch(...) {
-      fail(IOSLinearHDRProofFailureReason::CopyEncode);
+      fail(IOSLinearHDRProofFailureReason::Stale);
+      return false;
+      }
+    return view.sourceTexture!=nullptr && view.destinationBuffer!=nullptr &&
+           view.sceneMarker.size()==53u && view.copyMarker.size()==57u;
+    }
+
+  bool markNativeCopyEncoded(IOSLinearHDRProofFrame& frame) noexcept {
+    if(state!=IOSLinearHDRProofProducerState::Armed ||
+       activeFrame!=&frame || frame.impl==nullptr || frame.impl->encoded ||
+       frame.impl->source==nil || frame.impl->mapped==nullptr) {
+      fail(IOSLinearHDRProofFailureReason::State);
       return false;
       }
     if(!iosAdvanceLinearHDRProofProducerState(
@@ -852,6 +891,19 @@ bool IOSLinearHDRProofProducer::encodeCopy(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,
     const Tempest::Attachment& source) noexcept {
   return impl!=nullptr && impl->encodeCopy(frame,encoder,source);
+  }
+
+bool IOSLinearHDRProofProducer::nativeCopyView(
+    const IOSLinearHDRProofFrame& frame,
+    const Tempest::Attachment& source,
+    IOSLinearHDRProofNativeView& view) noexcept {
+  view = {};
+  return impl!=nullptr && impl->nativeCopyView(frame,source,view);
+  }
+
+bool IOSLinearHDRProofProducer::markNativeCopyEncoded(
+    IOSLinearHDRProofFrame& frame) noexcept {
+  return impl!=nullptr && impl->markNativeCopyEncoded(frame);
   }
 
 void IOSLinearHDRProofProducer::markSubmitted(
