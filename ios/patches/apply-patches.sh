@@ -10,8 +10,8 @@ TEMPEST_ROOT="${TEMPEST_ROOT:-$ROOT/lib/Tempest}"
 
 EXPECTED_URL="https://github.com/tryk016/Tempest.git"
 BASE_COMMIT="61b58f710b00f64d190fed2661f5762909397d1a"
-EXPECTED_COMMIT="308ec44c501c6ee86c153ba4acd63d44e39cf38d"
-EXPECTED_TAG="opengothic-ios-patch-stack-v15"
+EXPECTED_COMMIT="17ac7ae18f9cc27590522b7ed8e292933ef77f37"
+EXPECTED_TAG="opengothic-ios-patch-stack-v16"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -139,6 +139,9 @@ require_literal "$IOS_API" "appleStack[8*1024*1024]" "8 MB game-fiber stack"
 require_literal "$IOS_API" "displayLink invalidate" "display-link teardown"
 require_literal "$IOS_API" "UIInterfaceOrientationMaskLandscape" "landscape lock"
 require_literal "$IOS_API" "idleTimerDisabled" "idle-timer policy"
+require_literal "$IOS_API" "TempestSceneDelegate : UIResponder <UIWindowSceneDelegate>" "scene lifecycle delegate"
+require_literal "$IOS_API" "initWithWindowScene:windowScene" "scene-bound window"
+require_literal "$IOS_API" "configuration.delegateClass = TempestSceneDelegate.class" "scene configuration"
 require_literal "$IOS_API" "tempestIosSetPreferredFrameRate" "runtime frame cadence"
 require_literal "$IOS_API" "uncaught exception in iOS event dispatch" "event exception guard"
 require_literal "$IOS_API" "no-objc-pool" "fiber autorelease-pool guard"
@@ -238,4 +241,4 @@ require_literal "$METAL_TEST" "OfflineBuiltinManifestFailsClosed" "offline Built
 require_literal "$METAL_TEST" "OfflineInventoryMetallib" "offline inventory Metal runtime test"
 require_literal "$METAL_TEST" "OfflineInventoryManifestFailsClosed" "offline inventory fail-closed runtime test"
 
-echo "verified: Tempest renderer-ios fork $actual_commit (clean, async present + app-state + borrowed Metal resource/encoder bridges + one-shot command-buffer bridge + 2D texture readback conformance + runtime compilation counters + exact Builtin role attribution + fail-closed offline Builtin/inventory manifests + device-wide Builtin/inventory binary pipeline archive)"
+echo "verified: Tempest renderer-ios fork $actual_commit (clean, UIScene lifecycle + async present + app-state + borrowed Metal resource/encoder bridges + one-shot command-buffer bridge + 2D texture readback conformance + runtime compilation counters + exact Builtin role attribution + fail-closed offline Builtin/inventory manifests + device-wide Builtin/inventory binary pipeline archive)"
