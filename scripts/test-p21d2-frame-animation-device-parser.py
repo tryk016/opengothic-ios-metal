@@ -78,15 +78,16 @@ def native_block(generation: int, sequence: int) -> list[str]:
         "RendererIOS native scene identity: mode=production "
         f"generation={generation} sequence={sequence}",
         "RendererIOS native scene material-planned: mode=production "
-        "total=29724 opaque=18723 alpha=11001",
+        "total=29724 opaque=18539 alpha=11001 additive=183 multiply2=1",
         "RendererIOS native scene material-drawn: mode=production "
-        "total=29724 opaque=18723 alpha=11001 textured=29724",
+        "total=29724 opaque=18539 alpha=11001 additive=183 multiply2=1 "
+        "textured=29724",
         "RendererIOS native scene kind-planned: mode=production "
         "total=29724 landscape=338 static=22075 movable=7311",
         "RendererIOS native scene kind-drawn: mode=production "
         "total=29724 landscape=338 static=22075 movable=7311",
         "RendererIOS native scene alpha: mode=production "
-        "opaque-pso=18723 alpha-pso=11001 control-alpha-to-opaque=0 "
+        "opaque-pso=18539 alpha-pso=11001 control-alpha-to-opaque=0 "
         "alpha-fallback=0",
         "RendererIOS native scene fail-contract: mode=production "
         "unknown-category=0 unknown-kind=0 invalid-cutoff=0 "
@@ -590,13 +591,13 @@ def main() -> int:
                 good,
                 first_native,
                 1,
-                first_native[1].replace("total=29724 opaque=18723", "total=29723 opaque=18722"),
+                first_native[1].replace("total=29724 opaque=18539", "total=29723 opaque=18538"),
             ),
             "material-conservation": mutate_block(
                 good,
                 first_native,
                 1,
-                first_native[1].replace("opaque=18723 alpha=11001", "opaque=18722 alpha=11001"),
+                first_native[1].replace("opaque=18539 alpha=11001", "opaque=18538 alpha=11001"),
             ),
             "planned-drawn-material": mutate_block(
                 good,
@@ -614,7 +615,7 @@ def main() -> int:
                 good,
                 first_native,
                 5,
-                first_native[5].replace("opaque-pso=18723", "opaque-pso=18722"),
+                first_native[5].replace("opaque-pso=18539", "opaque-pso=18538"),
             ),
             "contract-failure": mutate_block(
                 good,

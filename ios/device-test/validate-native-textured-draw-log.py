@@ -15,7 +15,8 @@ PREFIX = "RendererIOS native scene material-drawn:"
 LINE_RE = re.compile(
     r"^RendererIOS native scene material-drawn: "
     r"mode=(\S+) total=(0|[1-9][0-9]*) opaque=(0|[1-9][0-9]*) "
-    r"alpha=(0|[1-9][0-9]*) textured=(0|[1-9][0-9]*)$"
+    r"alpha=(0|[1-9][0-9]*) additive=(0|[1-9][0-9]*) "
+    r"multiply2=(0|[1-9][0-9]*) textured=(0|[1-9][0-9]*)$"
 )
 
 
@@ -36,15 +37,18 @@ def validate(log: str) -> dict[str, Any]:
             continue
         match = LINE_RE.fullmatch(line)
         require(match is not None, "malformed native material-drawn marker")
-        mode, total_text, opaque_text, alpha_text, textured_text = match.groups()
+        (mode, total_text, opaque_text, alpha_text, additive_text,
+         multiply2_text, textured_text) = match.groups()
         if mode != "production":
             continue
         total = int(total_text)
         opaque = int(opaque_text)
         alpha = int(alpha_text)
+        additive = int(additive_text)
+        multiply2 = int(multiply2_text)
         textured = int(textured_text)
         require(total > 0, "production native draw total is zero")
-        require(opaque + alpha == total,
+        require(opaque + alpha + additive + multiply2 == total,
                 "production native draw category conservation failed")
         require(textured == total,
                 "production native draw texture coverage is incomplete")
@@ -70,7 +74,7 @@ def run_self_test() -> dict[str, Any]:
     valid = (
         "ordinary output\n"
         "RendererIOS native scene material-drawn: mode=production "
-        "total=3 opaque=1 alpha=2 textured=3\n"
+        "total=6 opaque=1 alpha=2 additive=2 multiply2=1 textured=6\n"
     )
     result = validate(valid)
     mutations = {
@@ -80,11 +84,17 @@ def run_self_test() -> dict[str, Any]:
         ),
         "foreign-mode": valid.replace("mode=production", "mode=self-test"),
         "zero-total": valid.replace(
-            "total=3 opaque=1 alpha=2 textured=3",
-            "total=0 opaque=0 alpha=0 textured=0",
+            "total=6 opaque=1 alpha=2 additive=2 multiply2=1 textured=6",
+            "total=0 opaque=0 alpha=0 additive=0 multiply2=0 textured=0",
         ),
-        "texture-coverage": valid.replace("textured=3", "textured=2"),
+        "texture-coverage": valid.replace("textured=6", "textured=5"),
         "category-conservation": valid.replace("opaque=1", "opaque=2"),
+        "missing-additive": valid.replace(" additive=2", ""),
+        "missing-multiply2": valid.replace(" multiply2=1", ""),
+        "legacy-schema": (
+            "RendererIOS native scene material-drawn: mode=production "
+            "total=3 opaque=1 alpha=2 textured=3\n"
+        ),
     }
     for name, mutation in mutations.items():
         expect_invalid(mutation, name)

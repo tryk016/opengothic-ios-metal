@@ -387,8 +387,12 @@ def parse_native_fields(
 
 
 NATIVE_FIELDS = {
-    NATIVE_PREFIXES[0]: ("total", "opaque", "alpha"),
-    NATIVE_PREFIXES[1]: ("total", "opaque", "alpha", "textured"),
+    NATIVE_PREFIXES[0]: (
+        "total", "opaque", "alpha", "additive", "multiply2",
+    ),
+    NATIVE_PREFIXES[1]: (
+        "total", "opaque", "alpha", "additive", "multiply2", "textured",
+    ),
     NATIVE_PREFIXES[2]: ("total", "landscape", "static", "movable"),
     NATIVE_PREFIXES[3]: ("total", "landscape", "static", "movable"),
     NATIVE_PREFIXES[4]: (
@@ -453,11 +457,14 @@ def validate_native_frame(
             f"phase {primary.phase} native planned total is not D1+22")
     require(
         material_planned["opaque"] + material_planned["alpha"]
+        + material_planned["additive"] + material_planned["multiply2"]
         == material_planned["total"],
         f"phase {primary.phase} planned materials do not conserve",
     )
     require(
-        {name: material_drawn[name] for name in ("total", "opaque", "alpha")}
+        {name: material_drawn[name] for name in (
+            "total", "opaque", "alpha", "additive", "multiply2",
+        )}
         == material_planned,
         f"phase {primary.phase} planned/drawn materials differ",
     )
