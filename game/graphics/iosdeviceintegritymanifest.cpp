@@ -902,10 +902,42 @@ const char* errorName(Error error) noexcept {
   return "unknown";
   }
 
+const char* failureStageName(FailureStage stage) noexcept {
+  switch(stage) {
+    case FailureStage::None: return "none";
+    case FailureStage::InitialResourceCollection:
+      return "initial-resource-collection";
+    case FailureStage::InitialSaveCollection:
+      return "initial-save-collection";
+    case FailureStage::ResourceHashing: return "resource-hashing";
+    case FailureStage::SaveHashing: return "save-hashing";
+    case FailureStage::RevalidationHook: return "revalidation-hook";
+    case FailureStage::PostHashResourceRecollection:
+      return "post-hash-resource-recollection";
+    case FailureStage::PostHashSaveRecollection:
+      return "post-hash-save-recollection";
+    case FailureStage::ResourceSnapshotComparison:
+      return "resource-snapshot-comparison";
+    case FailureStage::SaveSnapshotComparison:
+      return "save-snapshot-comparison";
+    case FailureStage::DocumentRootComparison:
+      return "document-root-comparison";
+    }
+  return "unknown";
+  }
+
 namespace {
 
 using RevalidationHook = bool (*)(
     const std::filesystem::path& documentRoot) noexcept;
+
+void setResultError(
+    Result& result, Error error,
+    FailureStage stage = FailureStage::None) noexcept {
+  result.error = error;
+  result.failureStage = error==Error::FileChanged
+      ? stage : FailureStage::None;
+  }
 
 Result createCanonicalManifestsImpl(
     const std::filesystem::path& documentRoot,
@@ -917,62 +949,98 @@ Result createCanonicalManifestsImpl(
         rootPath.c_str(),
         O_RDONLY|O_DIRECTORY|O_NOFOLLOW|closeOnExecFlag()));
     if(!root) {
-      result.error = Error::InvalidDocumentRoot;
+      setResultError(result,Error::InvalidDocumentRoot);
       return result;
       }
     struct stat rootBefore{};
     if(::fstat(root.get(),&rootBefore)!=0 ||
        !S_ISDIR(rootBefore.st_mode)) {
-      result.error = Error::InvalidDocumentRoot;
+      setResultError(result,Error::InvalidDocumentRoot);
       return result;
       }
     if(!leafIsAbsent(root.get(),ResourceManifestFileName) ||
        !leafIsAbsent(root.get(),ProtectedSaveManifestFileName)) {
-      result.error = Error::Collision;
+      setResultError(result,Error::Collision);
       return result;
       }
 
     Collection resources;
     result.error = collectResources(root.get(),resources);
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::InitialResourceCollection;
     result.resourceFileCount = resources.entries.size();
     result.resourceTotalBytes = resources.totalBytes;
-    if(result.error!=Error::None)
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     Collection saves;
     result.error = collectProtectedSaves(root.get(),saves);
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::InitialSaveCollection;
     result.protectedSaveFileCount = saves.entries.size();
     result.protectedSaveTotalBytes = saves.totalBytes;
-    if(result.error!=Error::None)
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     result.error = hashCollection(root.get(),resources);
-    if(result.error!=Error::None)
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::ResourceHashing;
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     result.error = hashCollection(root.get(),saves);
-    if(result.error!=Error::None)
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::SaveHashing;
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     if(revalidationHook!=nullptr && !revalidationHook(documentRoot)) {
-      result.error = Error::FileChanged;
+      setResultError(result,Error::FileChanged,FailureStage::RevalidationHook);
       return result;
       }
 
     Collection resourcesAfterHash;
     result.error = collectResources(root.get(),resourcesAfterHash);
-    if(result.error!=Error::None)
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::PostHashResourceRecollection;
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     Collection savesAfterHash;
     result.error = collectProtectedSaves(root.get(),savesAfterHash);
-    if(result.error!=Error::None)
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::PostHashSaveRecollection;
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
-    if(!sameCollectionSnapshot(resources,resourcesAfterHash) ||
-       !sameCollectionSnapshot(saves,savesAfterHash)) {
-      result.error = Error::FileChanged;
+      }
+    if(!sameCollectionSnapshot(resources,resourcesAfterHash)) {
+      setResultError(
+          result,Error::FileChanged,FailureStage::ResourceSnapshotComparison);
+      return result;
+      }
+    if(!sameCollectionSnapshot(saves,savesAfterHash)) {
+      setResultError(
+          result,Error::FileChanged,FailureStage::SaveSnapshotComparison);
       return result;
       }
 
     struct stat rootAfterHash{};
     if(::fstat(root.get(),&rootAfterHash)!=0 ||
        !sameStableStat(rootBefore,rootAfterHash)) {
-      result.error = Error::FileChanged;
+      setResultError(
+          result,Error::FileChanged,FailureStage::DocumentRootComparison);
       return result;
       }
 
@@ -981,12 +1049,14 @@ Result createCanonicalManifestsImpl(
     result.error = prepareResourceManifest(
         root.get(),resources,resourceManifest);
     if(result.error!=Error::None) {
+      result.failureStage = FailureStage::None;
       unlinkTemporary(root.get(),resourceManifest);
       return result;
       }
     result.error = prepareProtectedSaveManifest(
         root.get(),saves,saveManifest);
     if(result.error!=Error::None) {
+      result.failureStage = FailureStage::None;
       unlinkTemporary(root.get(),resourceManifest);
       unlinkTemporary(root.get(),saveManifest);
       return result;
@@ -994,14 +1064,16 @@ Result createCanonicalManifestsImpl(
     result.error = publishBoth(root.get(),resourceManifest,saveManifest);
     unlinkTemporary(root.get(),resourceManifest);
     unlinkTemporary(root.get(),saveManifest);
-    if(result.error!=Error::None)
+    if(result.error!=Error::None) {
+      result.failureStage = FailureStage::None;
       return result;
+      }
     result.resourceManifestSha256 = resourceManifest.sha256;
     result.protectedSaveManifestSha256 = saveManifest.sha256;
     return result;
     }
   catch(...) {
-    result.error = Error::OpenFailed;
+    setResultError(result,Error::OpenFailed);
     return result;
     }
   }
@@ -1095,6 +1167,30 @@ namespace RendererIOSDeviceIntegrity {
 const char* errorName(Error error) noexcept {
   return error==Error::UnsupportedPlatform
       ? "unsupported-platform" : "unavailable";
+  }
+
+const char* failureStageName(FailureStage stage) noexcept {
+  switch(stage) {
+    case FailureStage::None: return "none";
+    case FailureStage::InitialResourceCollection:
+      return "initial-resource-collection";
+    case FailureStage::InitialSaveCollection:
+      return "initial-save-collection";
+    case FailureStage::ResourceHashing: return "resource-hashing";
+    case FailureStage::SaveHashing: return "save-hashing";
+    case FailureStage::RevalidationHook: return "revalidation-hook";
+    case FailureStage::PostHashResourceRecollection:
+      return "post-hash-resource-recollection";
+    case FailureStage::PostHashSaveRecollection:
+      return "post-hash-save-recollection";
+    case FailureStage::ResourceSnapshotComparison:
+      return "resource-snapshot-comparison";
+    case FailureStage::SaveSnapshotComparison:
+      return "save-snapshot-comparison";
+    case FailureStage::DocumentRootComparison:
+      return "document-root-comparison";
+    }
+  return "unknown";
   }
 
 Result createCanonicalManifests(

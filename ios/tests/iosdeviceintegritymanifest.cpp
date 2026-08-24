@@ -91,6 +91,10 @@ void requireMode0600(const fs::path& path) {
   assert((identity.st_mode&0777)==0600);
   }
 
+void requireNoFailureStage(const Integrity::Result& result) {
+  assert(result.failureStage==Integrity::FailureStage::None);
+  }
+
 void testArguments() {
   constexpr const char* none[] = {"Gothic2Notr"};
   constexpr const char* valid[] = {
@@ -128,22 +132,61 @@ void testArguments() {
   static_assert(!Integrity::parseArguments(1,invalidVector).valid());
   }
 
+void testFailureStageNames() {
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::None))=="none");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::InitialResourceCollection))==
+      "initial-resource-collection");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::InitialSaveCollection))==
+      "initial-save-collection");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::ResourceHashing))=="resource-hashing");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::SaveHashing))=="save-hashing");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::RevalidationHook))=="revalidation-hook");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::PostHashResourceRecollection))==
+      "post-hash-resource-recollection");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::PostHashSaveRecollection))==
+      "post-hash-save-recollection");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::ResourceSnapshotComparison))==
+      "resource-snapshot-comparison");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::SaveSnapshotComparison))==
+      "save-snapshot-comparison");
+  assert(std::string_view(Integrity::failureStageName(
+      Integrity::FailureStage::DocumentRootComparison))==
+      "document-root-comparison");
+  }
+
 void testCleanup() {
   Fixture fixture;
   createBaseFixture(fixture.root);
   writeBytes(fixture.root/"unrelated.txt","keep");
-  assert(Integrity::createCanonicalManifests(fixture.root).success());
-  assert(Integrity::removeCanonicalManifests(fixture.root).success());
+  const auto created = Integrity::createCanonicalManifests(fixture.root);
+  assert(created.success());
+  requireNoFailureStage(created);
+  const auto removed = Integrity::removeCanonicalManifests(fixture.root);
+  assert(removed.success());
+  requireNoFailureStage(removed);
   assert(!fs::exists(fixture.root/Integrity::ResourceManifestFileName));
   assert(!fs::exists(fixture.root/Integrity::ProtectedSaveManifestFileName));
   assert(readBytes(fixture.root/"unrelated.txt")=="keep");
-  assert(Integrity::removeCanonicalManifests(fixture.root).success());
+  const auto removedAgain = Integrity::removeCanonicalManifests(fixture.root);
+  assert(removedAgain.success());
+  requireNoFailureStage(removedAgain);
 
   writeBytes(fixture.root/Integrity::ResourceManifestFileName,"owned");
   assert(::symlink("unrelated.txt",
       (fixture.root/Integrity::ProtectedSaveManifestFileName).c_str())==0);
   const auto collision = Integrity::removeCanonicalManifests(fixture.root);
   assert(collision.error==Integrity::Error::NonRegularEntry);
+  requireNoFailureStage(collision);
   assert(readBytes(fixture.root/Integrity::ResourceManifestFileName)=="owned");
   assert(fs::is_symlink(fixture.root/Integrity::ProtectedSaveManifestFileName));
   }
@@ -154,6 +197,7 @@ void testCanonicalFixture() {
   const Integrity::Result result =
       Integrity::createCanonicalManifests(fixture.root);
   assert(result.success());
+  requireNoFailureStage(result);
   assert(result.resourceFileCount==4u);
   assert(result.resourceTotalBytes==20u);
   assert(result.protectedSaveFileCount==4u);
@@ -198,6 +242,7 @@ void testCanonicalFixture() {
   const Integrity::Result collision =
       Integrity::createCanonicalManifests(fixture.root);
   assert(collision.error==Integrity::Error::Collision);
+  requireNoFailureStage(collision);
   assert(readBytes(resource)==resourceBefore);
   assert(readBytes(saves)==savesBefore);
   }
@@ -208,6 +253,7 @@ void testMissingExcludedFile() {
   assert(fs::remove(fixture.root/"system"/"Gothic.ini"));
   const auto result = Integrity::createCanonicalManifests(fixture.root);
   assert(result.error==Integrity::Error::MissingExcludedFile);
+  requireNoFailureStage(result);
   }
 
 void testMissingSave() {
@@ -216,6 +262,7 @@ void testMissingSave() {
   assert(fs::remove(fixture.root/"save_slot_4.sav"));
   const auto result = Integrity::createCanonicalManifests(fixture.root);
   assert(result.error==Integrity::Error::MissingProtectedSave);
+  requireNoFailureStage(result);
   }
 
 void testSingleLeafCollisionPublishesNothing() {
@@ -226,6 +273,7 @@ void testSingleLeafCollisionPublishesNothing() {
   writeBytes(saveManifest,"sentinel");
   const auto result = Integrity::createCanonicalManifests(fixture.root);
   assert(result.error==Integrity::Error::Collision);
+  requireNoFailureStage(result);
   assert(!fs::exists(fixture.root/Integrity::ResourceManifestFileName));
   assert(readBytes(saveManifest)=="sentinel");
   }
@@ -237,6 +285,7 @@ void testSymlinksFailClosed() {
     assert(::symlink("a.txt",(fixture.root/"Data"/"link").c_str())==0);
     const auto result = Integrity::createCanonicalManifests(fixture.root);
     assert(result.error==Integrity::Error::NonRegularEntry);
+    requireNoFailureStage(result);
   }
   {
     Fixture fixture;
@@ -246,6 +295,7 @@ void testSymlinksFailClosed() {
                      (fixture.root/"save_slot_2.sav").c_str())==0);
     const auto result = Integrity::createCanonicalManifests(fixture.root);
     assert(result.error==Integrity::Error::NonRegularEntry);
+    requireNoFailureStage(result);
   }
   }
 
@@ -256,6 +306,7 @@ void testMissingRoot() {
   assert(fs::remove(fixture.root/"_work"/"Data"));
   const auto result = Integrity::createCanonicalManifests(fixture.root);
   assert(result.error==Integrity::Error::MissingRoot);
+  requireNoFailureStage(result);
   }
 
 void testSparseLimitsBeforeHashing() {
@@ -270,6 +321,7 @@ void testSparseLimitsBeforeHashing() {
     assert(::close(descriptor)==0);
     const auto result = Integrity::createCanonicalManifests(fixture.root);
     assert(result.error==Integrity::Error::FileSizeLimit);
+    requireNoFailureStage(result);
   }
   {
     Fixture fixture;
@@ -285,6 +337,7 @@ void testSparseLimitsBeforeHashing() {
       }
     const auto result = Integrity::createCanonicalManifests(fixture.root);
     assert(result.error==Integrity::Error::TotalSizeLimit);
+    requireNoFailureStage(result);
   }
   }
 
@@ -336,6 +389,38 @@ bool addLateResourceFile(const fs::path& root) noexcept {
     }
   }
 
+bool replaceAlreadyHashedSaveWithSameSize(
+    const fs::path& root) noexcept {
+  try {
+    const fs::path target = root/"save_slot_1.sav";
+    const int descriptor = ::open(
+        target.c_str(),O_WRONLY|O_TRUNC|O_NOFOLLOW);
+    if(descriptor<0)
+      return false;
+    struct stat before{};
+    const char replacement[] = "omega!";
+    const bool wrote = ::fstat(descriptor,&before)==0 &&
+        ::write(descriptor,replacement,6u)==6 &&
+        ::fsync(descriptor)==0;
+    timespec changed[2] = {
+      {0,UTIME_OMIT},
+      {before.st_mtimespec.tv_sec+1,before.st_mtimespec.tv_nsec},
+      };
+    const bool timestamped = wrote && ::futimens(descriptor,changed)==0;
+    const bool closed = ::close(descriptor)==0;
+    HookMutationSucceeded = timestamped && closed;
+    return HookMutationSucceeded;
+    }
+  catch(...) {
+    return false;
+    }
+  }
+
+bool rejectRevalidation(const fs::path&) noexcept {
+  HookMutationSucceeded = true;
+  return false;
+  }
+
 void requireNoPublishedManifests(const fs::path& root) {
   assert(!fs::exists(root/Integrity::ResourceManifestFileName));
   assert(!fs::exists(root/Integrity::ProtectedSaveManifestFileName));
@@ -350,6 +435,8 @@ void testPostHashExactTreeRevalidation() {
         fixture.root,replaceAlreadyHashedFileWithSameSize);
     assert(HookMutationSucceeded);
     assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==
+        Integrity::FailureStage::ResourceSnapshotComparison);
     requireNoPublishedManifests(fixture.root);
   }
   {
@@ -360,6 +447,31 @@ void testPostHashExactTreeRevalidation() {
         fixture.root,addLateResourceFile);
     assert(HookMutationSucceeded);
     assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==
+        Integrity::FailureStage::ResourceSnapshotComparison);
+    requireNoPublishedManifests(fixture.root);
+  }
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    HookMutationSucceeded = false;
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,replaceAlreadyHashedSaveWithSameSize);
+    assert(HookMutationSucceeded);
+    assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==
+        Integrity::FailureStage::SaveSnapshotComparison);
+    requireNoPublishedManifests(fixture.root);
+  }
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    HookMutationSucceeded = false;
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,rejectRevalidation);
+    assert(HookMutationSucceeded);
+    assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==Integrity::FailureStage::RevalidationHook);
     requireNoPublishedManifests(fixture.root);
   }
   }
@@ -377,7 +489,7 @@ struct SourceAnchor final {
   std::string_view snippet;
   };
 
-static constexpr std::array<SourceAnchor,51> SourceAnchors = {{
+static constexpr std::array<SourceAnchor,59> SourceAnchors = {{
   {"header","MaximumFileCount = 100000u"},
   {"header","MaximumTotalBytes = 16ull*1024ull*1024ull*1024ull"},
   {"header","MaximumFileBytes = 8ull*1024ull*1024ull*1024ull"},
@@ -403,7 +515,7 @@ static constexpr std::array<SourceAnchor,51> SourceAnchors = {{
   {"implementation","for(const std::string_view save:ProtectedSaves)"},
   {"implementation","std::vector<DirectoryIdentity> directories;"},
   {"implementation","Collection resourcesAfterHash;\n    result.error = collectResources(root.get(),resourcesAfterHash);"},
-  {"implementation","if(!sameCollectionSnapshot(resources,resourcesAfterHash) ||\n       !sameCollectionSnapshot(saves,savesAfterHash))"},
+  {"implementation","if(!sameCollectionSnapshot(resources,resourcesAfterHash)) {"},
   {"implementation",R"anchor("{\"schemaVersion\":1,\"roots\":[\"Data\",\"_work/Data\",")anchor"},
   {"implementation",R"anchor("{\"relativePath\":\"")anchor"},
   {"implementation",R"anchor("{\"schemaVersion\":1,\"protectedSlots\":[1,2,3,4],")anchor"},
@@ -414,6 +526,13 @@ static constexpr std::array<SourceAnchor,51> SourceAnchors = {{
   {"implementation","std::strcmp(candidate.sha256.data(),prepared.sha256.data())!=0"},
   {"implementation","O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW"},
   {"implementation","if(!leafIsAbsent(root.get(),ResourceManifestFileName) ||\n       !leafIsAbsent(root.get(),ProtectedSaveManifestFileName))"},
+  {"implementation","result.error = collectResources(root.get(),resources);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::InitialResourceCollection;"},
+  {"implementation","result.error = collectProtectedSaves(root.get(),saves);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::InitialSaveCollection;"},
+  {"implementation","result.error = hashCollection(root.get(),resources);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::ResourceHashing;"},
+  {"implementation","result.error = hashCollection(root.get(),saves);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::SaveHashing;"},
+  {"implementation","result.error = collectResources(root.get(),resourcesAfterHash);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::PostHashResourceRecollection;"},
+  {"implementation","result.error = collectProtectedSaves(root.get(),savesAfterHash);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::PostHashSaveRecollection;"},
+  {"implementation","if(::fstat(root.get(),&rootAfterHash)!=0 ||\n       !sameStableStat(rootBefore,rootAfterHash)) {\n      setResultError(\n          result,Error::FileChanged,FailureStage::DocumentRootComparison);"},
   {"implementation","Result removeCanonicalManifests(\n    const std::filesystem::path& documentRoot) noexcept {\n  Result result;\n  try {"},
   {"implementation","::unlinkat(root.get(),name.c_str(),0)"},
   {"implementation","::fsync(root.get())!=0"},
@@ -425,6 +544,7 @@ static constexpr std::array<SourceAnchor,51> SourceAnchors = {{
   {"main","std::fflush(stdout)!=0"},
   {"main","throw std::runtime_error(\n            \"RendererIOS device integrity cleanup terminal write failed\");\n      return 0;"},
   {"main","if(integrityArguments.cleanupRequested) {\n      const auto integrity =\n          RendererIOSDeviceIntegrity::removeCanonicalManifests(\".\");\n      if(!integrity.success())\n        throw std::runtime_error(\n            std::string(\"RendererIOS device integrity cleanup failed: \")+\n            RendererIOSDeviceIntegrity::errorName(integrity.error));\n      if(std::fprintf(stdout,\"%s\\n\",\n                      RendererIOSDeviceIntegrity::CleanupTerminalMarker.data())<0 ||\n         std::fflush(stdout)!=0)\n        throw std::runtime_error(\n            \"RendererIOS device integrity cleanup terminal write failed\");\n      return 0;\n      }"},
+  {"main","if(integrity.error==RendererIOSDeviceIntegrity::Error::FileChanged)\n          message += std::string(\" stage=\")+\n              RendererIOSDeviceIntegrity::failureStageName(\n                  integrity.failureStage);"},
   {"main","RendererIOSDeviceIntegrity::TerminalMarker.data()"},
   {"cmake","    \"game/*.cpp\")"},
   {"cmake","\"-framework CoreFoundation\""},
@@ -484,13 +604,14 @@ void testSourceMutationOracle() {
       ++mutationsKilled;
       }
     }
-  assert(mutationsKilled==102u);
+  assert(mutationsKilled==118u);
   }
 
 }
 
 int main() {
   testArguments();
+  testFailureStageNames();
   testCanonicalFixture();
   testCleanup();
   testMissingExcludedFile();
@@ -503,6 +624,6 @@ int main() {
   testSourceMutationOracle();
   std::printf(
       "RendererIOS device integrity manifest host oracle: "
-      "PASS mutations-killed=102\n");
+      "PASS mutations-killed=118\n");
   return 0;
   }

@@ -105,8 +105,26 @@ enum class Error : uint8_t {
   PublishFailed,
   };
 
+// Diagnostics-only detail for the fail-closed FileChanged result. This is
+// intentionally broad: it identifies the integrity phase without exposing
+// filesystem-specific internals or changing the manifest format.
+enum class FailureStage : uint8_t {
+  None,
+  InitialResourceCollection,
+  InitialSaveCollection,
+  ResourceHashing,
+  SaveHashing,
+  RevalidationHook,
+  PostHashResourceRecollection,
+  PostHashSaveRecollection,
+  ResourceSnapshotComparison,
+  SaveSnapshotComparison,
+  DocumentRootComparison,
+  };
+
 struct Result final {
   Error error = Error::None;
+  FailureStage failureStage = FailureStage::None;
   uint64_t resourceFileCount = 0u;
   uint64_t resourceTotalBytes = 0u;
   uint64_t protectedSaveFileCount = 0u;
@@ -120,6 +138,7 @@ struct Result final {
   };
 
 const char* errorName(Error error) noexcept;
+const char* failureStageName(FailureStage stage) noexcept;
 
 // documentRoot is the application Documents directory. The function is
 // host-testable and has no UIKit/Objective-C types in its public contract.
