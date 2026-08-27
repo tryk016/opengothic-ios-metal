@@ -6645,7 +6645,7 @@ import re
 
 scene = Path("game/graphics/iosgpuscene.mm").read_text()
 bink = Path("game/graphics/iosgpubink.mm").read_text()
-start = scene.index("void IOSGPUScene::Impl::encodeMultiply2Causal(")
+start = scene.index("void IOSGPUScene::Impl::encodeMultiply2(")
 end_marker = "\n}\n#endif\n\nvoid IOSGPUScene::Impl::encodeLandscape("
 end = scene.index(end_marker, start) + len("\n}")
 causal = scene[start:end]
@@ -6657,9 +6657,9 @@ caller_end = scene.index(
 )
 caller = scene[caller_start:caller_end]
 bridge = """const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
-        impl->owner,encoder,&context,&Impl::encodeMultiply2Causal);"""
+        owner,encoder,&context,&Impl::encodeMultiply2);"""
 if scene.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1 or \
-   caller.count(bridge) != 1:
+   causal.count(bridge) != 1:
     raise SystemExit("Multiply2 command-buffer bridge call drift")
 allowed = {
     "id<MTLCommandBuffer>": 2,
