@@ -1,4 +1,5 @@
 #include <cassert>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -60,6 +61,8 @@ int main(int argc, char** argv) {
   assert(header.find("using Multiply2InputArtifact =")==std::string::npos);
   assert(header.find("struct Multiply2InputArtifact final")!=
          std::string::npos);
+  assert(count(header,"Report encodePreparedMultiply2Causal(")==1u);
+  assert(count(header,"Report encodePreparedMultiply2Continuation(")==1u);
   assert(plan.find(
       "defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A)\n"
       "  return \"multiply2-a\";")!=std::string::npos);
@@ -131,6 +134,20 @@ int main(int argc, char** argv) {
   assert(scene.find("insertDebugSignpost:(NSString*)draw.drawId.get()")!=
          std::string::npos);
   assert(count(scene,"Tempest::MetalApi::withActiveCommandBuffer(")==1u);
+  assert(count(scene,"&Impl::encodeMultiply2")==1u);
+  assert(ordered(scene,{
+      "enum class NativeMultiply2EncodeMode : uint8_t {",
+      "CaptureProof,",
+      "Continuation,",
+      "explicit NativeMultiply2Context(",
+      "const NativeMultiply2EncodeMode mode;",
+      "Impl::NativeMultiply2EncodeMode::CaptureProof",
+      "Impl::NativeMultiply2EncodeMode::Continuation"}));
+  assert(scene.find(
+      "continuation && context.hdrProofBuffer==nil &&\n"
+      "          context.coverageBuffer==nil && context.hdrBytesPerRow==0u &&\n"
+      "          context.coverageBytesPerRow==0u && context.sceneMarker.empty() &&\n"
+      "          context.proofMarker.empty()")!=std::string::npos);
   assert(ordered(scene,{
       "first.colorAttachments[0].texture = sceneHDR;",
       "first.depthAttachment.texture = depthStencil;",
@@ -140,6 +157,7 @@ int main(int argc, char** argv) {
       "context.scene->baseDepthState,0u",
       "context.scene->multiply2DepthState,1u",
       "context.prepared->markNativeBaseMultiplyCompleted();",
+      "if(captureProof) {",
       "@\"RendererIOS.HDRProofCopy.Multiply2.v1\"",
       "copyFromTexture:sceneHDR",
       "@\"RendererIOS.Multiply2.CoverageStencilCopy.v1\"",
@@ -152,6 +170,135 @@ int main(int argc, char** argv) {
       "context.scene->additiveDepthState,0u",
       "context.prepared->markNativeAdditiveCompleted();",
       "context.prepared->nativeCompleted = true;"}));
+  assert(count(scene,"@\"RendererIOS.Multiply2.BaseAndCausal.v1\"")==1u);
+  assert(count(scene,"@\"RendererIOS.HDRProofCopy.Multiply2.v1\"")==1u);
+  assert(count(scene,
+               "@\"RendererIOS.Multiply2.CoverageStencilCopy.v1\"")==2u);
+  assert(count(scene,
+               "@\"RendererIOS.Multiply2.AdditiveAfterProof.v1\"")==2u);
+  assert(count(scene,
+               "@\"RendererIOS.Multiply2.BaseAndContinuation.v1\"")==3u);
+  assert(count(scene,
+               "@\"RendererIOS.Multiply2.AdditiveContinuation.v1\"")==3u);
+  assert(ordered(scene,{
+      "bool IOSGPUScene::Impl::continuationDepthStencilForSceneHDR(",
+      "sceneHDR.device!=device",
+      "sceneHDR.pixelFormat!=MTLPixelFormatRG11B10Float",
+      "target.device==device",
+      "target.pixelFormat==MTLPixelFormatDepth32Float_Stencil8",
+      "target.width==sceneHDR.width",
+      "target.height==sceneHDR.height",
+      "target.sampleCount==1u",
+      "target.storageMode==MTLStorageModePrivate",
+      "target.cpuCacheMode==MTLCPUCacheModeDefaultCache",
+      "target.hazardTrackingMode==MTLHazardTrackingModeTracked",
+      "target.usage==MTLTextureUsageRenderTarget",
+      "if(target==nil) {",
+      "textureDescriptor.pixelFormat =\n"
+      "            MTLPixelFormatDepth32Float_Stencil8;",
+      "textureDescriptor.width = sceneHDR.width;",
+      "textureDescriptor.height = sceneHDR.height;",
+      "textureDescriptor.sampleCount = 1u;",
+      "MTLResourceCPUCacheModeDefaultCache |",
+      "MTLResourceStorageModePrivate |",
+      "MTLResourceHazardTrackingModeTracked;",
+      "textureDescriptor.usage = MTLTextureUsageRenderTarget;",
+      "[device newTextureWithDescriptor:textureDescriptor]",
+      "multiply2ContinuationDepthStencil = allocated.relinquish();",
+      "else if(!validContinuationTarget(target)) {",
+      "return false;"}));
+  assert(count(scene,
+               "multiply2ContinuationDepthStencil = allocated.relinquish();")==
+         1u);
+  assert(count(scene,"[multiply2ContinuationDepthStencil release];")==1u);
+  assert(scene.find(
+      "depthStencil==\n"
+      "                  (id<MTLTexture>)context.scene->\n"
+      "                      multiply2ContinuationDepthStencil")!=
+         std::string::npos);
+  assert(scene.find(
+      "context.report.encodedPhaseDrawCount!=context.report.drawCount")!=
+         std::string::npos);
+  assert(scene.find(
+      "context.report.encodedPhaseTexturedDrawCount!=\n"
+      "           context.report.texturedDrawCount")!=std::string::npos);
+  assert(scene.find(
+      "recordPlannedDrawnFailure(context.report);\n"
+      "      if(context.prepared!=nullptr)\n"
+      "        context.prepared->ready = false;")!=std::string::npos);
+
+  const std::array<std::string_view,7u> hdrStates = {
+      "Disabled","Armed","Encoded","Submitted","Completed","Published",
+      "Failed"};
+  const std::array<std::string_view,7u> coverageStates = {
+      "Disabled","Armed","Prepared","Encoded","Submitted","Published",
+      "Failed"};
+  std::size_t capturePairs = 0u;
+  std::size_t continuationPairs = 0u;
+  std::size_t rejectedPairs = 0u;
+  for(const auto hdr:hdrStates) {
+    for(const auto coverage:coverageStates) {
+      if(hdr=="Armed" && coverage=="Armed")
+        ++capturePairs;
+      else if((hdr=="Submitted" && coverage=="Submitted") ||
+              (hdr=="Published" && coverage=="Published"))
+        ++continuationPairs;
+      else
+        ++rejectedPairs;
+      }
+    }
+  assert(capturePairs==1u);
+  assert(continuationPairs==2u);
+  assert(rejectedPairs==46u);
+  assert(count(context,
+               "return IOSMultiply2SceneAdmission::CaptureProof;")==1u);
+  assert(count(context,
+               "return IOSMultiply2SceneAdmission::Continuation;")==1u);
+  assert(count(context,
+               "return IOSMultiply2SceneAdmission::Reject;")==1u);
+  assert(ordered(context,{
+      "const bool multiply2CausalProducersPresent =",
+      "? impl->linearHDRProof->state()\n"
+      "              : IOSLinearHDRProofProducerState::Disabled;",
+      "? impl->multiply2Coverage->state()\n"
+      "              : IOSMultiply2CoverageProducerState::Disabled;",
+      "const IOSMultiply2SceneAdmission multiply2Admission =",
+      "multiply2Admission==IOSMultiply2SceneAdmission::CaptureProof;",
+      "if(multiply2Admission==IOSMultiply2SceneAdmission::Reject)"}));
+  assert(ordered(context,{
+      "constexpr IOSMultiply2SceneAdmission iosMultiply2SceneAdmission(",
+      "hdr==IOSLinearHDRProofProducerState::Armed",
+      "coverage==IOSMultiply2CoverageProducerState::Armed",
+      "return IOSMultiply2SceneAdmission::CaptureProof;",
+      "hdr==IOSLinearHDRProofProducerState::Submitted",
+      "coverage==IOSMultiply2CoverageProducerState::Submitted",
+      "hdr==IOSLinearHDRProofProducerState::Published",
+      "coverage==IOSMultiply2CoverageProducerState::Published",
+      "return IOSMultiply2SceneAdmission::Continuation;",
+      "return IOSMultiply2SceneAdmission::Reject;",
+      "iosMultiply2SceneAdmission(\n"
+      "                linearHDRProofState,multiply2CoverageState);",
+      "if(multiply2Admission==IOSMultiply2SceneAdmission::Reject)",
+      "impl->gpuScene->encodePreparedMultiply2Causal(",
+      "impl->gpuScene->encodePreparedMultiply2Continuation("}));
+  const std::string_view lifecycleStartToken =
+      "#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)\n"
+      "        IOSGPUScene::Report report;";
+  const std::size_t lifecycleStart = context.find(lifecycleStartToken);
+  assert(lifecycleStart!=std::string::npos);
+  const std::size_t lifecycleEnd = context.find("#else",lifecycleStart);
+  assert(lifecycleEnd!=std::string::npos);
+  const std::string_view lifecycleEncoding(
+      context.data()+lifecycleStart,lifecycleEnd-lifecycleStart);
+  assert(lifecycleEncoding.find("encodePreparedMultiply2Causal(")!=
+         std::string_view::npos);
+  assert(lifecycleEncoding.find("encodePreparedMultiply2Continuation(")!=
+         std::string_view::npos);
+  assert(lifecycleEncoding.find("encodePrepared(encoder,preparedScene)")==
+         std::string_view::npos);
+  assert(lifecycleEncoding.find("linearHDRTargets.depth")==
+         std::string_view::npos);
+  assert(lifecycleEncoding.find("setFramebuffer(")==std::string_view::npos);
   assert(ordered(context,{
       "impl->linearHDRProof->nativeCopyView(",
       "impl->gpuScene->multiply2CoverageMetadata(",
@@ -231,6 +378,12 @@ int main(int argc, char** argv) {
   assert(coverageProducer.find(
       "RendererIOS.Multiply2.CausalStencil.v1")!=std::string::npos);
   assert(coverageProducer.find("RENAME_EXCL")!=std::string::npos);
+  assert(coverageProducer.find("fail(\"payload-invalid-byte\");")!=
+         std::string::npos);
+  assert(coverageProducer.find("fail(\"payload-missing-coverage\");")!=
+         std::string::npos);
+  assert(coverageProducer.find("fail(\"payload-build\");")!=
+         std::string::npos);
   assert(cmake.find("OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A=1")!=
          std::string::npos);
   assert(cmake.find("OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B=1")!=

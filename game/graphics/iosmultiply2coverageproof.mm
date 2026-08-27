@@ -376,9 +376,24 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
       return false;
     }
     std::vector<std::byte> artifact;
+    bool hasCoverage = false;
+    bool hasInvalidCoverageByte = false;
+    for(const std::byte value:payload) {
+      const uint8_t byte = std::to_integer<uint8_t>(value);
+      hasCoverage = hasCoverage || byte==1u;
+      hasInvalidCoverageByte = hasInvalidCoverageByte || byte>1u;
+    }
+    if(hasInvalidCoverageByte) {
+      fail("payload-invalid-byte");
+      return false;
+    }
+    if(!hasCoverage) {
+      fail("payload-missing-coverage");
+      return false;
+    }
     if(!iosBuildMultiply2CoverageProofV1(
            frame.impl->metadata,payload,artifact)) {
-      fail("payload");
+      fail("payload-build");
       return false;
     }
     IOSMultiply2CoverageProofView parsed;

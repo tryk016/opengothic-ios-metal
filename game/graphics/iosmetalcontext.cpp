@@ -264,6 +264,28 @@ constexpr char RendererIOSLinearHDRCaptureProfileEvidence[] =
 
 namespace {
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+enum class IOSMultiply2SceneAdmission : uint8_t {
+  CaptureProof,
+  Continuation,
+  Reject,
+  };
+
+constexpr IOSMultiply2SceneAdmission iosMultiply2SceneAdmission(
+    IOSLinearHDRProofProducerState hdr,
+    IOSMultiply2CoverageProducerState coverage) noexcept {
+  if(hdr==IOSLinearHDRProofProducerState::Armed &&
+     coverage==IOSMultiply2CoverageProducerState::Armed)
+    return IOSMultiply2SceneAdmission::CaptureProof;
+  if((hdr==IOSLinearHDRProofProducerState::Submitted &&
+      coverage==IOSMultiply2CoverageProducerState::Submitted) ||
+     (hdr==IOSLinearHDRProofProducerState::Published &&
+      coverage==IOSMultiply2CoverageProducerState::Published))
+    return IOSMultiply2SceneAdmission::Continuation;
+  return IOSMultiply2SceneAdmission::Reject;
+}
+#endif
+
 #if !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
 IOSGPUScene::DepthFormat iosGPUSceneDepthFormat(TextureFormat format) {
   switch(format) {
@@ -5588,11 +5610,36 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
           throw std::runtime_error(std::move(message));
           };
+        const bool multiply2CausalProducersPresent =
+            impl->linearHDRProof!=nullptr &&
+            impl->multiply2Coverage!=nullptr;
+        const auto linearHDRProofState =
+            multiply2CausalProducersPresent
+              ? impl->linearHDRProof->state()
+              : IOSLinearHDRProofProducerState::Disabled;
+        const auto multiply2CoverageState =
+            multiply2CausalProducersPresent
+              ? impl->multiply2Coverage->state()
+              : IOSMultiply2CoverageProducerState::Disabled;
+        const IOSMultiply2SceneAdmission multiply2Admission =
+            iosMultiply2SceneAdmission(
+                linearHDRProofState,multiply2CoverageState);
+        const bool multiply2CausalSplitPhase =
+            multiply2Admission==IOSMultiply2SceneAdmission::CaptureProof;
+        if(multiply2Admission==IOSMultiply2SceneAdmission::Reject)
+          failMultiply2SplitPhase(
+              "RendererIOS Multiply2 causal proof producers are unavailable");
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         bool linearHDRProofPrepared = false;
-        if(impl->linearHDRProof!=nullptr &&
-           impl->linearHDRProof->armed()) {
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+        const bool prepareLinearHDRProof = multiply2CausalSplitPhase;
+#else
+        const bool prepareLinearHDRProof =
+            impl->linearHDRProof!=nullptr &&
+            impl->linearHDRProof->armed();
+#endif
+        if(prepareLinearHDRProof) {
           linearHDRProofPrepared = impl->linearHDRProof->prepareFrame(
               frameContext.linearHDRProof,
               impl->linearHDRTargets.color,
@@ -5611,38 +5658,44 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         encoder.setDebugMarker("RendererIOS native Landscape HDR");
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
-        if(!linearHDRProofPrepared || impl->multiply2Coverage==nullptr)
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 causal proof producers are unavailable");
-        IOSLinearHDRProofNativeView hdrNative;
-        IOSMultiply2CoverageProofMetadata coverageMetadata;
-        IOSMultiply2CoverageNativeView coverageNative;
-        if(!impl->linearHDRProof->nativeCopyView(
-               frameContext.linearHDRProof,
-               impl->linearHDRTargets.color,hdrNative) ||
-           !impl->gpuScene->multiply2CoverageMetadata(
-               preparedScene,hdrNative.metadata,
-               impl->swapchain.w(),impl->swapchain.h(),
-               coverageMetadata) ||
-           !impl->multiply2Coverage->prepareFrame(
-               frameContext.multiply2Coverage,
-               impl->linearHDRTargets.color,coverageMetadata) ||
-           !impl->multiply2Coverage->nativeView(
-               frameContext.multiply2Coverage,coverageNative))
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 causal coverage preflight failed");
-        multiply2SplitPhaseStarted = true;
-        const auto report =
-          impl->gpuScene->encodePreparedMultiply2Causal(
+        IOSGPUScene::Report report;
+        if(multiply2CausalSplitPhase) {
+          if(!linearHDRProofPrepared || impl->multiply2Coverage==nullptr)
+            failMultiply2SplitPhase(
+                "RendererIOS Multiply2 causal proof producers are unavailable");
+          IOSLinearHDRProofNativeView hdrNative;
+          IOSMultiply2CoverageProofMetadata coverageMetadata;
+          IOSMultiply2CoverageNativeView coverageNative;
+          if(!impl->linearHDRProof->nativeCopyView(
+                 frameContext.linearHDRProof,
+                 impl->linearHDRTargets.color,hdrNative) ||
+             !impl->gpuScene->multiply2CoverageMetadata(
+                 preparedScene,hdrNative.metadata,
+                 impl->swapchain.w(),impl->swapchain.h(),
+                 coverageMetadata) ||
+             !impl->multiply2Coverage->prepareFrame(
+                 frameContext.multiply2Coverage,
+                 impl->linearHDRTargets.color,coverageMetadata) ||
+             !impl->multiply2Coverage->nativeView(
+                 frameContext.multiply2Coverage,coverageNative))
+            failMultiply2SplitPhase(
+                "RendererIOS Multiply2 causal coverage preflight failed");
+          multiply2SplitPhaseStarted = true;
+          report = impl->gpuScene->encodePreparedMultiply2Causal(
               encoder,preparedScene,impl->linearHDRTargets.color,
               hdrNative,coverageNative);
-        if(report.result==IOSGPUScene::Result::Success &&
-           (!impl->linearHDRProof->markNativeCopyEncoded(
-                frameContext.linearHDRProof) ||
-            !impl->multiply2Coverage->markEncoded(
-                frameContext.multiply2Coverage)))
-          failMultiply2SplitPhase(
-              "RendererIOS Multiply2 causal copy transition failed");
+          if(report.result==IOSGPUScene::Result::Success &&
+             (!impl->linearHDRProof->markNativeCopyEncoded(
+                  frameContext.linearHDRProof) ||
+              !impl->multiply2Coverage->markEncoded(
+                  frameContext.multiply2Coverage)))
+            failMultiply2SplitPhase(
+                "RendererIOS Multiply2 causal copy transition failed");
+        }
+        else {
+          report = impl->gpuScene->encodePreparedMultiply2Continuation(
+              encoder,preparedScene,impl->linearHDRTargets.color);
+          }
 #else
         encoder.setFramebuffer({{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});
         const auto report =
