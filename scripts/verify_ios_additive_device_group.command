@@ -14,7 +14,9 @@ PERFORMANCE="$ROOT/ios/device-test/run-additive-performance-test.sh"
 LAUNCH_TEST="$ROOT/scripts/test-p21e1b-additive-launch-adapter.py"
 PERFORMANCE_TEST="$ROOT/scripts/test-p21e1b-additive-performance.py"
 INTEGRITY_SOURCE="$ROOT/game/graphics/iosdeviceintegritymanifest.cpp"
+INTEGRITY_HEADER="$ROOT/game/graphics/iosdeviceintegritymanifest.h"
 INTEGRITY_TEST="$ROOT/ios/tests/iosdeviceintegritymanifest.cpp"
+INTEGRITY_MAIN="$ROOT/game/main.cpp"
 BUILD_TMP="$ROOT/build/tmp/p21e1b-additive-device-group"
 
 fail() {
@@ -24,7 +26,8 @@ fail() {
 
 for path in "$PAIR_SPEC" "$GROUP_SPEC" "$PAIR_VALIDATOR" "$GROUP_VALIDATOR" \
     "$RUNNER" "$PERFORMANCE" "$LAUNCH_TEST" "$PERFORMANCE_TEST" \
-    "$INTEGRITY_SOURCE" "$INTEGRITY_TEST"; do
+    "$INTEGRITY_SOURCE" "$INTEGRITY_HEADER" "$INTEGRITY_TEST" \
+    "$INTEGRITY_MAIN"; do
   [[ -f "$path" && ! -L "$path" ]] || fail "required grouped file is invalid: $path"
 done
 
@@ -40,9 +43,39 @@ xcrun --sdk macosx clang++ -std=c++20 \
   -o "$INTEGRITY_BINARY"
 integrity_output="$("$INTEGRITY_BINARY")" || fail "integrity host oracle failed"
 [[ "$integrity_output" == \
-   "RendererIOS device integrity manifest host oracle: PASS mutations-killed=118" ]] ||
+   "RendererIOS device integrity manifest host oracle: PASS mutations-killed=160" ]] ||
   fail "integrity host oracle terminal differs"
 printf '%s\n' "$integrity_output"
+
+INTEGRITY_PRODUCTION_BINARY="$BUILD_TMP/iosdeviceintegritymanifest-production"
+xcrun --sdk macosx clang++ -std=c++20 \
+  -DOPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=1 \
+  -I"$ROOT/game" -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion \
+  -Werror "$INTEGRITY_SOURCE" -x c++ -framework CoreFoundation \
+  -o "$INTEGRITY_PRODUCTION_BINARY" - <<'CPP'
+#include "graphics/iosdeviceintegritymanifest.h"
+
+int main() {
+  const auto result =
+      RendererIOSDeviceIntegrity::createCanonicalManifests(
+          "/rendererios-production-exclusion-missing");
+  return result.success() ? 1 : 0;
+}
+CPP
+production_symbols="$(xcrun nm -gU "$INTEGRITY_PRODUCTION_BINARY" | xcrun c++filt)"
+production_strings="$(xcrun strings "$INTEGRITY_PRODUCTION_BINARY")"
+[[ "$(printf '%s\n' "$production_symbols" | \
+      grep -Fc 'RendererIOSDeviceIntegrity::createCanonicalManifests(')" == 1 ]] ||
+  fail "production createCanonicalManifests symbol differs"
+for forbidden in CandidateHashTestHook CandidateHashTestHookResult \
+    createCanonicalManifestsForTest NotSelected Mutated Failed; do
+  [[ "$production_symbols" != *"$forbidden"* ]] ||
+    fail "host-test symbol leaked into production: $forbidden"
+  [[ "$production_strings" != *"$forbidden"* ]] ||
+    fail "host-test string leaked into production: $forbidden"
+done
+printf '%s\n' \
+  "RendererIOS device integrity production exclusion: PASS host-test-symbols=absent production-create=1"
 
 bash -n "$RUNNER" "$PERFORMANCE" \
   "$ROOT/ios/device-test/run-linear-hdr-proof-test.sh" \

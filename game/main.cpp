@@ -275,16 +275,9 @@ int main(int argc,const char** argv) {
     if(integrityArguments.requested) {
       const auto integrity =
           RendererIOSDeviceIntegrity::createCanonicalManifests(".");
-      if(!integrity.success()) {
-        std::string message =
-            std::string("RendererIOS device integrity manifest failed: ")+
-            RendererIOSDeviceIntegrity::errorName(integrity.error);
-        if(integrity.error==RendererIOSDeviceIntegrity::Error::FileChanged)
-          message += std::string(" stage=")+
-              RendererIOSDeviceIntegrity::failureStageName(
-                  integrity.failureStage);
-        throw std::runtime_error(std::move(message));
-        }
+      if(!integrity.success())
+        throw std::runtime_error(
+            RendererIOSDeviceIntegrity::formatFailureMessage(integrity));
       Tempest::Log::i(
           RendererIOSDeviceIntegrity::TerminalMarker.data());
       return 0;

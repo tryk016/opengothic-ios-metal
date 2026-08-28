@@ -502,11 +502,46 @@ bool updateDigest(
   return true;
   }
 
+bool hashNormalizedPath(
+    std::string_view normalizedRelativePath,
+    std::array<char,65>& output) noexcept {
+  CC_SHA256_CTX context{};
+  if(CC_SHA256_Init(&context)!=1 ||
+     !updateDigest(context,normalizedRelativePath.data(),
+                   normalizedRelativePath.size()))
+    return false;
+  std::array<unsigned char,CC_SHA256_DIGEST_LENGTH> digest{};
+  if(CC_SHA256_Final(digest.data(),&context)!=1)
+    return false;
+  encodeDigest(digest.data(),output);
+  return true;
+  }
+
 Error hashCandidate(
-    int documentRoot, Candidate& candidate) {
+    int documentRoot, Candidate& candidate
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    ,const std::filesystem::path* documentRootPath = nullptr,
+    uint64_t candidateOrdinal = 0u,
+    FailureStage stage = FailureStage::None,
+    CandidateHashTestHook candidateHashHook = nullptr,
+    bool* candidateHashHookConsumed = nullptr
+#endif
+    ) {
   FileDescriptor file;
   FileDescriptor parent;
   std::string leaf;
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  if(candidateHashHook!=nullptr && documentRootPath!=nullptr &&
+     candidateHashHookConsumed!=nullptr && !*candidateHashHookConsumed) {
+    const CandidateHashTestHookResult hookResult = candidateHashHook(
+        *documentRootPath,candidate.normalizedRelativePath,
+        candidateOrdinal,stage);
+    if(hookResult==CandidateHashTestHookResult::Failed)
+      return Error::OpenFailed;
+    *candidateHashHookConsumed =
+        hookResult==CandidateHashTestHookResult::Mutated;
+    }
+#endif
   const Error opened = openCandidate(
       documentRoot,candidate,file,parent,leaf);
   if(opened!=Error::None)
@@ -554,9 +589,40 @@ Error hashCandidate(
   return Error::None;
   }
 
-Error hashCollection(int documentRoot, Collection& collection) {
-  for(Candidate& candidate:collection.entries) {
-    const Error error = hashCandidate(documentRoot,candidate);
+Error hashCollection(
+    int documentRoot,
+    Collection& collection,
+    Result& result,
+    FailureStage stage
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    ,const std::filesystem::path& documentRootPath,
+    CandidateHashTestHook candidateHashHook
+#endif
+    ) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  bool candidateHashHookConsumed = false;
+#endif
+  for(std::size_t index=0u; index<collection.entries.size(); ++index) {
+    Candidate& candidate = collection.entries[index];
+    const Error error = hashCandidate(
+        documentRoot,candidate
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,&documentRootPath,static_cast<uint64_t>(index)+1u,stage,
+        candidateHashHook,&candidateHashHookConsumed
+#endif
+        );
+    if(error==Error::FileChanged) {
+      result.failureStage = stage;
+      const uint64_t ordinal = static_cast<uint64_t>(index)+1u;
+      std::array<char,65> normalizedPathSha256{};
+      if(ordinal<=MaximumFileCount &&
+         hashNormalizedPath(
+             candidate.normalizedRelativePath,normalizedPathSha256)) {
+        result.candidateOrdinal = ordinal;
+        result.candidatePathSha256 = normalizedPathSha256;
+        }
+      return error;
+      }
     if(error!=Error::None)
       return error;
     }
@@ -941,7 +1007,11 @@ void setResultError(
 
 Result createCanonicalManifestsImpl(
     const std::filesystem::path& documentRoot,
-    RevalidationHook revalidationHook) noexcept {
+    RevalidationHook revalidationHook
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    ,CandidateHashTestHook candidateHashHook
+#endif
+    ) noexcept {
   Result result;
   try {
     const std::string rootPath = documentRoot.string();
@@ -986,17 +1056,23 @@ Result createCanonicalManifestsImpl(
         result.failureStage = FailureStage::None;
       return result;
       }
-    result.error = hashCollection(root.get(),resources);
-    if(result.error==Error::FileChanged)
-      result.failureStage = FailureStage::ResourceHashing;
+    result.error = hashCollection(
+        root.get(),resources,result,FailureStage::ResourceHashing
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,documentRoot,candidateHashHook
+#endif
+        );
     if(result.error!=Error::None) {
       if(result.error!=Error::FileChanged)
         result.failureStage = FailureStage::None;
       return result;
       }
-    result.error = hashCollection(root.get(),saves);
-    if(result.error==Error::FileChanged)
-      result.failureStage = FailureStage::SaveHashing;
+    result.error = hashCollection(
+        root.get(),saves,result,FailureStage::SaveHashing
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,documentRoot,candidateHashHook
+#endif
+        );
     if(result.error!=Error::None) {
       if(result.error!=Error::FileChanged)
         result.failureStage = FailureStage::None;
@@ -1082,7 +1158,12 @@ Result createCanonicalManifestsImpl(
 
 Result createCanonicalManifests(
     const std::filesystem::path& documentRoot) noexcept {
-  return createCanonicalManifestsImpl(documentRoot,nullptr);
+  return createCanonicalManifestsImpl(
+      documentRoot,nullptr
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+      ,nullptr
+#endif
+      );
   }
 
 Result removeCanonicalManifests(
@@ -1153,8 +1234,10 @@ Result removeCanonicalManifests(
 #if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
 Result createCanonicalManifestsForTest(
     const std::filesystem::path& documentRoot,
-    RevalidationTestHook hook) noexcept {
-  return createCanonicalManifestsImpl(documentRoot,hook);
+    RevalidationTestHook hook,
+    CandidateHashTestHook candidateHashHook) noexcept {
+  return createCanonicalManifestsImpl(
+      documentRoot,hook,candidateHashHook);
   }
 #endif
 
@@ -1210,4 +1293,24 @@ Result removeCanonicalManifests(
 }
 
 #endif
+
+namespace RendererIOSDeviceIntegrity {
+
+std::string formatFailureMessage(const Result& result) {
+  std::string message =
+      std::string("RendererIOS device integrity manifest failed: ")+
+      errorName(result.error);
+  if(result.error==Error::FileChanged) {
+    message += std::string(" stage=")+failureStageName(result.failureStage);
+    if(result.hasHashingCandidateIdentity()) {
+      message += " candidate-ordinal="+std::to_string(result.candidateOrdinal);
+      message += std::string(" candidate-path-sha256=")+
+          result.candidatePathSha256.data();
+      }
+    }
+  return message;
+  }
+
+}
+
 #endif
