@@ -467,7 +467,8 @@ def validate_additive_device_group_integration(
         (
             "launch/performance-required-files",
             '    "$RUNNER" "$PERFORMANCE" "$LAUNCH_TEST" "$PERFORMANCE_TEST" \\\n'
-            '    "$INTEGRITY_SOURCE" "$INTEGRITY_TEST"; do',
+            '    "$INTEGRITY_SOURCE" "$INTEGRITY_HEADER" "$INTEGRITY_TEST" \\\n'
+            '    "$INTEGRITY_MAIN"; do',
         ),
         (
             "launch",
@@ -1873,7 +1874,8 @@ def test_additive_device_group_contract() -> None:
         'LAUNCH_TEST="$ROOT/scripts/test-p21e1b-additive-launch-adapter.py"',
         'PERFORMANCE_TEST="$ROOT/scripts/test-p21e1b-additive-performance.py"',
         '    "$RUNNER" "$PERFORMANCE" "$LAUNCH_TEST" "$PERFORMANCE_TEST" \\\n'
-        '    "$INTEGRITY_SOURCE" "$INTEGRITY_TEST"; do',
+        '    "$INTEGRITY_SOURCE" "$INTEGRITY_HEADER" "$INTEGRITY_TEST" \\\n'
+        '    "$INTEGRITY_MAIN"; do',
         'PYTHONDONTWRITEBYTECODE=1 python3 "$LAUNCH_TEST"',
         'PYTHONDONTWRITEBYTECODE=1 python3 "$PERFORMANCE_TEST"',
     )
