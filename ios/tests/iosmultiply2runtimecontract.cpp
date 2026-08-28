@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
       "first.stencilAttachment.clearStencil = 0u;",
       "@\"RendererIOS.Multiply2.BaseAndCausal.v1\"",
       "context.scene->baseDepthState,0u",
-      "context.scene->multiply2DepthState,1u",
+      "context.scene->multiply2DepthState];",
       "context.prepared->markNativeBaseMultiplyCompleted();",
       "if(captureProof) {",
       "@\"RendererIOS.HDRProofCopy.Multiply2.v1\"",
@@ -383,6 +383,173 @@ int main(int argc, char** argv) {
   assert(coverageProducer.find("fail(\"payload-missing-coverage\");")!=
          std::string::npos);
   assert(coverageProducer.find("fail(\"payload-build\");")!=
+         std::string::npos);
+  assert(count(cmake,
+      "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC")==4u);
+  assert(cmake.find(
+      "\"Run one diagnostics-only Multiply2 GPU visibility classification\" OFF")!=
+         std::string::npos);
+  assert(cmake.find(
+      "RendererIOS Multiply2 GPU visibility diagnostic requires causal-a or causal-b")!=
+         std::string::npos);
+  assert(coverageHeader.find(
+      "IOSMultiply2VisibilityResultBytes = 32u")!=std::string::npos);
+  assert(ordered(coverageHeader,{
+      "IOSMultiply2VisibilityProductionOffset = 0u",
+      "IOSMultiply2VisibilityRasterOffset = 8u",
+      "IOSMultiply2VisibilityStencilOffset = 16u",
+      "IOSMultiply2VisibilityClipClassOffset = 24u",
+      "0xd1a6000000000001ull",
+      "0xd1a6000000000002ull",
+      "0xd1a6000000000003ull"}));
+  assert(ordered(coverageModel,{
+      "iosClassifyMultiply2VisibilityDiagnostic(",
+      "IOSMultiply2VisibilityProductionSentinel",
+      "IOSMultiply2VisibilityRasterSentinel",
+      "IOSMultiply2VisibilityStencilSentinel",
+      "result.production && !result.raster",
+      "result.stencil && !result.production",
+      "IOSMultiply2VisibilityDiagnosticClass::DefinitelyOutsideFrustum",
+      "IOSMultiply2VisibilityDiagnosticClass::NonRasterizedUnknown",
+      "IOSMultiply2VisibilityDiagnosticClass::AllDepthRejected",
+      "IOSMultiply2VisibilityDiagnosticClass::StencilWriteMissing",
+      "IOSMultiply2VisibilityDiagnosticClass::StencilBlitOrReadbackLoss",
+      "IOSMultiply2VisibilityDiagnosticClass::CoverageResident"}));
+  assert(coverageModel.find(
+      "if(canonicalCoverage &&\n"
+      "     (!result.raster || !result.production || !result.stencil))")!=
+         std::string::npos);
+  for(const std::string_view name:{
+      "definitely-outside-frustum","non-rasterized-unknown",
+      "all-depth-rejected","stencil-write-missing",
+      "stencil-blit-or-readback-loss","diagnostic-invalid"})
+    assert(coverageModel.find(name)!=std::string::npos);
+  assert(ordered(coverageProducer,{
+      "Tempest::StorageBuffer visibilityBuffer;",
+      "RendererIOS.Multiply2.VisibilityResult.v1",
+      "IOSMultiply2VisibilityProductionSentinel",
+      "IOSMultiply2VisibilityRasterSentinel",
+      "IOSMultiply2VisibilityStencilSentinel",
+      "std::memcpy(\n        visibilityResults.data()",
+      "RendererIOS multiply2 visibility: v=1 terminal=C class=",
+      "RendererIOS multiply2 visibility: v=1 terminal=F class=diagnostic-invalid",
+      "fail(\"payload-missing-coverage\");"}));
+  assert(ordered(coverageProducer,{
+      "const bool visibilityValid =",
+      "RendererIOS multiply2 visibility: v=1 terminal=F class=diagnostic-invalid",
+      "if(hasInvalidCoverageByte)",
+      "fail(\"payload-invalid-byte\");",
+      "if(!hasCoverage) {",
+      "fail(\"payload-missing-coverage\");",
+      "if(!visibilityValid || visibilityTerminalWriteFailed)"}));
+  assert(ordered(scene,{
+      "additiveColor.writeMask = MTLColorWriteMaskNone;",
+      "depthDesc.depthCompareFunction = MTLCompareFunctionAlways;",
+      "visibilityStencilDesc.stencilCompareFunction = MTLCompareFunctionEqual;",
+      "visibilityStencilDesc.stencilFailureOperation = MTLStencilOperationKeep;",
+      "visibilityStencilDesc.depthFailureOperation = MTLStencilOperationKeep;",
+      "visibilityStencilDesc.depthStencilPassOperation = MTLStencilOperationKeep;",
+      "visibilityStencilDesc.readMask = 0xffu;",
+      "visibilityStencilDesc.writeMask = 0u;",
+      "first.visibilityResultBuffer = visibilityResultBuffer;",
+      "context.scene->multiply2DepthState];",
+      "IOSMultiply2VisibilityProductionOffset",
+      "RendererIOS.HDRProofCopy.Multiply2.v1",
+      "options:MTLBlitOptionStencilFromDepthStencil",
+      "RendererIOS.Multiply2.VisibilityDiagnostic.v1",
+      "IOSMultiply2VisibilityRasterOffset",
+      "IOSMultiply2VisibilityStencilOffset",
+      "second.colorAttachments[0].texture = sceneHDR;",
+      "context.scene->additiveDepthState,0u"}));
+  assert(scene.find(
+      "prepared.impl->multiply2.size()!=1u ||\n"
+      "     hdrProof.sourceTexture==nullptr")!=std::string::npos);
+  assert(scene.find(
+      "coverage.metadata.visibilityClipClass!=\n"
+      "         prepared.impl->multiply2.front().visibilityClipClass")!=
+         std::string::npos);
+  const std::size_t visibilityStart = scene.find(
+      "MTLRenderPassDescriptor* visibilityPass");
+  const std::size_t visibilityEnd = scene.find(
+      "MTLRenderPassDescriptor* second",visibilityStart);
+  assert(visibilityStart!=std::string::npos);
+  assert(visibilityEnd!=std::string::npos);
+  const std::string_view visibilityPass(
+      scene.data()+visibilityStart,visibilityEnd-visibilityStart);
+  assert(visibilityPass.find("draw.drawId")==std::string_view::npos);
+  assert(visibilityPass.find("draw.drawBind")==std::string_view::npos);
+  assert(visibilityPass.find("encodedPhaseDrawCount")==
+         std::string_view::npos);
+  assert(visibilityPass.find("encodedPhaseTexturedDrawCount")==
+         std::string_view::npos);
+  for(const std::string_view binding:{
+      "visibilityPass.colorAttachments[0].texture = sceneHDR;",
+      "visibilityPass.colorAttachments[0].loadAction = MTLLoadActionLoad;",
+      "visibilityPass.colorAttachments[0].storeAction = MTLStoreActionStore;",
+      "visibilityPass.depthAttachment.texture = depthStencil;",
+      "visibilityPass.depthAttachment.loadAction = MTLLoadActionLoad;",
+      "visibilityPass.depthAttachment.storeAction = MTLStoreActionStore;",
+      "visibilityPass.stencilAttachment.texture = depthStencil;",
+      "visibilityPass.stencilAttachment.loadAction = MTLLoadActionLoad;",
+      "visibilityPass.stencilAttachment.storeAction = MTLStoreActionStore;",
+      "visibilityPass.visibilityResultBuffer = visibilityResultBuffer;",
+      "context.scene->multiply2VisibilityPipelineState",
+      "context.scene->multiply2VisibilityRasterDepthState",
+      "context.scene->multiply2VisibilityStencilDepthState",
+      "draw.vertexBuffer","&draw.plan.constants","draw.baseColorTexture",
+      "draw.indexBuffer","draw.plan.indexBufferOffset",
+      "IOSMultiply2VisibilityRasterOffset",
+      "IOSMultiply2VisibilityStencilOffset"})
+    assert(visibilityPass.find(binding)!=std::string_view::npos);
+  const std::size_t productionStart = scene.find(
+      "(id<MTLDepthStencilState>)context.scene->multiply2DepthState];");
+  const std::size_t productionEnd = scene.find(
+      "++context.report.encodedPhaseDrawCount;",productionStart);
+  assert(productionStart!=std::string::npos);
+  assert(productionEnd!=std::string::npos);
+  const std::string_view productionQuery(
+      scene.data()+productionStart,productionEnd-productionStart);
+  assert(ordered(productionQuery,{
+      "context.scene->multiply2DepthState",
+      "setStencilReferenceValue:1u",
+      "MTLVisibilityResultModeBoolean",
+      "IOSMultiply2VisibilityProductionOffset",
+      "indexCount:productionDraw.plan.indexCount",
+      "indexBuffer:(id<MTLBuffer>)productionDraw.indexBuffer",
+      "indexBufferOffset:productionDraw.plan.indexBufferOffset",
+      "MTLVisibilityResultModeDisabled"}));
+  assert(ordered(visibilityPass,{
+      "context.scene->multiply2VisibilityRasterDepthState",
+      "setStencilReferenceValue:0u",
+      "MTLVisibilityResultModeBoolean",
+      "IOSMultiply2VisibilityRasterOffset",
+      "indexCount:draw.plan.indexCount",
+      "indexType:MTLIndexTypeUInt32",
+      "indexBuffer:(id<MTLBuffer>)draw.indexBuffer",
+      "indexBufferOffset:draw.plan.indexBufferOffset",
+      "instanceCount:1u baseVertex:0 baseInstance:0u",
+      "MTLVisibilityResultModeDisabled",
+      "context.scene->multiply2VisibilityStencilDepthState",
+      "setStencilReferenceValue:1u",
+      "MTLVisibilityResultModeBoolean",
+      "IOSMultiply2VisibilityStencilOffset",
+      "indexCount:draw.plan.indexCount",
+      "indexType:MTLIndexTypeUInt32",
+      "indexBuffer:(id<MTLBuffer>)draw.indexBuffer",
+      "indexBufferOffset:draw.plan.indexBufferOffset",
+      "instanceCount:1u baseVertex:0 baseInstance:0u",
+      "MTLVisibilityResultModeDisabled"}));
+  constexpr std::string_view ExactDiagnosticDraw =
+      "[renderEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle\n"
+      "                                  indexCount:draw.plan.indexCount\n"
+      "                                   indexType:MTLIndexTypeUInt32\n"
+      "                                 indexBuffer:(id<MTLBuffer>)draw.indexBuffer\n"
+      "                           indexBufferOffset:draw.plan.indexBufferOffset\n"
+      "                               instanceCount:1u baseVertex:0 baseInstance:0u];";
+  assert(count(visibilityPass,ExactDiagnosticDraw)==2u);
+  assert(count(visibilityPass,
+      "[renderEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle")==2u);
+  assert(scene.find("classifyIOSGPUSceneMultiply2ClipBounds(")!=
          std::string::npos);
   assert(cmake.find("OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A=1")!=
          std::string::npos);

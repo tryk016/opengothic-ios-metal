@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -30,6 +31,93 @@ IOSMultiply2CoverageProofMetadata metadata() {
 }
 
 int main() {
+  const auto classify = [](
+      uint64_t production, uint64_t raster, uint64_t stencil,
+      IOSMultiply2VisibilityClipClass clip, bool canonicalCoverage) {
+    return iosClassifyMultiply2VisibilityDiagnostic(
+        production,raster,stencil,static_cast<uint64_t>(clip),
+        canonicalCoverage);
+  };
+  using Classification = IOSMultiply2VisibilityDiagnosticClass;
+  using Clip = IOSMultiply2VisibilityClipClass;
+  const std::array indeterminateTruthTable = {
+      Classification::NonRasterizedUnknown,
+      Classification::DiagnosticInvalid,
+      Classification::AllDepthRejected,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::StencilWriteMissing,
+      Classification::StencilBlitOrReadbackLoss,
+  };
+  const std::array outsideTruthTable = {
+      Classification::DefinitelyOutsideFrustum,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+  };
+  const std::array canonicalCoverageTruthTable = {
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::DiagnosticInvalid,
+      Classification::CoverageResident,
+  };
+  for(uint64_t bits=0u; bits<8u; ++bits) {
+    const uint64_t production = (bits&4u)!=0u ? 7u : 0u;
+    const uint64_t raster = (bits&2u)!=0u ? 9u : 0u;
+    const uint64_t stencil = (bits&1u)!=0u ? 11u : 0u;
+    assert(classify(production,raster,stencil,Clip::Indeterminate,false).
+               classification==indeterminateTruthTable[bits]);
+    assert(classify(production,raster,stencil,Clip::Intersects,false).
+               classification==indeterminateTruthTable[bits]);
+    assert(classify(production,raster,stencil,Clip::DefinitelyOutside,false).
+               classification==outsideTruthTable[bits]);
+    assert(classify(production,raster,stencil,Clip::Indeterminate,true).
+               classification==canonicalCoverageTruthTable[bits]);
+    assert(classify(production,raster,stencil,Clip::Intersects,true).
+               classification==canonicalCoverageTruthTable[bits]);
+    assert(classify(production,raster,stencil,Clip::DefinitelyOutside,true).
+               classification==Classification::DiagnosticInvalid);
+  }
+  assert(iosClassifyMultiply2VisibilityDiagnostic(
+      IOSMultiply2VisibilityProductionSentinel,0u,0u,
+      static_cast<uint64_t>(Clip::Indeterminate),false).classification==
+         Classification::DiagnosticInvalid);
+  assert(iosClassifyMultiply2VisibilityDiagnostic(
+      0u,IOSMultiply2VisibilityRasterSentinel,0u,
+      static_cast<uint64_t>(Clip::Indeterminate),false).classification==
+         Classification::DiagnosticInvalid);
+  assert(iosClassifyMultiply2VisibilityDiagnostic(
+      0u,0u,IOSMultiply2VisibilityStencilSentinel,
+      static_cast<uint64_t>(Clip::Indeterminate),false).classification==
+         Classification::DiagnosticInvalid);
+  assert(iosClassifyMultiply2VisibilityDiagnostic(
+      0u,0u,0u,0u,false).classification==Classification::DiagnosticInvalid);
+  assert(std::string_view(iosMultiply2VisibilityDiagnosticClassName(
+      Classification::DefinitelyOutsideFrustum))==
+         "definitely-outside-frustum");
+  assert(std::string_view(iosMultiply2VisibilityDiagnosticClassName(
+      Classification::NonRasterizedUnknown))=="non-rasterized-unknown");
+  assert(std::string_view(iosMultiply2VisibilityDiagnosticClassName(
+      Classification::AllDepthRejected))=="all-depth-rejected");
+  assert(std::string_view(iosMultiply2VisibilityDiagnosticClassName(
+      Classification::StencilWriteMissing))=="stencil-write-missing");
+  assert(std::string_view(iosMultiply2VisibilityDiagnosticClassName(
+      Classification::StencilBlitOrReadbackLoss))==
+         "stencil-blit-or-readback-loss");
+  assert(std::string_view(iosMultiply2VisibilityDiagnosticClassName(
+      Classification::DiagnosticInvalid))=="diagnostic-invalid");
+  assert(std::string_view(iosMultiply2VisibilityClipClassName(
+      Clip::DefinitelyOutside))=="definitely-outside");
+
   const auto canonicalMetadata = metadata();
   std::vector<std::byte> payload(12u,std::byte{0});
   payload[5] = std::byte{1};

@@ -1270,11 +1270,118 @@ void testUVAnimationDownstreamEvidence() {
   assert(!corruptedReport.valid);
   }
 
+IOSMatrix4x4 translatedMatrix(const IOSFloat3& translation) {
+  IOSMatrix4x4 matrix;
+  matrix.set(0u,3u,translation.x);
+  matrix.set(1u,3u,translation.y);
+  matrix.set(2u,3u,translation.z);
+  return matrix;
+  }
+
+void testMultiply2ClipBoundsDiagnostic() {
+  const IOSBounds intersecting = {
+    {-0.5f,-0.5f,0.25f},
+    { 0.5f, 0.5f,0.75f},
+    };
+  const IOSMatrix4x4 identity;
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             intersecting,identity,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Intersects);
+  assert(std::string_view(
+             iosGPUSceneMultiply2ClipBoundsResultName(
+                 IOSGPUSceneMultiply2ClipBoundsResult::Intersects))==
+         "intersects");
+  assert(std::string_view(
+             iosGPUSceneMultiply2ClipBoundsResultName(
+                 IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside))==
+         "definitely-outside");
+  assert(std::string_view(
+             iosGPUSceneMultiply2ClipBoundsResultName(
+                 IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate))==
+         "indeterminate");
+
+  // Each translation puts all eight corners strictly beyond one and only one
+  // Metal clip plane.  Y is intentionally expressed in world space because
+  // landscape.metal negates clip.y before rasterization.
+  const std::array translations = {
+    IOSFloat3{-3.f, 0.f, 0.f}, // left
+    IOSFloat3{ 3.f, 0.f, 0.f}, // right
+    IOSFloat3{ 0.f, 3.f, 0.f}, // bottom after the Y flip
+    IOSFloat3{ 0.f,-3.f, 0.f}, // top after the Y flip
+    IOSFloat3{ 0.f, 0.f,-3.f}, // near
+    IOSFloat3{ 0.f, 0.f, 3.f}, // far
+    };
+  for(const IOSFloat3& translation:translations)
+    assert(classifyIOSGPUSceneMultiply2ClipBounds(
+               intersecting,translatedMatrix(translation),identity)==
+           IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside);
+
+  // Exact contact with any clip plane is deliberately indeterminate, before
+  // checking whether another plane could prove the box outside.
+  const std::array boundaryTranslations = {
+    IOSFloat3{-0.5f, 0.f, 0.f},
+    IOSFloat3{ 0.5f, 0.f, 0.f},
+    IOSFloat3{ 0.f, 0.5f, 0.f},
+    IOSFloat3{ 0.f,-0.5f, 0.f},
+    IOSFloat3{ 0.f, 0.f,-0.25f},
+    IOSFloat3{ 0.f, 0.f, 0.25f},
+    };
+  for(const IOSFloat3& translation:boundaryTranslations)
+    assert(classifyIOSGPUSceneMultiply2ClipBounds(
+               intersecting,translatedMatrix(translation),identity)==
+           IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+
+  // A projective w which changes sign through the box is ambiguous even when
+  // no corner itself lands on w=0.  A corner landing exactly on zero is also
+  // rejected before any plane can be reported as definitely outside.
+  IOSMatrix4x4 crossingW = identity;
+  crossingW.set(3u,0u,1.f);
+  crossingW.set(3u,3u,0.f);
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             intersecting,crossingW,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+  IOSMatrix4x4 zeroW = identity;
+  zeroW.set(3u,3u,0.f);
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             intersecting,zeroW,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+
+  IOSBounds inverted = intersecting;
+  inverted.minimum.x = 1.f;
+  inverted.maximum.x = -1.f;
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             inverted,identity,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+  IOSBounds nanBounds = intersecting;
+  nanBounds.minimum.y = std::numeric_limits<float>::quiet_NaN();
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             nanBounds,identity,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+  IOSBounds infiniteBounds = intersecting;
+  infiniteBounds.maximum.z = std::numeric_limits<float>::infinity();
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             infiniteBounds,identity,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+
+  IOSMatrix4x4 nanModel = identity;
+  nanModel.elements[0] = std::numeric_limits<float>::quiet_NaN();
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             intersecting,nanModel,identity)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+  IOSMatrix4x4 infiniteViewProjection = identity;
+  infiniteViewProjection.elements[15] =
+      std::numeric_limits<float>::infinity();
+  assert(classifyIOSGPUSceneMultiply2ClipBounds(
+             intersecting,identity,infiniteViewProjection)==
+         IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate);
+  }
+
 }
 
 int main() {
   testFrameAnimationDownstreamEvidence();
   testUVAnimationDownstreamEvidence();
+  testMultiply2ClipBoundsDiagnostic();
   IOSCameraState camera;
   camera.viewProjection.set(1u,2u,3.f);
 

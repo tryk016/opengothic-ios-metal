@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cstring>
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
@@ -22,6 +23,12 @@
 
 #if __has_feature(objc_arc)
 #error "IOSMultiply2CoverageProofProducer requires non-ARC Objective-C++ mode"
+#endif
+
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+#error "Multiply2 GPU visibility diagnostic requires a Multiply2 causal A/B build"
 #endif
 
 namespace {
@@ -80,14 +87,32 @@ bool validMetadata(
          metadata.targetGeneration!=0u && metadata.snapshotSequence!=0u &&
          metadata.sourceId!=0u && metadata.indexCount!=0u &&
          metadata.viewport==exact && metadata.scissor==exact &&
-         nonzero(metadata.proofId) && nonzero(metadata.buildSha);
+         nonzero(metadata.proofId) && nonzero(metadata.buildSha)
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+         && (metadata.visibilityClipClass==
+                 IOSMultiply2VisibilityClipClass::Indeterminate ||
+             metadata.visibilityClipClass==
+                 IOSMultiply2VisibilityClipClass::DefinitelyOutside ||
+             metadata.visibilityClipClass==
+                 IOSMultiply2VisibilityClipClass::Intersects)
+#endif
+         ;
 }
 
 }
 
 struct IOSMultiply2CoverageFrame::Impl final {
-  explicit Impl(Tempest::StorageBuffer&& buffer) noexcept
-    : buffer(std::move(buffer)) {
+  explicit Impl(
+      Tempest::StorageBuffer&& buffer
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      , Tempest::StorageBuffer&& visibilityBuffer
+#endif
+      ) noexcept
+    : buffer(std::move(buffer))
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    , visibilityBuffer(std::move(visibilityBuffer))
+#endif
+      {
   }
 
   ~Impl() {
@@ -96,6 +121,10 @@ struct IOSMultiply2CoverageFrame::Impl final {
   }
 
   Tempest::StorageBuffer buffer;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  Tempest::StorageBuffer visibilityBuffer;
+  const std::byte* visibilityMapped = nullptr;
+#endif
   id<MTLTexture> sceneHDR = nil;
   id<MTLTexture> depthStencil = nil;
   const std::byte* mapped = nullptr;
@@ -167,6 +196,10 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
     id<MTLTexture> nativeSceneHDR = nil;
     id<MTLTexture> depthStencil = nil;
     Tempest::StorageBuffer buffer;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    Tempest::StorageBuffer visibilityBuffer;
+    const std::byte* visibilityMapped = nullptr;
+#endif
     const std::byte* mapped = nullptr;
     uint64_t alignedRow = (uint64_t(metadata.width)+255u)&~uint64_t(255u);
     uint64_t gpuBytes = 0u;
@@ -275,6 +308,53 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
         fail("buffer-map");
         return false;
       }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      visibilityBuffer = owner.ssbo(
+          Tempest::BufferHeap::Upload,Tempest::Uninitialized,
+          IOSMultiply2VisibilityResultBytes);
+      if(visibilityBuffer.isEmpty() ||
+         visibilityBuffer.byteSize()!=IOSMultiply2VisibilityResultBytes) {
+        [depthStencil release];
+        fail("visibility-buffer-allocation");
+        return false;
+      }
+      const auto borrowedVisibility =
+          Tempest::MetalApi::borrowBuffer(owner,visibilityBuffer);
+      if(!borrowedVisibility) {
+        [depthStencil release];
+        fail("visibility-buffer-map");
+        return false;
+      }
+      id<MTLBuffer> nativeVisibility =
+          (id<MTLBuffer>)(void*)borrowedVisibility.get();
+      @try {
+        if(nativeVisibility.storageMode!=MTLStorageModeShared ||
+           nativeVisibility.length<IOSMultiply2VisibilityResultBytes ||
+           nativeVisibility.contents==nullptr) {
+          [depthStencil release];
+          fail("visibility-buffer-map");
+          return false;
+        }
+        nativeVisibility.label =
+            @"RendererIOS.Multiply2.VisibilityResult.v1";
+        const std::array<uint64_t,4u> initial = {
+            IOSMultiply2VisibilityProductionSentinel,
+            IOSMultiply2VisibilityRasterSentinel,
+            IOSMultiply2VisibilityStencilSentinel,
+            static_cast<uint64_t>(metadata.visibilityClipClass),
+        };
+        static_assert(
+            sizeof(initial)==IOSMultiply2VisibilityResultBytes);
+        std::memcpy(nativeVisibility.contents,initial.data(),sizeof(initial));
+        visibilityMapped =
+            static_cast<const std::byte*>(nativeVisibility.contents);
+      }
+      @catch(NSException*) {
+        [depthStencil release];
+        fail("visibility-buffer-map");
+        return false;
+      }
+#endif
     }
     catch(...) {
       [depthStencil release];
@@ -284,7 +364,11 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
 
     try {
       frame.impl = std::make_unique<IOSMultiply2CoverageFrame::Impl>(
-          std::move(buffer));
+          std::move(buffer)
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+          ,std::move(visibilityBuffer)
+#endif
+          );
     }
     catch(...) {
       [depthStencil release];
@@ -295,6 +379,9 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
     frame.impl->sceneHDR = nativeSceneHDR;
     frame.impl->depthStencil = depthStencil;
     frame.impl->mapped = mapped;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    frame.impl->visibilityMapped = visibilityMapped;
+#endif
     frame.impl->metadata = metadata;
     frame.impl->gpuBytesPerRow = static_cast<uint32_t>(alignedRow);
     activeFrame = &frame;
@@ -317,12 +404,23 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
         return false;
       view.depthStencilTexture = (void*)frame.impl->depthStencil;
       view.coverageBuffer = (void*)borrowed.get();
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      const auto borrowedVisibility =
+          Tempest::MetalApi::borrowBuffer(owner,frame.impl->visibilityBuffer);
+      if(!borrowedVisibility || frame.impl->visibilityMapped==nullptr)
+        return false;
+      view.visibilityResultBuffer = (void*)borrowedVisibility.get();
+#endif
       view.width = frame.impl->metadata.width;
       view.height = frame.impl->metadata.height;
       view.gpuBytesPerRow = frame.impl->gpuBytesPerRow;
       view.metadata = frame.impl->metadata;
       return view.depthStencilTexture!=nullptr &&
-             view.coverageBuffer!=nullptr;
+             view.coverageBuffer!=nullptr
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+             && view.visibilityResultBuffer!=nullptr
+#endif
+             ;
     }
     catch(...) {
       return false;
@@ -353,7 +451,11 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
   bool publish(IOSMultiply2CoverageFrame& frame) noexcept {
     if(state!=IOSMultiply2CoverageProducerState::Submitted ||
        activeFrame!=&frame || frame.impl==nullptr || !frame.impl->submitted ||
-       frame.impl->mapped==nullptr) {
+       frame.impl->mapped==nullptr
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+       || frame.impl->visibilityMapped==nullptr
+#endif
+       ) {
       fail("state");
       return false;
     }
@@ -383,6 +485,48 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
       hasCoverage = hasCoverage || byte==1u;
       hasInvalidCoverageByte = hasInvalidCoverageByte || byte>1u;
     }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    std::array<uint64_t,4u> visibilityResults{};
+    std::memcpy(
+        visibilityResults.data(),frame.impl->visibilityMapped,
+        IOSMultiply2VisibilityResultBytes);
+    const auto visibility = iosClassifyMultiply2VisibilityDiagnostic(
+        visibilityResults[0],visibilityResults[1],visibilityResults[2],
+        visibilityResults[3],hasCoverage);
+    const bool visibilityTerminalDuplicate = visibilityTerminalLogged;
+    visibilityTerminalLogged = true;
+    const bool visibilityValid =
+        !visibilityTerminalDuplicate &&
+        visibility.classification!=
+            IOSMultiply2VisibilityDiagnosticClass::DiagnosticInvalid &&
+        visibilityResults[3]==static_cast<uint64_t>(
+            frame.impl->metadata.visibilityClipClass);
+    try {
+      if(visibilityValid)
+        Tempest::Log::i(
+            "RendererIOS multiply2 visibility: v=1 terminal=C class=",
+            iosMultiply2VisibilityDiagnosticClassName(
+                visibility.classification),
+            " production=",visibility.production ? 1 : 0,
+            " raster=",visibility.raster ? 1 : 0,
+            " stencil=",visibility.stencil ? 1 : 0,
+            " canonical-coverage=",hasCoverage ? 1 : 0,
+            " clip=",iosMultiply2VisibilityClipClassName(
+                visibility.clipClass));
+      else
+        Tempest::Log::e(
+            "RendererIOS multiply2 visibility: v=1 terminal=F class=diagnostic-invalid",
+            " production=",visibility.production ? 1 : 0,
+            " raster=",visibility.raster ? 1 : 0,
+            " stencil=",visibility.stencil ? 1 : 0,
+            " canonical-coverage=",hasCoverage ? 1 : 0,
+            " clip=",iosMultiply2VisibilityClipClassName(
+                visibility.clipClass));
+    }
+    catch(...) {
+      visibilityTerminalWriteFailed = true;
+    }
+#endif
     if(hasInvalidCoverageByte) {
       fail("payload-invalid-byte");
       return false;
@@ -391,6 +535,14 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
       fail("payload-missing-coverage");
       return false;
     }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    if(!visibilityValid || visibilityTerminalWriteFailed) {
+      fail(visibilityTerminalWriteFailed
+               ? "diagnostic-terminal-log"
+               : "diagnostic-invalid");
+      return false;
+    }
+#endif
     if(!iosBuildMultiply2CoverageProofV1(
            frame.impl->metadata,payload,artifact)) {
       fail("payload-build");
@@ -470,6 +622,10 @@ struct IOSMultiply2CoverageProofProducer::Impl final {
   IOSMultiply2CoverageFrame* activeFrame = nullptr;
   std::string directoryPath;
   bool failureLogged = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  bool visibilityTerminalLogged = false;
+  bool visibilityTerminalWriteFailed = false;
+#endif
 };
 
 IOSMultiply2CoverageProofProducer::IOSMultiply2CoverageProofProducer(

@@ -594,36 +594,78 @@ bool symbolAllowlistMatches(const std::filesystem::path& repository) {
          actualAbiReferences==expectedAbiReferences;
 }
 
-bool runtimeReflectionContractMatches(
-    const std::filesystem::path& repository) {
-  const auto runtime = readFile(
-      repository/"game/graphics/iosgpuscene.mm");
-  if(!runtime)
-    return false;
-  const std::string source = compact(stripComments(*runtime));
+bool runtimeReflectionSourceContractMatches(std::string_view runtime) {
+  const std::string source = compact(stripComments(runtime));
   if(source.empty())
     return false;
 
   constexpr std::string_view ReflectionOptions =
       "options:(MTLPipelineOptionBindingInfo|"
       "MTLPipelineOptionBufferTypeInfo)";
-  return countOccurrences(source,ReflectionOptions)==4u &&
-      countOccurrences(source,"reflection:&opaquePipelineReflection")==1u &&
-      countOccurrences(source,"reflection:&alphaTestPipelineReflection")==1u &&
-      countOccurrences(source,"reflection:&additivePipelineReflection")==1u &&
-      countOccurrences(source,"reflection:&multiply2PipelineReflection")==1u &&
-      countOccurrences(
-          source,"drawConstantsReflectionMatches(opaquePipelineReflection)")==
-          1u &&
-      countOccurrences(
-          source,
-          "drawConstantsReflectionMatches(alphaTestPipelineReflection)")==1u &&
-      countOccurrences(
-          source,
-          "drawConstantsReflectionMatches(additivePipelineReflection)")==1u &&
-      countOccurrences(
-          source,
-          "drawConstantsReflectionMatches(multiply2PipelineReflection)")==1u &&
+  constexpr std::array<std::string_view,4> CanonicalReflectionBindings = {
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&opaquePipelineReflection",
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&alphaTestPipelineReflection",
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&additivePipelineReflection",
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&multiply2PipelineReflection",
+  };
+  constexpr std::array<std::string_view,4> CanonicalReflectionMatches = {
+    "drawConstantsReflectionMatches(opaquePipelineReflection)",
+    "drawConstantsReflectionMatches(alphaTestPipelineReflection)",
+    "drawConstantsReflectionMatches(additivePipelineReflection)",
+    "drawConstantsReflectionMatches(multiply2PipelineReflection)",
+  };
+  for(const std::string_view binding:CanonicalReflectionBindings)
+    if(countOccurrences(source,binding)!=1u)
+      return false;
+  for(const std::string_view match:CanonicalReflectionMatches)
+    if(countOccurrences(source,match)!=1u)
+      return false;
+
+  constexpr std::string_view VisibilityGuardStart =
+      "#ifdefined("
+      "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)"
+      "additiveColor.writeMask=MTLColorWriteMaskNone;";
+  constexpr std::string_view VisibilityGuardEnd =
+      "#endifOwnedObjectiveCdepthDescriptor(";
+  const size_t visibilityStart = source.find(VisibilityGuardStart);
+  if(visibilityStart==std::string::npos ||
+     source.find(VisibilityGuardStart,
+                 visibilityStart+VisibilityGuardStart.size())!=
+       std::string::npos)
+    return false;
+  const size_t visibilityEnd = source.find(
+      VisibilityGuardEnd,visibilityStart+VisibilityGuardStart.size());
+  if(visibilityEnd==std::string::npos)
+    return false;
+  const std::string_view visibilityBlock(
+      source.data()+visibilityStart,
+      visibilityEnd-visibilityStart+std::string_view("#endif").size());
+  constexpr std::string_view VisibilityReflectionDeclaration =
+      "MTLRenderPipelineReflection*visibilityPipelineReflection=nil;";
+  constexpr std::string_view VisibilityReflectionBinding =
+      "options:(MTLPipelineOptionBindingInfo|"
+      "MTLPipelineOptionBufferTypeInfo)"
+      "reflection:&visibilityPipelineReflection";
+  constexpr std::string_view VisibilityReflectionMatch =
+      "drawConstantsReflectionMatches(visibilityPipelineReflection)";
+  if(countOccurrences(source,ReflectionOptions)!=5u ||
+     countOccurrences(source,VisibilityReflectionDeclaration)!=1u ||
+     countOccurrences(source,VisibilityReflectionBinding)!=1u ||
+     countOccurrences(source,VisibilityReflectionMatch)!=1u ||
+     countOccurrences(visibilityBlock,VisibilityReflectionDeclaration)!=1u ||
+     countOccurrences(visibilityBlock,VisibilityReflectionBinding)!=1u ||
+     countOccurrences(visibilityBlock,VisibilityReflectionMatch)!=1u)
+    return false;
+
+  return
       countOccurrences(source,"binding.index!=NSUInteger(1u)")==1u &&
       countOccurrences(source,"!binding.used")==1u &&
       countOccurrences(source,"!binding.argument")==1u &&
@@ -634,6 +676,43 @@ bool runtimeReflectionContractMatches(
       countOccurrences(
           source,
           "buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants)")==1u;
+}
+
+bool runtimeReflectionMutationsAreRejected(std::string_view runtime) {
+  constexpr std::string_view VisibilityGuard =
+      "#if defined("
+      "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)\n"
+      "      additiveColor.writeMask = MTLColorWriteMaskNone;";
+  constexpr std::string_view UnguardedVisibility =
+      "      additiveColor.writeMask = MTLColorWriteMaskNone;";
+  const std::array<std::string,4> mutations = {
+    replaceOnce(
+        std::string(runtime),
+        "reflection:&visibilityPipelineReflection",
+        "reflection:nullptr"),
+    replaceOnce(
+        std::string(runtime),
+        "reflection:&visibilityPipelineReflection",
+        "reflection:&multiply2PipelineReflection"),
+    replaceOnce(
+        std::string(runtime),
+        "drawConstantsReflectionMatches(visibilityPipelineReflection)",
+        "drawConstantsReflectionMatches(multiply2PipelineReflection)"),
+    replaceOnce(
+        std::string(runtime),VisibilityGuard,UnguardedVisibility),
+  };
+  for(const std::string& mutation:mutations)
+    if(mutation.empty() || runtimeReflectionSourceContractMatches(mutation))
+      return false;
+  return true;
+}
+
+bool runtimeReflectionContractMatches(
+    const std::filesystem::path& repository) {
+  const auto runtime = readFile(
+      repository/"game/graphics/iosgpuscene.mm");
+  return runtime && runtimeReflectionSourceContractMatches(*runtime) &&
+      runtimeReflectionMutationsAreRejected(*runtime);
 }
 
 bool runtimeUVAnimationEvidenceContractMatchesSources(

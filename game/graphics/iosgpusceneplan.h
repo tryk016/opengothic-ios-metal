@@ -2514,6 +2514,153 @@ struct IOSGPUSceneMeshCandidate final {
   std::size_t         indexCount = 0;
   };
 
+// This is a diagnostics-only conservative visibility result.  A bounds box
+// which is not proven to be outside one homogeneous clip plane remains
+// drawable; invalid and projectively ambiguous inputs are kept distinct so a
+// caller can log them without turning the diagnostic into an acceptance gate.
+enum class IOSGPUSceneMultiply2ClipBoundsResult : uint8_t {
+  Intersects,
+  DefinitelyOutside,
+  Indeterminate,
+  };
+
+inline constexpr const char* iosGPUSceneMultiply2ClipBoundsResultName(
+    IOSGPUSceneMultiply2ClipBoundsResult result) noexcept {
+  switch(result) {
+    case IOSGPUSceneMultiply2ClipBoundsResult::Intersects:
+      return "intersects";
+    case IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside:
+      return "definitely-outside";
+    case IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate:
+      return "indeterminate";
+    }
+  return nullptr;
+  }
+
+inline IOSGPUSceneMultiply2ClipBoundsResult
+    classifyIOSGPUSceneMultiply2ClipBounds(
+        const IOSBounds& bounds,
+        const IOSMatrix4x4& model,
+        const IOSMatrix4x4& viewProjection) noexcept {
+  const bool finiteBounds =
+      std::isfinite(bounds.minimum.x) &&
+      std::isfinite(bounds.minimum.y) &&
+      std::isfinite(bounds.minimum.z) &&
+      std::isfinite(bounds.maximum.x) &&
+      std::isfinite(bounds.maximum.y) &&
+      std::isfinite(bounds.maximum.z);
+  const bool orderedBounds =
+      bounds.minimum.x<=bounds.maximum.x &&
+      bounds.minimum.y<=bounds.maximum.y &&
+      bounds.minimum.z<=bounds.maximum.z;
+  if(!finiteBounds || !orderedBounds)
+    return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+  for(const float component:model.elements)
+    if(!std::isfinite(component))
+      return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+  for(const float component:viewProjection.elements)
+    if(!std::isfinite(component))
+      return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+
+  struct ClipPoint final {
+    float x = 0.f;
+    float y = 0.f;
+    float z = 0.f;
+    float w = 0.f;
+    };
+  std::array<ClipPoint,8u> points = {};
+  bool hasNegativeW = false;
+  bool hasPositiveW = false;
+  for(std::size_t corner=0u; corner<points.size(); ++corner) {
+    const float localX = (corner&1u)!=0u
+        ? bounds.maximum.x : bounds.minimum.x;
+    const float localY = (corner&2u)!=0u
+        ? bounds.maximum.y : bounds.minimum.y;
+    const float localZ = (corner&4u)!=0u
+        ? bounds.maximum.z : bounds.minimum.z;
+
+    // Keep the same column-major matrix-vector order as landscape.metal:
+    // world = model * float4(position,1), then clip = viewProjection*world.
+    const float worldX =
+        model.at(0u,0u)*localX + model.at(0u,1u)*localY +
+        model.at(0u,2u)*localZ + model.at(0u,3u);
+    const float worldY =
+        model.at(1u,0u)*localX + model.at(1u,1u)*localY +
+        model.at(1u,2u)*localZ + model.at(1u,3u);
+    const float worldZ =
+        model.at(2u,0u)*localX + model.at(2u,1u)*localY +
+        model.at(2u,2u)*localZ + model.at(2u,3u);
+    const float worldW =
+        model.at(3u,0u)*localX + model.at(3u,1u)*localY +
+        model.at(3u,2u)*localZ + model.at(3u,3u);
+    ClipPoint point;
+    point.x =
+        viewProjection.at(0u,0u)*worldX +
+        viewProjection.at(0u,1u)*worldY +
+        viewProjection.at(0u,2u)*worldZ +
+        viewProjection.at(0u,3u)*worldW;
+    point.y =
+        viewProjection.at(1u,0u)*worldX +
+        viewProjection.at(1u,1u)*worldY +
+        viewProjection.at(1u,2u)*worldZ +
+        viewProjection.at(1u,3u)*worldW;
+    point.z =
+        viewProjection.at(2u,0u)*worldX +
+        viewProjection.at(2u,1u)*worldY +
+        viewProjection.at(2u,2u)*worldZ +
+        viewProjection.at(2u,3u)*worldW;
+    point.w =
+        viewProjection.at(3u,0u)*worldX +
+        viewProjection.at(3u,1u)*worldY +
+        viewProjection.at(3u,2u)*worldZ +
+        viewProjection.at(3u,3u)*worldW;
+    // landscape.metal flips Y before the clip-space position is emitted.
+    point.y = -point.y;
+    if(!std::isfinite(point.x) || !std::isfinite(point.y) ||
+       !std::isfinite(point.z) || !std::isfinite(point.w))
+      return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+    if(point.w==0.f)
+      return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+    // Exact contact with a homogeneous clip plane is deliberately
+    // indeterminate: strict outside proof must not depend on boundary
+    // rasterization rules or floating-point edge behavior.
+    if(point.x==-point.w || point.x==point.w ||
+       point.y==-point.w || point.y==point.w ||
+       point.z==0.f || point.z==point.w)
+      return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+    if(point.w<0.f)
+      hasNegativeW = true;
+    else
+      hasPositiveW = true;
+    points[corner] = point;
+    }
+
+  // The homogeneous clip inequalities are not continuous through w=0.  A
+  // box spanning both sides cannot be conservatively classified from its
+  // corner tests, so retain the fail-closed diagnostic result.
+  if(hasNegativeW && hasPositiveW)
+    return IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate;
+
+  bool outsideLeft = true;
+  bool outsideRight = true;
+  bool outsideBottom = true;
+  bool outsideTop = true;
+  bool outsideNear = true;
+  bool outsideFar = true;
+  for(const ClipPoint& point:points) {
+    outsideLeft = outsideLeft && point.x < -point.w;
+    outsideRight = outsideRight && point.x > point.w;
+    outsideBottom = outsideBottom && point.y < -point.w;
+    outsideTop = outsideTop && point.y > point.w;
+    outsideNear = outsideNear && point.z < 0.f;
+    outsideFar = outsideFar && point.z > point.w;
+    }
+  if(outsideLeft || outsideRight || outsideBottom || outsideTop ||
+     outsideNear || outsideFar)
+    return IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside;
+  return IOSGPUSceneMultiply2ClipBoundsResult::Intersects;
+  }
+
 inline uint64_t iosGPUSceneFailingHandle(
     IOSGPUSceneDrawPlanResult result,
     const IOSGPUSceneMeshCandidate& source) noexcept {

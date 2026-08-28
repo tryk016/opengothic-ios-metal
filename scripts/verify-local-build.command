@@ -708,13 +708,29 @@ required = (
     ("alpha-pso-state",
      "game/graphics/iosgpuscene.mm",
      "alphaTestPipelineState = alphaTestPipelineOwner.relinquish();"),
-    ("additive-pso-and-depth-state",
+    ("additive-and-multiply2-pso-state",
      "game/graphics/iosgpuscene.mm",
      """additivePipelineState  = additivePipelineOwner.relinquish();
-      multiply2PipelineState = multiply2PipelineOwner.relinquish();
-      baseDepthState         = depthOwner.relinquish();
+      multiply2PipelineState = multiply2PipelineOwner.relinquish();"""),
+    ("optional-visibility-pso-state",
+     "game/graphics/iosgpuscene.mm",
+     """#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityPipelineState =
+          visibilityPipelineOwner.relinquish();
+#endif"""),
+    ("base-additive-and-multiply2-depth-state",
+     "game/graphics/iosgpuscene.mm",
+     """baseDepthState         = depthOwner.relinquish();
       additiveDepthState     = additiveDepthOwner.relinquish();
       multiply2DepthState    = multiply2DepthOwner.relinquish();"""),
+    ("optional-visibility-depth-states",
+     "game/graphics/iosgpuscene.mm",
+     """#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityRasterDepthState =
+          visibilityRasterDepthOwner.relinquish();
+      multiply2VisibilityStencilDepthState =
+          visibilityStencilDepthOwner.relinquish();
+#endif"""),
     ("alpha-fragment-descriptor-assignment",
      "game/graphics/iosgpuscene.mm",
      """pipelineDesc.fragmentFunction =
@@ -892,8 +908,9 @@ if missing:
         + ",".join(missing)
     )
 if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 4:
-    raise SystemExit("RendererIOS GPU path must create exactly four offline PSOs")
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 5:
+    raise SystemExit(
+        "RendererIOS GPU path must declare four production PSOs and one macro-guarded visibility PSO")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",

@@ -101,6 +101,12 @@ if(NOT IOS AND
   message(FATAL_ERROR
     "RendererIOS Multiply2 causal A/B builds are available only for iOS")
 endif()
+if(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC AND
+   (NOT IOS OR
+    OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE STREQUAL "none"))
+  message(FATAL_ERROR
+    "RendererIOS Multiply2 GPU visibility diagnostic requires causal-a or causal-b")
+endif()
 
 if(NOT IOS AND OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST)
   message(FATAL_ERROR
@@ -182,6 +188,8 @@ elseif(IOS)
          "Encode, submit, read back and capture one deterministic shading prototype Forward pass" OFF)
   option(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE
          "Capture one exact SceneHDR/proof-copy/tone-resolve command-buffer triple" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC
+         "Run one diagnostics-only Multiply2 GPU visibility classification" OFF)
   set(OPENGOTHIC_RENDERER_IOS_METAL_CAPTURE_PLIST_ENTRY "")
   if(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST OR
      OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST OR
@@ -463,6 +471,10 @@ elseif(IOS)
   elseif(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE STREQUAL "causal-b")
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC=1)
   endif()
 
   if(OPENGOTHIC_RENDERER_IOS_FAULT_MODE STREQUAL "none")

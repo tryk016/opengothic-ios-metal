@@ -18,6 +18,55 @@ inline constexpr uint64_t IOSMultiply2CoverageProofV1MaximumPayloadBytes =
     uint64_t(IOSMultiply2CoverageProofV1MaximumExtent)*
     uint64_t(IOSMultiply2CoverageProofV1MaximumExtent);
 
+inline constexpr std::size_t IOSMultiply2VisibilityResultBytes = 32u;
+inline constexpr std::size_t IOSMultiply2VisibilityProductionOffset = 0u;
+inline constexpr std::size_t IOSMultiply2VisibilityRasterOffset = 8u;
+inline constexpr std::size_t IOSMultiply2VisibilityStencilOffset = 16u;
+inline constexpr std::size_t IOSMultiply2VisibilityClipClassOffset = 24u;
+inline constexpr uint64_t IOSMultiply2VisibilityProductionSentinel =
+    0xd1a6000000000001ull;
+inline constexpr uint64_t IOSMultiply2VisibilityRasterSentinel =
+    0xd1a6000000000002ull;
+inline constexpr uint64_t IOSMultiply2VisibilityStencilSentinel =
+    0xd1a6000000000003ull;
+
+enum class IOSMultiply2VisibilityClipClass : uint64_t {
+  Indeterminate = 1u,
+  DefinitelyOutside = 2u,
+  Intersects = 3u,
+};
+
+enum class IOSMultiply2VisibilityDiagnosticClass : uint8_t {
+  DiagnosticInvalid = 0u,
+  DefinitelyOutsideFrustum,
+  NonRasterizedUnknown,
+  AllDepthRejected,
+  StencilWriteMissing,
+  StencilBlitOrReadbackLoss,
+  CoverageResident,
+};
+
+struct IOSMultiply2VisibilityDiagnostic final {
+  IOSMultiply2VisibilityDiagnosticClass classification =
+      IOSMultiply2VisibilityDiagnosticClass::DiagnosticInvalid;
+  IOSMultiply2VisibilityClipClass clipClass =
+      IOSMultiply2VisibilityClipClass::Indeterminate;
+  bool production = false;
+  bool raster = false;
+  bool stencil = false;
+};
+
+IOSMultiply2VisibilityDiagnostic iosClassifyMultiply2VisibilityDiagnostic(
+    uint64_t productionResult,
+    uint64_t rasterResult,
+    uint64_t stencilResult,
+    uint64_t clipClass,
+    bool canonicalCoverage) noexcept;
+const char* iosMultiply2VisibilityClipClassName(
+    IOSMultiply2VisibilityClipClass value) noexcept;
+const char* iosMultiply2VisibilityDiagnosticClassName(
+    IOSMultiply2VisibilityDiagnosticClass value) noexcept;
+
 struct IOSMultiply2CoverageRect final {
   uint32_t x = 0u;
   uint32_t y = 0u;
@@ -43,6 +92,10 @@ struct IOSMultiply2CoverageProofMetadata final {
   IOSMultiply2CoverageRect scissor;
   std::array<uint8_t,16u> proofId{};
   std::array<uint8_t,20u> buildSha{};
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  IOSMultiply2VisibilityClipClass visibilityClipClass =
+      IOSMultiply2VisibilityClipClass::Indeterminate;
+#endif
 };
 
 struct IOSMultiply2CoverageProofView final {
@@ -79,6 +132,9 @@ IOSMultiply2CoverageProofError iosParseMultiply2CoverageProofV1(
 struct IOSMultiply2CoverageNativeView final {
   void* depthStencilTexture = nullptr;
   void* coverageBuffer = nullptr;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  void* visibilityResultBuffer = nullptr;
+#endif
   uint32_t width = 0u;
   uint32_t height = 0u;
   uint32_t gpuBytesPerRow = 0u;
