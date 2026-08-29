@@ -9,6 +9,7 @@
 
 #include <CommonCrypto/CommonDigest.h>
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <cstdint>
@@ -111,9 +112,20 @@ void requireMode0600(const fs::path& path) {
 
 void requireNoCandidateIdentity(const Integrity::Result& result) {
   assert(result.candidateOrdinal==0u);
+  assert(result.candidateDriftCode==0u);
   for(const char value:result.candidatePathSha256)
     assert(value=='\0');
   assert(!result.hasHashingCandidateIdentity());
+  }
+
+std::string driftCodeHex(uint16_t code) {
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string encoded(4u,'0');
+  encoded[0] = hex[(code>>12u)&0x0fu];
+  encoded[1] = hex[(code>>8u)&0x0fu];
+  encoded[2] = hex[(code>>4u)&0x0fu];
+  encoded[3] = hex[code&0x0fu];
+  return encoded;
   }
 
 void requireNoFailureStage(const Integrity::Result& result) {
@@ -198,13 +210,15 @@ void testCandidateIdentityAdmissionAndFormatting() {
   valid.failureStage = Integrity::FailureStage::ResourceHashing;
   valid.resourceFileCount = 4u;
   valid.candidateOrdinal = 1u;
+  valid.candidateDriftCode = 0x2028u;
   std::copy(pathSha.begin(),pathSha.end(),
             valid.candidatePathSha256.begin());
   assert(valid.hasHashingCandidateIdentity());
   assert(Integrity::formatFailureMessage(valid)==
       "RendererIOS device integrity manifest failed: file-changed "
       "stage=resource-hashing candidate-ordinal=1 "
-      "candidate-path-sha256="+std::string(pathSha));
+      "candidate-path-sha256="+std::string(pathSha)+
+      " candidate-drift-code=2028");
   Integrity::Result validSave = valid;
   validSave.failureStage = Integrity::FailureStage::SaveHashing;
   validSave.resourceFileCount = 0u;
@@ -213,7 +227,8 @@ void testCandidateIdentityAdmissionAndFormatting() {
   assert(Integrity::formatFailureMessage(validSave)==
       "RendererIOS device integrity manifest failed: file-changed "
       "stage=save-hashing candidate-ordinal=1 "
-      "candidate-path-sha256="+std::string(pathSha));
+      "candidate-path-sha256="+std::string(pathSha)+
+      " candidate-drift-code=2028");
 
   const auto requireFormatterRedacted = [](const Integrity::Result& rejected) {
     assert(!rejected.hasHashingCandidateIdentity());
@@ -267,6 +282,27 @@ void testCandidateIdentityAdmissionAndFormatting() {
     Integrity::Result rejected = valid;
     rejected.candidatePathSha256[64] = 'x';
     requireFormatterRedacted(rejected);
+  }
+  {
+    Integrity::Result rejected = valid;
+    rejected.candidateDriftCode = 0u;
+    assert(!rejected.hasValidHashingCandidateDrift());
+    const std::string formatted = Integrity::formatFailureMessage(rejected);
+    assert(formatted.find("candidate-ordinal=")==std::string::npos);
+    assert(formatted.find("candidate-drift-code=")==std::string::npos);
+  }
+  {
+    Integrity::Result rejected = valid;
+    rejected.candidateDriftCode = 0x1000u;
+    assert(!rejected.hasValidHashingCandidateDrift());
+    const std::string formatted = Integrity::formatFailureMessage(rejected);
+    assert(formatted.find("candidate-ordinal=")==std::string::npos);
+    assert(formatted.find("candidate-drift-code=")==std::string::npos);
+  }
+  {
+    Integrity::Result rejected = valid;
+    rejected.candidateDriftCode = 0x2a08u;
+    assert(!rejected.hasValidHashingCandidateDrift());
   }
   {
     Integrity::Result rejected = valid;
@@ -483,6 +519,36 @@ struct CandidateMutationState final {
 CandidateMutationState CandidateState;
 bool CandidateStableStatChanged = false;
 
+enum class CandidateDriftMutation : uint8_t {
+  None,
+  CtimeOnly,
+  ReplaceSameSize,
+  ReplaceDirectoryWithFile,
+  ChangeMode,
+  Grow,
+  Truncate,
+  RenameAway,
+  };
+
+struct CandidateDriftMutationState final {
+  Integrity::CandidateDriftTestPoint selectedPoint =
+      Integrity::CandidateDriftTestPoint::PathBeforeStat;
+  Integrity::CandidateDriftTestHookResult selectedResult =
+      Integrity::CandidateDriftTestHookResult::NotSelected;
+  Integrity::FailureStage stage = Integrity::FailureStage::ResourceHashing;
+  uint64_t ordinal = 1u;
+  std::string_view normalizedRelativePath;
+  fs::path mutationPath;
+  CandidateDriftMutation mutation = CandidateDriftMutation::None;
+  uint64_t callbackCount = 0u;
+  uint64_t selectedCount = 0u;
+  uint64_t mutationCount = 0u;
+  bool mutationSucceeded = false;
+  std::vector<Integrity::CandidateDriftTestPoint> points;
+  };
+
+CandidateDriftMutationState CandidateDriftState;
+
 bool appendByte(const fs::path& path) noexcept {
   const int descriptor = ::open(
       path.c_str(),O_WRONLY|O_APPEND|O_NOFOLLOW);
@@ -520,6 +586,24 @@ bool rewriteSameSize(const fs::path& path) noexcept {
   return ::close(descriptor)==0 && CandidateStableStatChanged;
   }
 
+bool changeCtimeOnly(const fs::path& path) noexcept {
+  struct stat before{};
+  if(::lstat(path.c_str(),&before)!=0)
+    return false;
+  if(::chmod(path.c_str(),before.st_mode^S_IXUSR)!=0 ||
+     ::chmod(path.c_str(),before.st_mode)!=0)
+    return false;
+  struct stat after{};
+  if(::lstat(path.c_str(),&after)!=0)
+    return false;
+  return before.st_dev==after.st_dev && before.st_ino==after.st_ino &&
+      before.st_mode==after.st_mode && before.st_size==after.st_size &&
+      before.st_mtimespec.tv_sec==after.st_mtimespec.tv_sec &&
+      before.st_mtimespec.tv_nsec==after.st_mtimespec.tv_nsec &&
+      (before.st_ctimespec.tv_sec!=after.st_ctimespec.tv_sec ||
+       before.st_ctimespec.tv_nsec!=after.st_ctimespec.tv_nsec);
+  }
+
 bool replaceInode(const fs::path& path) noexcept {
   try {
     fs::path replacement = path;
@@ -533,6 +617,64 @@ bool replaceInode(const fs::path& path) noexcept {
         ::fsync(descriptor)==0;
     const bool closed = ::close(descriptor)==0;
     return wrote && closed && ::rename(replacement.c_str(),path.c_str())==0;
+    }
+  catch(...) {
+    return false;
+    }
+  }
+
+bool replaceInodeSameSize(const fs::path& path) noexcept {
+  try {
+    struct stat original{};
+    if(::lstat(path.c_str(),&original)!=0 || original.st_size<0)
+      return false;
+    fs::path replacement = path;
+    replacement += ".replacement";
+    const int descriptor = ::open(
+        replacement.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+    if(descriptor<0)
+      return false;
+    std::string bytes(static_cast<std::size_t>(original.st_size),'z');
+    const bool wrote =
+        ::write(descriptor,bytes.data(),bytes.size())==
+            static_cast<ssize_t>(bytes.size()) &&
+        ::fsync(descriptor)==0;
+    const bool modeSet = wrote &&
+        ::fchmod(descriptor,original.st_mode&07777)==0;
+    timespec times[2] = {
+      {0,UTIME_OMIT},
+      {original.st_mtimespec.tv_sec,original.st_mtimespec.tv_nsec},
+      };
+    const bool timestamped = modeSet && ::futimens(descriptor,times)==0;
+    const bool closed = ::close(descriptor)==0;
+    if(!timestamped || !closed) {
+      (void)::unlink(replacement.c_str());
+      return false;
+      }
+    return ::rename(replacement.c_str(),path.c_str())==0;
+    }
+  catch(...) {
+    return false;
+    }
+  }
+
+bool replaceDirectoryWithFile(const fs::path& path) noexcept {
+  try {
+    fs::path moved = path;
+    moved += ".directory-moved";
+    if(::rename(path.c_str(),moved.c_str())!=0)
+      return false;
+    const int descriptor = ::open(
+        path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW,0600);
+    if(descriptor<0)
+      return false;
+    const char bytes[] = "not-a-directory";
+    const bool wrote = ::write(
+        descriptor,bytes,sizeof(bytes)-1u)==
+        static_cast<ssize_t>(sizeof(bytes)-1u) &&
+        ::fsync(descriptor)==0;
+    const bool closed = ::close(descriptor)==0;
+    return wrote && closed;
     }
   catch(...) {
     return false;
@@ -554,6 +696,72 @@ bool renameAway(const fs::path& path) noexcept {
   catch(...) {
     return false;
     }
+  }
+
+bool truncateFile(const fs::path& path, off_t size) noexcept {
+  const int descriptor = ::open(path.c_str(),O_WRONLY|O_NOFOLLOW);
+  if(descriptor<0)
+    return false;
+  const bool changed = ::ftruncate(descriptor,size)==0 &&
+      ::fsync(descriptor)==0;
+  const bool closed = ::close(descriptor)==0;
+  return changed && closed;
+  }
+
+Integrity::CandidateDriftTestHookResult exerciseCandidateDrift(
+    const fs::path& root,
+    std::string_view normalizedRelativePath,
+    uint64_t candidateOrdinal,
+    Integrity::FailureStage stage,
+    Integrity::CandidateDriftTestPoint point) noexcept {
+  ++CandidateDriftState.callbackCount;
+  if(stage!=CandidateDriftState.stage ||
+     candidateOrdinal!=CandidateDriftState.ordinal ||
+     normalizedRelativePath!=CandidateDriftState.normalizedRelativePath)
+    return Integrity::CandidateDriftTestHookResult::NotSelected;
+  CandidateDriftState.points.push_back(point);
+  if(point!=CandidateDriftState.selectedPoint ||
+     CandidateDriftState.selectedResult==
+         Integrity::CandidateDriftTestHookResult::NotSelected)
+    return Integrity::CandidateDriftTestHookResult::NotSelected;
+  ++CandidateDriftState.selectedCount;
+  if(CandidateDriftState.selectedResult!=
+         Integrity::CandidateDriftTestHookResult::Mutated)
+    return CandidateDriftState.selectedResult;
+  ++CandidateDriftState.mutationCount;
+  const fs::path target = CandidateDriftState.mutationPath.empty()
+      ? root/std::string(normalizedRelativePath) : CandidateDriftState.mutationPath;
+  bool succeeded = false;
+  switch(CandidateDriftState.mutation) {
+    case CandidateDriftMutation::None:
+      succeeded = true;
+      break;
+    case CandidateDriftMutation::CtimeOnly:
+      succeeded = changeCtimeOnly(target);
+      break;
+    case CandidateDriftMutation::ReplaceSameSize:
+      succeeded = replaceInodeSameSize(target);
+      break;
+    case CandidateDriftMutation::ReplaceDirectoryWithFile:
+      succeeded = replaceDirectoryWithFile(target);
+      break;
+    case CandidateDriftMutation::ChangeMode:
+      succeeded = changeMode(target);
+      break;
+    case CandidateDriftMutation::Grow:
+      succeeded = appendByte(target);
+      break;
+    case CandidateDriftMutation::Truncate:
+      succeeded = truncateFile(target,0);
+      break;
+    case CandidateDriftMutation::RenameAway:
+      succeeded = renameAway(target);
+      break;
+    }
+  CandidateDriftState.mutationSucceeded = succeeded;
+  return succeeded
+      ? Integrity::CandidateDriftTestHookResult::Mutated
+      : Integrity::CandidateDriftTestHookResult::Failed;
   }
 
 Integrity::CandidateHashTestHookResult mutateCandidateBeforeHash(
@@ -746,6 +954,8 @@ void testHashingCandidateIdentity() {
     assert(result.candidateOrdinal==testCase.ordinal);
     assert(std::string_view(result.candidatePathSha256.data())==
         testCase.expectedPathSha256);
+    assert(result.candidateDriftCode!=0u);
+    assert(Integrity::isCandidateDriftCodeValid(result.candidateDriftCode));
     if(testCase.mutation==CandidateMutation::ChangeMode)
       assert(sha256Bytes(testCase.rawRelativePath)!=
           std::string(result.candidatePathSha256.data()));
@@ -755,7 +965,8 @@ void testHashingCandidateIdentity() {
         "RendererIOS device integrity manifest failed: file-changed stage="+
         std::string(Integrity::failureStageName(testCase.stage))+
         " candidate-ordinal="+std::to_string(testCase.ordinal)+
-        " candidate-path-sha256="+std::string(testCase.expectedPathSha256));
+        " candidate-path-sha256="+std::string(testCase.expectedPathSha256)+
+        " candidate-drift-code="+driftCodeHex(result.candidateDriftCode));
     assert(message.find(testCase.rawRelativePath)==std::string::npos);
     assert(message.find(testCase.normalizedRelativePath)==std::string::npos);
     assert(message.find(fixture.root.string())==std::string::npos);
@@ -875,12 +1086,586 @@ void testPostHashExactTreeRevalidation() {
   }
   }
 
+void resetCandidateDriftState(
+    Integrity::CandidateDriftTestPoint selectedPoint,
+    Integrity::CandidateDriftTestHookResult selectedResult,
+    Integrity::FailureStage stage,
+    uint64_t ordinal,
+    std::string_view normalizedRelativePath,
+    const fs::path& mutationPath,
+    CandidateDriftMutation mutation) {
+  CandidateDriftState = {};
+  CandidateDriftState.selectedPoint = selectedPoint;
+  CandidateDriftState.selectedResult = selectedResult;
+  CandidateDriftState.stage = stage;
+  CandidateDriftState.ordinal = ordinal;
+  CandidateDriftState.normalizedRelativePath = normalizedRelativePath;
+  CandidateDriftState.mutationPath = mutationPath;
+  CandidateDriftState.mutation = mutation;
+  CandidateDriftState.points.reserve(16u);
+  }
+
+void assertCandidateDriftPrefix(
+    const std::vector<Integrity::CandidateDriftTestPoint>& points,
+    std::initializer_list<Integrity::CandidateDriftTestPoint> expected) {
+  assert(points.size()==expected.size());
+  std::size_t index = 0u;
+  for(const auto point:expected) {
+    assert(points[index]==point);
+    ++index;
+    }
+  }
+
+Integrity::CandidateDriftTestHookResult candidateDriftNoMutation(
+    const fs::path& root,
+    std::string_view normalizedRelativePath,
+    uint64_t candidateOrdinal,
+    Integrity::FailureStage stage,
+    Integrity::CandidateDriftTestPoint point) noexcept {
+  return exerciseCandidateDrift(
+      root,normalizedRelativePath,candidateOrdinal,stage,point);
+  }
+
+void testCandidateDriftCodeDomainAndFormatting() {
+  const auto valid = [](uint16_t checkpoint, uint16_t detail) {
+    const uint16_t code = static_cast<uint16_t>(
+        (checkpoint<<12u)|detail);
+    assert(Integrity::isCandidateDriftCodeValid(code));
+    };
+  valid(1u,0x100u);
+  valid(1u,0x200u);
+  valid(1u,0x400u);
+  valid(1u,0x800u);
+  valid(1u,0x001u);
+  valid(1u,0x03fu);
+  for(const uint16_t checkpoint:{
+        static_cast<uint16_t>(2u),static_cast<uint16_t>(3u),
+        static_cast<uint16_t>(4u),static_cast<uint16_t>(6u),
+        static_cast<uint16_t>(7u)}) {
+    valid(checkpoint,0x001u);
+    valid(checkpoint,0x03fu);
+    valid(checkpoint,0x800u);
+    }
+  valid(5u,0x008u);
+  for(const uint16_t code:{
+        static_cast<uint16_t>(0x0000u),static_cast<uint16_t>(0x1000u),
+        static_cast<uint16_t>(0x1101u),static_cast<uint16_t>(0x1060u),
+        static_cast<uint16_t>(0x1900u),
+        static_cast<uint16_t>(0x2000u),static_cast<uint16_t>(0x2040u),
+        static_cast<uint16_t>(0x2801u),static_cast<uint16_t>(0x3000u),
+        static_cast<uint16_t>(0x3801u),static_cast<uint16_t>(0x4000u),
+        static_cast<uint16_t>(0x5000u),static_cast<uint16_t>(0x5001u),
+        static_cast<uint16_t>(0x5009u),static_cast<uint16_t>(0x6000u),
+        static_cast<uint16_t>(0x6801u),static_cast<uint16_t>(0x7000u),
+        static_cast<uint16_t>(0x7801u),static_cast<uint16_t>(0x8001u),
+        static_cast<uint16_t>(0xffffu),
+        })
+    assert(!Integrity::isCandidateDriftCodeValid(code));
+
+  Integrity::Result result;
+  result.error = Integrity::Error::FileChanged;
+  result.failureStage = Integrity::FailureStage::ResourceHashing;
+  result.resourceFileCount = 1u;
+  result.candidateOrdinal = 1u;
+  constexpr std::string_view pathSha =
+      "7c5f5ae02b576c00748471a0a9c5cce6bc3320359b6cf378b417df39fa54a467";
+  std::copy(pathSha.begin(),pathSha.end(),result.candidatePathSha256.begin());
+  result.candidateDriftCode = 0x7008u;
+  assert(result.hasValidHashingCandidateDrift());
+  const std::string message = Integrity::formatFailureMessage(result);
+  assert(message.ends_with(" candidate-drift-code=7008"));
+  assert(message.find("candidate-drift-code=7008")!=std::string::npos);
+  assert(message.find("candidate-drift-code=7008") ==
+      message.rfind("candidate-drift-code=7008"));
+  }
+
+void testCandidateDriftHookOrderAndOneShot() {
+  Fixture fixture;
+  createBaseFixture(fixture.root);
+  resetCandidateDriftState(
+      Integrity::CandidateDriftTestPoint::PathAfterStat,
+      Integrity::CandidateDriftTestHookResult::NotSelected,
+      Integrity::FailureStage::ResourceHashing,4u,
+      "system/control\nfile",{},CandidateDriftMutation::None);
+  const auto result = Integrity::createCanonicalManifestsForTest(
+      fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+  assert(result.success());
+  requireNoFailureStage(result);
+  assert(CandidateDriftState.callbackCount==68u);
+  assert(CandidateDriftState.selectedCount==0u);
+  assert(CandidateDriftState.mutationCount==0u);
+  assertCandidateDriftPrefix(CandidateDriftState.points,{
+    Integrity::CandidateDriftTestPoint::AncestorPathStat,
+    Integrity::CandidateDriftTestPoint::AncestorKind,
+    Integrity::CandidateDriftTestPoint::AncestorOpen,
+    Integrity::CandidateDriftTestPoint::AncestorFdStat,
+    Integrity::CandidateDriftTestPoint::PathBeforeStat,
+    Integrity::CandidateDriftTestPoint::FdBeforeStat,
+    Integrity::CandidateDriftTestPoint::PreReadStat,
+    Integrity::CandidateDriftTestPoint::ReadLength,
+    Integrity::CandidateDriftTestPoint::FdAfterStat,
+    Integrity::CandidateDriftTestPoint::PathAfterStat,
+    });
+  assert(fs::exists(fixture.root/Integrity::ResourceManifestFileName));
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        Integrity::CandidateDriftTestPoint::AncestorKind,
+        Integrity::CandidateDriftTestHookResult::Mutated,
+        Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",
+        fixture.root/"Data",CandidateDriftMutation::None);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(result.success());
+    requireNoFailureStage(result);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==1u);
+    assert(CandidateDriftState.mutationSucceeded);
+    assert(CandidateDriftState.callbackCount==26u);
+    assertCandidateDriftPrefix(CandidateDriftState.points,{
+      Integrity::CandidateDriftTestPoint::AncestorPathStat,
+      Integrity::CandidateDriftTestPoint::AncestorKind,
+      });
+    assert(fs::exists(fixture.root/Integrity::ResourceManifestFileName));
+    }
+  }
+
+void testCandidateDriftMutations() {
+  struct MutationCase final {
+    Integrity::CandidateDriftTestPoint point;
+    Integrity::FailureStage stage;
+    uint64_t ordinal;
+    std::string_view normalizedPath;
+    fs::path relativeMutationPath;
+    CandidateDriftMutation mutation;
+    uint16_t expectedCode;
+    uint64_t expectedCallbacks;
+    };
+  const fs::path dataA = "Data/a.txt";
+  constexpr std::string_view control = "system/control\nfile";
+  const std::array<MutationCase,11> cases = {{
+    {Integrity::CandidateDriftTestPoint::AncestorPathStat,
+     Integrity::FailureStage::ResourceHashing,4u,control,"system",
+     CandidateDriftMutation::ReplaceDirectoryWithFile,0x1200u,35u},
+    {Integrity::CandidateDriftTestPoint::AncestorFdStat,
+     Integrity::FailureStage::ResourceHashing,4u,control,"system",
+     CandidateDriftMutation::ChangeMode,0x1024u,38u},
+    {Integrity::CandidateDriftTestPoint::PathBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::CtimeOnly,0x2020u,5u},
+    {Integrity::CandidateDriftTestPoint::PathBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::ReplaceSameSize,0x2022u,5u},
+    {Integrity::CandidateDriftTestPoint::PathBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::ChangeMode,0x2024u,5u},
+    {Integrity::CandidateDriftTestPoint::PathBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::Grow,0x2038u,5u},
+    {Integrity::CandidateDriftTestPoint::FdBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::ChangeMode,0x3024u,6u},
+    {Integrity::CandidateDriftTestPoint::PreReadStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::ChangeMode,0x4024u,7u},
+    {Integrity::CandidateDriftTestPoint::ReadLength,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::Truncate,0x5008u,8u},
+    {Integrity::CandidateDriftTestPoint::FdAfterStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::ChangeMode,0x6024u,9u},
+    {Integrity::CandidateDriftTestPoint::PathAfterStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",dataA,
+     CandidateDriftMutation::ReplaceSameSize,0x7022u,10u},
+    }};
+  for(const MutationCase& testCase:cases) {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        testCase.point,Integrity::CandidateDriftTestHookResult::Mutated,
+        testCase.stage,testCase.ordinal,testCase.normalizedPath,
+        fixture.root/testCase.relativeMutationPath,testCase.mutation);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==1u);
+    assert(CandidateDriftState.mutationSucceeded);
+    assert(CandidateDriftState.callbackCount==testCase.expectedCallbacks);
+    assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==testCase.stage);
+    assert(result.candidateOrdinal==testCase.ordinal);
+    assert(result.candidateDriftCode==testCase.expectedCode);
+    assert(result.candidateDriftCode!=0u);
+    assert(Integrity::isCandidateDriftCodeValid(result.candidateDriftCode));
+    const std::string message = Integrity::formatFailureMessage(result);
+    assert(message.find("candidate-drift-code="+driftCodeHex(
+        result.candidateDriftCode))!=std::string::npos);
+    assert(message.find(testCase.normalizedPath)==std::string::npos);
+    requireNoPublishedManifests(fixture.root);
+    }
+  }
+
+void testCandidateDriftForcedFailures() {
+  struct ForcedCase final {
+    Integrity::CandidateDriftTestPoint point;
+    Integrity::FailureStage stage;
+    uint64_t ordinal;
+    std::string_view normalizedPath;
+    uint16_t expectedCode;
+    uint64_t expectedCallbacks;
+    };
+  const std::array<ForcedCase,8> cases = {{
+    {Integrity::CandidateDriftTestPoint::AncestorPathStat,
+     Integrity::FailureStage::ResourceHashing,4u,"system/control\nfile",
+     0x1100u,35u},
+    {Integrity::CandidateDriftTestPoint::AncestorOpen,
+     Integrity::FailureStage::ResourceHashing,4u,"system/control\nfile",
+     0x1400u,37u},
+    {Integrity::CandidateDriftTestPoint::AncestorFdStat,
+     Integrity::FailureStage::ResourceHashing,4u,"system/control\nfile",
+     0x1800u,38u},
+    {Integrity::CandidateDriftTestPoint::PathBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",
+     0x2800u,5u},
+    {Integrity::CandidateDriftTestPoint::FdBeforeStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",
+     0x3800u,6u},
+    {Integrity::CandidateDriftTestPoint::PreReadStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",
+     0x4800u,7u},
+    {Integrity::CandidateDriftTestPoint::FdAfterStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",
+     0x6800u,9u},
+    {Integrity::CandidateDriftTestPoint::PathAfterStat,
+     Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",
+     0x7800u,10u},
+    }};
+  for(const ForcedCase& testCase:cases) {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        testCase.point,Integrity::CandidateDriftTestHookResult::ForceFailure,
+        testCase.stage,testCase.ordinal,testCase.normalizedPath,{},
+        CandidateDriftMutation::None);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==0u);
+    assert(CandidateDriftState.callbackCount==testCase.expectedCallbacks);
+    assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==testCase.stage);
+    assert(result.candidateOrdinal==testCase.ordinal);
+    assert(result.candidateDriftCode==testCase.expectedCode);
+    assert(Integrity::isCandidateDriftCodeValid(result.candidateDriftCode));
+    requireNoPublishedManifests(fixture.root);
+    }
+  }
+
+void testCandidateDriftFailedAndSaveStage() {
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        Integrity::CandidateDriftTestPoint::PathBeforeStat,
+        Integrity::CandidateDriftTestHookResult::Failed,
+        Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",{},
+        CandidateDriftMutation::None);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(result.error==Integrity::Error::OpenFailed);
+    requireNoFailureStage(result);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==0u);
+    assert(CandidateDriftState.callbackCount==5u);
+    requireNoPublishedManifests(fixture.root);
+    }
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        Integrity::CandidateDriftTestPoint::AncestorKind,
+        Integrity::CandidateDriftTestHookResult::ForceFailure,
+        Integrity::FailureStage::ResourceHashing,4u,"system/control\nfile",{},
+        CandidateDriftMutation::None);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(result.error==Integrity::Error::OpenFailed);
+    requireNoFailureStage(result);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==0u);
+    assert(CandidateDriftState.callbackCount==36u);
+    requireNoPublishedManifests(fixture.root);
+    }
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        Integrity::CandidateDriftTestPoint::ReadLength,
+        Integrity::CandidateDriftTestHookResult::ForceFailure,
+        Integrity::FailureStage::ResourceHashing,1u,"Data/a.txt",{},
+        CandidateDriftMutation::None);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(result.error==Integrity::Error::OpenFailed);
+    requireNoFailureStage(result);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==0u);
+    assert(CandidateDriftState.callbackCount==8u);
+    requireNoPublishedManifests(fixture.root);
+    }
+  {
+    Fixture fixture;
+    createBaseFixture(fixture.root);
+    resetCandidateDriftState(
+        Integrity::CandidateDriftTestPoint::PathBeforeStat,
+        Integrity::CandidateDriftTestHookResult::Mutated,
+        Integrity::FailureStage::SaveHashing,1u,"save_slot_1.sav",
+        fixture.root/"save_slot_1.sav",CandidateDriftMutation::Grow);
+    const auto result = Integrity::createCanonicalManifestsForTest(
+        fixture.root,nullptr,nullptr,candidateDriftNoMutation);
+    assert(result.error==Integrity::Error::FileChanged);
+    assert(result.failureStage==Integrity::FailureStage::SaveHashing);
+    assert(result.candidateOrdinal==1u);
+    assert(result.candidateDriftCode!=0u);
+    assert((result.candidateDriftCode>>12u)==2u);
+    assert(CandidateDriftState.callbackCount==45u);
+    assert(CandidateDriftState.selectedCount==1u);
+    assert(CandidateDriftState.mutationCount==1u);
+    assert(CandidateDriftState.mutationSucceeded);
+    requireNoPublishedManifests(fixture.root);
+    }
+  }
+
 std::string readSource(const fs::path& path) {
   std::ifstream input(path,std::ios::binary);
   assert(input);
   return std::string(
       std::istreambuf_iterator<char>(input),
       std::istreambuf_iterator<char>());
+  }
+
+std::string withoutHostTestBlocks(const std::string& source) {
+  std::string production;
+  std::size_t offset = 0u;
+  std::size_t skippedDepth = 0u;
+  while(offset<source.size()) {
+    const std::size_t end = source.find('\n',offset);
+    const std::size_t count = end==std::string::npos
+        ? source.size()-offset : end-offset;
+    const std::string_view line(source.data()+offset,count);
+    if(skippedDepth==0u && line.find(
+           "#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)")!=
+           std::string_view::npos) {
+      skippedDepth = 1u;
+      }
+    else if(skippedDepth!=0u) {
+      if(line.find("#if")!=std::string_view::npos)
+        ++skippedDepth;
+      if(line.find("#endif")!=std::string_view::npos)
+        --skippedDepth;
+      }
+    else {
+      production.append(line);
+      production.push_back('\n');
+      }
+    if(end==std::string::npos)
+      break;
+    offset = end+1u;
+    }
+  return production;
+  }
+
+static constexpr std::array<std::string_view,17>
+    CandidateDriftProductionAnchors = {{
+  "if(::fstatat(parent,stableName.c_str(),&pathIdentity,\n"
+  "               AT_SYMLINK_NOFOLLOW)!=0) {\n"
+  "    driftCode = candidateDriftCode(1u,0x100u);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(!S_ISDIR(pathIdentity.st_mode)) {\n"
+  "    driftCode = candidateDriftCode(1u,0x200u);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(!opened) {\n"
+  "    driftCode = candidateDriftCode(1u,0x400u);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(::fstat(opened.get(),&openedIdentity)!=0) {\n"
+  "    driftCode = candidateDriftCode(1u,0x800u);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "stableStatDifference(\n"
+  "         pathIdentity,openedIdentity); difference!=0u) {\n"
+  "    driftCode = candidateDriftCode(1u,difference);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(::fstatat(current.get(),leaf.c_str(),&pathBefore,\n"
+  "               AT_SYMLINK_NOFOLLOW)!=0) {\n"
+  "    driftCode = candidateDriftCode(2u,0x800u);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "stableStatDifference(\n"
+  "         candidate.identity,pathBefore); difference!=0u) {\n"
+  "    driftCode = candidateDriftCode(2u,difference);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(::fstat(opened.get(),&descriptorBefore)!=0) {\n"
+  "    driftCode = candidateDriftCode(3u,0x800u);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "stableStatDifference(\n"
+  "         candidate.identity,descriptorBefore); difference!=0u) {\n"
+  "    driftCode = candidateDriftCode(3u,difference);\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(::fstat(file.get(),&before)!=0) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(4u,0x800u);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "stableStatDifference(\n"
+  "         candidate.identity,before); difference!=0u) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(4u,difference);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(unsignedCount>candidate.byteSize-bytesRead) {\n"
+  "      candidateDriftCodeValue = candidateDriftCode(5u,0x008u);\n"
+  "      if(candidateDriftCodeOutput!=nullptr)\n"
+  "        *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "      return Error::FileChanged;\n"
+  "      }",
+  "if(bytesRead!=candidate.byteSize) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(5u,0x008u);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(::fstat(file.get(),&after)!=0) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(6u,0x800u);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "if(::fstatat(parent.get(),leaf.c_str(),&pathAfter,\n"
+  "               AT_SYMLINK_NOFOLLOW)!=0) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(7u,0x800u);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "stableStatDifference(\n"
+  "         before,after); difference!=0u) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(6u,difference);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  "stableStatDifference(\n"
+  "         before,pathAfter); difference!=0u) {\n"
+  "    candidateDriftCodeValue = candidateDriftCode(7u,difference);\n"
+  "    if(candidateDriftCodeOutput!=nullptr)\n"
+  "      *candidateDriftCodeOutput = candidateDriftCodeValue;\n"
+  "    return Error::FileChanged;\n"
+  "    }",
+  }};
+
+bool candidateDriftProductionContractValid(const std::string& production) {
+  for(const std::string_view anchor:CandidateDriftProductionAnchors) {
+    const std::size_t position = production.find(anchor);
+    if(position==std::string::npos || position!=production.rfind(anchor))
+      return false;
+    }
+  const std::size_t fdAfterStat = production.find(
+      "if(::fstat(file.get(),&after)!=0)");
+  const std::size_t pathAfterStat = production.find(
+      "if(::fstatat(parent.get(),leaf.c_str(),&pathAfter,");
+  const std::size_t fdAfterCompare = production.find(
+      "before,after); difference!=0u)");
+  const std::size_t pathAfterCompare = production.find(
+      "before,pathAfter); difference!=0u)");
+  constexpr std::string_view fileChangedReturn =
+      "return Error::FileChanged;";
+  const auto countReturns = [&](std::string_view beginAnchor,
+                                std::string_view endAnchor) {
+    const std::size_t begin = production.find(beginAnchor);
+    const std::size_t end = production.find(endAnchor);
+    if(begin==std::string::npos || end==std::string::npos || begin>=end)
+      return std::numeric_limits<std::size_t>::max();
+    std::size_t count = 0u;
+    for(std::size_t position = production.find(fileChangedReturn,begin);
+        position!=std::string::npos && position<end;
+        position = production.find(fileChangedReturn,
+                                   position+fileChangedReturn.size()))
+      ++count;
+    return count;
+    };
+  const std::size_t returnCount =
+      countReturns("Error openCandidateAncestorAt(","Error openDirectoryPath(")+
+      countReturns("Error openCandidate(","void encodeDigest(")+
+      countReturns("Error hashCandidate(","Error hashCollection(");
+  return returnCount==CandidateDriftProductionAnchors.size() &&
+      fdAfterStat<pathAfterStat && pathAfterStat<fdAfterCompare &&
+      fdAfterCompare<pathAfterCompare;
+  }
+
+void testProductionCandidateDriftSourceOracle() {
+  const fs::path root = fs::current_path();
+  const std::string header = readSource(
+      root/"game/graphics/iosdeviceintegritymanifest.h");
+  const std::string implementation = readSource(
+      root/"game/graphics/iosdeviceintegritymanifest.cpp");
+  const std::string production = withoutHostTestBlocks(implementation);
+  assert(candidateDriftProductionContractValid(production));
+  for(const std::string_view anchor:CandidateDriftProductionAnchors) {
+    std::string mutant = production;
+    mutant.erase(mutant.find(anchor),anchor.size());
+    assert(!candidateDriftProductionContractValid(mutant));
+    }
+  assert(header.find(
+      "detail>=0x001u && detail<=0x03fu")!=std::string::npos);
+  assert(production.find("constexpr uint16_t candidateDriftCode(")!=
+      std::string::npos);
+  assert(production.find("Error openCandidateAncestorAt(")!=
+      std::string::npos);
+  assert(production.find("uint16_t candidateDriftCodeValue = 0u;")!=
+      std::string::npos);
+  assert(production.find(
+      "uint16_t* candidateDriftCodeOutput = nullptr")!=std::string::npos);
+  for(const std::string_view checkpoint:
+      {"candidateDriftCode(1u,difference)",
+       "candidateDriftCode(2u,difference)",
+       "candidateDriftCode(3u,difference)",
+       "candidateDriftCode(4u,difference)",
+       "candidateDriftCode(5u,0x008u)",
+       "candidateDriftCode(6u,difference)",
+       "candidateDriftCode(7u,difference)"})
+    assert(production.find(checkpoint)!=std::string::npos);
+  for(const std::string_view hookSymbol:
+      {"CandidateDriftTestHook","CandidateDriftTestPoint",
+       "CandidateHashTestHook","createCanonicalManifestsForTest"})
+    assert(production.find(hookSymbol)==std::string::npos);
+  assert(production.find("&candidateDriftCodeValue")!=std::string::npos);
+  assert(production.find("result.candidateDriftCode = candidateDriftCodeValue;")!=
+      std::string::npos);
+
+  Integrity::Result synthetic;
+  synthetic.error = Integrity::Error::FileChanged;
+  synthetic.failureStage = Integrity::FailureStage::ResourceHashing;
+  synthetic.resourceFileCount = 1u;
+  synthetic.candidateOrdinal = 1u;
+  constexpr std::string_view pathSha =
+      "7c5f5ae02b576c00748471a0a9c5cce6bc3320359b6cf378b417df39fa54a467";
+  std::copy(pathSha.begin(),pathSha.end(),synthetic.candidatePathSha256.begin());
+  synthetic.candidateDriftCode = 0x2008u;
+  assert(synthetic.candidateDriftCode!=0u);
+  assert(Integrity::isCandidateDriftCodeValid(synthetic.candidateDriftCode));
+  assert(synthetic.hasValidHashingCandidateDrift());
+  const std::string formatted = Integrity::formatFailureMessage(synthetic);
+  assert(formatted.find("candidate-drift-code=2008")!=std::string::npos);
   }
 
 struct SourceAnchor final {
@@ -915,7 +1700,7 @@ static constexpr std::array<SourceAnchor,78> SourceAnchors = {{
   {"implementation","O_RDONLY|O_NOFOLLOW|closeOnExecFlag()"},
   {"implementation","::fstat(file.get(),&before)"},
   {"implementation","::fstat(file.get(),&after)"},
-  {"implementation","::fstatat(parent,stableName.c_str(),&pathIdentity,\n               AT_SYMLINK_NOFOLLOW)!=0"},
+  {"implementation","return errno==ENOENT ? Error::MissingRoot : Error::OpenFailed;"},
   {"implementation","MaximumTotalBytes-collection.totalBytes"},
   {"implementation","if(collection.entries.size()>=MaximumFileCount)"},
   {"implementation","if(byteSize>MaximumFileBytes)"},
@@ -937,10 +1722,10 @@ static constexpr std::array<SourceAnchor,78> SourceAnchors = {{
   {"implementation","if(!leafIsAbsent(root.get(),ResourceManifestFileName) ||\n       !leafIsAbsent(root.get(),ProtectedSaveManifestFileName))"},
   {"implementation","result.error = collectResources(root.get(),resources);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::InitialResourceCollection;"},
   {"implementation","result.error = collectProtectedSaves(root.get(),saves);\n    if(result.error==Error::FileChanged)\n      result.failureStage = FailureStage::InitialSaveCollection;"},
-  {"implementation","#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)\n  bool candidateHashHookConsumed = false;\n#endif"},
+  {"implementation","bool candidateHashHookConsumed = false;"},
   {"implementation","const CandidateHashTestHookResult hookResult = candidateHashHook(\n        *documentRootPath,candidate.normalizedRelativePath,\n        candidateOrdinal,stage);"},
   {"implementation","if(hookResult==CandidateHashTestHookResult::Failed)\n      return Error::OpenFailed;"},
-  {"implementation","hookResult==CandidateHashTestHookResult::Mutated;\n    }\n#endif\n  const Error opened = openCandidate(\n      documentRoot,candidate,file,parent,leaf);"},
+  {"implementation","const Error opened = openCandidate(\n      documentRoot,candidate,file,parent,leaf"},
   {"implementation","const uint64_t ordinal = static_cast<uint64_t>(index)+1u;\n      std::array<char,65> normalizedPathSha256{};\n      if(ordinal<=MaximumFileCount &&\n         hashNormalizedPath(\n             candidate.normalizedRelativePath,normalizedPathSha256))"},
   {"implementation","result.candidateOrdinal = ordinal;\n        result.candidatePathSha256 = normalizedPathSha256;"},
   {"implementation","result.error = hashCollection(\n        root.get(),resources,result,FailureStage::ResourceHashing"},
@@ -960,7 +1745,7 @@ static constexpr std::array<SourceAnchor,78> SourceAnchors = {{
   {"main","std::fflush(stdout)!=0"},
   {"main","throw std::runtime_error(\n            \"RendererIOS device integrity cleanup terminal write failed\");\n      return 0;"},
   {"main","if(integrityArguments.cleanupRequested) {\n      const auto integrity =\n          RendererIOSDeviceIntegrity::removeCanonicalManifests(\".\");\n      if(!integrity.success())\n        throw std::runtime_error(\n            std::string(\"RendererIOS device integrity cleanup failed: \")+\n            RendererIOSDeviceIntegrity::errorName(integrity.error));\n      if(std::fprintf(stdout,\"%s\\n\",\n                      RendererIOSDeviceIntegrity::CleanupTerminalMarker.data())<0 ||\n         std::fflush(stdout)!=0)\n        throw std::runtime_error(\n            \"RendererIOS device integrity cleanup terminal write failed\");\n      return 0;\n      }"},
-  {"implementation","if(result.hasHashingCandidateIdentity()) {\n      message += \" candidate-ordinal=\"+std::to_string(result.candidateOrdinal);"},
+  {"implementation","if(result.hasValidHashingCandidateDrift()) {"},
   {"implementation","message += std::string(\" candidate-path-sha256=\")+\n          result.candidatePathSha256.data();"},
   {"main","if(!integrity.success())\n        throw std::runtime_error(\n            RendererIOSDeviceIntegrity::formatFailureMessage(integrity));"},
   {"main","RendererIOSDeviceIntegrity::TerminalMarker.data()"},
@@ -979,8 +1764,9 @@ bool sourceContractValid(
         anchor.file=="implementation" ? implementation :
         anchor.file=="main" ? mainSource : cmake;
     if(source.find(anchor.snippet)==std::string::npos ||
-       source.find(anchor.snippet)!=source.rfind(anchor.snippet))
+       source.find(anchor.snippet)!=source.rfind(anchor.snippet)) {
       return false;
+      }
     }
   if(mainSource.find("RendererIOS device integrity manifest failed:")!=
          std::string::npos ||
@@ -1065,6 +1851,12 @@ int main() {
   testHashingCandidateIdentity();
   testCandidateHookDomain();
   testPostHashExactTreeRevalidation();
+  testCandidateDriftCodeDomainAndFormatting();
+  testCandidateDriftHookOrderAndOneShot();
+  testCandidateDriftMutations();
+  testCandidateDriftForcedFailures();
+  testCandidateDriftFailedAndSaveStage();
+  testProductionCandidateDriftSourceOracle();
   testSourceMutationOracle();
   std::printf(
       "RendererIOS device integrity manifest host oracle: "

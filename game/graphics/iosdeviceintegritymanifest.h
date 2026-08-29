@@ -123,11 +123,32 @@ enum class FailureStage : uint8_t {
   DocumentRootComparison,
   };
 
+constexpr bool isCandidateDriftCodeValid(uint16_t code) noexcept {
+  const uint16_t checkpoint = static_cast<uint16_t>(code>>12u);
+  const uint16_t detail = static_cast<uint16_t>(code&0x0fffu);
+  switch(checkpoint) {
+    case 1u:
+      return detail==0x800u || (detail>=0x001u && detail<=0x03fu) ||
+          detail==0x100u || detail==0x200u || detail==0x400u;
+    case 2u:
+    case 3u:
+    case 4u:
+    case 6u:
+    case 7u:
+      return detail==0x800u || (detail>=0x001u && detail<=0x03fu);
+    case 5u:
+      return detail==0x008u;
+    default:
+      return false;
+    }
+  }
+
 struct Result final {
   Error error = Error::None;
   FailureStage failureStage = FailureStage::None;
   uint64_t candidateOrdinal = 0u;
   std::array<char,65> candidatePathSha256{};
+  uint16_t candidateDriftCode = 0u;
   uint64_t resourceFileCount = 0u;
   uint64_t resourceTotalBytes = 0u;
   uint64_t protectedSaveFileCount = 0u;
@@ -157,6 +178,11 @@ struct Result final {
         return false;
       }
     return true;
+    }
+
+  constexpr bool hasValidHashingCandidateDrift() const noexcept {
+    return hasHashingCandidateIdentity() &&
+        isCandidateDriftCodeValid(candidateDriftCode);
     }
   };
 
@@ -192,6 +218,34 @@ using CandidateHashTestHook = CandidateHashTestHookResult (*)(
     uint64_t candidateOrdinal,
     FailureStage stage) noexcept;
 
+enum class CandidateDriftTestPoint : uint8_t {
+  AncestorPathStat,
+  AncestorKind,
+  AncestorOpen,
+  AncestorFdStat,
+  PathBeforeStat,
+  FdBeforeStat,
+  PreReadStat,
+  ReadLength,
+  FdAfterStat,
+  PathAfterStat,
+  };
+using CandidateDriftTestHookPoint = CandidateDriftTestPoint;
+
+enum class CandidateDriftTestHookResult : uint8_t {
+  NotSelected,
+  Mutated,
+  ForceFailure,
+  Failed,
+  };
+using CandidateDriftHookResult = CandidateDriftTestHookResult;
+using CandidateDriftTestHook = CandidateDriftTestHookResult (*)(
+    const std::filesystem::path& documentRoot,
+    std::string_view normalizedRelativePath,
+    uint64_t candidateOrdinal,
+    FailureStage stage,
+    CandidateDriftTestPoint point) noexcept;
+
 // Runs the hook after all payload hashes and before the mandatory exact-tree
 // revalidation. The candidate hook runs immediately before the selected
 // candidate's stable open/read. Ordinals restart at one for each collection.
@@ -201,7 +255,8 @@ using CandidateHashTestHook = CandidateHashTestHookResult (*)(
 Result createCanonicalManifestsForTest(
     const std::filesystem::path& documentRoot,
     RevalidationTestHook hook,
-    CandidateHashTestHook candidateHashHook = nullptr) noexcept;
+    CandidateHashTestHook candidateHashHook = nullptr,
+    CandidateDriftTestHook candidateDriftHook = nullptr) noexcept;
 #endif
 
 }
