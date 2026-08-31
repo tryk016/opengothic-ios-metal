@@ -5030,6 +5030,10 @@ struct IOSMetalContext::Impl final {
   TextureFormat                                depthFormat = TextureFormat::Depth16;
   bool                                         depthSupported = false;
   std::unique_ptr<IOSGPUScene>                  gpuScene;
+  uint64_t                                      nativeSceneReadyGeneration = 0u;
+  uint64_t                                      nativeSceneCandidateGeneration = 0u;
+  uint64_t                                      nativeSceneCandidateSequence = 0u;
+  uint64_t                                      nativeScenePrepareFailureGeneration = 0u;
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
   bool                                         emissiveProfileTerminalReported = false;
   bool                                         emissiveProfileClaimed = false;
@@ -5138,9 +5142,31 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     if(frameContext.submitted && impl->fault.frameFenceErrorAfterTerminal())
       throw DeviceLostException("RendererIOS diagnostics injected a terminal frame-fence error");
     }
-  catch(const std::exception& e) {
+  catch(const DeviceLostException& e) {
     // Do not retry a Metal error command buffer: Tempest maps it to device
     // lost/hang. Dropping the fence also prevents its throwing destructor.
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+    impl->markLinearHDRProofFenceFailure(frameContext);
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
+    impl->failEmissiveInput(frameContext,"gpu","fence");
+#endif
+    frameContext.fence = Fence();
+    impl->retireSlotAfterTerminal(frameContext);
+    impl->forcePreviewPlaceholder();
+    if(e.log()!=nullptr && e.log()[0]!='\0') {
+      try {
+        Log::e("RendererIOS Metal frame fence encoder diagnostics: ",e.log());
+        }
+      catch(...) {
+        }
+      }
+    impl->fail(previewFenceFault ? "RendererIOS Metal save-preview fence failed"
+                                : "RendererIOS Metal frame fence failed",
+               e.what());
+    return std::nullopt;
+    }
+  catch(const std::exception& e) {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     impl->markLinearHDRProofFenceFailure(frameContext);
 #endif
@@ -5401,6 +5427,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool previewAccepted = false;
   bool previewFallback = false;
   bool submissionAttempted = false;
+  bool nativeSceneEncoded = false;
+  uint64_t nativeSceneGeneration = 0u;
+  uint64_t nativeSceneSequence = 0u;
+  uint64_t nativeSceneDrawCount = 0u;
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
   bool captureOnlyFailure = false;
 #endif
@@ -5488,6 +5518,21 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           frameAnimation,uvAnimation);
       if(preparedSceneReport.result!=IOSGPUScene::Result::Success ||
          !preparedScene.ready()) {
+        if(impl->nativeScenePrepareFailureGeneration!=
+             input.snapshot->generation.value) {
+          try {
+            Log::e("RendererIOS native scene prepare failed: generation=",
+                   input.snapshot->generation.value,
+                   " sequence=",input.snapshot->sequence.value,
+                   " result=",iosGPUSceneResultName(preparedSceneReport.result),
+                   " handle=",preparedSceneReport.failingHandle,
+                   " ready=",preparedScene.ready() ? 1 : 0);
+            impl->nativeScenePrepareFailureGeneration =
+                input.snapshot->generation.value;
+            }
+          catch(...) {
+            }
+          }
         impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
         linearHDRSceneActive = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
@@ -5825,6 +5870,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             std::string("RendererIOS tone resolve failed: ")+
             iosLinearHDRMetalEncodeResultName(resolve));
           }
+        nativeSceneEncoded = true;
+        nativeSceneGeneration = input.snapshot->generation.value;
+        nativeSceneSequence = input.snapshot->sequence.value;
+        nativeSceneDrawCount = report.drawCount;
         encoder.setFramebuffer({});
         advanceLinearHDR(IOSLinearHDRFrameEvent::ToneResolve);
         encoder.setDebugMarker("RendererIOS UI over tone resolve");
@@ -5978,6 +6027,27 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         linearHDRSequence.route()==IOSLinearHDRFrameRoute::Scene &&
         impl->linearHDRPolicy.ready;
     frameContext.linearHDRTerminalPending = true;
+    if(nativeSceneEncoded &&
+       impl->nativeSceneReadyGeneration!=nativeSceneGeneration) {
+      const bool consecutive =
+          impl->nativeSceneCandidateGeneration==nativeSceneGeneration &&
+          impl->nativeSceneCandidateSequence!=
+              std::numeric_limits<uint64_t>::max() &&
+          impl->nativeSceneCandidateSequence+1u==nativeSceneSequence;
+      if(consecutive) {
+        try {
+          Log::i("RendererIOS native scene ready: generation=",
+                 nativeSceneGeneration," sequence=",nativeSceneSequence,
+                 " draws=",nativeSceneDrawCount,
+                 " consecutive-presents=2");
+          impl->nativeSceneReadyGeneration = nativeSceneGeneration;
+          }
+        catch(...) {
+          }
+        }
+      impl->nativeSceneCandidateGeneration = nativeSceneGeneration;
+      impl->nativeSceneCandidateSequence = nativeSceneSequence;
+      }
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     frameContext.functionalEvidence.serial = frame.serial;
     frameContext.functionalEvidence.presentAccepted = true;

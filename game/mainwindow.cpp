@@ -89,6 +89,15 @@ IOSSceneSourceProvider iosSceneSourceProvider(const WorldView* source) noexcept 
   return {source,&visitIOSWorldSources};
   }
 
+constexpr bool rendererIOSPublishesWorldDuringLoad(
+    Gothic::LoadState state) noexcept {
+  return state!=Gothic::LoadState::Loading;
+  }
+
+static_assert(!rendererIOSPublishesWorldDuringLoad(Gothic::LoadState::Loading));
+static_assert(rendererIOSPublishesWorldDuringLoad(Gothic::LoadState::Idle));
+static_assert(rendererIOSPublishesWorldDuringLoad(Gothic::LoadState::Saving));
+
 #if defined(__IOS__)
 uint64_t rendererIOSSaveClockUs() noexcept {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -616,6 +625,15 @@ void MainWindow::paintEvent(PaintEvent& event) {
   if(world!=nullptr) {
     world->globalFx()->scrBlend(p,Rect(0,0,w(),h()));
     }
+
+#if defined(__IOS__)
+  static bool rendererIOSGameplayUIReadyReported = false;
+  if(!rendererIOSGameplayUIReadyReported &&
+     world!=nullptr && st==Gothic::LoadState::Idle) {
+    Log::i("RendererIOS gameplay UI ready");
+    rendererIOSGameplayUIReadyReported = true;
+    }
+#endif
 
   if(preparingSave || (st!=Gothic::LoadState::Idle && st!=Gothic::LoadState::Finalize)) {
     if(preparingSave || st==Gothic::LoadState::Saving) {
@@ -1831,11 +1849,13 @@ uint64_t MainWindow::tick() {
 
   auto st = Gothic::inst().checkLoading();
   if(st==Gothic::LoadState::Finalize || st==Gothic::LoadState::FailedLoad || st==Gothic::LoadState::FailedSave) {
-    Gothic::inst().finishLoading();
+    const bool loadingFinished = Gothic::inst().finishLoading();
     if(st==Gothic::LoadState::FailedLoad)
       rootMenu.setMainMenu();
     if(st==Gothic::LoadState::FailedSave)
       Gothic::inst().onPrint("unable to write savegame file");
+    if(loadingFinished)
+      update();
     return 0;
     }
   else if(st!=Gothic::LoadState::Idle) {
@@ -2564,15 +2584,19 @@ void MainWindow::render(){
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     const uint64_t poseRefreshStart = perfNowUs();
 #endif
-    if(auto* world = Gothic::inst().world())
+    const auto loadState = Gothic::inst().checkLoading();
+    const bool publishWorld = rendererIOSPublishesWorldDuringLoad(loadState);
+    if(auto* world = publishWorld ? Gothic::inst().world() : nullptr)
       world->refreshAnimationPose();
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     perfWindow.poseRefreshUs.push_back(perfSample(perfNowUs()-poseRefreshStart));
 #endif
 
     auto scene = renderer.buildSceneSnapshot(
-      *frame,iosSceneSourceProvider(Gothic::inst().worldView()),
-      iosSceneFrameState(Gothic::inst().world(),Gothic::inst().camera(),
+      *frame,
+      iosSceneSourceProvider(publishWorld ? Gothic::inst().worldView() : nullptr),
+      iosSceneFrameState(publishWorld ? Gothic::inst().world() : nullptr,
+                         publishWorld ? Gothic::inst().camera() : nullptr,
                          renderer.drawableSize()));
 
     const bool videoActive = video.isActive();

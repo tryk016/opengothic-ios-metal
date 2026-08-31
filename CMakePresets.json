@@ -41,6 +41,31 @@
       }
     },
     {
+      "name": "renderer-ios-simulator-on",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-simulator-on",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "ON",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
+      "name": "renderer-ios-simulator-fast",
+      "inherits": "renderer-ios-base",
+      "binaryDir": "${sourceDir}/build/local-renderer-ios-simulator-fast",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE": "ON",
+        "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+        "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF"
+      }
+    },
+    {
       "name": "renderer-ios-on",
       "inherits": "renderer-ios-base",
       "binaryDir": "${sourceDir}/build/local-renderer-ios-on",
@@ -227,6 +252,30 @@
     }
   ],
   "buildPresets": [
+    {
+      "name": "renderer-ios-simulator-on",
+      "configurePreset": "renderer-ios-simulator-on",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphonesimulator",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
+    {
+      "name": "renderer-ios-simulator-fast",
+      "configurePreset": "renderer-ios-simulator-fast",
+      "configuration": "Release",
+      "nativeToolOptions": [
+        "-sdk",
+        "iphonesimulator",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY="
+      ]
+    },
     {
       "name": "renderer-ios-off",
       "configurePreset": "renderer-ios-off",

@@ -305,11 +305,35 @@ bool drawConstantsReflectionMatches(
        binding.type!=MTLBindingTypeBuffer)
       return false;
     id<MTLBufferBinding> buffer = (id<MTLBufferBinding>)binding;
-    if(buffer.bufferDataSize!=sizeof(IOSGPUSceneDrawConstants) ||
-       buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants))
+    if(!iosGPUSceneDrawConstantsReflectionLayoutMatches(
+           buffer.bufferDataSize,buffer.bufferAlignment))
       return false;
     }
   return matchingArguments==NSUInteger(1u);
+  }
+
+std::string drawConstantsReflectionDetails(
+    MTLRenderPipelineReflection* reflection) {
+  if(reflection==nil)
+    return "reflection=nil";
+  if(reflection.vertexBindings==nil)
+    return "vertex-bindings=nil";
+
+  std::string result = "vertex-bindings=" +
+      std::to_string(reflection.vertexBindings.count);
+  for(id<MTLBinding> binding in reflection.vertexBindings) {
+    result += " [index=" + std::to_string(binding.index) +
+              " used=" + std::to_string(binding.used ? 1u : 0u) +
+              " argument=" + std::to_string(binding.argument ? 1u : 0u) +
+              " type=" + std::to_string(binding.type);
+    if(binding.type==MTLBindingTypeBuffer) {
+      id<MTLBufferBinding> buffer = (id<MTLBufferBinding>)binding;
+      result += " bytes=" + std::to_string(buffer.bufferDataSize) +
+                " alignment=" + std::to_string(buffer.bufferAlignment);
+      }
+    result += "]";
+    }
+  return result;
   }
 
 struct NativeTextureValidationCache final {
@@ -1174,7 +1198,8 @@ struct IOSGPUScene::Impl final {
           Tempest::Log::e(
               "RendererIOS IOSGPUScene initialization: "
               "result=pipeline-unavailable "
-              "reason=opaque-draw-constants-reflection");
+              "reason=opaque-draw-constants-reflection ",
+              drawConstantsReflectionDetails(opaquePipelineReflection));
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
         failCausal(
@@ -1530,6 +1555,9 @@ struct IOSGPUScene::Impl final {
       IOSGPUScene::Result::PipelineUnavailable;
   NativeTextureValidationCache     textureValidation;
   bool                              emissiveTerminalReported = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+  bool                              simulatorSmokeBudgetReported = false;
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
   IOSGPUSceneCausalRuntimeState     causalState;
@@ -1899,7 +1927,6 @@ void IOSGPUScene::Impl::encodeMultiply2(
         ++context.report.encodedPhaseTexturedDrawCount;
       [renderEncoder setFragmentTexture:nil atIndex:0u];
       [renderEncoder setFragmentSamplerState:nil atIndex:0u];
-      [renderEncoder setDepthStencilState:nil];
       [renderEncoder popDebugGroup];
       if(!endRender()) {
         closeOrTerminate();
@@ -2024,7 +2051,6 @@ void IOSGPUScene::Impl::encodeMultiply2(
                                           offset:0u];
         [renderEncoder setFragmentTexture:nil atIndex:0u];
         [renderEncoder setFragmentSamplerState:nil atIndex:0u];
-        [renderEncoder setDepthStencilState:nil];
         [renderEncoder popDebugGroup];
         if(!endRender()) {
           closeOrTerminate();
@@ -2073,7 +2099,6 @@ void IOSGPUScene::Impl::encodeMultiply2(
                   context.scene->additiveDepthState,0u);
       [renderEncoder setFragmentTexture:nil atIndex:0u];
       [renderEncoder setFragmentSamplerState:nil atIndex:0u];
-      [renderEncoder setDepthStencilState:nil];
       [renderEncoder popDebugGroup];
       if(!endRender()) {
         closeOrTerminate();
@@ -2148,7 +2173,6 @@ void IOSGPUScene::Impl::encodeLandscape(
   const auto restoreEncoderState = [&]() {
     [encoder setFragmentTexture:nil atIndex:0u];
     [encoder setFragmentSamplerState:nil atIndex:0u];
-    [encoder setDepthStencilState:nil];
     [encoder setCullMode:MTLCullModeNone];
     [encoder setFrontFacingWinding:MTLWindingClockwise];
     };
@@ -2414,6 +2438,11 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     multiply2BaseRecords.reserve(snapshot.entities.size());
     multiply2Records.reserve(1u);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+    std::size_t simulatorSelectedDraws = 0u;
+    std::size_t simulatorCulledDraws = 0u;
+    std::size_t simulatorBudgetSkippedDraws = 0u;
+#endif
 
     for(const auto& entity:snapshot.entities) {
       const auto source = candidate(
@@ -2433,6 +2462,21 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         recordPlanFailure(report,planned,source);
         return report;
         }
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+      if(classifyIOSGPUSceneMultiply2ClipBounds(
+             entity.bounds,plan.constants.model,
+             plan.constants.viewProjection)==
+           IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside) {
+        ++simulatorCulledDraws;
+        continue;
+        }
+      if(!iosGPUSceneSimulatorSmokeDrawBudgetAccepts(
+           simulatorSelectedDraws)) {
+        ++simulatorBudgetSkippedDraws;
+        continue;
+        }
+      ++simulatorSelectedDraws;
+#endif
       if(!recordCountFailure(
              recordIOSGPUSceneDrawCount(
                  plan.materialCategory,plan.kind,
@@ -2739,6 +2783,17 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       else
         candidateFrame->base.emplace_back(std::move(draw));
       }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+    if(!impl->simulatorSmokeBudgetReported) {
+      Tempest::Log::i(
+          "RendererIOS simulator smoke budget: selected=",
+          simulatorSelectedDraws," culled=",simulatorCulledDraws,
+          " budget-skipped=",simulatorBudgetSkippedDraws,
+          " limit=",IOSGPUSceneSimulatorSmokeDrawBudget);
+      impl->simulatorSmokeBudgetReported = true;
+      }
+#endif
 
     report.drawCount = report.counts.drawn.material.total;
     report.texturedDrawCount = report.counts.drawn.texturedDraws;

@@ -28,11 +28,22 @@ constexpr uint8_t FormatCount =
      __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000) || \
     (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && \
      __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000)
-#define OPENGOTHIC_IOS_DEVICE_FACTS_HAS_METAL4 1
 #define OPENGOTHIC_IOS_DEVICE_FACTS_HAS_APPLE10 1
 #else
-#define OPENGOTHIC_IOS_DEVICE_FACTS_HAS_METAL4 0
 #define OPENGOTHIC_IOS_DEVICE_FACTS_HAS_APPLE10 0
+#endif
+
+// The iOS Simulator 27 SDK intentionally omits the Metal 4 family and
+// command-queue declarations even though it exposes Apple10. Treat Metal 4 as
+// unavailable there instead of inferring API presence from the SDK version.
+#if !TARGET_OS_SIMULATOR && \
+    ((defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && \
+      __IPHONE_OS_VERSION_MAX_ALLOWED >= 260000) || \
+     (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && \
+      __MAC_OS_X_VERSION_MAX_ALLOWED >= 260000))
+#define OPENGOTHIC_IOS_DEVICE_FACTS_HAS_METAL4 1
+#else
+#define OPENGOTHIC_IOS_DEVICE_FACTS_HAS_METAL4 0
 #endif
 
 #if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && \

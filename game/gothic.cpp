@@ -569,6 +569,8 @@ bool Gothic::finishLoading() {
     saveTex = Texture2d();
     loadTex = Texture2d();
     onWorldLoaded();
+    if(state==LoadState::Finalize && game!=nullptr)
+      Log::i("OpenGothic world ready");
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS) && \
     defined(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID) && \
     OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID == 8

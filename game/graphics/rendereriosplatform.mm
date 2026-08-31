@@ -8,6 +8,7 @@
 
 #import <CommonCrypto/CommonDigest.h>
 #import <Foundation/Foundation.h>
+#import <TargetConditionals.h>
 
 #include <array>
 #include <cerrno>
@@ -64,7 +65,7 @@ struct ResolvedPipelineArchive final {
   std::string                          cacheRoot;
   };
 
-ResolvedPipelineArchive resolvePipelineArchiveDescriptor(
+[[maybe_unused]] ResolvedPipelineArchive resolvePipelineArchiveDescriptor(
     const std::string& metallibPath) {
   ResolvedPipelineArchive resolved;
   if(metallibPath.empty())
@@ -298,6 +299,16 @@ std::string rendererIOSMetalLibraryPath() {
 
 RendererIOSPipelineArchiveDescriptor
 rendererIOSPipelineArchiveDescriptor(const std::string& metallibPath) {
+#if TARGET_OS_SIMULATOR
+  // CoreSimulator's binary-archive serializer aborts because its virtual Metal
+  // device has no serializable target architecture. Keep the offline metallib
+  // provenance, but disable only this optional cache in Simulator builds.
+  RendererIOSPipelineArchiveDescriptor descriptor;
+  NSString* path = [NSString stringWithUTF8String:metallibPath.c_str()];
+  if(path!=nil)
+    descriptor.metallibSha256 = metallibSha256(path);
+  return descriptor;
+#else
   // Archive discovery runs once, before Tempest creates the Metal device. The
   // sidecar is an exact provenance record for the metallib digest. If it is
   // missing or stale, discard the archive before Tempest can load it, then
@@ -367,6 +378,7 @@ rendererIOSPipelineArchiveDescriptor(const std::string& metallibPath) {
   catch(...) {
     return {};
     }
+#endif
   }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)

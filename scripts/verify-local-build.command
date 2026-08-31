@@ -966,18 +966,18 @@ echo "### RendererIOS native GPU and offline Metal contracts"
 [ -x ios/device-test/run-smoke-test.sh ]
 grep -Fq 'the first presented frame must have exact offline shader totals' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'select_device_record()' ios/device-test/run-smoke-test.sh
-grep -Fq 'attempt=%d result=retry' ios/device-test/run-smoke-test.sh
-grep -Fq '((attempt < 5)) && sleep 1' ios/device-test/run-smoke-test.sh
-grep -Fq 'OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST' \
+grep -Fq 'run_usb_afc_preflight "${PREFLIGHT_BUNDLE_ARGUMENTS[@]}"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq -- '--json-output "$WORK/usb-afc-preflight.json"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq 'value.get("terminal") != "USB AFC PREFLIGHT PASS"' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'device_selection_attempts=' ios/device-test/run-smoke-test.sh
 grep -Fq 'device_selection_method=' ios/device-test/run-smoke-test.sh
 # shellcheck disable=SC2016 # exact source literal, not a shell expansion
 grep -Fq 'copy_private_evidence_path "$WORK/device-selection.log"' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("interface") == "usb"' ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
+grep -Fq 'copy_private_evidence_path "$WORK/usb-afc-preflight.json"' \
   ios/device-test/run-smoke-test.sh
 [ -f game/graphics/iosgpusceneplan.h ]
 [ -f game/graphics/iosgpuscene.h ]

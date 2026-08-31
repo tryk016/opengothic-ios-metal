@@ -4392,8 +4392,10 @@ grep -Fq 'material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   game/graphics/shaders.cpp
 grep -Fq 'runtime_compilation_frame_source_growth=' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'An explicitly selected paired device may establish its CoreDevice/DDI' \
-  ios/device-test/run-smoke-test.sh
+grep -Fq 'if isinstance(current, dict) and current:' \
+  ios/device-test/preflight-usb-afc.py
+grep -Fq 'device.connection_type == "USB"' \
+  ios/device-test/preflight-usb-afc.py
 grep -Fq 'save runtime totals must remain exact 0/0/2' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'runtime compilation frame markers are not contiguous' \
@@ -4600,7 +4602,7 @@ grep -Fq 'new-game pipeline archive mode has no non-empty scene snapshot' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
   ios/patches/apply-patches.sh
-grep -Fq 'opengothic-ios-patch-stack-v16' \
+grep -Fq 'opengothic-ios-patch-stack-v17' \
   ios/patches/apply-patches.sh
 
 grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-9.binaryarchive' \
@@ -4664,7 +4666,7 @@ grep -Fq 'run_direct_phase corrupt corrupt' \
   ios/device-test/run-pipeline-archive-test.sh
 ! grep -Fq 'device copy to' \
   ios/device-test/run-pipeline-archive-test.sh
-grep -Fq 'device copy to --device "$DEVICE"' \
+grep -Fq 'run_bounded_afc_copy_to --device "$DEVICE_UDID"' \
   ios/device-test/run-smoke-test.sh
 ! grep -Fq -- '--remove-existing-content' \
   ios/device-test/run-pipeline-archive-test.sh
@@ -7793,10 +7795,11 @@ test "$(grep -Fc 'echo "scenario=$SCENARIO"' \
   ios/device-test/run-smoke-test.sh)" -eq 2
 test "$(grep -Fc 'echo "save_slot=$SCENARIO_SAVE_SLOT"' \
   ios/device-test/run-smoke-test.sh)" -eq 2
-grep -Fq 'select_device_record()' ios/device-test/run-smoke-test.sh
-grep -Fq 'attempt=%d result=retry' ios/device-test/run-smoke-test.sh
-grep -Fq '((attempt < 5)) && sleep 1' ios/device-test/run-smoke-test.sh
-grep -Fq 'OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST' \
+grep -Fq 'run_usb_afc_preflight "${PREFLIGHT_BUNDLE_ARGUMENTS[@]}"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq -- '--json-output "$WORK/usb-afc-preflight.json"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq 'value.get("terminal") != "USB AFC PREFLIGHT PASS"' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'device_selection_attempts=' \
   ios/device-test/run-smoke-test.sh
@@ -7804,9 +7807,7 @@ grep -Fq 'device_selection_method=' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'copy_private_evidence_path "$WORK/device-selection.log"' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("interface") == "usb"' \
-  ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
+grep -Fq 'copy_private_evidence_path "$WORK/usb-afc-preflight.json"' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'OpenGothic container has missing/invalid resources:' \
   ios/device-test/run-smoke-test.sh
@@ -7850,8 +7851,10 @@ expected_build_binding = source.index(
     '[[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||')
 expected_fault_preflight = source.index(
     'grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT"')
-selection = source.index('DEVICE_RECORD="$(select_device_record)"')
 bundle = source.index('BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"')
+preflight = source.index('if ! run_usb_afc_preflight')
+selection = source.index(
+    'IFS=$\'\\t\' read -r DEVICE DEVICE_UDID BUNDLE_ID <<<"$DEVICE_RECORD"')
 selection_evidence = source.index(
     'copy_private_evidence_path "$WORK/device-selection.log"')
 game_data_preflight = source.index(
@@ -7885,9 +7888,9 @@ pass_fault_namespace = source.index(
     'OUT="$(smoke_evidence_path pass')
 evidence_published = source.index('publish_evidence_path "$OUT"')
 result = source.index('echo "result=PASS"')
-if not expected_build_binding < expected_build_preflight < expected_fault_preflight < selection < bundle:
-    raise SystemExit("bounded device selection retry runs after app inspection")
-if not bundle < game_data_preflight < install:
+if not expected_build_binding < expected_build_preflight < expected_fault_preflight < bundle < preflight < selection:
+    raise SystemExit("mandatory USB AFC preflight is not before smoke selection")
+if not selection < game_data_preflight < install:
     raise SystemExit("game-data preflight does not fail before install")
 if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < preview_fence_parser < preview_fence_summary < frame_fence_parser < frame_fence_summary < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
     raise SystemExit("device PASS is emitted before cleanup proof")
@@ -7993,10 +7996,10 @@ crash_function = source.split('capture_crash_state() {', 1)[1].split(
     '\npreserve_failure_evidence() {', 1
 )[0]
 crash_contract = (
-    'if ! run_bounded_device_file_query --device "$DEVICE"',
+    'if ! run_bounded_afc_file_query --device "$DEVICE_UDID"',
     'state="$(crash_listing_state "$listing")"',
     'if [[ "$state" == missing ]]',
-    'if ! xcrun devicectl device copy from --device "$DEVICE"',
+    'if ! run_bounded_afc_copy_from --device "$DEVICE_UDID"',
     'sha="$(shasum -a 256 "$destination"',
 )
 crash_positions = [crash_function.index(value) for value in crash_contract]

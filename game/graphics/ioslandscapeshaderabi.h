@@ -22,6 +22,17 @@ static_assert(offsetof(IOSToneResolveConstants,exposure)==12u);
 static_assert(sizeof(IOSToneResolveConstants)==16u);
 static_assert(alignof(IOSToneResolveConstants)==16u);
 
+constexpr bool iosToneResolveConstantsReflectionLayoutMatches(
+    std::size_t dataSize,
+    std::size_t requiredBufferOffsetAlignment) noexcept {
+  return dataSize==sizeof(IOSToneResolveConstants) &&
+         requiredBufferOffsetAlignment>=alignof(IOSToneResolveConstants) &&
+         (requiredBufferOffsetAlignment&
+              (requiredBufferOffsetAlignment-1u))==0u &&
+         requiredBufferOffsetAlignment%
+              alignof(IOSToneResolveConstants)==0u;
+  }
+
 namespace RendererIOSShader {
 
 inline constexpr uint32_t AbiVersion = 9u;

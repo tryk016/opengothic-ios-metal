@@ -176,6 +176,8 @@ elseif(IOS)
          "Enable low-frequency performance and memory telemetry" OFF)
   option(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS
          "Enable RendererIOS lifecycle markers and validation diagnostics" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE
+         "Bound native scene work for the focused iOS Simulator smoke lane" OFF)
   option(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST
          "Encode and read back one deterministic RendererIOS Bink frame" OFF)
   option(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST
@@ -259,6 +261,14 @@ elseif(IOS)
   if(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     target_compile_definitions(${PROJECT_NAME} PRIVATE
       OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS=1)
+  endif()
+  if(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+    if(NOT CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
+      message(FATAL_ERROR
+        "OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE requires the iPhone Simulator SDK")
+    endif()
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+      OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE=1)
   endif()
   list(FIND _renderer_ios_fault_modes
        "${OPENGOTHIC_RENDERER_IOS_FAULT_MODE}"
@@ -557,6 +567,15 @@ elseif(IOS)
     MACOSX_PACKAGE_LOCATION Resources)
 
   find_program(OPENGOTHIC_XCRUN_EXECUTABLE xcrun REQUIRED)
+  if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
+    set(OPENGOTHIC_RENDERER_IOS_METAL_SDK "iphonesimulator")
+    set(OPENGOTHIC_RENDERER_IOS_METAL_TARGET
+        "air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}-simulator")
+  else()
+    set(OPENGOTHIC_RENDERER_IOS_METAL_SDK "iphoneos")
+    set(OPENGOTHIC_RENDERER_IOS_METAL_TARGET
+        "air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}")
+  endif()
   set(OPENGOTHIC_RENDERER_IOS_LANDSCAPE_METAL_SOURCE
       "${CMAKE_SOURCE_DIR}/shader/ios-metal/landscape.metal")
   set(OPENGOTHIC_RENDERER_IOS_BINK_METAL_SOURCE
@@ -587,27 +606,27 @@ elseif(IOS)
       "${OPENGOTHIC_RENDERER_IOS_INVENTORY_AIR}"
       "${OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPES_AIR}"
       "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
-    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
-            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
+            -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
             -c "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_AIR}"
-    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
-            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
+            -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
             -c "${OPENGOTHIC_RENDERER_IOS_BINK_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_BINK_AIR}"
-    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
-            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
+            -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
             -c "${OPENGOTHIC_RENDERER_IOS_UI_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_UI_AIR}"
-    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
-            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
+            -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
             -c "${OPENGOTHIC_RENDERER_IOS_INVENTORY_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_INVENTORY_AIR}"
-    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metal
-            -target air64-apple-ios${OPENGOTHIC_IOS_MINIMUM_VERSION}
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
+            -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
             -c "${OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPES_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPES_AIR}"
-    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk iphoneos metallib
+    COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metallib
             "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_AIR}"
             "${OPENGOTHIC_RENDERER_IOS_BINK_AIR}"
             "${OPENGOTHIC_RENDERER_IOS_UI_AIR}"
@@ -642,8 +661,10 @@ if(IOS)
     "-framework UIKit"
     "-framework GameController"
     "-framework AVFoundation"
-    "-framework Security"
-    "-weak_framework MetalFX")
+    "-framework Security")
+  if(NOT CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
+    target_link_libraries(${PROJECT_NAME} "-weak_framework MetalFX")
+  endif()
   if(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation")
   endif()

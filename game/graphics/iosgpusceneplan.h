@@ -2701,6 +2701,24 @@ struct alignas(16) IOSGPUSceneDrawConstants final {
   IOSFloat2    uvOffset;
   };
 
+constexpr bool iosGPUSceneDrawConstantsReflectionLayoutMatches(
+    std::size_t dataSize,
+    std::size_t requiredBufferOffsetAlignment) noexcept {
+  return dataSize==sizeof(IOSGPUSceneDrawConstants) &&
+         requiredBufferOffsetAlignment>=alignof(IOSGPUSceneDrawConstants) &&
+         (requiredBufferOffsetAlignment&
+              (requiredBufferOffsetAlignment-1u))==0u &&
+         requiredBufferOffsetAlignment%
+              alignof(IOSGPUSceneDrawConstants)==0u;
+  }
+
+inline constexpr std::size_t IOSGPUSceneSimulatorSmokeDrawBudget = 2048u;
+
+constexpr bool iosGPUSceneSimulatorSmokeDrawBudgetAccepts(
+    std::size_t selectedDraws) noexcept {
+  return selectedDraws<IOSGPUSceneSimulatorSmokeDrawBudget;
+  }
+
 struct IOSGPUSceneDrawPlan final {
   IOSGPUSceneDrawConstants constants;
   IOSTextureHandle         baseColorTexture;

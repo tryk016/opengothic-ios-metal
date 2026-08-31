@@ -34,7 +34,8 @@ readonly DURABLE_ZERO_INTERVAL_SECONDS=10
 readonly DURABLE_ZERO_REQUIRED_STABLE_SECONDS=90
 readonly DEVICECTL_PROCESS_QUERY_TIMEOUT_SECONDS=30
 readonly DEVICECTL_TERMINATE_TIMEOUT_SECONDS=30
-readonly DEVICECTL_FILE_QUERY_TIMEOUT_SECONDS=30
+readonly AFC_FILE_OPERATION_TIMEOUT_SECONDS=30
+readonly USB_AFC_PREFLIGHT_TIMEOUT_SECONDS=45
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PREFIX='RendererIOS resource allocator self-test:'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_ARMED='RendererIOS resource allocator self-test: ARMED case=private-memoryless-4x4-rgba8-v1'
 readonly RESOURCE_ALLOCATOR_SELF_TEST_PASS='RendererIOS resource allocator self-test: PASS case=private-memoryless-4x4-rgba8-v1 allocation-only=1 encoded=0 render-pass=0 submitted=0 created=2 live=0 released=2'
@@ -198,10 +199,10 @@ if group_exists() and not terminate_group():
 raise SystemExit(returncode)
 PY
 }
-run_bounded_device_file_query() {
-  run_bounded_command "$DEVICECTL_FILE_QUERY_TIMEOUT_SECONDS" \
-    xcrun devicectl device info files "$@"
-}
+run_bounded_afc_file_query() { run_bounded_command "$AFC_FILE_OPERATION_TIMEOUT_SECONDS" /opt/homebrew/bin/uv run --python python3.11 --script "$ROOT/ios/device-test/afc-app-container.py" list "$@"; }
+run_bounded_afc_copy_from() { run_bounded_command "$AFC_FILE_OPERATION_TIMEOUT_SECONDS" /opt/homebrew/bin/uv run --python python3.11 --script "$ROOT/ios/device-test/afc-app-container.py" pull "$@"; }
+run_bounded_afc_copy_to() { run_bounded_command "$AFC_FILE_OPERATION_TIMEOUT_SECONDS" /opt/homebrew/bin/uv run --python python3.11 --script "$ROOT/ios/device-test/afc-app-container.py" push "$@"; }
+run_usb_afc_preflight() { run_bounded_command "$USB_AFC_PREFLIGHT_TIMEOUT_SECONDS" /opt/homebrew/bin/uv run --python python3.11 --script "$ROOT/ios/device-test/preflight-usb-afc.py" "$@"; }
 secure_private_evidence() {
   local directory="$1"
 
@@ -1598,16 +1599,16 @@ verify_game_container_resources() {
   [[ "$phase" == preinstall || "$phase" == postinstall ||
      "$phase" == postruntime ]] || return 1
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$documents" >/dev/null || return 1
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile \
     --subdirectory "Documents/_work/Data/Scripts/_compiled" --no-recurse \
     --json-output "$scripts" >/dev/null || return 1
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory "Documents/system" --no-recurse \
     --json-output "$system" >/dev/null || return 1
@@ -2431,6 +2432,7 @@ WORK="$(mktemp -d -t opengothic-device-smoke)"
 umask 077
 chmod 700 "$WORK" || fail "could not secure smoke work directory"
 DEVICE=""
+DEVICE_UDID=""
 APP_EXECUTABLE=""
 APP_EXECUTABLE_SHA256="uncomputed"
 CAUSAL_BINARY_SHA256="uncomputed"
@@ -2879,7 +2881,7 @@ pull_runtime_logs() {
   for name in log.txt stderr.log crash.log; do
     stem="${name%.*}"
     extension="${name##*.}"
-    xcrun devicectl device copy from --device "$DEVICE" \
+    run_bounded_afc_copy_from --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
       --source "Documents/$name" \
       --destination "$WORK/$stem-$suffix.$extension" >/dev/null 2>&1 || true
@@ -2894,7 +2896,7 @@ capture_crash_state() {
   local state sha
 
   rm -f "$listing" "$destination"
-  if ! run_bounded_device_file_query --device "$DEVICE" \
+  if ! run_bounded_afc_file_query --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
       --username mobile --subdirectory Documents --no-recurse \
       --json-output "$listing" >/dev/null; then
@@ -2913,7 +2915,7 @@ capture_crash_state() {
     printf -v "$variable" '%s' "provider-error"
     return 1
   }
-  if ! xcrun devicectl device copy from --device "$DEVICE" \
+  if ! run_bounded_afc_copy_from --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
       --source Documents/crash.log --destination "$destination" >/dev/null; then
     printf -v "$variable" '%s' "copy-error"
@@ -2947,7 +2949,7 @@ capture_clear_only_capture_artifact() {
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
 
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -2975,7 +2977,7 @@ PY
   )" || return 1
   [[ "$listed_kind" == file || "$listed_kind" == directory ]] || return 1
 
-  xcrun devicectl device copy from --device "$DEVICE" \
+  run_bounded_afc_copy_from --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$CLEAR_ONLY_CAPTURE_NAME" \
     --destination "$destination" >/dev/null || return 1
@@ -3042,7 +3044,7 @@ capture_shading_prototype_tile_artifact() {
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
 
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3070,7 +3072,7 @@ PY
   )" || return 1
   [[ "$listed_kind" == file || "$listed_kind" == directory ]] || return 1
 
-  xcrun devicectl device copy from --device "$DEVICE" \
+  run_bounded_afc_copy_from --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$SHADING_PROTOTYPE_TILE_CAPTURE_NAME" \
     --destination "$destination" >/dev/null || return 1
@@ -3140,7 +3142,7 @@ capture_shading_prototype_forward_artifact() {
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
   [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
 
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3168,7 +3170,7 @@ PY
   )" || return 1
   [[ "$listed_kind" == file || "$listed_kind" == directory ]] || return 1
 
-  xcrun devicectl device copy from --device "$DEVICE" \
+  run_bounded_afc_copy_from --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$SHADING_PROTOTYPE_FORWARD_CAPTURE_NAME" \
     --destination "$destination" >/dev/null || return 1
@@ -3237,7 +3239,7 @@ capture_shading_prototype_forward_saves() {
   [[ "$phase" == before || "$phase" == after ]] || return 1
   ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST != 0)) || return 0
   [[ -n "$DEVICE" && -n "$BUNDLE_ID" ]] || return 1
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3282,7 +3284,7 @@ PY
     [[ "$name" =~ ^save_slot_[0-9]+\.sav$ ]] || return 1
     destination="$WORK/shading-prototype-forward-$phase-$name"
     [[ ! -e "$destination" && ! -L "$destination" ]] || return 1
-    xcrun devicectl device copy from --device "$DEVICE" \
+    run_bounded_afc_copy_from --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
       --source "Documents/$name" --destination "$destination" \
       >/dev/null || return 1
@@ -3432,7 +3434,7 @@ capture_id3_save_preflight() {
   local slot destination manifest="$WORK/id3-protected-before.sha256"
 
   [[ "$EXPECTED_FAULT" == preview-fence-error-after-terminal ]] || return 0
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3459,7 +3461,7 @@ PY
   )" || return 1
   [[ "$ID3_DESTINATION_EXISTED" == 0 || "$ID3_DESTINATION_EXISTED" == 1 ]] || return 1
   if ((ID3_DESTINATION_EXISTED == 1)); then
-    xcrun devicectl device copy from --device "$DEVICE" \
+    run_bounded_afc_copy_from --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
       --source Documents/save_slot_20.sav \
       --destination "$WORK/id3-destination-before.sav" >/dev/null || return 1
@@ -3472,7 +3474,7 @@ PY
   : >"$manifest"
   for slot in 1 2 3 4; do
     destination="$WORK/id3-before-save_slot_$slot.sav"
-    xcrun devicectl device copy from --device "$DEVICE" \
+    run_bounded_afc_copy_from --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
       --source "Documents/save_slot_$slot.sav" --destination "$destination" \
       >/dev/null || return 1
@@ -3500,12 +3502,12 @@ restore_id3_destination_if_needed() {
     shasum -a 256 "$backup" | awk '{print $1}'
   )"
   [[ "$backup_sha" == "$ID3_DESTINATION_BEFORE_SHA256" ]] || return 1
-  xcrun devicectl device copy to --device "$DEVICE" \
+  run_bounded_afc_copy_to --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "$backup" \
     --destination Documents/save_slot_20.sav >/dev/null || return 1
   rm -f "$WORK/id3-destination-restore-check.sav"
-  xcrun devicectl device copy from --device "$DEVICE" \
+  run_bounded_afc_copy_from --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source Documents/save_slot_20.sav \
     --destination "$WORK/id3-destination-restore-check.sav" >/dev/null || return 1
@@ -3527,7 +3529,7 @@ capture_id3_save_postflight_raw() {
   ((ID3_DESTINATION_EXISTED == 0 || ID3_DESTINATION_RESTORED == 0)) || return 1
   rm -f "$listing" "$manifest" "$WORK/save_slot_20.sav" \
     "$WORK"/id3-after-save_slot_*.sav
-  run_bounded_device_file_query --device "$DEVICE" \
+  run_bounded_afc_file_query --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" \
     --username mobile --subdirectory Documents --no-recurse \
     --json-output "$listing" >/dev/null || return 1
@@ -3557,7 +3559,7 @@ PY
   : >"$manifest"
   for slot in 1 2 3 4; do
     destination="$WORK/id3-after-save_slot_$slot.sav"
-    xcrun devicectl device copy from --device "$DEVICE" \
+    run_bounded_afc_copy_from --device "$DEVICE_UDID" \
       --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
       --source "Documents/save_slot_$slot.sav" --destination "$destination" \
       >/dev/null || return 1
@@ -3566,7 +3568,7 @@ PY
       "$(shasum -a 256 "$destination" | awk '{print $1}')" "$slot" >>"$manifest"
     sync_id3_recovery_artifacts || return 1
   done
-  xcrun devicectl device copy from --device "$DEVICE" \
+  run_bounded_afc_copy_from --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source Documents/save_slot_20.sav --destination "$WORK/save_slot_20.sav" \
     >/dev/null || return 1
@@ -3769,7 +3771,7 @@ wait_for_shading_prototype_forward_terminal() {
 
   for ((attempt=1; attempt<=DURATION; attempt++)); do
     rm -f "$log"
-    if xcrun devicectl device copy from --device "$DEVICE" \
+    if run_bounded_afc_copy_from --device "$DEVICE_UDID" \
         --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
         --source Documents/log.txt --destination "$log" >/dev/null 2>&1 &&
        terminal_values="$(python3 - "$log" \
@@ -3852,7 +3854,7 @@ wait_for_id3_completion() {
 
   for attempt in 1 2 3 4 5 6 7 8 9 10; do
     rm -f "$log"
-    if xcrun devicectl device copy from --device "$DEVICE" \
+    if run_bounded_afc_copy_from --device "$DEVICE_UDID" \
         --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
         --source Documents/log.txt --destination "$log" >/dev/null 2>&1 &&
        python3 - "$log" "$ID3_SEMANTIC_NONCE" <<'PY'
@@ -4258,99 +4260,34 @@ grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT" \
   fail "app binary configured fault mode does not match expected fault"
 
 REQUESTED_DEVICE="${OPENGOTHIC_IOS_DEVICE:-}"
-DEVICE_SELECTION_TEST_FAIL_FIRST="${OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST:-0}"
-[[ "$DEVICE_SELECTION_TEST_FAIL_FIRST" =~ ^[01]$ ]] ||
-  fail "OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST must be 0 or 1"
-select_device_record() {
-  local attempt json xcjson record selected_method
-
-  for attempt in 1 2 3 4 5; do
-    json="$WORK/devices-$attempt.json"
-    xcjson="$WORK/xcdevices-$attempt.json"
-    if ((DEVICE_SELECTION_TEST_FAIL_FIRST != 0 && attempt == 1)); then
-      printf 'attempt=1 result=test-injected-enumeration-failure\n' \
-        >>"$WORK/device-selection.log"
-    elif xcrun devicectl list devices --json-output "$json" \
-        >/dev/null 2>>"$WORK/device-selection.log"; then
-      if [[ -n "$REQUESTED_DEVICE" ]]; then
-        printf '[]\n' >"$xcjson"
-      elif ! xcrun xcdevice list >"$xcjson" \
-          2>>"$WORK/device-selection.log"; then
-        printf 'attempt=%d result=xcdevice-enumeration-failure\n' "$attempt" \
-          >>"$WORK/device-selection.log"
-      fi
-      if [[ -s "$xcjson" ]] &&
-          record="$(python3 - "$json" "$REQUESTED_DEVICE" "$xcjson" \
-          2>>"$WORK/device-selection.log" <<'PY'
-import json, sys
-devices = json.load(open(sys.argv[1]))["result"]["devices"]
-requested = sys.argv[2]
-xcdevices = json.load(open(sys.argv[3]))
-usb_udids = {
-    d.get("identifier")
-    for d in xcdevices
-    if not d.get("simulator")
-    and d.get("available")
-    and d.get("interface") == "usb"
-    and d.get("platform") == "com.apple.platform.iphoneos"
-}
-matches = [
-    d for d in devices
-    if d.get("hardwareProperties", {}).get("platform") == "iOS"
-    and d.get("hardwareProperties", {}).get("reality") == "physical"
-    # An explicitly selected paired device may establish its CoreDevice/DDI
-    # tunnel on the first device command after a transient disconnect. In
-    # auto-selection mode, require a connected tunnel or an independent
-    # xcdevice witness that this exact UDID is currently available over USB.
-    and (requested or
-         d.get("connectionProperties", {}).get("tunnelState") == "connected"
-         or d.get("hardwareProperties", {}).get("udid") in usb_udids)
-    and (not requested or requested in (
-        d.get("identifier"), d.get("hardwareProperties", {}).get("udid")))
-]
-if len(matches) != 1:
-    raise SystemExit(f"expected exactly one connected physical iOS device, found {len(matches)}")
-device = matches[0]
-if requested:
-    method = "explicit"
-elif device.get("connectionProperties", {}).get("tunnelState") == "connected":
-    method = "connected"
-else:
-    method = "usb-witness"
-print(device["identifier"] + "\t" + device["hardwareProperties"]["udid"] +
-      "\t" + method)
-PY
-      )"; then
-        selected_method="${record##*$'\t'}"
-        printf 'attempt=%d result=selected method=%s\n' \
-          "$attempt" "$selected_method" \
-          >>"$WORK/device-selection.log"
-        printf '%s\n' "$record"
-        return 0
-      fi
-    fi
-
-    printf 'attempt=%d result=retry\n' "$attempt" \
-      >>"$WORK/device-selection.log"
-    ((attempt < 5)) && sleep 1
-  done
-  return 1
-}
-
-if ! DEVICE_RECORD="$(select_device_record)"; then
-  tail -20 "$WORK/device-selection.log" >&2 || true
-  fail "could not select a unique connected physical iOS device"
-fi
-DEVICE_SELECTION_ATTEMPTS_USED="$(
-  grep -Ec 'result=(retry|selected)' "$WORK/device-selection.log"
-)"
-IFS=$'\t' read -r DEVICE DEVICE_UDID DEVICE_SELECTION_METHOD <<<"$DEVICE_RECORD"
-
 BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"
-xcrun devicectl device info apps --device "$DEVICE" \
-  --json-output "$WORK/apps.json" >/dev/null
-BUNDLE_ID="$(select_bundle_id_from_apps "$WORK/apps.json" "$BUNDLE_ID")" ||
-  fail "bundle id must identify the exact existing non-xctrunner OpenGothic container"
+PREFLIGHT_BUNDLE_ARGUMENTS=(--expected-base-bundle-id "$BASE_BUNDLE_ID.")
+[[ -z "$BUNDLE_ID" ]] || PREFLIGHT_BUNDLE_ARGUMENTS=(--expected-bundle-id "$BUNDLE_ID")
+if ! run_usb_afc_preflight "${PREFLIGHT_BUNDLE_ARGUMENTS[@]}" \
+    --requested-device "$REQUESTED_DEVICE" \
+    --json-output "$WORK/usb-afc-preflight.json" \
+    >"$WORK/device-selection.log" 2>&1; then
+  tail -20 "$WORK/device-selection.log" >&2 || true
+  fail "mandatory USB AFC preflight failed before smoke selection"
+fi
+DEVICE_RECORD="$(python3 - "$WORK/usb-afc-preflight.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1], encoding="utf-8"))
+keys = ("coreDeviceIdentifier", "deviceUdid", "bundleIdentifier")
+if value.get("terminal") != "USB AFC PREFLIGHT PASS" or any(
+    not isinstance(value.get(key), str) or not value[key] for key in keys
+):
+    raise SystemExit("USB AFC preflight identity is malformed")
+print("\t".join(value[key] for key in keys))
+PY
+)" || fail "mandatory USB AFC preflight result is invalid"
+IFS=$'\t' read -r DEVICE DEVICE_UDID BUNDLE_ID <<<"$DEVICE_RECORD"
+DEVICE_SELECTION_ATTEMPTS_USED=1
+DEVICE_SELECTION_TEST_FAIL_FIRST=0
+DEVICE_SELECTION_METHOD="usb-witness"
+[[ -z "$REQUESTED_DEVICE" ]] || DEVICE_SELECTION_METHOD="explicit-usb"
+printf 'attempt=1 result=selected method=%s preflight=pass\n' \
+  "$DEVICE_SELECTION_METHOD" >>"$WORK/device-selection.log"
 
 TEAM_ID="${OPENGOTHIC_IOS_TEAM_ID:-${BUNDLE_ID##*.}}"
 [[ "$BUNDLE_ID" == "$BASE_BUNDLE_ID.$TEAM_ID" ]] ||
@@ -4658,7 +4595,7 @@ else
 fi
 
 for name in log.txt stderr.log; do
-  xcrun devicectl device copy from --device "$DEVICE" \
+  run_bounded_afc_copy_from --device "$DEVICE_UDID" \
     --domain-type appDataContainer --domain-identifier "$BUNDLE_ID" --user mobile \
     --source "Documents/$name" --destination "$WORK/$name" >/dev/null 2>&1 || true
 done
@@ -5764,6 +5701,9 @@ copy_private_evidence_path "$WORK/log.txt" "$OUT/log.txt" ||
 copy_private_evidence_path "$WORK/device-selection.log" \
   "$OUT/device-selection.log" ||
   fail "could not preserve private device-selection evidence"
+copy_private_evidence_path "$WORK/usb-afc-preflight.json" \
+  "$OUT/usb-afc-preflight.json" ||
+  fail "could not preserve mandatory USB AFC preflight evidence"
 [[ ! -f "$WORK/cleanup.log" ]] ||
   copy_private_evidence_path "$WORK/cleanup.log" "$OUT/cleanup.log" ||
   fail "could not preserve private cleanup evidence"
@@ -5949,6 +5889,7 @@ done
   echo "device_selection_attempts=$DEVICE_SELECTION_ATTEMPTS_USED"
   echo "device_selection_method=$DEVICE_SELECTION_METHOD"
   echo "device_selection_test_fail_first=$DEVICE_SELECTION_TEST_FAIL_FIRST"
+  echo "usb_afc_preflight_sha256=$(shasum -a 256 "$WORK/usb-afc-preflight.json" | awk '{print $1}')"
   echo "bink_self_test_required=$REQUIRE_BINK_SELF_TEST"
   echo "bink_self_test_passed=$REQUIRE_BINK_SELF_TEST"
   echo "metallib_sha256=$METALLIB_SHA"

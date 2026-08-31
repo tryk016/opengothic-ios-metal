@@ -249,7 +249,15 @@ requirements = {
     "visibility-pass-label": ("scene", "RendererIOS.Multiply2.VisibilityDiagnostic.v1", 2),
     "visibility-raster-query": ("scene", "IOSMultiply2VisibilityRasterOffset", 1),
     "visibility-stencil-query": ("scene", "IOSMultiply2VisibilityStencilOffset", 1),
-    "visibility-helper": ("scene", "classifyIOSGPUSceneMultiply2ClipBounds(", 1),
+    "visibility-helper": ("scene", "classifyIOSGPUSceneMultiply2ClipBounds(", 2),
+    "simulator-smoke-visibility-helper": (
+        "scene",
+        "#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)\n"
+        "      if(classifyIOSGPUSceneMultiply2ClipBounds(\n"
+        "             entity.bounds,plan.constants.model,\n"
+        "             plan.constants.viewProjection)==",
+        1,
+    ),
     "visibility-pass-attachments": ("scene", "visibilityPass.colorAttachments[0].texture = sceneHDR;\n        visibilityPass.colorAttachments[0].loadAction = MTLLoadActionLoad;\n        visibilityPass.colorAttachments[0].storeAction = MTLStoreActionStore;\n        visibilityPass.depthAttachment.texture = depthStencil;\n        visibilityPass.depthAttachment.loadAction = MTLLoadActionLoad;\n        visibilityPass.depthAttachment.storeAction = MTLStoreActionStore;\n        visibilityPass.stencilAttachment.texture = depthStencil;\n        visibilityPass.stencilAttachment.loadAction = MTLLoadActionLoad;\n        visibilityPass.stencilAttachment.storeAction = MTLStoreActionStore;", 1),
     "visibility-pass-raster-state": ("scene", "context.scene->multiply2VisibilityRasterDepthState", 1),
     "visibility-pass-stencil-state": ("scene", "context.scene->multiply2VisibilityStencilDepthState", 1),

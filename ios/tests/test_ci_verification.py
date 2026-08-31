@@ -805,6 +805,8 @@ def validate_cmake_presets(
     expected_configure_names = {
         "renderer-ios-base",
         "renderer-ios-off",
+        "renderer-ios-simulator-on",
+        "renderer-ios-simulator-fast",
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
@@ -843,6 +845,32 @@ def validate_cmake_presets(
     }
     if base.get("cacheVariables") != expected_base_cache:
         raise ValueError("shared iOS configure base tuple drifted")
+
+    simulator_tuple = {
+        "simulator-on": ("ON", None),
+        "simulator-fast": ("OFF", "ON"),
+    }
+    for name, (diagnostics, smoke) in simulator_tuple.items():
+        preset = configure_by_name[f"renderer-ios-{name}"]
+        if preset.get("inherits") != "renderer-ios-base":
+            raise ValueError(f"{name} does not inherit the shared base")
+        if preset.get("binaryDir") != (
+            "${sourceDir}/build/local-renderer-ios-" + name
+        ):
+            raise ValueError(f"{name} public binaryDir drifted")
+        expected_simulator_cache = {
+            "CMAKE_OSX_SYSROOT": "iphonesimulator",
+            "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": diagnostics,
+            "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": "none",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": "OFF",
+            "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": "OFF",
+        }
+        if smoke is not None:
+            expected_simulator_cache[
+                "OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE"
+            ] = smoke
+        if preset.get("cacheVariables") != expected_simulator_cache:
+            raise ValueError(f"{name} simulator tuple drifted")
 
     profile_tuple = {
         "off": ("OFF", "OFF", "OFF"),
@@ -989,6 +1017,8 @@ def validate_cmake_presets(
     if not isinstance(build_presets, list):
         raise ValueError("buildPresets must be a list")
     if [item.get("name") for item in build_presets] != [
+        "renderer-ios-simulator-on",
+        "renderer-ios-simulator-fast",
         "renderer-ios-off",
         "renderer-ios-on",
         "renderer-ios-tile",
@@ -1003,9 +1033,16 @@ def validate_cmake_presets(
         "renderer-ios-causal-b",
     ]:
         raise ValueError("build preset names or order drifted")
-    expected_native_options = [
+    expected_device_native_options = [
         "-sdk",
         "iphoneos",
+        "CODE_SIGNING_ALLOWED=NO",
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGN_IDENTITY=",
+    ]
+    expected_simulator_native_options = [
+        "-sdk",
+        "iphonesimulator",
         "CODE_SIGNING_ALLOWED=NO",
         "CODE_SIGNING_REQUIRED=NO",
         "CODE_SIGN_IDENTITY=",
@@ -1016,6 +1053,11 @@ def validate_cmake_presets(
             raise ValueError(f"{name} build/configure preset mismatch")
         if item.get("configuration") != "Release":
             raise ValueError(f"{name} build is not Release")
+        expected_native_options = (
+            expected_simulator_native_options
+            if name.startswith("renderer-ios-simulator-")
+            else expected_device_native_options
+        )
         if item.get("nativeToolOptions") != expected_native_options:
             raise ValueError(f"{name} signing policy drifted")
 
@@ -2010,12 +2052,12 @@ def test_cmake_presets_contract() -> None:
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][3]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][5]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS", "OFF"
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][3]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][5]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST", "ON"
         )
     )
@@ -2035,29 +2077,29 @@ def test_cmake_presets_contract() -> None:
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][6]["environment"].__setitem__(
+        lambda candidate: candidate["configurePresets"][8]["environment"].__setitem__(
             "PACKAGE_DEVICE_IPA", "1"
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][7]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][9]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE", "none"
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][8]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][10]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS", "OFF"
         )
     )
     mutated_presets(
-        lambda candidate: candidate["configurePresets"][5]["cacheVariables"].__setitem__(
+        lambda candidate: candidate["configurePresets"][7]["cacheVariables"].__setitem__(
             "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE", "OFF"
         )
     )
     mutated_presets(
         lambda candidate: candidate["buildPresets"].__setitem__(
-            slice(6, 8),
-            list(reversed(candidate["buildPresets"][6:8])),
+            slice(8, 10),
+            list(reversed(candidate["buildPresets"][8:10])),
         )
     )
     mutations.extend(

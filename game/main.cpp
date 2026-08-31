@@ -52,12 +52,47 @@ constexpr bool shouldFlushLogLine(Tempest::Log::Mode mode) noexcept {
 #endif
   }
 
+constexpr bool shouldFlushLogText(Tempest::Log::Mode mode,
+                                  std::string_view text) noexcept {
+  constexpr std::string_view WorldLoadTerminal = "Done loading world[";
+  constexpr std::string_view WorldReadyTerminal = "OpenGothic world ready";
+  constexpr std::string_view GameplayUIReadyTerminal =
+      "RendererIOS gameplay UI ready";
+  constexpr std::string_view SimulatorBudgetTerminal =
+      "RendererIOS simulator smoke budget:";
+  constexpr std::string_view NativeSceneReadyTerminal =
+      "RendererIOS native scene ready:";
+  return shouldFlushLogLine(mode) ||
+         (text.size()>=WorldLoadTerminal.size() &&
+          text.substr(0,WorldLoadTerminal.size())==WorldLoadTerminal) ||
+         text==WorldReadyTerminal ||
+         text==GameplayUIReadyTerminal ||
+         (text.size()>=SimulatorBudgetTerminal.size() &&
+          text.substr(0,SimulatorBudgetTerminal.size())==
+              SimulatorBudgetTerminal) ||
+         (text.size()>=NativeSceneReadyTerminal.size() &&
+          text.substr(0,NativeSceneReadyTerminal.size())==
+              NativeSceneReadyTerminal);
+  }
+
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 static_assert(shouldFlushLogLine(Tempest::Log::Info));
 #else
 static_assert(!shouldFlushLogLine(Tempest::Log::Info));
 #endif
 static_assert(shouldFlushLogLine(Tempest::Log::Error));
+static_assert(shouldFlushLogText(
+  Tempest::Log::Info,"Done loading world[NEWWORLD.ZEN]"));
+static_assert(shouldFlushLogText(
+  Tempest::Log::Info,"OpenGothic world ready"));
+static_assert(shouldFlushLogText(
+  Tempest::Log::Info,"RendererIOS gameplay UI ready"));
+static_assert(shouldFlushLogText(
+  Tempest::Log::Info,
+  "RendererIOS simulator smoke budget: selected=1"));
+static_assert(shouldFlushLogText(
+  Tempest::Log::Info,
+  "RendererIOS native scene ready: generation=1"));
 
 }
 
@@ -204,7 +239,7 @@ int main(int argc,const char** argv) {
       // Diagnostic device runs are evidence-producing builds: make every
       // marker visible while the app is still alive. Production keeps the
       // cheaper error-only flush policy.
-      if(shouldFlushLogLine(mode))
+      if(shouldFlushLogText(mode,text==nullptr ? std::string_view{} : text))
         logFile.flush();
       });
     }

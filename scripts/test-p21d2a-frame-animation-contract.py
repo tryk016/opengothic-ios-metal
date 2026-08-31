@@ -71,12 +71,17 @@ def wiring_errors(mainwindow: str, snapshot: str) -> list[str]:
             errors.append("world time must be captured even when camera is null")
 
     call = re.compile(
-        r"iosSceneFrameState\s*\(\s*Gothic::inst\(\)\.world\(\)\s*,"
-        r"\s*Gothic::inst\(\)\.camera\(\)\s*,"
+        r"iosSceneFrameState\s*\(\s*publishWorld\s*\?\s*"
+        r"Gothic::inst\(\)\.world\(\)\s*:\s*nullptr\s*,"
+        r"\s*publishWorld\s*\?\s*Gothic::inst\(\)\.camera\(\)\s*"
+        r":\s*nullptr\s*,"
         r"\s*renderer\.drawableSize\(\)\s*\)"
     )
     if call.search(mainwindow) is None:
-        errors.append("render path must pass Gothic::inst().world() to iosSceneFrameState")
+        errors.append(
+            "render path must pass the loading-safe world/camera pair "
+            "to iosSceneFrameState"
+        )
 
     return errors
 
@@ -98,8 +103,8 @@ def require_wiring_mutations_killed(mainwindow: str, snapshot: str) -> None:
             "world->tickCount() : 0u", "world->tickCount() : 1u", 1
         ),
         "missing-world-call": mainwindow.replace(
-            "iosSceneFrameState(Gothic::inst().world(),Gothic::inst().camera(),",
-            "iosSceneFrameState(nullptr,Gothic::inst().camera(),",
+            "iosSceneFrameState(publishWorld ? Gothic::inst().world() : nullptr,",
+            "iosSceneFrameState(nullptr,",
             1,
         ),
     }
