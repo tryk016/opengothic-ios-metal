@@ -85,7 +85,7 @@ jobs:
       build_multiply2_b_hdr: ${{ steps.route.outputs.build_multiply2_b_hdr }}
     steps:
       - name: Checkout full push history
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
       - name: Classify push before to SHA
@@ -119,7 +119,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -135,7 +135,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -163,7 +163,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -197,7 +197,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -215,7 +215,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -241,7 +241,7 @@ jobs:
       binary_marker: ${{ steps.build.outputs.binary_marker }}
     steps:
       - name: Checkout exact SHA with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -268,7 +268,7 @@ jobs:
       binary_marker: ${{ steps.build.outputs.binary_marker }}
     steps:
       - name: Checkout exact SHA with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -295,7 +295,7 @@ jobs:
       binary_marker: ${{ steps.build.outputs.binary_marker }}
     steps:
       - name: Checkout exact SHA with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -322,7 +322,7 @@ jobs:
       binary_marker: ${{ steps.build.outputs.binary_marker }}
     steps:
       - name: Checkout exact SHA with submodules
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive
@@ -341,7 +341,7 @@ jobs:
     runs-on: macos-15
     steps:
       - name: Checkout aggregator
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Reject missing, skipped or failed required gates
         run: |
           set -euo pipefail

@@ -52,7 +52,7 @@ jobs:
       DYNAMIC_DRAW_DISTANCE: ${{ (startsWith(github.ref, 'refs/heads/codex/ios-performance') || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ios' || (github.event_name == 'workflow_dispatch' && inputs.sidestore_memory_test)) && github.ref != 'refs/heads/codex/ios-performance-far-plane-60000' }}
     steps:
       - name: Checkout (with submodules)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
           submodules: recursive

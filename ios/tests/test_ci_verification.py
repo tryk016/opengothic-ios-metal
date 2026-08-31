@@ -18,6 +18,8 @@ SCRIPT = REPO / "scripts" / "ci_verification.py"
 CLASSIFIER_SCRIPT = REPO / "scripts" / "classify_verification.py"
 POLICY = REPO / "verification-policy.json"
 WORKFLOW = REPO / ".github" / "workflows" / "renderer-ios.yml"
+IOS_WORKFLOW = REPO / ".github" / "workflows" / "ios.yml"
+METALFX_WORKFLOW = REPO / ".github" / "workflows" / "ios-metalfx-temporal.yml"
 CONTRACTS = REPO / "scripts" / "ci_contracts.command"
 PROFILE = REPO / "scripts" / "ci_build_profile.command"
 PRESETS = REPO / "CMakePresets.json"
@@ -191,7 +193,7 @@ def validate_workflow(source: str) -> None:
         required_job_lines = (
             "    needs: [classifier, contracts]",
             f"    if: needs.classifier.outputs.{output} == 'true'",
-            "        uses: actions/checkout@v4",
+            "        uses: actions/checkout@v5",
             "          fetch-depth: 0",
             "          submodules: recursive",
             "        run: brew install cmake glslang ripgrep",
@@ -1664,7 +1666,7 @@ def test_workflow_contract() -> None:
         replace_once_in_job(
             workflow,
             "build-on",
-            "        uses: actions/checkout@v4",
+            "        uses: actions/checkout@v5",
             "        run: true",
         ),
     )
@@ -1784,6 +1786,40 @@ def test_workflow_contract() -> None:
         else:
             raise AssertionError("extracted CI/profile mutation survived")
     assert extraction_killed == 12
+
+
+def test_checkout_action_runtime_contract() -> None:
+    workflows = (WORKFLOW, IOS_WORKFLOW, METALFX_WORKFLOW)
+    sources = {path: path.read_text(encoding="utf-8") for path in workflows}
+
+    def validate(values: dict[pathlib.Path, str]) -> None:
+        for path, source in values.items():
+            checkout_lines = [
+                line.strip()
+                for line in source.splitlines()
+                if "uses: actions/checkout@" in line
+            ]
+            if not checkout_lines:
+                raise ValueError(f"workflow has no checkout action: {path.name}")
+            if any(line != "uses: actions/checkout@v5" for line in checkout_lines):
+                raise ValueError(f"workflow checkout runtime drifted: {path.name}")
+
+    validate(sources)
+    killed = 0
+    for path in workflows:
+        mutation = dict(sources)
+        if "uses: actions/checkout@v5" not in mutation[path]:
+            raise AssertionError(f"checkout mutation anchor missing: {path.name}")
+        mutation[path] = mutation[path].replace(
+            "uses: actions/checkout@v5", "uses: actions/checkout@v4", 1
+        )
+        try:
+            validate(mutation)
+        except ValueError:
+            killed += 1
+        else:
+            raise AssertionError("checkout runtime mutation survived")
+    assert killed == len(workflows)
 
 
 def test_additive_device_group_contract() -> None:
@@ -3323,6 +3359,7 @@ def main() -> None:
     test_push_before_to_sha()
     test_aggregation()
     test_workflow_contract()
+    test_checkout_action_runtime_contract()
     test_additive_device_group_contract()
     test_cmake_presets_contract()
     test_causal_build_isolation_source_contract()
@@ -3334,8 +3371,9 @@ def main() -> None:
     test_bash32_local_profile_parser()
     print(
         "RendererIOS CI verification tests passed: "
-        "13 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
+        "14 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
+        "3 checkout runtime mutations, "
         "15 additive device group integration mutations, 5 policy mutations, "
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
