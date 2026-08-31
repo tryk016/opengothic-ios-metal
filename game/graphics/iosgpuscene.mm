@@ -52,6 +52,12 @@
 #error "IOSGPUScene requires the project's non-ARC Objective-C++ mode"
 #endif
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+#error "Multiply2 GPU visibility diagnostic requires a Multiply2 causal A/B build"
+#endif
+
 namespace {
 
 static_assert(std::is_standard_layout_v<Resources::Vertex>);
@@ -299,11 +305,35 @@ bool drawConstantsReflectionMatches(
        binding.type!=MTLBindingTypeBuffer)
       return false;
     id<MTLBufferBinding> buffer = (id<MTLBufferBinding>)binding;
-    if(buffer.bufferDataSize!=sizeof(IOSGPUSceneDrawConstants) ||
-       buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants))
+    if(!iosGPUSceneDrawConstantsReflectionLayoutMatches(
+           buffer.bufferDataSize,buffer.bufferAlignment))
       return false;
     }
   return matchingArguments==NSUInteger(1u);
+  }
+
+std::string drawConstantsReflectionDetails(
+    MTLRenderPipelineReflection* reflection) {
+  if(reflection==nil)
+    return "reflection=nil";
+  if(reflection.vertexBindings==nil)
+    return "vertex-bindings=nil";
+
+  std::string result = "vertex-bindings=" +
+      std::to_string(reflection.vertexBindings.count);
+  for(id<MTLBinding> binding in reflection.vertexBindings) {
+    result += " [index=" + std::to_string(binding.index) +
+              " used=" + std::to_string(binding.used ? 1u : 0u) +
+              " argument=" + std::to_string(binding.argument ? 1u : 0u) +
+              " type=" + std::to_string(binding.type);
+    if(binding.type==MTLBindingTypeBuffer) {
+      id<MTLBufferBinding> buffer = (id<MTLBufferBinding>)binding;
+      result += " bytes=" + std::to_string(buffer.bufferDataSize) +
+                " alignment=" + std::to_string(buffer.bufferAlignment);
+      }
+    result += "]";
+    }
+  return result;
   }
 
 struct NativeTextureValidationCache final {
@@ -491,6 +521,10 @@ void recordPlannedDrawnFailure(IOSGPUScene::Report& report) noexcept {
 
 struct IOSGPUSceneNativePreparedDraw final {
   IOSGPUSceneDrawPlan plan;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  IOSMultiply2VisibilityClipClass visibilityClipClass =
+      IOSMultiply2VisibilityClipClass::Indeterminate;
+#endif
   id                  pipelineState = nil;
   id                  vertexBuffer = nil;
   id                  indexBuffer = nil;
@@ -825,13 +859,27 @@ struct IOSGPUScene::Impl final {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
-  struct NativeMultiply2CausalContext final {
+  enum class NativeMultiply2EncodeMode : uint8_t {
+    CaptureProof,
+    Continuation,
+    };
+
+  struct NativeMultiply2Context final {
+    explicit NativeMultiply2Context(
+        NativeMultiply2EncodeMode requestedMode) noexcept
+      : mode(requestedMode) {
+      }
+
+    const NativeMultiply2EncodeMode mode;
     Impl* scene = nullptr;
     PreparedFrame::Impl* prepared = nullptr;
     id sceneHDR = nil;
     id hdrProofBuffer = nil;
     id depthStencil = nil;
     id coverageBuffer = nil;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    id visibilityResultBuffer = nil;
+#endif
     uint32_t width = 0u;
     uint32_t height = 0u;
     uint32_t hdrBytesPerRow = 0u;
@@ -842,8 +890,14 @@ struct IOSGPUScene::Impl final {
     bool succeeded = false;
     };
 
-  static void encodeMultiply2Causal(
+  static void encodeMultiply2(
       void* opaque, MTL::CommandBuffer* nativeCommandBuffer);
+  IOSGPUScene::Report runMultiply2(
+      Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+      NativeMultiply2Context& context) noexcept;
+  bool continuationDepthStencilForSceneHDR(
+      id sceneHDR, id& depthStencil,
+      uint32_t& width, uint32_t& height) noexcept;
 #endif
 
   static void encodeLandscape(void* opaque,
@@ -1144,7 +1198,8 @@ struct IOSGPUScene::Impl final {
           Tempest::Log::e(
               "RendererIOS IOSGPUScene initialization: "
               "result=pipeline-unavailable "
-              "reason=opaque-draw-constants-reflection");
+              "reason=opaque-draw-constants-reflection ",
+              drawConstantsReflectionDetails(opaquePipelineReflection));
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
         failCausal(
@@ -1292,6 +1347,36 @@ struct IOSGPUScene::Impl final {
         return;
         }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      additiveColor.writeMask = MTLColorWriteMaskNone;
+      additiveColor.blendingEnabled = NO;
+      pipelineDesc.label = @"RendererIOS.Static.Multiply2.Visibility.v1";
+      NSError* visibilityPipelineError = nil;
+      MTLRenderPipelineReflection* visibilityPipelineReflection = nil;
+      OwnedObjectiveC visibilityPipelineOwner(
+          [device newRenderPipelineStateWithDescriptor:pipelineDesc
+                                               options:(
+              MTLPipelineOptionBindingInfo |
+              MTLPipelineOptionBufferTypeInfo)
+                                            reflection:&visibilityPipelineReflection
+                                                 error:&visibilityPipelineError]);
+      if(visibilityPipelineOwner.get()==nil ||
+         !drawConstantsReflectionMatches(visibilityPipelineReflection)) {
+        if(visibilityPipelineOwner.get()==nil)
+          Tempest::Log::e(
+            metalFailure(
+                "RendererIOS IOSGPUScene initialization: "
+                "result=pipeline-unavailable reason=multiply2-visibility-pso",
+                visibilityPipelineError));
+        else
+          Tempest::Log::e(
+              "RendererIOS IOSGPUScene initialization: "
+              "result=pipeline-unavailable "
+              "reason=multiply2-visibility-draw-constants-reflection");
+        return;
+        }
+#endif
+
       OwnedObjectiveC depthDescriptor(
           [[MTLDepthStencilDescriptor alloc] init]);
       MTLDepthStencilDescriptor* depthDesc =
@@ -1320,6 +1405,31 @@ struct IOSGPUScene::Impl final {
 #endif
       OwnedObjectiveC multiply2DepthOwner(
           [device newDepthStencilStateWithDescriptor:depthDesc]);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      depthDesc.depthCompareFunction = MTLCompareFunctionAlways;
+      depthDesc.depthWriteEnabled = NO;
+      depthDesc.frontFaceStencil = nil;
+      depthDesc.backFaceStencil = nil;
+      OwnedObjectiveC visibilityRasterDepthOwner(
+          [device newDepthStencilStateWithDescriptor:depthDesc]);
+      OwnedObjectiveC visibilityStencilDescriptor(
+          [[MTLStencilDescriptor alloc] init]);
+      MTLStencilDescriptor* visibilityStencilDesc =
+          (MTLStencilDescriptor*)visibilityStencilDescriptor.get();
+      visibilityStencilDesc.stencilCompareFunction = MTLCompareFunctionEqual;
+      visibilityStencilDesc.stencilFailureOperation = MTLStencilOperationKeep;
+      visibilityStencilDesc.depthFailureOperation = MTLStencilOperationKeep;
+      visibilityStencilDesc.depthStencilPassOperation = MTLStencilOperationKeep;
+      visibilityStencilDesc.readMask = 0xffu;
+      visibilityStencilDesc.writeMask = 0u;
+      depthDesc.frontFaceStencil = visibilityStencilDesc;
+      depthDesc.backFaceStencil = visibilityStencilDesc;
+      OwnedObjectiveC visibilityStencilDepthOwner(
+          [device newDepthStencilStateWithDescriptor:depthDesc]);
+      if(visibilityRasterDepthOwner.get()==nil ||
+         visibilityStencilDepthOwner.get()==nil)
+        return;
+#endif
       if(!iosGPUSceneProductionDepthStatesAreAvailable(
              depthOwner.get()!=nil,additiveDepthOwner.get()!=nil,
              multiply2DepthOwner.get()!=nil)) {
@@ -1373,9 +1483,19 @@ struct IOSGPUScene::Impl final {
       alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
       additivePipelineState  = additivePipelineOwner.relinquish();
       multiply2PipelineState = multiply2PipelineOwner.relinquish();
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityPipelineState =
+          visibilityPipelineOwner.relinquish();
+#endif
       baseDepthState         = depthOwner.relinquish();
       additiveDepthState     = additiveDepthOwner.relinquish();
       multiply2DepthState    = multiply2DepthOwner.relinquish();
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityRasterDepthState =
+          visibilityRasterDepthOwner.relinquish();
+      multiply2VisibilityStencilDepthState =
+          visibilityStencilDepthOwner.relinquish();
+#endif
       samplerState           = samplerOwner.relinquish();
       initializationResult   = IOSGPUScene::Result::Success;
       }
@@ -1390,6 +1510,15 @@ struct IOSGPUScene::Impl final {
       failCausal(
           causalState.generation,causalState.lastSequence,
           IOSGPUSceneCausalFailureReason::TargetNotObserved);
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+    [multiply2ContinuationDepthStencil release];
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    [multiply2VisibilityStencilDepthState release];
+    [multiply2VisibilityRasterDepthState release];
+    [multiply2VisibilityPipelineState release];
 #endif
     [samplerState release];
     [multiply2DepthState release];
@@ -1407,14 +1536,28 @@ struct IOSGPUScene::Impl final {
   id                               alphaTestPipelineState = nil;
   id                               additivePipelineState = nil;
   id                               multiply2PipelineState = nil;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  id                               multiply2VisibilityPipelineState = nil;
+#endif
   id                               baseDepthState = nil;
   id                               additiveDepthState = nil;
   id                               multiply2DepthState = nil;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  id                               multiply2VisibilityRasterDepthState = nil;
+  id                               multiply2VisibilityStencilDepthState = nil;
+#endif
   id                               samplerState = nil;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  id                               multiply2ContinuationDepthStencil = nil;
+#endif
   IOSGPUScene::Result              initializationResult =
       IOSGPUScene::Result::PipelineUnavailable;
   NativeTextureValidationCache     textureValidation;
   bool                              emissiveTerminalReported = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+  bool                              simulatorSmokeBudgetReported = false;
+#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
   IOSGPUSceneCausalRuntimeState     causalState;
@@ -1441,20 +1584,125 @@ void IOSGPUScene::Impl::failCausal(
 
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
-void IOSGPUScene::Impl::encodeMultiply2Causal(
+bool IOSGPUScene::Impl::continuationDepthStencilForSceneHDR(
+    id sceneHDRObject, id& depthStencilObject,
+    uint32_t& width, uint32_t& height) noexcept {
+  depthStencilObject = nil;
+  width = 0u;
+  height = 0u;
+  @autoreleasepool {
+    @try {
+      id<MTLDevice> device =
+          (id<MTLDevice>)(void*)nativeDevice.get();
+      id<MTLTexture> sceneHDR = (id<MTLTexture>)sceneHDRObject;
+      if(device==nil || sceneHDR==nil || sceneHDR.device!=device ||
+         sceneHDR.textureType!=MTLTextureType2D ||
+         sceneHDR.pixelFormat!=MTLPixelFormatRG11B10Float ||
+         sceneHDR.width==0u || sceneHDR.height==0u ||
+         sceneHDR.width>std::numeric_limits<uint32_t>::max() ||
+         sceneHDR.height>std::numeric_limits<uint32_t>::max() ||
+         sceneHDR.depth!=1u || sceneHDR.mipmapLevelCount!=1u ||
+         sceneHDR.arrayLength!=1u || sceneHDR.sampleCount!=1u)
+        return false;
+
+      const auto validContinuationTarget =
+          [&](id<MTLTexture> target) noexcept {
+        return target!=nil && target.device==device &&
+               target.textureType==MTLTextureType2D &&
+               target.pixelFormat==MTLPixelFormatDepth32Float_Stencil8 &&
+               target.width==sceneHDR.width &&
+               target.height==sceneHDR.height && target.depth==1u &&
+               target.mipmapLevelCount==1u && target.arrayLength==1u &&
+               target.sampleCount==1u &&
+               target.storageMode==MTLStorageModePrivate &&
+               target.cpuCacheMode==MTLCPUCacheModeDefaultCache &&
+               target.hazardTrackingMode==MTLHazardTrackingModeTracked &&
+               target.usage==MTLTextureUsageRenderTarget;
+      };
+
+      id<MTLTexture> target =
+          (id<MTLTexture>)multiply2ContinuationDepthStencil;
+      if(target==nil) {
+        OwnedObjectiveC descriptor(
+            [[MTLTextureDescriptor alloc] init]);
+        if(descriptor.get()==nil)
+          return false;
+        MTLTextureDescriptor* textureDescriptor =
+            (MTLTextureDescriptor*)descriptor.get();
+        textureDescriptor.textureType = MTLTextureType2D;
+        textureDescriptor.pixelFormat =
+            MTLPixelFormatDepth32Float_Stencil8;
+        textureDescriptor.width = sceneHDR.width;
+        textureDescriptor.height = sceneHDR.height;
+        textureDescriptor.depth = 1u;
+        textureDescriptor.mipmapLevelCount = 1u;
+        textureDescriptor.sampleCount = 1u;
+        textureDescriptor.arrayLength = 1u;
+        textureDescriptor.resourceOptions =
+            MTLResourceCPUCacheModeDefaultCache |
+            MTLResourceStorageModePrivate |
+            MTLResourceHazardTrackingModeTracked;
+        textureDescriptor.usage = MTLTextureUsageRenderTarget;
+        OwnedObjectiveC allocated(
+            [device newTextureWithDescriptor:textureDescriptor]);
+        target = (id<MTLTexture>)allocated.get();
+        if(!validContinuationTarget(target))
+          return false;
+        [target setLabel:
+            @"RendererIOS.Multiply2.ContinuationDepthStencil.v1"];
+        multiply2ContinuationDepthStencil = allocated.relinquish();
+        }
+      else if(!validContinuationTarget(target)) {
+        return false;
+        }
+
+      depthStencilObject = target;
+      width = static_cast<uint32_t>(sceneHDR.width);
+      height = static_cast<uint32_t>(sceneHDR.height);
+      return true;
+    }
+    @catch(NSException*) {
+      depthStencilObject = nil;
+      width = 0u;
+      height = 0u;
+      return false;
+    }
+  }
+}
+
+void IOSGPUScene::Impl::encodeMultiply2(
     void* opaque, MTL::CommandBuffer* nativeCommandBuffer) {
   if(opaque==nullptr || nativeCommandBuffer==nullptr)
     return;
-  auto& context = *static_cast<NativeMultiply2CausalContext*>(opaque);
+  auto& context = *static_cast<NativeMultiply2Context*>(opaque);
+  const bool captureProof =
+      context.mode==NativeMultiply2EncodeMode::CaptureProof;
+  const bool continuation =
+      context.mode==NativeMultiply2EncodeMode::Continuation;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  const bool visibilityModeResourcesAreValid =
+      captureProof ? context.visibilityResultBuffer!=nil
+                   : continuation && context.visibilityResultBuffer==nil;
+#else
+  constexpr bool visibilityModeResourcesAreValid = true;
+#endif
+  const bool modeResourcesAreValid =
+      captureProof
+        ? context.hdrProofBuffer!=nil && context.coverageBuffer!=nil &&
+          context.hdrBytesPerRow==context.width*4u &&
+          context.coverageBytesPerRow>=context.width &&
+          context.sceneMarker.size()==53u &&
+          context.proofMarker.size()==57u
+        : continuation && context.hdrProofBuffer==nil &&
+          context.coverageBuffer==nil && context.hdrBytesPerRow==0u &&
+          context.coverageBytesPerRow==0u && context.sceneMarker.empty() &&
+          context.proofMarker.empty();
   if(context.scene==nullptr || context.prepared==nullptr ||
      context.prepared->owner!=context.scene || !context.prepared->ready ||
      context.prepared->multiply2.size()!=1u ||
-     context.sceneHDR==nil || context.hdrProofBuffer==nil ||
-     context.depthStencil==nil || context.coverageBuffer==nil ||
+     context.sceneHDR==nil || context.depthStencil==nil ||
      context.width==0u || context.height==0u ||
-     context.hdrBytesPerRow!=context.width*4u ||
-     context.coverageBytesPerRow<context.width ||
-     context.sceneMarker.size()!=53u || context.proofMarker.size()!=57u)
+     !modeResourcesAreValid || !visibilityModeResourcesAreValid)
     return;
 
   id<MTLCommandBuffer> command =
@@ -1463,16 +1711,24 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
   id<MTLTexture> depthStencil = (id<MTLTexture>)context.depthStencil;
   id<MTLBuffer> hdrProofBuffer = (id<MTLBuffer>)context.hdrProofBuffer;
   id<MTLBuffer> coverageBuffer = (id<MTLBuffer>)context.coverageBuffer;
-  OwnedObjectiveC sceneMarker([[NSString alloc]
-      initWithBytes:context.sceneMarker.data()
-             length:context.sceneMarker.size()
-           encoding:NSUTF8StringEncoding]);
-  OwnedObjectiveC proofMarker([[NSString alloc]
-      initWithBytes:context.proofMarker.data()
-             length:context.proofMarker.size()
-           encoding:NSUTF8StringEncoding]);
-  if(sceneMarker.get()==nil || proofMarker.get()==nil)
-    return;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  id<MTLBuffer> visibilityResultBuffer =
+      (id<MTLBuffer>)context.visibilityResultBuffer;
+#endif
+  OwnedObjectiveC sceneMarker;
+  OwnedObjectiveC proofMarker;
+  if(captureProof) {
+    sceneMarker = OwnedObjectiveC([[NSString alloc]
+        initWithBytes:context.sceneMarker.data()
+               length:context.sceneMarker.size()
+             encoding:NSUTF8StringEncoding]);
+    proofMarker = OwnedObjectiveC([[NSString alloc]
+        initWithBytes:context.proofMarker.data()
+               length:context.proofMarker.size()
+             encoding:NSUTF8StringEncoding]);
+    if(sceneMarker.get()==nil || proofMarker.get()==nil)
+      return;
+    }
   id<MTLRenderCommandEncoder> renderEncoder = nil;
   id<MTLBlitCommandEncoder> blitEncoder = nil;
   const auto endRender = [&]() noexcept {
@@ -1510,19 +1766,42 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
     @try {
       id<MTLDevice> device =
           (id<MTLDevice>)(void*)context.scene->nativeDevice.get();
+      const bool modeNativeResourcesAreValid =
+          captureProof
+            ? hdrProofBuffer.device==device &&
+              coverageBuffer.device==device &&
+              hdrProofBuffer.storageMode==MTLStorageModeShared &&
+              coverageBuffer.storageMode==MTLStorageModeShared
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+              && visibilityResultBuffer.device==device &&
+              visibilityResultBuffer.storageMode==MTLStorageModeShared &&
+              visibilityResultBuffer.length>=
+                  IOSMultiply2VisibilityResultBytes &&
+              visibilityResultBuffer.contents!=nullptr
+#endif
+            : continuation &&
+              depthStencil==
+                  (id<MTLTexture>)context.scene->
+                      multiply2ContinuationDepthStencil;
       if(command==nil || device==nil || command.device!=device ||
          sceneHDR.device!=device || depthStencil.device!=device ||
-         hdrProofBuffer.device!=device || coverageBuffer.device!=device ||
          sceneHDR.pixelFormat!=MTLPixelFormatRG11B10Float ||
          sceneHDR.width!=NSUInteger(context.width) ||
          sceneHDR.height!=NSUInteger(context.height) ||
          sceneHDR.sampleCount!=1u ||
+         sceneHDR.textureType!=MTLTextureType2D ||
          depthStencil.pixelFormat!=MTLPixelFormatDepth32Float_Stencil8 ||
          depthStencil.width!=NSUInteger(context.width) ||
          depthStencil.height!=NSUInteger(context.height) ||
          depthStencil.sampleCount!=1u ||
-         hdrProofBuffer.storageMode!=MTLStorageModeShared ||
-         coverageBuffer.storageMode!=MTLStorageModeShared)
+         depthStencil.textureType!=MTLTextureType2D ||
+         depthStencil.depth!=1u || depthStencil.mipmapLevelCount!=1u ||
+         depthStencil.arrayLength!=1u ||
+         depthStencil.storageMode!=MTLStorageModePrivate ||
+         depthStencil.cpuCacheMode!=MTLCPUCacheModeDefaultCache ||
+         depthStencil.hazardTrackingMode!=MTLHazardTrackingModeTracked ||
+         depthStencil.usage!=MTLTextureUsageRenderTarget ||
+         !modeNativeResourcesAreValid)
         return;
 
       const MTLViewport viewport = {
@@ -1577,14 +1856,28 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
       first.stencilAttachment.loadAction = MTLLoadActionClear;
       first.stencilAttachment.storeAction = MTLStoreActionStore;
       first.stencilAttachment.clearStencil = 0u;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      if(captureProof)
+        first.visibilityResultBuffer = visibilityResultBuffer;
+#endif
       renderEncoder = [command renderCommandEncoderWithDescriptor:first];
       [first release];
       if(renderEncoder==nil)
         return;
-      [renderEncoder setLabel:(NSString*)sceneMarker.get()];
-      [renderEncoder pushDebugGroup:(NSString*)sceneMarker.get()];
-      [renderEncoder insertDebugSignpost:
-          @"RendererIOS.Multiply2.BaseAndCausal.v1"];
+      if(captureProof) {
+        [renderEncoder setLabel:(NSString*)sceneMarker.get()];
+        [renderEncoder pushDebugGroup:(NSString*)sceneMarker.get()];
+        [renderEncoder insertDebugSignpost:
+            @"RendererIOS.Multiply2.BaseAndCausal.v1"];
+        }
+      else {
+        [renderEncoder setLabel:
+            @"RendererIOS.Multiply2.BaseAndContinuation.v1"];
+        [renderEncoder pushDebugGroup:
+            @"RendererIOS.Multiply2.BaseAndContinuation.v1"];
+        [renderEncoder insertDebugSignpost:
+            @"RendererIOS.Multiply2.BaseAndContinuation.v1"];
+        }
       [renderEncoder setViewport:viewport];
       [renderEncoder setScissorRect:scissor];
       [renderEncoder setFrontFacingWinding:MTLWindingClockwise];
@@ -1593,11 +1886,47 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
           (id<MTLSamplerState>)context.scene->samplerState atIndex:0u];
       encodeDraws(renderEncoder,context.prepared->base,
                   context.scene->baseDepthState,0u);
-      encodeDraws(renderEncoder,context.prepared->multiply2,
-                  context.scene->multiply2DepthState,1u);
+      [renderEncoder setDepthStencilState:
+          (id<MTLDepthStencilState>)context.scene->multiply2DepthState];
+      [renderEncoder setStencilReferenceValue:1u];
+      const auto& productionDraw = context.prepared->multiply2.front();
+      [renderEncoder setRenderPipelineState:
+          (id<MTLRenderPipelineState>)productionDraw.pipelineState];
+      [renderEncoder setVertexBuffer:(id<MTLBuffer>)productionDraw.vertexBuffer
+                              offset:0u atIndex:0u];
+      [renderEncoder setVertexBytes:&productionDraw.plan.constants
+                             length:sizeof(productionDraw.plan.constants)
+                            atIndex:1u];
+      [renderEncoder setFragmentTexture:
+          (id<MTLTexture>)productionDraw.baseColorTexture atIndex:0u];
+      if(productionDraw.drawId.get()!=nil &&
+         productionDraw.drawBind.get()!=nil) {
+        [renderEncoder insertDebugSignpost:
+            (NSString*)productionDraw.drawId.get()];
+        [renderEncoder insertDebugSignpost:
+            (NSString*)productionDraw.drawBind.get()];
+      }
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      if(captureProof)
+        [renderEncoder setVisibilityResultMode:MTLVisibilityResultModeBoolean
+                                          offset:IOSMultiply2VisibilityProductionOffset];
+#endif
+      [renderEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                indexCount:productionDraw.plan.indexCount
+                                 indexType:MTLIndexTypeUInt32
+                               indexBuffer:(id<MTLBuffer>)productionDraw.indexBuffer
+                         indexBufferOffset:productionDraw.plan.indexBufferOffset
+                             instanceCount:1u baseVertex:0 baseInstance:0u];
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      if(captureProof)
+        [renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled
+                                          offset:0u];
+#endif
+      ++context.report.encodedPhaseDrawCount;
+      if(productionDraw.baseColorTexture!=nil)
+        ++context.report.encodedPhaseTexturedDrawCount;
       [renderEncoder setFragmentTexture:nil atIndex:0u];
       [renderEncoder setFragmentSamplerState:nil atIndex:0u];
-      [renderEncoder setDepthStencilState:nil];
       [renderEncoder popDebugGroup];
       if(!endRender()) {
         closeOrTerminate();
@@ -1605,47 +1934,130 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
       }
       context.prepared->markNativeBaseMultiplyCompleted();
 
-      blitEncoder = [command blitCommandEncoder];
-      if(blitEncoder==nil)
-        return;
-      [blitEncoder setLabel:(NSString*)proofMarker.get()];
-      [blitEncoder pushDebugGroup:(NSString*)proofMarker.get()];
-      const MTLOrigin origin = MTLOriginMake(0u,0u,0u);
-      const MTLSize size =
-          MTLSizeMake(context.width,context.height,1u);
-      [blitEncoder insertDebugSignpost:@"RendererIOS.HDRProofCopy.Multiply2.v1"];
-      [blitEncoder copyFromTexture:sceneHDR sourceSlice:0u sourceLevel:0u
-                      sourceOrigin:origin sourceSize:size
-                          toBuffer:hdrProofBuffer destinationOffset:0u
-             destinationBytesPerRow:context.hdrBytesPerRow
-           destinationBytesPerImage:
-               NSUInteger(context.hdrBytesPerRow)*context.height
-                           options:MTLBlitOptionNone];
-      [blitEncoder popDebugGroup];
-      if(!endBlit()) {
-        closeOrTerminate();
-        return;
+      if(captureProof) {
+        blitEncoder = [command blitCommandEncoder];
+        if(blitEncoder==nil)
+          return;
+        [blitEncoder setLabel:(NSString*)proofMarker.get()];
+        [blitEncoder pushDebugGroup:(NSString*)proofMarker.get()];
+        const MTLOrigin origin = MTLOriginMake(0u,0u,0u);
+        const MTLSize size =
+            MTLSizeMake(context.width,context.height,1u);
+        [blitEncoder insertDebugSignpost:@"RendererIOS.HDRProofCopy.Multiply2.v1"];
+        [blitEncoder copyFromTexture:sceneHDR sourceSlice:0u sourceLevel:0u
+                        sourceOrigin:origin sourceSize:size
+                            toBuffer:hdrProofBuffer destinationOffset:0u
+               destinationBytesPerRow:context.hdrBytesPerRow
+             destinationBytesPerImage:
+                 NSUInteger(context.hdrBytesPerRow)*context.height
+                             options:MTLBlitOptionNone];
+        [blitEncoder popDebugGroup];
+        if(!endBlit()) {
+          closeOrTerminate();
+          return;
+          }
+
+        blitEncoder = [command blitCommandEncoder];
+        if(blitEncoder==nil)
+          return;
+        [blitEncoder setLabel:@"RendererIOS.Multiply2.CausalCopies.v1"];
+        [blitEncoder pushDebugGroup:
+            @"RendererIOS.Multiply2.CoverageStencilCopy.v1"];
+        [blitEncoder insertDebugSignpost:@"RendererIOS.Multiply2.CoverageStencilCopy.v1"];
+        [blitEncoder copyFromTexture:depthStencil sourceSlice:0u sourceLevel:0u
+                        sourceOrigin:origin sourceSize:size
+                            toBuffer:coverageBuffer destinationOffset:0u
+               destinationBytesPerRow:context.coverageBytesPerRow
+             destinationBytesPerImage:
+                 NSUInteger(context.coverageBytesPerRow)*context.height
+                             options:MTLBlitOptionStencilFromDepthStencil];
+        [blitEncoder popDebugGroup];
+        if(!endBlit()) {
+          closeOrTerminate();
+          return;
+          }
       }
 
-      blitEncoder = [command blitCommandEncoder];
-      if(blitEncoder==nil)
-        return;
-      [blitEncoder setLabel:@"RendererIOS.Multiply2.CausalCopies.v1"];
-      [blitEncoder pushDebugGroup:
-          @"RendererIOS.Multiply2.CoverageStencilCopy.v1"];
-      [blitEncoder insertDebugSignpost:@"RendererIOS.Multiply2.CoverageStencilCopy.v1"];
-      [blitEncoder copyFromTexture:depthStencil sourceSlice:0u sourceLevel:0u
-                      sourceOrigin:origin sourceSize:size
-                          toBuffer:coverageBuffer destinationOffset:0u
-             destinationBytesPerRow:context.coverageBytesPerRow
-           destinationBytesPerImage:
-               NSUInteger(context.coverageBytesPerRow)*context.height
-                           options:MTLBlitOptionStencilFromDepthStencil];
-      [blitEncoder popDebugGroup];
-      if(!endBlit()) {
-        closeOrTerminate();
-        return;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      if(captureProof) {
+        MTLRenderPassDescriptor* visibilityPass =
+            [[MTLRenderPassDescriptor alloc] init];
+        if(visibilityPass==nil)
+          return;
+        visibilityPass.colorAttachments[0].texture = sceneHDR;
+        visibilityPass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+        visibilityPass.colorAttachments[0].storeAction = MTLStoreActionStore;
+        visibilityPass.depthAttachment.texture = depthStencil;
+        visibilityPass.depthAttachment.loadAction = MTLLoadActionLoad;
+        visibilityPass.depthAttachment.storeAction = MTLStoreActionStore;
+        visibilityPass.stencilAttachment.texture = depthStencil;
+        visibilityPass.stencilAttachment.loadAction = MTLLoadActionLoad;
+        visibilityPass.stencilAttachment.storeAction = MTLStoreActionStore;
+        visibilityPass.visibilityResultBuffer = visibilityResultBuffer;
+        renderEncoder =
+            [command renderCommandEncoderWithDescriptor:visibilityPass];
+        [visibilityPass release];
+        if(renderEncoder==nil)
+          return;
+        [renderEncoder setLabel:
+            @"RendererIOS.Multiply2.VisibilityDiagnostic.v1"];
+        [renderEncoder pushDebugGroup:
+            @"RendererIOS.Multiply2.VisibilityDiagnostic.v1"];
+        [renderEncoder setViewport:viewport];
+        [renderEncoder setScissorRect:scissor];
+        [renderEncoder setFrontFacingWinding:MTLWindingClockwise];
+        [renderEncoder setCullMode:MTLCullModeFront];
+        [renderEncoder setFragmentSamplerState:
+            (id<MTLSamplerState>)context.scene->samplerState atIndex:0u];
+        const auto& draw = context.prepared->multiply2.front();
+        [renderEncoder setRenderPipelineState:
+            (id<MTLRenderPipelineState>)
+                context.scene->multiply2VisibilityPipelineState];
+        [renderEncoder setVertexBuffer:(id<MTLBuffer>)draw.vertexBuffer
+                                offset:0u atIndex:0u];
+        [renderEncoder setVertexBytes:&draw.plan.constants
+                               length:sizeof(draw.plan.constants) atIndex:1u];
+        [renderEncoder setFragmentTexture:
+            (id<MTLTexture>)draw.baseColorTexture atIndex:0u];
+
+        [renderEncoder setDepthStencilState:
+            (id<MTLDepthStencilState>)
+                context.scene->multiply2VisibilityRasterDepthState];
+        [renderEncoder setStencilReferenceValue:0u];
+        [renderEncoder setVisibilityResultMode:MTLVisibilityResultModeBoolean
+                                          offset:IOSMultiply2VisibilityRasterOffset];
+        [renderEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                  indexCount:draw.plan.indexCount
+                                   indexType:MTLIndexTypeUInt32
+                                 indexBuffer:(id<MTLBuffer>)draw.indexBuffer
+                           indexBufferOffset:draw.plan.indexBufferOffset
+                               instanceCount:1u baseVertex:0 baseInstance:0u];
+        [renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled
+                                          offset:0u];
+
+        [renderEncoder setDepthStencilState:
+            (id<MTLDepthStencilState>)
+                context.scene->multiply2VisibilityStencilDepthState];
+        [renderEncoder setStencilReferenceValue:1u];
+        [renderEncoder setVisibilityResultMode:MTLVisibilityResultModeBoolean
+                                          offset:IOSMultiply2VisibilityStencilOffset];
+        [renderEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle
+                                  indexCount:draw.plan.indexCount
+                                   indexType:MTLIndexTypeUInt32
+                                 indexBuffer:(id<MTLBuffer>)draw.indexBuffer
+                           indexBufferOffset:draw.plan.indexBufferOffset
+                               instanceCount:1u baseVertex:0 baseInstance:0u];
+        [renderEncoder setVisibilityResultMode:MTLVisibilityResultModeDisabled
+                                          offset:0u];
+        [renderEncoder setFragmentTexture:nil atIndex:0u];
+        [renderEncoder setFragmentSamplerState:nil atIndex:0u];
+        [renderEncoder popDebugGroup];
+        if(!endRender()) {
+          closeOrTerminate();
+          return;
+          }
       }
+#endif
 
       MTLRenderPassDescriptor* second =
           [[MTLRenderPassDescriptor alloc] init];
@@ -1664,9 +2076,19 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
       [second release];
       if(renderEncoder==nil)
         return;
-      [renderEncoder setLabel:@"RendererIOS.Multiply2.AdditiveAfterProof.v1"];
-      [renderEncoder pushDebugGroup:
-          @"RendererIOS.Multiply2.AdditiveAfterProof.v1"];
+      if(captureProof) {
+        [renderEncoder setLabel:@"RendererIOS.Multiply2.AdditiveAfterProof.v1"];
+        [renderEncoder pushDebugGroup:
+            @"RendererIOS.Multiply2.AdditiveAfterProof.v1"];
+        }
+      else {
+        [renderEncoder setLabel:
+            @"RendererIOS.Multiply2.AdditiveContinuation.v1"];
+        [renderEncoder pushDebugGroup:
+            @"RendererIOS.Multiply2.AdditiveContinuation.v1"];
+        [renderEncoder insertDebugSignpost:
+            @"RendererIOS.Multiply2.AdditiveContinuation.v1"];
+        }
       [renderEncoder setViewport:viewport];
       [renderEncoder setScissorRect:scissor];
       [renderEncoder setFrontFacingWinding:MTLWindingClockwise];
@@ -1677,7 +2099,6 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
                   context.scene->additiveDepthState,0u);
       [renderEncoder setFragmentTexture:nil atIndex:0u];
       [renderEncoder setFragmentSamplerState:nil atIndex:0u];
-      [renderEncoder setDepthStencilState:nil];
       [renderEncoder popDebugGroup];
       if(!endRender()) {
         closeOrTerminate();
@@ -1691,6 +2112,40 @@ void IOSGPUScene::Impl::encodeMultiply2Causal(
       context.prepared->markNativeException();
       closeOrTerminate();
     }
+  }
+}
+
+IOSGPUScene::Report IOSGPUScene::Impl::runMultiply2(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    NativeMultiply2Context& context) noexcept {
+  try {
+    const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
+        owner,encoder,&context,&Impl::encodeMultiply2);
+    if(!accepted || !context.succeeded ||
+       context.prepared==nullptr || context.prepared->nativeException ||
+       !context.prepared->nativeCompleted ||
+       context.report.encodedPhaseDrawCount!=context.report.drawCount ||
+       context.report.encodedPhaseTexturedDrawCount!=
+           context.report.texturedDrawCount) {
+      context.report.result = IOSGPUScene::Result::NativeEncodingFailed;
+      recordFailure(context.report.failures.nativeEncode,context.report);
+      recordPlannedDrawnFailure(context.report);
+      if(context.prepared!=nullptr)
+        context.prepared->ready = false;
+      return context.report;
+      }
+    context.prepared->ready = false;
+    return context.report;
+  }
+  catch(...) {
+    context.report.result = IOSGPUScene::Result::NativeEncodingFailed;
+    recordFailure(context.report.failures.nativeEncode,context.report);
+    recordPlannedDrawnFailure(context.report);
+    if(context.prepared!=nullptr) {
+      context.prepared->markNativeException();
+      context.prepared->ready = false;
+      }
+    return context.report;
   }
 }
 #endif
@@ -1718,7 +2173,6 @@ void IOSGPUScene::Impl::encodeLandscape(
   const auto restoreEncoderState = [&]() {
     [encoder setFragmentTexture:nil atIndex:0u];
     [encoder setFragmentSamplerState:nil atIndex:0u];
-    [encoder setDepthStencilState:nil];
     [encoder setCullMode:MTLCullModeNone];
     [encoder setFrontFacingWinding:MTLWindingClockwise];
     };
@@ -1886,6 +2340,11 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
      !iosGPUSceneProductionDepthStatesAreAvailable(
          impl->baseDepthState!=nil,impl->additiveDepthState!=nil,
          impl->multiply2DepthState!=nil) ||
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+     impl->multiply2VisibilityPipelineState==nil ||
+     impl->multiply2VisibilityRasterDepthState==nil ||
+     impl->multiply2VisibilityStencilDepthState==nil ||
+#endif
      impl->samplerState==nil) {
     report.result = Result::PipelineUnavailable;
     recordFailure(report.failures.psoUnavailable,report);
@@ -1979,6 +2438,11 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     multiply2BaseRecords.reserve(snapshot.entities.size());
     multiply2Records.reserve(1u);
 #endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+    std::size_t simulatorSelectedDraws = 0u;
+    std::size_t simulatorCulledDraws = 0u;
+    std::size_t simulatorBudgetSkippedDraws = 0u;
+#endif
 
     for(const auto& entity:snapshot.entities) {
       const auto source = candidate(
@@ -1998,6 +2462,21 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         recordPlanFailure(report,planned,source);
         return report;
         }
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+      if(classifyIOSGPUSceneMultiply2ClipBounds(
+             entity.bounds,plan.constants.model,
+             plan.constants.viewProjection)==
+           IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside) {
+        ++simulatorCulledDraws;
+        continue;
+        }
+      if(!iosGPUSceneSimulatorSmokeDrawBudgetAccepts(
+           simulatorSelectedDraws)) {
+        ++simulatorBudgetSkippedDraws;
+        continue;
+        }
+      ++simulatorSelectedDraws;
+#endif
       if(!recordCountFailure(
              recordIOSGPUSceneDrawCount(
                  plan.materialCategory,plan.kind,
@@ -2140,6 +2619,26 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
 
       IOSGPUSceneNativePreparedDraw draw;
       draw.plan = plan;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      if(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2) {
+        switch(classifyIOSGPUSceneMultiply2ClipBounds(
+            entity.bounds,plan.constants.model,
+            plan.constants.viewProjection)) {
+          case IOSGPUSceneMultiply2ClipBoundsResult::Intersects:
+            draw.visibilityClipClass =
+                IOSMultiply2VisibilityClipClass::Intersects;
+            break;
+          case IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside:
+            draw.visibilityClipClass =
+                IOSMultiply2VisibilityClipClass::DefinitelyOutside;
+            break;
+          case IOSGPUSceneMultiply2ClipBoundsResult::Indeterminate:
+            draw.visibilityClipClass =
+                IOSMultiply2VisibilityClipClass::Indeterminate;
+            break;
+        }
+      }
+#endif
       draw.pipelineState = pipelineState;
       draw.vertexBuffer = vertexBuffer;
       draw.indexBuffer = indexBuffer;
@@ -2284,6 +2783,17 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       else
         candidateFrame->base.emplace_back(std::move(draw));
       }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+    if(!impl->simulatorSmokeBudgetReported) {
+      Tempest::Log::i(
+          "RendererIOS simulator smoke budget: selected=",
+          simulatorSelectedDraws," culled=",simulatorCulledDraws,
+          " budget-skipped=",simulatorBudgetSkippedDraws,
+          " limit=",IOSGPUSceneSimulatorSmokeDrawBudget);
+      impl->simulatorSmokeBudgetReported = true;
+      }
+#endif
 
     report.drawCount = report.counts.drawn.material.total;
     report.texturedDrawCount = report.counts.drawn.texturedDraws;
@@ -2490,6 +3000,10 @@ bool IOSGPUScene::multiply2CoverageMetadata(
   metadata.scissor = metadata.viewport;
   metadata.proofId = hdrProof.proofId;
   metadata.buildSha = hdrProof.buildSha;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+  metadata.visibilityClipClass =
+      prepared.impl->multiply2.front().visibilityClipClass;
+#endif
   return true;
 #else
   (void)prepared;
@@ -2518,6 +3032,11 @@ IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal(
      hdrProof.destinationBuffer==nullptr ||
      coverage.depthStencilTexture==nullptr ||
      coverage.coverageBuffer==nullptr ||
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+     coverage.visibilityResultBuffer==nullptr ||
+     coverage.metadata.visibilityClipClass!=
+         prepared.impl->multiply2.front().visibilityClipClass ||
+#endif
      coverage.width==0u || coverage.height==0u ||
      coverage.width!=coverage.metadata.width ||
      coverage.height!=coverage.metadata.height ||
@@ -2549,13 +3068,18 @@ IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal(
       prepared.impl->ready = false;
       return report;
       }
-    Impl::NativeMultiply2CausalContext context;
+    Impl::NativeMultiply2Context context(
+        Impl::NativeMultiply2EncodeMode::CaptureProof);
     context.scene = impl.get();
     context.prepared = prepared.impl.get();
     context.sceneHDR = (id)hdrProof.sourceTexture;
     context.hdrProofBuffer = (id)hdrProof.destinationBuffer;
     context.depthStencil = (id)coverage.depthStencilTexture;
     context.coverageBuffer = (id)coverage.coverageBuffer;
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+    context.visibilityResultBuffer =
+        (id)coverage.visibilityResultBuffer;
+#endif
     context.width = coverage.width;
     context.height = coverage.height;
     context.hdrBytesPerRow = hdrProof.metadata.bytesPerRow;
@@ -2565,22 +3089,7 @@ IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal(
     context.report = prepared.impl->report;
     context.report.encodedPhaseDrawCount = 0u;
     context.report.encodedPhaseTexturedDrawCount = 0u;
-    const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
-        impl->owner,encoder,&context,&Impl::encodeMultiply2Causal);
-    if(!accepted || !context.succeeded ||
-       prepared.impl->nativeException ||
-       !prepared.impl->nativeCompleted ||
-       context.report.encodedPhaseDrawCount!=context.report.drawCount ||
-       context.report.encodedPhaseTexturedDrawCount!=
-           context.report.texturedDrawCount) {
-      context.report.result = Result::NativeEncodingFailed;
-      recordFailure(context.report.failures.nativeEncode,context.report);
-      recordPlannedDrawnFailure(context.report);
-      prepared.impl->ready = false;
-      return context.report;
-      }
-    prepared.impl->ready = false;
-    return context.report;
+    return impl->runMultiply2(encoder,context);
   }
   catch(...) {
     recordFailure(report.failures.nativeEncode,report);
@@ -2597,6 +3106,73 @@ IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal(
   (void)sceneHDR;
   (void)hdrProof;
   (void)coverage;
+  recordFailure(report.failures.nativeEncode,report);
+  return report;
+#endif
+}
+
+IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Continuation(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    PreparedFrame& prepared,
+    const Tempest::Attachment& sceneHDR) noexcept {
+  Report report = makeReport(Result::NativeEncodingFailed);
+#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  if(impl==nullptr || prepared.impl==nullptr ||
+     prepared.impl->owner!=impl.get()) {
+    recordFailure(report.failures.nativeEncode,report);
+    return report;
+    }
+  report = prepared.impl->report;
+  const auto failContinuation = [&]() noexcept {
+    report.result = Result::NativeEncodingFailed;
+    recordFailure(report.failures.nativeEncode,report);
+    recordPlannedDrawnFailure(report);
+    prepared.impl->ready = false;
+    return report;
+    };
+  if(!prepared.impl->ready || prepared.impl->nativeCompleted ||
+     !prepared.impl->multiply2DrawIdentityReady ||
+     prepared.impl->multiply2.size()!=1u)
+    return failContinuation();
+
+  try {
+    const auto& texture =
+        Tempest::textureCast<const Tempest::Texture2d&>(sceneHDR);
+    const auto borrowed =
+        Tempest::MetalApi::borrowTexture(impl->owner,texture);
+    if(!borrowed)
+      return failContinuation();
+    id<MTLTexture> nativeSceneHDR =
+        (id<MTLTexture>)(void*)borrowed.get();
+    id depthStencil = nil;
+    uint32_t width = 0u;
+    uint32_t height = 0u;
+    if(!impl->continuationDepthStencilForSceneHDR(
+         nativeSceneHDR,depthStencil,width,height))
+      return failContinuation();
+
+    Impl::NativeMultiply2Context context(
+        Impl::NativeMultiply2EncodeMode::Continuation);
+    context.scene = impl.get();
+    context.prepared = prepared.impl.get();
+    context.sceneHDR = nativeSceneHDR;
+    context.depthStencil = depthStencil;
+    context.width = width;
+    context.height = height;
+    context.report = report;
+    context.report.encodedPhaseDrawCount = 0u;
+    context.report.encodedPhaseTexturedDrawCount = 0u;
+    return impl->runMultiply2(encoder,context);
+  }
+  catch(...) {
+    prepared.impl->nativeException = true;
+    return failContinuation();
+  }
+#else
+  (void)encoder;
+  (void)prepared;
+  (void)sceneHDR;
   recordFailure(report.failures.nativeEncode,report);
   return report;
 #endif

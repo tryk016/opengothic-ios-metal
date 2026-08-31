@@ -465,8 +465,12 @@ void testSourceMutations(const Sources& original) {
       "(id<MTLRenderPipelineState>)impl->additivePipelineState;",
       "(id<MTLRenderPipelineState>)impl->opaquePipelineState;");
   rejected("wrong-additive-depth",original,&Sources::scene,
-      "depthDesc.depthWriteEnabled = NO;",
-      "depthDesc.depthWriteEnabled = YES;");
+      "depthDesc.depthWriteEnabled = NO;\n"
+      "      OwnedObjectiveC additiveDepthOwner(\n"
+      "          [device newDepthStencilStateWithDescriptor:depthDesc]);",
+      "depthDesc.depthWriteEnabled = YES;\n"
+      "      OwnedObjectiveC additiveDepthOwner(\n"
+      "          [device newDepthStencilStateWithDescriptor:depthDesc]);");
   rejected("wrong-additive-blend",original,&Sources::scene,
       "additiveColor.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;",
       "additiveColor.sourceRGBBlendFactor = MTLBlendFactorZero;");

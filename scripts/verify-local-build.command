@@ -130,6 +130,10 @@ echo "### Tempest Metal 2D copy contract"
 PYTHONDONTWRITEBYTECODE=1 python3 \
   ios/tests/test_tempest_metal_2d_copy_contract.py
 
+echo "### iOS scene lifecycle contract"
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/tests/test_ios_scene_lifecycle_contract.py
+
 echo "### Neutral P2.1 scene boundary"
 headers=(
   game/graphics/iosframeinput.h
@@ -704,13 +708,29 @@ required = (
     ("alpha-pso-state",
      "game/graphics/iosgpuscene.mm",
      "alphaTestPipelineState = alphaTestPipelineOwner.relinquish();"),
-    ("additive-pso-and-depth-state",
+    ("additive-and-multiply2-pso-state",
      "game/graphics/iosgpuscene.mm",
      """additivePipelineState  = additivePipelineOwner.relinquish();
-      multiply2PipelineState = multiply2PipelineOwner.relinquish();
-      baseDepthState         = depthOwner.relinquish();
+      multiply2PipelineState = multiply2PipelineOwner.relinquish();"""),
+    ("optional-visibility-pso-state",
+     "game/graphics/iosgpuscene.mm",
+     """#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityPipelineState =
+          visibilityPipelineOwner.relinquish();
+#endif"""),
+    ("base-additive-and-multiply2-depth-state",
+     "game/graphics/iosgpuscene.mm",
+     """baseDepthState         = depthOwner.relinquish();
       additiveDepthState     = additiveDepthOwner.relinquish();
       multiply2DepthState    = multiply2DepthOwner.relinquish();"""),
+    ("optional-visibility-depth-states",
+     "game/graphics/iosgpuscene.mm",
+     """#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityRasterDepthState =
+          visibilityRasterDepthOwner.relinquish();
+      multiply2VisibilityStencilDepthState =
+          visibilityStencilDepthOwner.relinquish();
+#endif"""),
     ("alpha-fragment-descriptor-assignment",
      "game/graphics/iosgpuscene.mm",
      """pipelineDesc.fragmentFunction =
@@ -888,8 +908,9 @@ if missing:
         + ",".join(missing)
     )
 if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 4:
-    raise SystemExit("RendererIOS GPU path must create exactly four offline PSOs")
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 5:
+    raise SystemExit(
+        "RendererIOS GPU path must declare four production PSOs and one macro-guarded visibility PSO")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",
@@ -945,18 +966,18 @@ echo "### RendererIOS native GPU and offline Metal contracts"
 [ -x ios/device-test/run-smoke-test.sh ]
 grep -Fq 'the first presented frame must have exact offline shader totals' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'select_device_record()' ios/device-test/run-smoke-test.sh
-grep -Fq 'attempt=%d result=retry' ios/device-test/run-smoke-test.sh
-grep -Fq '((attempt < 5)) && sleep 1' ios/device-test/run-smoke-test.sh
-grep -Fq 'OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST' \
+grep -Fq 'run_usb_afc_preflight "${PREFLIGHT_BUNDLE_ARGUMENTS[@]}"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq -- '--json-output "$WORK/usb-afc-preflight.json"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq 'value.get("terminal") != "USB AFC PREFLIGHT PASS"' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'device_selection_attempts=' ios/device-test/run-smoke-test.sh
 grep -Fq 'device_selection_method=' ios/device-test/run-smoke-test.sh
 # shellcheck disable=SC2016 # exact source literal, not a shell expansion
 grep -Fq 'copy_private_evidence_path "$WORK/device-selection.log"' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("interface") == "usb"' ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
+grep -Fq 'copy_private_evidence_path "$WORK/usb-afc-preflight.json"' \
   ios/device-test/run-smoke-test.sh
 [ -f game/graphics/iosgpusceneplan.h ]
 [ -f game/graphics/iosgpuscene.h ]
@@ -2642,7 +2663,7 @@ import re
 
 scene = Path("game/graphics/iosgpuscene.mm").read_text()
 bink = Path("game/graphics/iosgpubink.mm").read_text()
-start = scene.index("void IOSGPUScene::Impl::encodeMultiply2Causal(")
+start = scene.index("void IOSGPUScene::Impl::encodeMultiply2(")
 end_marker = "\n}\n#endif\n\nvoid IOSGPUScene::Impl::encodeLandscape("
 end = scene.index(end_marker, start) + len("\n}")
 causal = scene[start:end]
@@ -2654,9 +2675,9 @@ caller_end = scene.index(
 )
 caller = scene[caller_start:caller_end]
 bridge = """const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
-        impl->owner,encoder,&context,&Impl::encodeMultiply2Causal);"""
+        owner,encoder,&context,&Impl::encodeMultiply2);"""
 if scene.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1 or \
-   caller.count(bridge) != 1:
+   causal.count(bridge) != 1:
     raise SystemExit("Multiply2 command-buffer bridge call drift")
 allowed = {
     "id<MTLCommandBuffer>": 2,

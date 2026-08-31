@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -594,46 +595,179 @@ bool symbolAllowlistMatches(const std::filesystem::path& repository) {
          actualAbiReferences==expectedAbiReferences;
 }
 
-bool runtimeReflectionContractMatches(
-    const std::filesystem::path& repository) {
-  const auto runtime = readFile(
-      repository/"game/graphics/iosgpuscene.mm");
-  if(!runtime)
-    return false;
-  const std::string source = compact(stripComments(*runtime));
+bool runtimeReflectionSourceContractMatches(std::string_view runtime) {
+  const std::string source = compact(stripComments(runtime));
   if(source.empty())
     return false;
 
   constexpr std::string_view ReflectionOptions =
       "options:(MTLPipelineOptionBindingInfo|"
       "MTLPipelineOptionBufferTypeInfo)";
-  return countOccurrences(source,ReflectionOptions)==4u &&
-      countOccurrences(source,"reflection:&opaquePipelineReflection")==1u &&
-      countOccurrences(source,"reflection:&alphaTestPipelineReflection")==1u &&
-      countOccurrences(source,"reflection:&additivePipelineReflection")==1u &&
-      countOccurrences(source,"reflection:&multiply2PipelineReflection")==1u &&
-      countOccurrences(
-          source,"drawConstantsReflectionMatches(opaquePipelineReflection)")==
-          1u &&
-      countOccurrences(
-          source,
-          "drawConstantsReflectionMatches(alphaTestPipelineReflection)")==1u &&
-      countOccurrences(
-          source,
-          "drawConstantsReflectionMatches(additivePipelineReflection)")==1u &&
-      countOccurrences(
-          source,
-          "drawConstantsReflectionMatches(multiply2PipelineReflection)")==1u &&
+  constexpr std::array<std::string_view,4> CanonicalReflectionBindings = {
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&opaquePipelineReflection",
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&alphaTestPipelineReflection",
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&additivePipelineReflection",
+    "options:(MTLPipelineOptionBindingInfo|"
+        "MTLPipelineOptionBufferTypeInfo)"
+        "reflection:&multiply2PipelineReflection",
+  };
+  constexpr std::array<std::string_view,4> CanonicalReflectionMatches = {
+    "drawConstantsReflectionMatches(opaquePipelineReflection)",
+    "drawConstantsReflectionMatches(alphaTestPipelineReflection)",
+    "drawConstantsReflectionMatches(additivePipelineReflection)",
+    "drawConstantsReflectionMatches(multiply2PipelineReflection)",
+  };
+  for(const std::string_view binding:CanonicalReflectionBindings)
+    if(countOccurrences(source,binding)!=1u)
+      return false;
+  for(const std::string_view match:CanonicalReflectionMatches)
+    if(countOccurrences(source,match)!=1u)
+      return false;
+
+  constexpr std::string_view VisibilityGuardStart =
+      "#ifdefined("
+      "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)"
+      "additiveColor.writeMask=MTLColorWriteMaskNone;";
+  constexpr std::string_view VisibilityGuardEnd =
+      "#endifOwnedObjectiveCdepthDescriptor(";
+  const size_t visibilityStart = source.find(VisibilityGuardStart);
+  if(visibilityStart==std::string::npos ||
+     source.find(VisibilityGuardStart,
+                 visibilityStart+VisibilityGuardStart.size())!=
+       std::string::npos)
+    return false;
+  const size_t visibilityEnd = source.find(
+      VisibilityGuardEnd,visibilityStart+VisibilityGuardStart.size());
+  if(visibilityEnd==std::string::npos)
+    return false;
+  const std::string_view visibilityBlock(
+      source.data()+visibilityStart,
+      visibilityEnd-visibilityStart+std::string_view("#endif").size());
+  constexpr std::string_view VisibilityReflectionDeclaration =
+      "MTLRenderPipelineReflection*visibilityPipelineReflection=nil;";
+  constexpr std::string_view VisibilityReflectionBinding =
+      "options:(MTLPipelineOptionBindingInfo|"
+      "MTLPipelineOptionBufferTypeInfo)"
+      "reflection:&visibilityPipelineReflection";
+  constexpr std::string_view VisibilityReflectionMatch =
+      "drawConstantsReflectionMatches(visibilityPipelineReflection)";
+  if(countOccurrences(source,ReflectionOptions)!=5u ||
+     countOccurrences(source,VisibilityReflectionDeclaration)!=1u ||
+     countOccurrences(source,VisibilityReflectionBinding)!=1u ||
+     countOccurrences(source,VisibilityReflectionMatch)!=1u ||
+     countOccurrences(visibilityBlock,VisibilityReflectionDeclaration)!=1u ||
+     countOccurrences(visibilityBlock,VisibilityReflectionBinding)!=1u ||
+     countOccurrences(visibilityBlock,VisibilityReflectionMatch)!=1u)
+    return false;
+
+  return
       countOccurrences(source,"binding.index!=NSUInteger(1u)")==1u &&
       countOccurrences(source,"!binding.used")==1u &&
       countOccurrences(source,"!binding.argument")==1u &&
       countOccurrences(source,"binding.type!=MTLBindingTypeBuffer")==1u &&
       countOccurrences(
           source,
-          "buffer.bufferDataSize!=sizeof(IOSGPUSceneDrawConstants)")==1u &&
+          "iosGPUSceneDrawConstantsReflectionLayoutMatches("
+          "buffer.bufferDataSize,buffer.bufferAlignment)")==1u;
+}
+
+bool runtimeReflectionMutationsAreRejected(std::string_view runtime) {
+  constexpr std::string_view VisibilityGuard =
+      "#if defined("
+      "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)\n"
+      "      additiveColor.writeMask = MTLColorWriteMaskNone;";
+  constexpr std::string_view UnguardedVisibility =
+      "      additiveColor.writeMask = MTLColorWriteMaskNone;";
+  const std::array<std::string,5> mutations = {
+    replaceOnce(
+        std::string(runtime),
+        "reflection:&visibilityPipelineReflection",
+        "reflection:nullptr"),
+    replaceOnce(
+        std::string(runtime),
+        "reflection:&visibilityPipelineReflection",
+        "reflection:&multiply2PipelineReflection"),
+    replaceOnce(
+        std::string(runtime),
+        "drawConstantsReflectionMatches(visibilityPipelineReflection)",
+        "drawConstantsReflectionMatches(multiply2PipelineReflection)"),
+    replaceOnce(
+        std::string(runtime),VisibilityGuard,UnguardedVisibility),
+    replaceOnce(
+        std::string(runtime),
+        "iosGPUSceneDrawConstantsReflectionLayoutMatches(\n"
+        "           buffer.bufferDataSize,buffer.bufferAlignment)",
+        "true"),
+  };
+  for(const std::string& mutation:mutations)
+    if(mutation.empty() || runtimeReflectionSourceContractMatches(mutation))
+      return false;
+  return true;
+}
+
+bool runtimeReflectionContractMatches(
+    const std::filesystem::path& repository) {
+  const auto runtime = readFile(
+      repository/"game/graphics/iosgpuscene.mm");
+  return runtime && runtimeReflectionSourceContractMatches(*runtime) &&
+      runtimeReflectionMutationsAreRejected(*runtime);
+}
+
+bool toneReflectionSourceContractMatches(std::string_view runtime) {
+  const std::string source = compact(stripComments(runtime));
+  return !source.empty() &&
+      countOccurrences(source,"reflection.fragmentBindings")==2u &&
       countOccurrences(
           source,
-          "buffer.bufferAlignment!=alignof(IOSGPUSceneDrawConstants)")==1u;
+          "iosToneResolveConstantsReflectionLayoutMatches("
+          "buffer.bufferDataSize,buffer.bufferAlignment)")==1u;
+}
+
+bool toneReflectionContractMatches(
+    const std::filesystem::path& repository) {
+  const auto runtime = readFile(
+      repository/"game/graphics/ioslinearhdrmetal.mm");
+  if(!runtime || !toneReflectionSourceContractMatches(*runtime))
+    return false;
+  const std::array<std::string,2> mutations = {
+    replaceOnce(
+        *runtime,
+        "iosToneResolveConstantsReflectionLayoutMatches(\n"
+        "           buffer.bufferDataSize,buffer.bufferAlignment)",
+        "true"),
+    replaceOnce(*runtime,"reflection.fragmentBindings==nil",
+                         "reflection.vertexBindings==nil"),
+  };
+  for(const std::string& mutation:mutations)
+    if(mutation.empty() || toneReflectionSourceContractMatches(mutation))
+      return false;
+  return true;
+}
+
+bool runtimeDepthStateSourceContractMatches(std::string_view runtime) {
+  return countOccurrences(runtime,"setDepthStencilState:nil")==0u &&
+      countOccurrences(runtime,"setDepthStencilState:")>=4u;
+}
+
+bool runtimeDepthStateContractMatches(
+    const std::filesystem::path& repository) {
+  const auto runtime = readFile(
+      repository/"game/graphics/iosgpuscene.mm");
+  if(!runtime || !runtimeDepthStateSourceContractMatches(*runtime))
+    return false;
+  const std::string mutation = replaceOnce(
+      *runtime,
+      "[encoder setFragmentSamplerState:nil atIndex:0u];",
+      "[encoder setFragmentSamplerState:nil atIndex:0u];\n"
+      "    [encoder setDepthStencilState:nil];");
+  return !mutation.empty() &&
+      !runtimeDepthStateSourceContractMatches(mutation);
 }
 
 bool runtimeUVAnimationEvidenceContractMatchesSources(
@@ -757,10 +891,14 @@ int main(int argc, char** argv) {
     return 4;
   if(!runtimeReflectionContractMatches(argv[2]))
     return 5;
-  if(!runtimeUVAnimationEvidenceContractMatches(argv[2]))
+  if(!toneReflectionContractMatches(argv[2]))
     return 6;
-  if(!symbolAllowlistMatches(argv[2]))
+  if(!runtimeDepthStateContractMatches(argv[2]))
     return 7;
+  if(!runtimeUVAnimationEvidenceContractMatches(argv[2]))
+    return 8;
+  if(!symbolAllowlistMatches(argv[2]))
+    return 9;
 
   static_assert(IOSLandscapeVertexStride==36u);
   static_assert(sizeof(IOSFloat2)==8u);
@@ -770,6 +908,18 @@ int main(int argc, char** argv) {
   static_assert(offsetof(IOSGPUSceneDrawConstants,uvOffset)==144u);
   static_assert(sizeof(IOSGPUSceneDrawConstants)==160u);
   static_assert(alignof(IOSGPUSceneDrawConstants)==16u);
+  static_assert(iosGPUSceneDrawConstantsReflectionLayoutMatches(160u,16u));
+  static_assert(iosGPUSceneDrawConstantsReflectionLayoutMatches(160u,256u));
+  static_assert(!iosGPUSceneDrawConstantsReflectionLayoutMatches(159u,16u));
+  static_assert(!iosGPUSceneDrawConstantsReflectionLayoutMatches(160u,0u));
+  static_assert(!iosGPUSceneDrawConstantsReflectionLayoutMatches(160u,8u));
+  static_assert(!iosGPUSceneDrawConstantsReflectionLayoutMatches(160u,24u));
+  static_assert(IOSGPUSceneSimulatorSmokeDrawBudget==2048u);
+  static_assert(iosGPUSceneSimulatorSmokeDrawBudgetAccepts(0u));
+  static_assert(iosGPUSceneSimulatorSmokeDrawBudgetAccepts(2047u));
+  static_assert(!iosGPUSceneSimulatorSmokeDrawBudgetAccepts(2048u));
+  static_assert(!iosGPUSceneSimulatorSmokeDrawBudgetAccepts(
+      std::numeric_limits<std::size_t>::max()));
   static_assert(RendererIOSShader::ToneResolveTextureIndex==0u);
   static_assert(RendererIOSShader::ToneResolveConstantsBufferIndex==0u);
   static_assert(offsetof(IOSToneResolveConstants,brightness)==0u);
@@ -778,6 +928,12 @@ int main(int argc, char** argv) {
   static_assert(offsetof(IOSToneResolveConstants,exposure)==12u);
   static_assert(sizeof(IOSToneResolveConstants)==16u);
   static_assert(alignof(IOSToneResolveConstants)==16u);
+  static_assert(iosToneResolveConstantsReflectionLayoutMatches(16u,16u));
+  static_assert(iosToneResolveConstantsReflectionLayoutMatches(16u,256u));
+  static_assert(!iosToneResolveConstantsReflectionLayoutMatches(15u,16u));
+  static_assert(!iosToneResolveConstantsReflectionLayoutMatches(16u,0u));
+  static_assert(!iosToneResolveConstantsReflectionLayoutMatches(16u,8u));
+  static_assert(!iosToneResolveConstantsReflectionLayoutMatches(16u,24u));
   constexpr IOSToneResolveConstants DefaultToneResolveConstants;
   static_assert(DefaultToneResolveConstants.brightness==0.0f);
   static_assert(DefaultToneResolveConstants.contrast==1.0f);

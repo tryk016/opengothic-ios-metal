@@ -113,15 +113,70 @@ struct PreparedManifest final {
   std::array<char,65> sha256{};
   };
 
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+struct CandidateDriftHookContext final {
+  const std::filesystem::path* documentRoot = nullptr;
+  std::string_view normalizedRelativePath;
+  uint64_t candidateOrdinal = 0u;
+  FailureStage stage = FailureStage::None;
+  CandidateDriftTestHook hook = nullptr;
+  bool* consumed = nullptr;
+  };
+#endif
+
 bool sameTimestamp(const timespec& lhs, const timespec& rhs) noexcept {
   return lhs.tv_sec==rhs.tv_sec && lhs.tv_nsec==rhs.tv_nsec;
   }
 
+uint16_t stableStatDifference(
+    const struct stat& lhs, const struct stat& rhs) noexcept {
+  uint16_t difference = 0u;
+  if(lhs.st_dev!=rhs.st_dev)
+    difference = static_cast<uint16_t>(difference|0x001u);
+  if(lhs.st_ino!=rhs.st_ino)
+    difference = static_cast<uint16_t>(difference|0x002u);
+  if(lhs.st_mode!=rhs.st_mode)
+    difference = static_cast<uint16_t>(difference|0x004u);
+  if(lhs.st_size!=rhs.st_size)
+    difference = static_cast<uint16_t>(difference|0x008u);
+  if(!sameTimestamp(lhs.st_mtimespec,rhs.st_mtimespec))
+    difference = static_cast<uint16_t>(difference|0x010u);
+  if(!sameTimestamp(lhs.st_ctimespec,rhs.st_ctimespec))
+    difference = static_cast<uint16_t>(difference|0x020u);
+  return difference;
+  }
+
 bool sameStableStat(const struct stat& lhs, const struct stat& rhs) noexcept {
-  return lhs.st_dev==rhs.st_dev && lhs.st_ino==rhs.st_ino &&
-      lhs.st_mode==rhs.st_mode && lhs.st_size==rhs.st_size &&
-      sameTimestamp(lhs.st_mtimespec,rhs.st_mtimespec) &&
-      sameTimestamp(lhs.st_ctimespec,rhs.st_ctimespec);
+  return stableStatDifference(lhs,rhs)==0u;
+  }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+CandidateDriftTestHookResult invokeCandidateDriftHook(
+    CandidateDriftHookContext* context,
+    CandidateDriftTestPoint point) noexcept {
+  if(context==nullptr || context->hook==nullptr || context->consumed==nullptr ||
+     *context->consumed)
+    return CandidateDriftTestHookResult::NotSelected;
+  const CandidateDriftTestHookResult response = context->hook(
+      *context->documentRoot,context->normalizedRelativePath,
+      context->candidateOrdinal,context->stage,point);
+  switch(response) {
+    case CandidateDriftTestHookResult::NotSelected:
+      return response;
+    case CandidateDriftTestHookResult::Mutated:
+    case CandidateDriftTestHookResult::ForceFailure:
+    case CandidateDriftTestHookResult::Failed:
+      *context->consumed = true;
+      return response;
+    }
+  *context->consumed = true;
+  return CandidateDriftTestHookResult::Failed;
+  }
+#endif
+
+constexpr uint16_t candidateDriftCode(
+    uint16_t checkpoint, uint16_t detail) noexcept {
+  return static_cast<uint16_t>((checkpoint<<12u)|detail);
   }
 
 bool sameIdentityAndSize(
@@ -225,6 +280,87 @@ Error openDirectoryAt(
   if(::fstat(opened.get(),&openedIdentity)!=0 ||
      !sameStableStat(pathIdentity,openedIdentity))
     return Error::FileChanged;
+  output = std::move(opened);
+  return Error::None;
+  }
+
+Error openCandidateAncestorAt(
+    int parent,
+    std::string_view name,
+    FileDescriptor& output,
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    CandidateDriftHookContext* driftContext,
+#endif
+    uint16_t& driftCode) {
+  const std::string stableName(name);
+  struct stat pathIdentity{};
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult pathHook = invokeCandidateDriftHook(
+      driftContext,CandidateDriftTestPoint::AncestorPathStat);
+  if(pathHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(pathHook==CandidateDriftTestHookResult::ForceFailure) {
+    driftCode = candidateDriftCode(1u,0x100u);
+    return Error::FileChanged;
+    }
+#endif
+  if(::fstatat(parent,stableName.c_str(),&pathIdentity,
+               AT_SYMLINK_NOFOLLOW)!=0) {
+    driftCode = candidateDriftCode(1u,0x100u);
+    return Error::FileChanged;
+    }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult kindHook = invokeCandidateDriftHook(
+      driftContext,CandidateDriftTestPoint::AncestorKind);
+  if(kindHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(kindHook==CandidateDriftTestHookResult::ForceFailure)
+    return Error::OpenFailed;
+#endif
+  if(!S_ISDIR(pathIdentity.st_mode)) {
+    driftCode = candidateDriftCode(1u,0x200u);
+    return Error::FileChanged;
+    }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult openHook = invokeCandidateDriftHook(
+      driftContext,CandidateDriftTestPoint::AncestorOpen);
+  if(openHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(openHook==CandidateDriftTestHookResult::ForceFailure) {
+    driftCode = candidateDriftCode(1u,0x400u);
+    return Error::FileChanged;
+    }
+#endif
+  FileDescriptor opened(::openat(
+      parent,stableName.c_str(),
+      O_RDONLY|O_DIRECTORY|O_NOFOLLOW|closeOnExecFlag()));
+  if(!opened) {
+    driftCode = candidateDriftCode(1u,0x400u);
+    return Error::FileChanged;
+    }
+
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult fdHook = invokeCandidateDriftHook(
+      driftContext,CandidateDriftTestPoint::AncestorFdStat);
+  if(fdHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(fdHook==CandidateDriftTestHookResult::ForceFailure) {
+    driftCode = candidateDriftCode(1u,0x800u);
+    return Error::FileChanged;
+    }
+#endif
+  struct stat openedIdentity{};
+  if(::fstat(opened.get(),&openedIdentity)!=0) {
+    driftCode = candidateDriftCode(1u,0x800u);
+    return Error::FileChanged;
+    }
+  if(const uint16_t difference = stableStatDifference(
+         pathIdentity,openedIdentity); difference!=0u) {
+    driftCode = candidateDriftCode(1u,difference);
+    return Error::FileChanged;
+    }
   output = std::move(opened);
   return Error::None;
   }
@@ -438,7 +574,12 @@ Error openCandidate(
     const Candidate& candidate,
     FileDescriptor& file,
     FileDescriptor& parent,
-    std::string& leaf) {
+    std::string& leaf,
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    CandidateDriftHookContext* driftContext,
+#endif
+    uint16_t& driftCode
+    ) {
   const auto components = pathComponents(candidate.rawRelativePath);
   if(components.empty())
     return Error::NonCanonicalPath;
@@ -447,10 +588,14 @@ Error openCandidate(
     return Error::OpenFailed;
   for(std::size_t index=0u; index+1u<components.size(); ++index) {
     FileDescriptor next;
-    const Error opened = openDirectoryAt(
-        current.get(),components[index],next);
+    const Error opened = openCandidateAncestorAt(
+        current.get(),components[index],next
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,driftContext
+#endif
+        ,driftCode);
     if(opened!=Error::None)
-      return Error::FileChanged;
+      return opened;
     current = std::move(next);
     }
   try {
@@ -460,19 +605,53 @@ Error openCandidate(
     return Error::OpenFailed;
     }
   struct stat pathBefore{};
-  if(::fstatat(current.get(),leaf.c_str(),&pathBefore,
-               AT_SYMLINK_NOFOLLOW)!=0 ||
-     !sameStableStat(candidate.identity,pathBefore))
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult pathBeforeHook =
+      invokeCandidateDriftHook(
+          driftContext,CandidateDriftTestPoint::PathBeforeStat);
+  if(pathBeforeHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(pathBeforeHook==CandidateDriftTestHookResult::ForceFailure) {
+    driftCode = candidateDriftCode(2u,0x800u);
     return Error::FileChanged;
+    }
+#endif
+  if(::fstatat(current.get(),leaf.c_str(),&pathBefore,
+               AT_SYMLINK_NOFOLLOW)!=0) {
+    driftCode = candidateDriftCode(2u,0x800u);
+    return Error::FileChanged;
+    }
+  if(const uint16_t difference = stableStatDifference(
+         candidate.identity,pathBefore); difference!=0u) {
+    driftCode = candidateDriftCode(2u,difference);
+    return Error::FileChanged;
+    }
   FileDescriptor opened(::openat(
       current.get(),leaf.c_str(),
       O_RDONLY|O_NOFOLLOW|closeOnExecFlag()));
   if(!opened)
     return Error::OpenFailed;
   struct stat descriptorBefore{};
-  if(::fstat(opened.get(),&descriptorBefore)!=0 ||
-     !sameStableStat(candidate.identity,descriptorBefore))
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult fdBeforeHook =
+      invokeCandidateDriftHook(
+          driftContext,CandidateDriftTestPoint::FdBeforeStat);
+  if(fdBeforeHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(fdBeforeHook==CandidateDriftTestHookResult::ForceFailure) {
+    driftCode = candidateDriftCode(3u,0x800u);
     return Error::FileChanged;
+    }
+#endif
+  if(::fstat(opened.get(),&descriptorBefore)!=0) {
+    driftCode = candidateDriftCode(3u,0x800u);
+    return Error::FileChanged;
+    }
+  if(const uint16_t difference = stableStatDifference(
+         candidate.identity,descriptorBefore); difference!=0u) {
+    driftCode = candidateDriftCode(3u,difference);
+    return Error::FileChanged;
+    }
   file = std::move(opened);
   parent = std::move(current);
   return Error::None;
@@ -502,25 +681,125 @@ bool updateDigest(
   return true;
   }
 
+bool hashNormalizedPath(
+    std::string_view normalizedRelativePath,
+    std::array<char,65>& output) noexcept {
+  CC_SHA256_CTX context{};
+  if(CC_SHA256_Init(&context)!=1 ||
+     !updateDigest(context,normalizedRelativePath.data(),
+                   normalizedRelativePath.size()))
+    return false;
+  std::array<unsigned char,CC_SHA256_DIGEST_LENGTH> digest{};
+  if(CC_SHA256_Final(digest.data(),&context)!=1)
+    return false;
+  encodeDigest(digest.data(),output);
+  return true;
+  }
+
 Error hashCandidate(
-    int documentRoot, Candidate& candidate) {
+    int documentRoot, Candidate& candidate,
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    const std::filesystem::path* documentRootPath = nullptr,
+    uint64_t candidateOrdinal = 0u,
+    FailureStage stage = FailureStage::None,
+    CandidateHashTestHook candidateHashHook = nullptr,
+    bool* candidateHashHookConsumed = nullptr,
+    CandidateDriftTestHook candidateDriftHook = nullptr,
+    bool* candidateDriftHookConsumed = nullptr,
+#endif
+    uint16_t* candidateDriftCodeOutput = nullptr
+    ) {
+  uint16_t candidateDriftCodeValue = 0u;
+  if(candidateDriftCodeOutput!=nullptr)
+    *candidateDriftCodeOutput = 0u;
   FileDescriptor file;
   FileDescriptor parent;
   std::string leaf;
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  if(candidateHashHook!=nullptr && documentRootPath!=nullptr &&
+     candidateHashHookConsumed!=nullptr && !*candidateHashHookConsumed) {
+    const CandidateHashTestHookResult hookResult = candidateHashHook(
+        *documentRootPath,candidate.normalizedRelativePath,
+        candidateOrdinal,stage);
+    if(hookResult==CandidateHashTestHookResult::Failed)
+      return Error::OpenFailed;
+    *candidateHashHookConsumed =
+        hookResult==CandidateHashTestHookResult::Mutated;
+    }
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  CandidateDriftHookContext driftContext;
+  if(documentRootPath!=nullptr && candidateDriftHook!=nullptr) {
+    driftContext.documentRoot = documentRootPath;
+    driftContext.normalizedRelativePath = candidate.normalizedRelativePath;
+    driftContext.candidateOrdinal = candidateOrdinal;
+    driftContext.stage = stage;
+    driftContext.hook = candidateDriftHook;
+    driftContext.consumed = candidateDriftHookConsumed;
+    }
+#endif
   const Error opened = openCandidate(
-      documentRoot,candidate,file,parent,leaf);
-  if(opened!=Error::None)
+      documentRoot,candidate,file,parent,leaf,
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+      candidateDriftHook==nullptr ? nullptr : &driftContext,
+#endif
+      candidateDriftCodeValue
+      );
+  if(opened!=Error::None) {
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
     return opened;
+    }
   struct stat before{};
-  if(::fstat(file.get(),&before)!=0 ||
-     !sameStableStat(candidate.identity,before))
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult preReadHook =
+      invokeCandidateDriftHook(
+          candidateDriftHook==nullptr ? nullptr : &driftContext,
+          CandidateDriftTestPoint::PreReadStat);
+  if(preReadHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(preReadHook==CandidateDriftTestHookResult::ForceFailure) {
+    candidateDriftCodeValue = candidateDriftCode(4u,0x800u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
     return Error::FileChanged;
+    }
+#endif
+  if(::fstat(file.get(),&before)!=0) {
+    candidateDriftCodeValue = candidateDriftCode(4u,0x800u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
+  if(const uint16_t difference = stableStatDifference(
+         candidate.identity,before); difference!=0u) {
+    candidateDriftCodeValue = candidateDriftCode(4u,difference);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
   CC_SHA256_CTX context{};
   if(CC_SHA256_Init(&context)!=1)
     return Error::ReadFailed;
   std::array<char,HashChunkBytes> buffer{};
   uint64_t bytesRead = 0u;
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  bool readLengthHookPending = true;
+#endif
   for(;;) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    if(readLengthHookPending) {
+      readLengthHookPending = false;
+      const CandidateDriftTestHookResult readLengthHook =
+          invokeCandidateDriftHook(
+              candidateDriftHook==nullptr ? nullptr : &driftContext,
+              CandidateDriftTestPoint::ReadLength);
+      if(readLengthHook==CandidateDriftTestHookResult::Failed)
+        return Error::OpenFailed;
+      if(readLengthHook==CandidateDriftTestHookResult::ForceFailure)
+        return Error::OpenFailed;
+      }
+#endif
     const ssize_t count = ::read(file.get(),buffer.data(),buffer.size());
     if(count<0) {
       if(errno==EINTR)
@@ -530,33 +809,130 @@ Error hashCandidate(
     if(count==0)
       break;
     const uint64_t unsignedCount = static_cast<uint64_t>(count);
-    if(unsignedCount>candidate.byteSize-bytesRead)
+    if(unsignedCount>candidate.byteSize-bytesRead) {
+      candidateDriftCodeValue = candidateDriftCode(5u,0x008u);
+      if(candidateDriftCodeOutput!=nullptr)
+        *candidateDriftCodeOutput = candidateDriftCodeValue;
       return Error::FileChanged;
+      }
     if(!updateDigest(context,buffer.data(),
                      static_cast<std::size_t>(count)))
       return Error::ReadFailed;
     bytesRead += unsignedCount;
     }
-  if(bytesRead!=candidate.byteSize)
+  if(bytesRead!=candidate.byteSize) {
+    candidateDriftCodeValue = candidateDriftCode(5u,0x008u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
     return Error::FileChanged;
+    }
   struct stat after{};
   struct stat pathAfter{};
-  if(::fstat(file.get(),&after)!=0 ||
-     ::fstatat(parent.get(),leaf.c_str(),&pathAfter,
-               AT_SYMLINK_NOFOLLOW)!=0 ||
-     !sameStableStat(before,after) ||
-     !sameStableStat(before,pathAfter))
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult fdAfterHook =
+      invokeCandidateDriftHook(
+          candidateDriftHook==nullptr ? nullptr : &driftContext,
+          CandidateDriftTestPoint::FdAfterStat);
+  if(fdAfterHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(fdAfterHook==CandidateDriftTestHookResult::ForceFailure) {
+    candidateDriftCodeValue = candidateDriftCode(6u,0x800u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
     return Error::FileChanged;
+    }
+#endif
+  if(::fstat(file.get(),&after)!=0) {
+    candidateDriftCodeValue = candidateDriftCode(6u,0x800u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  const CandidateDriftTestHookResult pathAfterHook =
+      invokeCandidateDriftHook(
+          candidateDriftHook==nullptr ? nullptr : &driftContext,
+          CandidateDriftTestPoint::PathAfterStat);
+  if(pathAfterHook==CandidateDriftTestHookResult::Failed)
+    return Error::OpenFailed;
+  if(pathAfterHook==CandidateDriftTestHookResult::ForceFailure) {
+    candidateDriftCodeValue = candidateDriftCode(7u,0x800u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
+#endif
+  if(::fstatat(parent.get(),leaf.c_str(),&pathAfter,
+               AT_SYMLINK_NOFOLLOW)!=0) {
+    candidateDriftCodeValue = candidateDriftCode(7u,0x800u);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
+  if(const uint16_t difference = stableStatDifference(
+         before,after); difference!=0u) {
+    candidateDriftCodeValue = candidateDriftCode(6u,difference);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
+  if(const uint16_t difference = stableStatDifference(
+         before,pathAfter); difference!=0u) {
+    candidateDriftCodeValue = candidateDriftCode(7u,difference);
+    if(candidateDriftCodeOutput!=nullptr)
+      *candidateDriftCodeOutput = candidateDriftCodeValue;
+    return Error::FileChanged;
+    }
   std::array<unsigned char,CC_SHA256_DIGEST_LENGTH> digest{};
   if(CC_SHA256_Final(digest.data(),&context)!=1)
     return Error::ReadFailed;
   encodeDigest(digest.data(),candidate.sha256);
+  if(candidateDriftCodeOutput!=nullptr)
+    *candidateDriftCodeOutput = 0u;
   return Error::None;
   }
 
-Error hashCollection(int documentRoot, Collection& collection) {
-  for(Candidate& candidate:collection.entries) {
-    const Error error = hashCandidate(documentRoot,candidate);
+Error hashCollection(
+    int documentRoot,
+    Collection& collection,
+    Result& result,
+    FailureStage stage
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    ,const std::filesystem::path& documentRootPath,
+    CandidateHashTestHook candidateHashHook,
+    CandidateDriftTestHook candidateDriftHook
+#endif
+    ) {
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+  bool candidateHashHookConsumed = false;
+  bool candidateDriftHookConsumed = false;
+#endif
+  for(std::size_t index=0u; index<collection.entries.size(); ++index) {
+    Candidate& candidate = collection.entries[index];
+    uint16_t candidateDriftCodeValue = 0u;
+    const Error error = hashCandidate(
+        documentRoot,candidate
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,&documentRootPath,static_cast<uint64_t>(index)+1u,stage,
+        candidateHashHook,&candidateHashHookConsumed,
+        candidateDriftHook,&candidateDriftHookConsumed
+#endif
+        ,&candidateDriftCodeValue
+        );
+    if(error==Error::FileChanged) {
+      result.failureStage = stage;
+      const uint64_t ordinal = static_cast<uint64_t>(index)+1u;
+      std::array<char,65> normalizedPathSha256{};
+      if(ordinal<=MaximumFileCount &&
+         hashNormalizedPath(
+             candidate.normalizedRelativePath,normalizedPathSha256)) {
+        result.candidateOrdinal = ordinal;
+        result.candidatePathSha256 = normalizedPathSha256;
+        if(isCandidateDriftCodeValid(candidateDriftCodeValue))
+          result.candidateDriftCode = candidateDriftCodeValue;
+        }
+      return error;
+      }
     if(error!=Error::None)
       return error;
     }
@@ -902,14 +1278,58 @@ const char* errorName(Error error) noexcept {
   return "unknown";
   }
 
+const char* failureStageName(FailureStage stage) noexcept {
+  switch(stage) {
+    case FailureStage::None: return "none";
+    case FailureStage::InitialResourceCollection:
+      return "initial-resource-collection";
+    case FailureStage::InitialSaveCollection:
+      return "initial-save-collection";
+    case FailureStage::ResourceHashing: return "resource-hashing";
+    case FailureStage::SaveHashing: return "save-hashing";
+    case FailureStage::RevalidationHook: return "revalidation-hook";
+    case FailureStage::PostHashResourceRecollection:
+      return "post-hash-resource-recollection";
+    case FailureStage::PostHashSaveRecollection:
+      return "post-hash-save-recollection";
+    case FailureStage::ResourceSnapshotComparison:
+      return "resource-snapshot-comparison";
+    case FailureStage::SaveSnapshotComparison:
+      return "save-snapshot-comparison";
+    case FailureStage::DocumentRootComparison:
+      return "document-root-comparison";
+    }
+  return "unknown";
+  }
+
 namespace {
 
 using RevalidationHook = bool (*)(
     const std::filesystem::path& documentRoot) noexcept;
 
+void setResultError(
+    Result& result, Error error,
+    FailureStage stage = FailureStage::None) noexcept {
+  result.error = error;
+  result.failureStage = error==Error::FileChanged
+      ? stage : FailureStage::None;
+  if(error!=Error::FileChanged ||
+     (stage!=FailureStage::ResourceHashing &&
+      stage!=FailureStage::SaveHashing)) {
+    result.candidateOrdinal = 0u;
+    result.candidatePathSha256 = {};
+    result.candidateDriftCode = 0u;
+    }
+  }
+
 Result createCanonicalManifestsImpl(
     const std::filesystem::path& documentRoot,
-    RevalidationHook revalidationHook) noexcept {
+    RevalidationHook revalidationHook
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+    ,CandidateHashTestHook candidateHashHook,
+    CandidateDriftTestHook candidateDriftHook
+#endif
+    ) noexcept {
   Result result;
   try {
     const std::string rootPath = documentRoot.string();
@@ -917,62 +1337,104 @@ Result createCanonicalManifestsImpl(
         rootPath.c_str(),
         O_RDONLY|O_DIRECTORY|O_NOFOLLOW|closeOnExecFlag()));
     if(!root) {
-      result.error = Error::InvalidDocumentRoot;
+      setResultError(result,Error::InvalidDocumentRoot);
       return result;
       }
     struct stat rootBefore{};
     if(::fstat(root.get(),&rootBefore)!=0 ||
        !S_ISDIR(rootBefore.st_mode)) {
-      result.error = Error::InvalidDocumentRoot;
+      setResultError(result,Error::InvalidDocumentRoot);
       return result;
       }
     if(!leafIsAbsent(root.get(),ResourceManifestFileName) ||
        !leafIsAbsent(root.get(),ProtectedSaveManifestFileName)) {
-      result.error = Error::Collision;
+      setResultError(result,Error::Collision);
       return result;
       }
 
     Collection resources;
     result.error = collectResources(root.get(),resources);
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::InitialResourceCollection;
     result.resourceFileCount = resources.entries.size();
     result.resourceTotalBytes = resources.totalBytes;
-    if(result.error!=Error::None)
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     Collection saves;
     result.error = collectProtectedSaves(root.get(),saves);
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::InitialSaveCollection;
     result.protectedSaveFileCount = saves.entries.size();
     result.protectedSaveTotalBytes = saves.totalBytes;
-    if(result.error!=Error::None)
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
-    result.error = hashCollection(root.get(),resources);
-    if(result.error!=Error::None)
+      }
+    result.error = hashCollection(
+        root.get(),resources,result,FailureStage::ResourceHashing
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,documentRoot,candidateHashHook,candidateDriftHook
+#endif
+        );
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
-    result.error = hashCollection(root.get(),saves);
-    if(result.error!=Error::None)
+      }
+    result.error = hashCollection(
+        root.get(),saves,result,FailureStage::SaveHashing
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+        ,documentRoot,candidateHashHook,candidateDriftHook
+#endif
+        );
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     if(revalidationHook!=nullptr && !revalidationHook(documentRoot)) {
-      result.error = Error::FileChanged;
+      setResultError(result,Error::FileChanged,FailureStage::RevalidationHook);
       return result;
       }
 
     Collection resourcesAfterHash;
     result.error = collectResources(root.get(),resourcesAfterHash);
-    if(result.error!=Error::None)
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::PostHashResourceRecollection;
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
+      }
     Collection savesAfterHash;
     result.error = collectProtectedSaves(root.get(),savesAfterHash);
-    if(result.error!=Error::None)
+    if(result.error==Error::FileChanged)
+      result.failureStage = FailureStage::PostHashSaveRecollection;
+    if(result.error!=Error::None) {
+      if(result.error!=Error::FileChanged)
+        result.failureStage = FailureStage::None;
       return result;
-    if(!sameCollectionSnapshot(resources,resourcesAfterHash) ||
-       !sameCollectionSnapshot(saves,savesAfterHash)) {
-      result.error = Error::FileChanged;
+      }
+    if(!sameCollectionSnapshot(resources,resourcesAfterHash)) {
+      setResultError(
+          result,Error::FileChanged,FailureStage::ResourceSnapshotComparison);
+      return result;
+      }
+    if(!sameCollectionSnapshot(saves,savesAfterHash)) {
+      setResultError(
+          result,Error::FileChanged,FailureStage::SaveSnapshotComparison);
       return result;
       }
 
     struct stat rootAfterHash{};
     if(::fstat(root.get(),&rootAfterHash)!=0 ||
        !sameStableStat(rootBefore,rootAfterHash)) {
-      result.error = Error::FileChanged;
+      setResultError(
+          result,Error::FileChanged,FailureStage::DocumentRootComparison);
       return result;
       }
 
@@ -981,12 +1443,14 @@ Result createCanonicalManifestsImpl(
     result.error = prepareResourceManifest(
         root.get(),resources,resourceManifest);
     if(result.error!=Error::None) {
+      result.failureStage = FailureStage::None;
       unlinkTemporary(root.get(),resourceManifest);
       return result;
       }
     result.error = prepareProtectedSaveManifest(
         root.get(),saves,saveManifest);
     if(result.error!=Error::None) {
+      result.failureStage = FailureStage::None;
       unlinkTemporary(root.get(),resourceManifest);
       unlinkTemporary(root.get(),saveManifest);
       return result;
@@ -994,14 +1458,16 @@ Result createCanonicalManifestsImpl(
     result.error = publishBoth(root.get(),resourceManifest,saveManifest);
     unlinkTemporary(root.get(),resourceManifest);
     unlinkTemporary(root.get(),saveManifest);
-    if(result.error!=Error::None)
+    if(result.error!=Error::None) {
+      result.failureStage = FailureStage::None;
       return result;
+      }
     result.resourceManifestSha256 = resourceManifest.sha256;
     result.protectedSaveManifestSha256 = saveManifest.sha256;
     return result;
     }
   catch(...) {
-    result.error = Error::OpenFailed;
+    setResultError(result,Error::OpenFailed);
     return result;
     }
   }
@@ -1010,7 +1476,12 @@ Result createCanonicalManifestsImpl(
 
 Result createCanonicalManifests(
     const std::filesystem::path& documentRoot) noexcept {
-  return createCanonicalManifestsImpl(documentRoot,nullptr);
+  return createCanonicalManifestsImpl(
+      documentRoot,nullptr
+#if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
+      ,nullptr,nullptr
+#endif
+      );
   }
 
 Result removeCanonicalManifests(
@@ -1081,8 +1552,11 @@ Result removeCanonicalManifests(
 #if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
 Result createCanonicalManifestsForTest(
     const std::filesystem::path& documentRoot,
-    RevalidationTestHook hook) noexcept {
-  return createCanonicalManifestsImpl(documentRoot,hook);
+    RevalidationTestHook hook,
+    CandidateHashTestHook candidateHashHook,
+    CandidateDriftTestHook candidateDriftHook) noexcept {
+  return createCanonicalManifestsImpl(
+      documentRoot,hook,candidateHashHook,candidateDriftHook);
   }
 #endif
 
@@ -1095,6 +1569,30 @@ namespace RendererIOSDeviceIntegrity {
 const char* errorName(Error error) noexcept {
   return error==Error::UnsupportedPlatform
       ? "unsupported-platform" : "unavailable";
+  }
+
+const char* failureStageName(FailureStage stage) noexcept {
+  switch(stage) {
+    case FailureStage::None: return "none";
+    case FailureStage::InitialResourceCollection:
+      return "initial-resource-collection";
+    case FailureStage::InitialSaveCollection:
+      return "initial-save-collection";
+    case FailureStage::ResourceHashing: return "resource-hashing";
+    case FailureStage::SaveHashing: return "save-hashing";
+    case FailureStage::RevalidationHook: return "revalidation-hook";
+    case FailureStage::PostHashResourceRecollection:
+      return "post-hash-resource-recollection";
+    case FailureStage::PostHashSaveRecollection:
+      return "post-hash-save-recollection";
+    case FailureStage::ResourceSnapshotComparison:
+      return "resource-snapshot-comparison";
+    case FailureStage::SaveSnapshotComparison:
+      return "save-snapshot-comparison";
+    case FailureStage::DocumentRootComparison:
+      return "document-root-comparison";
+    }
+  return "unknown";
   }
 
 Result createCanonicalManifests(
@@ -1114,4 +1612,34 @@ Result removeCanonicalManifests(
 }
 
 #endif
+
+namespace RendererIOSDeviceIntegrity {
+
+std::string formatFailureMessage(const Result& result) {
+  std::string message =
+      std::string("RendererIOS device integrity manifest failed: ")+
+      errorName(result.error);
+  if(result.error==Error::FileChanged) {
+    message += std::string(" stage=")+failureStageName(result.failureStage);
+    if(result.hasValidHashingCandidateDrift()) {
+      message += " candidate-ordinal="+std::to_string(result.candidateOrdinal);
+      message += std::string(" candidate-path-sha256=")+
+          result.candidatePathSha256.data();
+      static constexpr char Hex[] = "0123456789abcdef";
+      char encoded[5] = {
+        Hex[(result.candidateDriftCode>>12u)&0x0fu],
+        Hex[(result.candidateDriftCode>>8u)&0x0fu],
+        Hex[(result.candidateDriftCode>>4u)&0x0fu],
+        Hex[result.candidateDriftCode&0x0fu],
+        '\0',
+        };
+      message += " candidate-drift-code=";
+      message += encoded;
+      }
+    }
+  return message;
+  }
+
+}
+
 #endif

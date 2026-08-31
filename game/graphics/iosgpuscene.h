@@ -168,6 +168,10 @@ class IOSGPUScene final {
         const Tempest::Attachment& sceneHDR,
         const IOSLinearHDRProofNativeView& hdrProof,
         const IOSMultiply2CoverageNativeView& coverage) noexcept;
+    Report encodePreparedMultiply2Continuation(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        PreparedFrame& prepared,
+        const Tempest::Attachment& sceneHDR) noexcept;
 
   private:
     Report encodePreparedPhase(

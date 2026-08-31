@@ -27,6 +27,10 @@ printf '\n### CI contract: Verify Tempest Metal 2D copy contract\n'
 PYTHONDONTWRITEBYTECODE=1 python3 \
   ios/tests/test_tempest_metal_2d_copy_contract.py
 
+printf '\n### CI contract: Verify iOS scene lifecycle\n'
+PYTHONDONTWRITEBYTECODE=1 python3 \
+  ios/tests/test_ios_scene_lifecycle_contract.py
+
 scripts/verify_ios_linear_hdr.command
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_validate_linear_hdr_log.py
 PYTHONDONTWRITEBYTECODE=1 python3 ios/tests/test_linear_hdr_gpu_evidence.py
@@ -659,6 +663,8 @@ def validate_sources(
     expected_names = [
         "renderer-ios-base",
         "renderer-ios-off",
+        "renderer-ios-simulator-on",
+        "renderer-ios-simulator-fast",
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
@@ -797,6 +803,8 @@ def validate_sources(
             raise ValueError(suffix + " cache tuple drifted")
     build_names = [item["name"] for item in candidate_presets["buildPresets"]]
     if build_names != [
+        "renderer-ios-simulator-on",
+        "renderer-ios-simulator-fast",
         "renderer-ios-off",
         "renderer-ios-on",
         "renderer-ios-tile",
@@ -840,6 +848,14 @@ def validate_sources(
 
 
 validate_sources(cmake, presets, profile, local)
+
+
+def configure_preset(document: dict, name: str) -> dict:
+    return next(
+        item for item in document["configurePresets"] if item["name"] == name
+    )
+
+
 source_mutations = []
 for literal in cmake_contract[:8]:
     source_mutations.append(
@@ -854,55 +870,59 @@ for literal in multiply2_contract:
         (cmake.replace(literal, "E2B_MUTANT", 1), presets, profile, local)
     )
 mutated = deepcopy(presets)
-del mutated["configurePresets"][0]["cacheVariables"][
+del configure_preset(mutated, "renderer-ios-base")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ]
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-del mutated["configurePresets"][0]["cacheVariables"][
+del configure_preset(mutated, "renderer-ios-base")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE"
 ]
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][10]["binaryDir"] = (
+configure_preset(mutated, "renderer-ios-causal-none")["binaryDir"] = (
     "${sourceDir}/build/local-renderer-ios-causal-a"
 )
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][11]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-causal-a")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ] = "none"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][12]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-causal-b")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST"
 ] = "ON"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][10]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+configure_preset(mutated, "renderer-ios-causal-none")["environment"][
+    "PACKAGE_DEVICE_IPA"
+] = "1"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][0]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-base")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
 ] = "ON"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][5]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-hdr-triple")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
 ] = "OFF"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][8]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-multiply2-a-hdr")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE"
 ] = "none"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][9]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-multiply2-b-hdr")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE"
 ] = "causal-a"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][8]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+configure_preset(mutated, "renderer-ios-multiply2-a-hdr")["environment"][
+    "PACKAGE_DEVICE_IPA"
+] = "1"
 source_mutations.append((cmake, mutated, profile, local))
 source_mutations.append(
     (
@@ -4388,8 +4408,10 @@ grep -Fq 'material-pipelines=source-metadata-only pfx-pipelines=disabled' \
   game/graphics/shaders.cpp
 grep -Fq 'runtime_compilation_frame_source_growth=' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'An explicitly selected paired device may establish its CoreDevice/DDI' \
-  ios/device-test/run-smoke-test.sh
+grep -Fq 'if isinstance(current, dict) and current:' \
+  ios/device-test/preflight-usb-afc.py
+grep -Fq 'device.connection_type == "USB"' \
+  ios/device-test/preflight-usb-afc.py
 grep -Fq 'save runtime totals must remain exact 0/0/2' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'runtime compilation frame markers are not contiguous' \
@@ -4596,7 +4618,7 @@ grep -Fq 'new-game pipeline archive mode has no non-empty scene snapshot' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
   ios/patches/apply-patches.sh
-grep -Fq 'opengothic-ios-patch-stack-v15' \
+grep -Fq 'opengothic-ios-patch-stack-v19' \
   ios/patches/apply-patches.sh
 
 grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-9.binaryarchive' \
@@ -4660,7 +4682,7 @@ grep -Fq 'run_direct_phase corrupt corrupt' \
   ios/device-test/run-pipeline-archive-test.sh
 ! grep -Fq 'device copy to' \
   ios/device-test/run-pipeline-archive-test.sh
-grep -Fq 'device copy to --device "$DEVICE"' \
+grep -Fq 'run_bounded_afc_copy_to --device "$DEVICE_UDID"' \
   ios/device-test/run-smoke-test.sh
 ! grep -Fq -- '--remove-existing-content' \
   ios/device-test/run-pipeline-archive-test.sh
@@ -5173,13 +5195,29 @@ required = (
     ("alpha-pso-state",
      "game/graphics/iosgpuscene.mm",
      "alphaTestPipelineState = alphaTestPipelineOwner.relinquish();"),
-    ("additive-pso-and-depth-state",
+    ("additive-and-multiply2-pso-state",
      "game/graphics/iosgpuscene.mm",
      """additivePipelineState  = additivePipelineOwner.relinquish();
-      multiply2PipelineState = multiply2PipelineOwner.relinquish();
-      baseDepthState         = depthOwner.relinquish();
+      multiply2PipelineState = multiply2PipelineOwner.relinquish();"""),
+    ("optional-visibility-pso-state",
+     "game/graphics/iosgpuscene.mm",
+     """#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityPipelineState =
+          visibilityPipelineOwner.relinquish();
+#endif"""),
+    ("base-additive-and-multiply2-depth-state",
+     "game/graphics/iosgpuscene.mm",
+     """baseDepthState         = depthOwner.relinquish();
       additiveDepthState     = additiveDepthOwner.relinquish();
       multiply2DepthState    = multiply2DepthOwner.relinquish();"""),
+    ("optional-visibility-depth-states",
+     "game/graphics/iosgpuscene.mm",
+     """#if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
+      multiply2VisibilityRasterDepthState =
+          visibilityRasterDepthOwner.relinquish();
+      multiply2VisibilityStencilDepthState =
+          visibilityStencilDepthOwner.relinquish();
+#endif"""),
     ("alpha-fragment-descriptor-assignment",
      "game/graphics/iosgpuscene.mm",
      """pipelineDesc.fragmentFunction =
@@ -5357,8 +5395,9 @@ if missing:
         + ",".join(missing)
     )
 if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 4:
-    raise SystemExit("RendererIOS GPU path must create exactly four offline PSOs")
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 5:
+    raise SystemExit(
+        "RendererIOS GPU path must declare four production PSOs and one macro-guarded visibility PSO")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",
@@ -6641,7 +6680,7 @@ import re
 
 scene = Path("game/graphics/iosgpuscene.mm").read_text()
 bink = Path("game/graphics/iosgpubink.mm").read_text()
-start = scene.index("void IOSGPUScene::Impl::encodeMultiply2Causal(")
+start = scene.index("void IOSGPUScene::Impl::encodeMultiply2(")
 end_marker = "\n}\n#endif\n\nvoid IOSGPUScene::Impl::encodeLandscape("
 end = scene.index(end_marker, start) + len("\n}")
 causal = scene[start:end]
@@ -6653,9 +6692,9 @@ caller_end = scene.index(
 )
 caller = scene[caller_start:caller_end]
 bridge = """const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
-        impl->owner,encoder,&context,&Impl::encodeMultiply2Causal);"""
+        owner,encoder,&context,&Impl::encodeMultiply2);"""
 if scene.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1 or \
-   caller.count(bridge) != 1:
+   causal.count(bridge) != 1:
     raise SystemExit("Multiply2 command-buffer bridge call drift")
 allowed = {
     "id<MTLCommandBuffer>": 2,
@@ -7772,10 +7811,11 @@ test "$(grep -Fc 'echo "scenario=$SCENARIO"' \
   ios/device-test/run-smoke-test.sh)" -eq 2
 test "$(grep -Fc 'echo "save_slot=$SCENARIO_SAVE_SLOT"' \
   ios/device-test/run-smoke-test.sh)" -eq 2
-grep -Fq 'select_device_record()' ios/device-test/run-smoke-test.sh
-grep -Fq 'attempt=%d result=retry' ios/device-test/run-smoke-test.sh
-grep -Fq '((attempt < 5)) && sleep 1' ios/device-test/run-smoke-test.sh
-grep -Fq 'OPENGOTHIC_IOS_DEVICE_SELECTION_TEST_FAIL_FIRST' \
+grep -Fq 'run_usb_afc_preflight "${PREFLIGHT_BUNDLE_ARGUMENTS[@]}"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq -- '--json-output "$WORK/usb-afc-preflight.json"' \
+  ios/device-test/run-smoke-test.sh
+grep -Fq 'value.get("terminal") != "USB AFC PREFLIGHT PASS"' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'device_selection_attempts=' \
   ios/device-test/run-smoke-test.sh
@@ -7783,9 +7823,7 @@ grep -Fq 'device_selection_method=' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'copy_private_evidence_path "$WORK/device-selection.log"' \
   ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("interface") == "usb"' \
-  ios/device-test/run-smoke-test.sh
-grep -Fq 'd.get("hardwareProperties", {}).get("udid") in usb_udids' \
+grep -Fq 'copy_private_evidence_path "$WORK/usb-afc-preflight.json"' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'OpenGothic container has missing/invalid resources:' \
   ios/device-test/run-smoke-test.sh
@@ -7829,8 +7867,10 @@ expected_build_binding = source.index(
     '[[ "$EXPECTED_BUILD" == "$EXPECTED_SHA" ||')
 expected_fault_preflight = source.index(
     'grep -Fxq "RendererIOS configured fault mode=$EXPECTED_FAULT"')
-selection = source.index('DEVICE_RECORD="$(select_device_record)"')
 bundle = source.index('BUNDLE_ID="${OPENGOTHIC_IOS_BUNDLE_ID:-}"')
+preflight = source.index('if ! run_usb_afc_preflight')
+selection = source.index(
+    'IFS=$\'\\t\' read -r DEVICE DEVICE_UDID BUNDLE_ID <<<"$DEVICE_RECORD"')
 selection_evidence = source.index(
     'copy_private_evidence_path "$WORK/device-selection.log"')
 game_data_preflight = source.index(
@@ -7864,9 +7904,9 @@ pass_fault_namespace = source.index(
     'OUT="$(smoke_evidence_path pass')
 evidence_published = source.index('publish_evidence_path "$OUT"')
 result = source.index('echo "result=PASS"')
-if not expected_build_binding < expected_build_preflight < expected_fault_preflight < selection < bundle:
-    raise SystemExit("bounded device selection retry runs after app inspection")
-if not bundle < game_data_preflight < install:
+if not expected_build_binding < expected_build_preflight < expected_fault_preflight < bundle < preflight < selection:
+    raise SystemExit("mandatory USB AFC preflight is not before smoke selection")
+if not selection < game_data_preflight < install:
     raise SystemExit("game-data preflight does not fail before install")
 if not stopped < runtime_shell_oracle < runtime_fault_oracle < runtime_diagnostics < preview_fence_parser < preview_fence_summary < frame_fence_parser < frame_fence_summary < fault_parser < fault_summary < crash_sentinel < durable < final_crash_sentinel < pass_fault_namespace < evidence_published < result:
     raise SystemExit("device PASS is emitted before cleanup proof")
@@ -7972,10 +8012,10 @@ crash_function = source.split('capture_crash_state() {', 1)[1].split(
     '\npreserve_failure_evidence() {', 1
 )[0]
 crash_contract = (
-    'if ! run_bounded_device_file_query --device "$DEVICE"',
+    'if ! run_bounded_afc_file_query --device "$DEVICE_UDID"',
     'state="$(crash_listing_state "$listing")"',
     'if [[ "$state" == missing ]]',
-    'if ! xcrun devicectl device copy from --device "$DEVICE"',
+    'if ! run_bounded_afc_copy_from --device "$DEVICE_UDID"',
     'sha="$(shasum -a 256 "$destination"',
 )
 crash_positions = [crash_function.index(value) for value in crash_contract]

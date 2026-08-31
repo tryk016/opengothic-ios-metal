@@ -107,6 +107,101 @@ IOSMultiply2CoverageProofError validatePayload(
 
 }
 
+IOSMultiply2VisibilityDiagnostic iosClassifyMultiply2VisibilityDiagnostic(
+    uint64_t productionResult,
+    uint64_t rasterResult,
+    uint64_t stencilResult,
+    uint64_t clipClassValue,
+    bool canonicalCoverage) noexcept {
+  IOSMultiply2VisibilityDiagnostic result;
+  result.clipClass =
+      static_cast<IOSMultiply2VisibilityClipClass>(clipClassValue);
+  if(productionResult==IOSMultiply2VisibilityProductionSentinel ||
+     rasterResult==IOSMultiply2VisibilityRasterSentinel ||
+     stencilResult==IOSMultiply2VisibilityStencilSentinel)
+    return result;
+  if(clipClassValue!=
+         static_cast<uint64_t>(
+             IOSMultiply2VisibilityClipClass::Indeterminate) &&
+     clipClassValue!=
+         static_cast<uint64_t>(
+             IOSMultiply2VisibilityClipClass::DefinitelyOutside) &&
+     clipClassValue!=
+         static_cast<uint64_t>(
+             IOSMultiply2VisibilityClipClass::Intersects))
+    return result;
+
+  result.production = productionResult!=0u;
+  result.raster = rasterResult!=0u;
+  result.stencil = stencilResult!=0u;
+  if(canonicalCoverage &&
+     (!result.raster || !result.production || !result.stencil))
+    return result;
+  if((result.production && !result.raster) ||
+     (result.stencil && !result.production))
+    return result;
+  if(result.clipClass==
+       IOSMultiply2VisibilityClipClass::DefinitelyOutside) {
+    if(!result.production && !result.raster && !result.stencil)
+      result.classification =
+          IOSMultiply2VisibilityDiagnosticClass::DefinitelyOutsideFrustum;
+    return result;
+  }
+  if(!result.raster) {
+    result.classification =
+        IOSMultiply2VisibilityDiagnosticClass::NonRasterizedUnknown;
+    return result;
+  }
+  if(!result.production) {
+    result.classification =
+        IOSMultiply2VisibilityDiagnosticClass::AllDepthRejected;
+    return result;
+  }
+  if(!result.stencil) {
+    result.classification =
+        IOSMultiply2VisibilityDiagnosticClass::StencilWriteMissing;
+    return result;
+  }
+  result.classification = canonicalCoverage
+      ? IOSMultiply2VisibilityDiagnosticClass::CoverageResident
+      : IOSMultiply2VisibilityDiagnosticClass::StencilBlitOrReadbackLoss;
+  return result;
+}
+
+const char* iosMultiply2VisibilityClipClassName(
+    IOSMultiply2VisibilityClipClass value) noexcept {
+  switch(value) {
+    case IOSMultiply2VisibilityClipClass::Indeterminate:
+      return "indeterminate";
+    case IOSMultiply2VisibilityClipClass::DefinitelyOutside:
+      return "definitely-outside";
+    case IOSMultiply2VisibilityClipClass::Intersects:
+      return "intersects";
+  }
+  return "invalid";
+}
+
+const char* iosMultiply2VisibilityDiagnosticClassName(
+    IOSMultiply2VisibilityDiagnosticClass value) noexcept {
+  switch(value) {
+    case IOSMultiply2VisibilityDiagnosticClass::DiagnosticInvalid:
+      return "diagnostic-invalid";
+    case IOSMultiply2VisibilityDiagnosticClass::DefinitelyOutsideFrustum:
+      return "definitely-outside-frustum";
+    case IOSMultiply2VisibilityDiagnosticClass::NonRasterizedUnknown:
+      return "non-rasterized-unknown";
+    case IOSMultiply2VisibilityDiagnosticClass::AllDepthRejected:
+      return "all-depth-rejected";
+    case IOSMultiply2VisibilityDiagnosticClass::StencilWriteMissing:
+      return "stencil-write-missing";
+    case IOSMultiply2VisibilityDiagnosticClass::StencilBlitOrReadbackLoss:
+      return "stencil-blit-or-readback-loss";
+    case IOSMultiply2VisibilityDiagnosticClass::CoverageResident:
+      return "coverage-resident";
+  }
+  return "diagnostic-invalid";
+}
+
 bool iosBuildMultiply2CoverageProofV1(
     const IOSMultiply2CoverageProofMetadata& metadata,
     std::span<const std::byte> payload,

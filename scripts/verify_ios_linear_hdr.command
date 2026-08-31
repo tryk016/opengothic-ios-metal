@@ -514,6 +514,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
 import ast
 import json
 import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -884,8 +885,29 @@ def require_call(node: ast.AST, name: str, count: int = 1) -> list[ast.Call]:
     return matches
 
 
+def require_json_documents_binding(node: ast.AST, names: tuple[str, ...],
+                                   expected_count: int, label: str) -> None:
+    call = require_call(node, "_json_documents")[0]
+    if len(call.args) != 3 or ast_name(call.args[0]) != "raw" or \
+            ast_name(call.args[1]) != "label" or \
+            ast.literal_eval(call.args[2]) != expected_count:
+        raise ValueError(f"{label} JSON call changed")
+    assignments = [child for child in ast.walk(node)
+                   if isinstance(child, ast.Assign) and child.value is call]
+    if len(assignments) != 1 or len(assignments[0].targets) != 1 or \
+            not isinstance(assignments[0].targets[0], ast.Tuple) or \
+            tuple(ast_name(item) for item in assignments[0].targets[0].elts) != names:
+        raise ValueError(f"{label} JSON result binding changed")
+
+
 def require_unparsed(node: ast.AST, fragments: tuple[str, ...], label: str) -> str:
     source = ast.unparse(node)
+    # Python 3.9 parenthesizes tuple assignment targets while newer versions
+    # render the same AST without parentheses. Keep source-fragment checks
+    # stable across both renderings; structural tuple checks remain separate.
+    source = re.sub(
+        r"(?m)^(\s*)\(([_A-Za-z]\w*(?:,\s*[_A-Za-z]\w*)+)\)(\s*=)",
+        r"\1\2\3", source)
     for fragment in fragments:
         if fragment not in source:
             raise ValueError(f"{label} changed: {fragment}")
@@ -981,10 +1003,31 @@ def validate_validator(candidate: str) -> None:
         "OTHER_SESSIONS_RE.fullmatch(lines[index][:-1])",
         "count == 1 and noun == 'session' or (count > 1 and noun == 'sessions')",
         "lines[index] == f'gpudebug -s {session} -c <command> to send commands.\\n'",
-        "documents, _ = _json_documents(payload, 'gpudebug open payload', 1)",
         "_validate_open_root(documents[0])",
         "return session",
     ), "strict open transcript parser")
+    open_json_call = require_call(open_parser, "_json_documents")[0]
+    if (
+        len(open_json_call.args) != 3
+        or ast_name(open_json_call.args[0]) != "payload"
+        or ast.literal_eval(open_json_call.args[1]) != "gpudebug open payload"
+        or ast.literal_eval(open_json_call.args[2]) != 1
+    ):
+        raise ValueError("strict open transcript JSON call changed")
+    open_json_assignments = [
+        child for child in ast.walk(open_parser)
+        if isinstance(child, ast.Assign) and child.value is open_json_call
+    ]
+    if len(open_json_assignments) != 1:
+        raise ValueError("strict open transcript JSON assignment changed")
+    open_json_targets = open_json_assignments[0].targets
+    if (
+        len(open_json_targets) != 1
+        or not isinstance(open_json_targets[0], ast.Tuple)
+        or [ast_name(item) for item in open_json_targets[0].elts]
+        != ["documents", "_"]
+    ):
+        raise ValueError("strict open transcript JSON result binding changed")
     open_root = function_node(tree, "_validate_open_root")
     require_unparsed(open_root, (
         "exact_object(document, ('children', 'totalCount'), 'gpudebug open root')",
@@ -1079,14 +1122,18 @@ def validate_validator(candidate: str) -> None:
     if "json.loads" in documents_source:
         raise ValueError("gpudebug parser retains a single-json shortcut")
     navigable = function_node(tree, "_navigable_json")
+    require_json_documents_binding(
+        navigable, ("documents", "fragments"), 2,
+        "go/list multi-document parser")
     require_unparsed(navigable, (
-        "documents, fragments = _json_documents(raw, label, 2)",
         "fragments[0] == fragments[1] and documents[0] == documents[1]",
         "return documents[1]",
     ), "go/list multi-document parser")
     direct_info = function_node(tree, "_direct_info_json")
+    require_json_documents_binding(
+        direct_info, ("documents", "_"), 1,
+        "direct-info single-document parser")
     require_unparsed(direct_info, (
-        "documents, _ = _json_documents(raw, label, 1)",
         "return documents[0]",
     ), "direct-info single-document parser")
 
@@ -1340,6 +1387,10 @@ validator_mutations = (
     validator.replace(
         "    match = SESSION_RE.fullmatch(lines[0][:-1])\n",
         "    match = SESSION_RE.search(text)  # fullmatch(lines[0][:-1])\n", 1),
+    validator.replace(
+        '    documents, _ = _json_documents(payload, "gpudebug open payload", 1)\n',
+        '    documents, _ = _json_documents(payload, "gpudebug open payload", 2)\n',
+        1),
     validator.replace(
         "    require(raw == expected, \"gpudebug terminate transcript is not byte-exact\")\n",
         "    require(True, \"gpudebug terminate transcript is not byte-exact\")\n",

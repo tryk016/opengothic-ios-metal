@@ -76,8 +76,8 @@ bool reflectionMatches(MTLRenderPipelineReflection* reflection) noexcept {
       if(binding.access!=MTLBindingAccessReadOnly)
         return false;
       id<MTLBufferBinding> buffer = (id<MTLBufferBinding>)binding;
-      if(buffer.bufferDataSize!=sizeof(IOSToneResolveConstants) ||
-         buffer.bufferAlignment!=alignof(IOSToneResolveConstants))
+      if(!iosToneResolveConstantsReflectionLayoutMatches(
+           buffer.bufferDataSize,buffer.bufferAlignment))
         return false;
       continue;
       }

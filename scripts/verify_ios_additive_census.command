@@ -63,7 +63,7 @@ occurrences: list[tuple[Path, int, str]] = []
 for path in sorted(Path("game").rglob("*")):
     if path.suffix not in (".h", ".hpp", ".cpp", ".mm"):
         continue
-    stack: list[bool | None] = []
+    stack = []
     for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         directive = line.lstrip()
         if directive.startswith("#ifdef "):

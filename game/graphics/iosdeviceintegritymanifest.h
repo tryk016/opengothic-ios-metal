@@ -7,6 +7,7 @@
 
 #include <array>
 #include <filesystem>
+#include <string>
 #include <string_view>
 
 namespace RendererIOSDeviceIntegrity {
@@ -105,8 +106,49 @@ enum class Error : uint8_t {
   PublishFailed,
   };
 
+// Diagnostics-only detail for the fail-closed FileChanged result. This is
+// intentionally broad: it identifies the integrity phase without exposing
+// filesystem-specific internals or changing the manifest format.
+enum class FailureStage : uint8_t {
+  None,
+  InitialResourceCollection,
+  InitialSaveCollection,
+  ResourceHashing,
+  SaveHashing,
+  RevalidationHook,
+  PostHashResourceRecollection,
+  PostHashSaveRecollection,
+  ResourceSnapshotComparison,
+  SaveSnapshotComparison,
+  DocumentRootComparison,
+  };
+
+constexpr bool isCandidateDriftCodeValid(uint16_t code) noexcept {
+  const uint16_t checkpoint = static_cast<uint16_t>(code>>12u);
+  const uint16_t detail = static_cast<uint16_t>(code&0x0fffu);
+  switch(checkpoint) {
+    case 1u:
+      return detail==0x800u || (detail>=0x001u && detail<=0x03fu) ||
+          detail==0x100u || detail==0x200u || detail==0x400u;
+    case 2u:
+    case 3u:
+    case 4u:
+    case 6u:
+    case 7u:
+      return detail==0x800u || (detail>=0x001u && detail<=0x03fu);
+    case 5u:
+      return detail==0x008u;
+    default:
+      return false;
+    }
+  }
+
 struct Result final {
   Error error = Error::None;
+  FailureStage failureStage = FailureStage::None;
+  uint64_t candidateOrdinal = 0u;
+  std::array<char,65> candidatePathSha256{};
+  uint16_t candidateDriftCode = 0u;
   uint64_t resourceFileCount = 0u;
   uint64_t resourceTotalBytes = 0u;
   uint64_t protectedSaveFileCount = 0u;
@@ -117,9 +159,36 @@ struct Result final {
   constexpr bool success() const noexcept {
     return error==Error::None;
     }
+
+  constexpr bool hasHashingCandidateIdentity() const noexcept {
+    if(error!=Error::FileChanged ||
+       (failureStage!=FailureStage::ResourceHashing &&
+        failureStage!=FailureStage::SaveHashing) ||
+       candidateOrdinal==0u || candidateOrdinal>MaximumFileCount ||
+       candidatePathSha256[64]!='\0')
+      return false;
+    const uint64_t collectionFileCount =
+        failureStage==FailureStage::ResourceHashing
+        ? resourceFileCount : protectedSaveFileCount;
+    if(candidateOrdinal>collectionFileCount)
+      return false;
+    for(std::size_t index=0u; index<64u; ++index) {
+      const char value = candidatePathSha256[index];
+      if(!((value>='0' && value<='9') || (value>='a' && value<='f')))
+        return false;
+      }
+    return true;
+    }
+
+  constexpr bool hasValidHashingCandidateDrift() const noexcept {
+    return hasHashingCandidateIdentity() &&
+        isCandidateDriftCodeValid(candidateDriftCode);
+    }
   };
 
 const char* errorName(Error error) noexcept;
+const char* failureStageName(FailureStage stage) noexcept;
+std::string formatFailureMessage(const Result& result);
 
 // documentRoot is the application Documents directory. The function is
 // host-testable and has no UIKit/Objective-C types in its public contract.
@@ -138,12 +207,56 @@ Result removeCanonicalManifests(
 #if defined(OPENGOTHIC_RENDERER_IOS_DEVICE_INTEGRITY_HOST_TEST)
 using RevalidationTestHook = bool (*)(
     const std::filesystem::path& documentRoot) noexcept;
+enum class CandidateHashTestHookResult : uint8_t {
+  NotSelected,
+  Mutated,
+  Failed,
+  };
+using CandidateHashTestHook = CandidateHashTestHookResult (*)(
+    const std::filesystem::path& documentRoot,
+    std::string_view normalizedRelativePath,
+    uint64_t candidateOrdinal,
+    FailureStage stage) noexcept;
+
+enum class CandidateDriftTestPoint : uint8_t {
+  AncestorPathStat,
+  AncestorKind,
+  AncestorOpen,
+  AncestorFdStat,
+  PathBeforeStat,
+  FdBeforeStat,
+  PreReadStat,
+  ReadLength,
+  FdAfterStat,
+  PathAfterStat,
+  };
+using CandidateDriftTestHookPoint = CandidateDriftTestPoint;
+
+enum class CandidateDriftTestHookResult : uint8_t {
+  NotSelected,
+  Mutated,
+  ForceFailure,
+  Failed,
+  };
+using CandidateDriftHookResult = CandidateDriftTestHookResult;
+using CandidateDriftTestHook = CandidateDriftTestHookResult (*)(
+    const std::filesystem::path& documentRoot,
+    std::string_view normalizedRelativePath,
+    uint64_t candidateOrdinal,
+    FailureStage stage,
+    CandidateDriftTestPoint point) noexcept;
 
 // Runs the hook after all payload hashes and before the mandatory exact-tree
-// revalidation. This entry point is absent from production builds.
+// revalidation. The candidate hook runs immediately before the selected
+// candidate's stable open/read. Ordinals restart at one for each collection.
+// NotSelected advances to the next candidate, Mutated consumes the hook for
+// that collection, and Failed returns OpenFailed without hashing or detail.
+// This entry point and hook domain are absent from production builds.
 Result createCanonicalManifestsForTest(
     const std::filesystem::path& documentRoot,
-    RevalidationTestHook hook) noexcept;
+    RevalidationTestHook hook,
+    CandidateHashTestHook candidateHashHook = nullptr,
+    CandidateDriftTestHook candidateDriftHook = nullptr) noexcept;
 #endif
 
 }
