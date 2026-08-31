@@ -663,6 +663,8 @@ def validate_sources(
     expected_names = [
         "renderer-ios-base",
         "renderer-ios-off",
+        "renderer-ios-simulator-on",
+        "renderer-ios-simulator-fast",
         "renderer-ios-on",
         "renderer-ios-tile",
         "renderer-ios-forward",
@@ -801,6 +803,8 @@ def validate_sources(
             raise ValueError(suffix + " cache tuple drifted")
     build_names = [item["name"] for item in candidate_presets["buildPresets"]]
     if build_names != [
+        "renderer-ios-simulator-on",
+        "renderer-ios-simulator-fast",
         "renderer-ios-off",
         "renderer-ios-on",
         "renderer-ios-tile",
@@ -844,6 +848,14 @@ def validate_sources(
 
 
 validate_sources(cmake, presets, profile, local)
+
+
+def configure_preset(document: dict, name: str) -> dict:
+    return next(
+        item for item in document["configurePresets"] if item["name"] == name
+    )
+
+
 source_mutations = []
 for literal in cmake_contract[:8]:
     source_mutations.append(
@@ -858,55 +870,59 @@ for literal in multiply2_contract:
         (cmake.replace(literal, "E2B_MUTANT", 1), presets, profile, local)
     )
 mutated = deepcopy(presets)
-del mutated["configurePresets"][0]["cacheVariables"][
+del configure_preset(mutated, "renderer-ios-base")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ]
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-del mutated["configurePresets"][0]["cacheVariables"][
+del configure_preset(mutated, "renderer-ios-base")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE"
 ]
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][10]["binaryDir"] = (
+configure_preset(mutated, "renderer-ios-causal-none")["binaryDir"] = (
     "${sourceDir}/build/local-renderer-ios-causal-a"
 )
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][11]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-causal-a")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE"
 ] = "none"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][12]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-causal-b")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST"
 ] = "ON"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][10]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+configure_preset(mutated, "renderer-ios-causal-none")["environment"][
+    "PACKAGE_DEVICE_IPA"
+] = "1"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][0]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-base")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
 ] = "ON"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][5]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-hdr-triple")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE"
 ] = "OFF"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][8]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-multiply2-a-hdr")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_MODE"
 ] = "none"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][9]["cacheVariables"][
+configure_preset(mutated, "renderer-ios-multiply2-b-hdr")["cacheVariables"][
     "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE"
 ] = "causal-a"
 source_mutations.append((cmake, mutated, profile, local))
 mutated = deepcopy(presets)
-mutated["configurePresets"][8]["environment"]["PACKAGE_DEVICE_IPA"] = "1"
+configure_preset(mutated, "renderer-ios-multiply2-a-hdr")["environment"][
+    "PACKAGE_DEVICE_IPA"
+] = "1"
 source_mutations.append((cmake, mutated, profile, local))
 source_mutations.append(
     (
