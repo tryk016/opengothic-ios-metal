@@ -22,6 +22,7 @@ IOS_WORKFLOW = REPO / ".github" / "workflows" / "ios.yml"
 METALFX_WORKFLOW = REPO / ".github" / "workflows" / "ios-metalfx-temporal.yml"
 CONTRACTS = REPO / "scripts" / "ci_contracts.command"
 CAUSAL_CONTRACTS = REPO / "scripts" / "ci_causal_contracts.command"
+SHADING_CONTRACTS = REPO / "scripts" / "ci_shading_contracts.command"
 PROFILE = REPO / "scripts" / "ci_build_profile.command"
 PRESETS = REPO / "CMakePresets.json"
 CMAKE = REPO / "CMakeLists.txt"
@@ -111,6 +112,7 @@ def validate_workflow(source: str) -> None:
         "classifier",
         "contracts",
         "causal-contracts",
+        "shading-contracts",
         "build-off",
         "build-on",
         "build-tile",
@@ -143,7 +145,7 @@ def validate_workflow(source: str) -> None:
         "if: needs.classifier.outputs.build_additive_b_hdr == 'true'",
         "if: needs.classifier.outputs.build_multiply2_a_hdr == 'true'",
         "if: needs.classifier.outputs.build_multiply2_b_hdr == 'true'",
-        "needs: [classifier, contracts, causal-contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr, build-multiply2-a-hdr, build-multiply2-b-hdr]",
+        "needs: [classifier, contracts, causal-contracts, shading-contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr, build-multiply2-a-hdr, build-multiply2-b-hdr]",
         "if: always()",
         "scripts/ci_verification.py aggregate",
         "--classifier-result \"${{ needs.classifier.result }}\"",
@@ -151,6 +153,8 @@ def validate_workflow(source: str) -> None:
         "--result-contracts \"${{ needs.contracts.result }}\"",
         "--expected-causal-contracts \"${{ needs.classifier.outputs.contracts }}\"",
         "--result-causal-contracts \"${{ needs.causal-contracts.result }}\"",
+        "--expected-shading-contracts \"${{ needs.classifier.outputs.contracts }}\"",
+        "--result-shading-contracts \"${{ needs.shading-contracts.result }}\"",
         "--expected-build-off \"${{ needs.classifier.outputs.build_off }}\"",
         "--result-build-off \"${{ needs.build-off.result }}\"",
         "--expected-build-on \"${{ needs.classifier.outputs.build_on }}\"",
@@ -220,11 +224,26 @@ def validate_workflow(source: str) -> None:
             raise ValueError(
                 "causal-contracts is not self-contained: " + line.strip()
             )
+    shading_scope = workflow_job(source, "shading-contracts")
+    for line in (
+        "    needs: classifier",
+        "    if: needs.classifier.result == 'success' && needs.classifier.outputs.contracts == 'true'",
+        "        uses: actions/checkout@v5",
+        "          fetch-depth: 0",
+        "          submodules: recursive",
+        "        run: brew install cmake glslang ripgrep",
+        "        run: scripts/ci_shading_contracts.command",
+    ):
+        if shading_scope.splitlines().count(line) != 1:
+            raise ValueError(
+                "shading-contracts is not self-contained: " + line.strip()
+            )
 
 
 def validate_extracted_oracles(
     contracts: str,
     causal_contracts: str,
+    shading_contracts: str,
     profile: str,
 ) -> None:
     local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
@@ -237,6 +256,7 @@ def validate_extracted_oracles(
         if (
             policy_oracle in contracts
             or policy_oracle in causal_contracts
+            or policy_oracle in shading_contracts
             or policy_oracle in profile
         ):
             raise ValueError(f"policy oracle is duplicated outside classifier: {policy_oracle}")
@@ -268,28 +288,56 @@ def validate_extracted_oracles(
         "Assert legacy renderer is not in the target",
         "Verify RendererIOS UI automation contract",
     )
+    shading_names = {
+        "Verify P2.5a shading prototype plan contract",
+        "Verify P2.5b2a1 shading prototype Tile self-test profile",
+        "Verify P2.5c1b1 shading prototype Forward self-test profile",
+    }
     for name in contract_names:
         marker = f"### CI contract: {name}"
-        if contracts.count(marker) != 1:
+        target = shading_contracts if name in shading_names else contracts
+        if target.count(marker) != 1:
             raise ValueError(f"CI-only oracle is not extracted exactly once: {name}")
         if marker in profile:
             raise ValueError(f"CI-only oracle leaked into profile builds: {name}")
         if marker in causal_contracts:
             raise ValueError(f"ordinary CI oracle leaked into causal shard: {name}")
+        other = contracts if name in shading_names else shading_contracts
+        if marker in other:
+            raise ValueError(f"CI oracle leaked across main/shading shards: {name}")
     causal_marker = (
         "### CI contract: Verify P2.1c3b3c causal runtime and native order"
     )
     if causal_contracts.count(causal_marker) != 1:
         raise ValueError("causal shard boundary marker drifted")
-    if causal_marker in contracts or causal_marker in profile:
+    if (
+        causal_marker in contracts
+        or causal_marker in shading_contracts
+        or causal_marker in profile
+    ):
         raise ValueError("causal shard boundary leaked outside its script")
     causal_terminal = "RendererIOS causal contracts passed exactly once"
     if causal_contracts.count(causal_terminal) != 1:
         raise ValueError("causal shard terminal drifted")
-    if causal_terminal in contracts or causal_terminal in profile:
+    if (
+        causal_terminal in contracts
+        or causal_terminal in shading_contracts
+        or causal_terminal in profile
+    ):
         raise ValueError("causal shard terminal leaked outside its script")
     if causal_contracts.count("bash ios/patches/apply-patches.sh") != 1:
         raise ValueError("causal shard Tempest verifier is not exact")
+    shading_terminal = "RendererIOS shading contracts passed exactly once"
+    if shading_contracts.count(shading_terminal) != 1:
+        raise ValueError("shading shard terminal drifted")
+    if (
+        shading_terminal in contracts
+        or shading_terminal in causal_contracts
+        or shading_terminal in profile
+    ):
+        raise ValueError("shading shard terminal leaked outside its script")
+    if shading_contracts.count("bash ios/patches/apply-patches.sh") != 1:
+        raise ValueError("shading shard Tempest verifier is not exact")
     for name in (
         "Build iOS Release",
         "Verify P2.6b1 final weak MetalFX dependency",
@@ -1563,6 +1611,7 @@ def test_aggregation() -> None:
     expected = {
         "contracts": True,
         "causal_contracts": True,
+        "shading_contracts": True,
         "build_off": True,
         "build_on": False,
         "build_tile": True,
@@ -1575,6 +1624,7 @@ def test_aggregation() -> None:
     passing = {
         "contracts": "success",
         "causal_contracts": "success",
+        "shading_contracts": "success",
         "build_off": "success",
         "build_on": "skipped",
         "build_tile": "success",
@@ -1602,6 +1652,17 @@ def test_aggregation() -> None:
             "success",
             unexpected_causal,
             inconsistent_causal,
+        )
+    )
+    skipped_shading = dict(passing, shading_contracts="skipped")
+    expect_error(lambda: CI.aggregate("success", expected, skipped_shading))
+    unexpected_shading = dict(expected, shading_contracts=False)
+    inconsistent_shading = dict(passing, shading_contracts="skipped")
+    expect_error(
+        lambda: CI.aggregate(
+            "success",
+            unexpected_shading,
+            inconsistent_shading,
         )
     )
     unexpected = dict(passing, build_on="success")
@@ -1684,10 +1745,16 @@ def test_workflow_contract() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     contracts = CONTRACTS.read_text(encoding="utf-8")
     causal_contracts = CAUSAL_CONTRACTS.read_text(encoding="utf-8")
+    shading_contracts = SHADING_CONTRACTS.read_text(encoding="utf-8")
     profile = PROFILE.read_text(encoding="utf-8")
     context = IOS_METAL_CONTEXT.read_text(encoding="utf-8")
     validate_workflow(workflow)
-    validate_extracted_oracles(contracts, causal_contracts, profile)
+    validate_extracted_oracles(
+        contracts,
+        causal_contracts,
+        shading_contracts,
+        profile,
+    )
     validate_clear_only_admission_contract(contracts, context)
     mailbox_mutation = replace_once(
         context,
@@ -1753,6 +1820,22 @@ def test_workflow_contract() -> None:
             '--result-causal-contracts "${{ needs.causal-contracts.result }}"',
             '--result-causal-contracts "skipped"',
         ),
+        replace_once(
+            workflow,
+            "  shading-contracts:",
+            "  shading-contracts-removed:",
+        ),
+        replace_once_in_job(
+            workflow,
+            "shading-contracts",
+            "        run: scripts/ci_shading_contracts.command",
+            "        run: true",
+        ),
+        replace_once(
+            workflow,
+            '--result-shading-contracts "${{ needs.shading-contracts.result }}"',
+            '--result-shading-contracts "skipped"',
+        ),
     )
     killed = 0
     for candidate in mutations:
@@ -1762,7 +1845,7 @@ def test_workflow_contract() -> None:
             killed += 1
         else:
             raise AssertionError("workflow mutation survived")
-    assert killed == 10
+    assert killed == 13
     extraction_mutations = (
         (
             replace_once(
@@ -1867,6 +1950,7 @@ def test_workflow_contract() -> None:
             validate_extracted_oracles(
                 candidate_contracts,
                 causal_contracts,
+                shading_contracts,
                 candidate_profile,
             )
         except ValueError:
@@ -1892,12 +1976,39 @@ def test_workflow_contract() -> None:
     )
     for candidate_causal in causal_extraction_mutations:
         try:
-            validate_extracted_oracles(contracts, candidate_causal, profile)
+            validate_extracted_oracles(
+                contracts,
+                candidate_causal,
+                shading_contracts,
+                profile,
+            )
         except ValueError:
             extraction_killed += 1
         else:
             raise AssertionError("causal shard extraction mutation survived")
-    assert extraction_killed == 15
+    shading_extraction_mutations = tuple(
+        shading_contracts.replace(marker, "SHADING_MARKER_REMOVED", 1)
+        for marker in (
+            "### CI contract: Verify P2.5a shading prototype plan contract",
+            "### CI contract: Verify P2.5b2a1 shading prototype Tile self-test profile",
+            "### CI contract: Verify P2.5c1b1 shading prototype Forward self-test profile",
+            "RendererIOS shading contracts passed exactly once",
+            "bash ios/patches/apply-patches.sh",
+        )
+    )
+    for candidate_shading in shading_extraction_mutations:
+        try:
+            validate_extracted_oracles(
+                contracts,
+                causal_contracts,
+                candidate_shading,
+                profile,
+            )
+        except ValueError:
+            extraction_killed += 1
+        else:
+            raise AssertionError("shading shard extraction mutation survived")
+    assert extraction_killed == 20
 
 
 def test_checkout_action_runtime_contract() -> None:
@@ -1936,6 +2047,7 @@ def test_checkout_action_runtime_contract() -> None:
 
 def test_contract_profile_build_deduplication() -> None:
     contracts = CONTRACTS.read_text(encoding="utf-8")
+    shading_contracts = SHADING_CONTRACTS.read_text(encoding="utf-8")
     profile = PROFILE.read_text(encoding="utf-8")
     workflow = WORKFLOW.read_text(encoding="utf-8")
     tile_build = 'cmake --build "$TILE_BUILD" --config Release -- \\\n'
@@ -1955,8 +2067,9 @@ def test_contract_profile_build_deduplication() -> None:
         candidate_profile: str,
         candidate_workflow: str,
     ) -> None:
+        contract_sources = candidate_contracts + "\n" + shading_contracts
         for duplicate in (tile_build, forward_build):
-            if duplicate in candidate_contracts:
+            if duplicate in contract_sources:
                 raise ValueError("contracts job duplicates a profile build")
         for retained in (
             "configure_profile off OFF",
@@ -1965,7 +2078,7 @@ def test_contract_profile_build_deduplication() -> None:
             'cmake --preset renderer-ios-forward -B "$FORWARD_BUILD"',
             'FORWARD_PROJECT="$FORWARD_BUILD/Gothic2Notr.xcodeproj/project.pbxproj"',
         ):
-            if candidate_contracts.count(retained) != 1:
+            if contract_sources.count(retained) != 1:
                 raise ValueError("profile source/PBX contract drifted: " + retained)
         build_scope = candidate_profile.split(
             "### CI profile Build iOS Release", 1
@@ -1995,10 +2108,10 @@ def test_contract_profile_build_deduplication() -> None:
             contracts,
             profile,
             workflow.replace(
-                "needs: [classifier, contracts, causal-contracts, build-off, build-on, build-tile, "
+                "needs: [classifier, contracts, causal-contracts, shading-contracts, build-off, build-on, build-tile, "
                 "build-forward, build-additive-a-hdr, build-additive-b-hdr, "
                 "build-multiply2-a-hdr, build-multiply2-b-hdr]",
-                "needs: [classifier, contracts, causal-contracts, build-off, build-on, build-forward, "
+                "needs: [classifier, contracts, causal-contracts, shading-contracts, build-off, build-on, build-forward, "
                 "build-additive-a-hdr, build-additive-b-hdr, "
                 "build-multiply2-a-hdr, build-multiply2-b-hdr]",
                 1,
@@ -3646,7 +3759,7 @@ def main() -> None:
     print(
         "RendererIOS CI verification tests passed: "
         "15 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
-        "10 workflow mutations, 15 extraction/profile mutations, "
+        "13 workflow mutations, 20 extraction/profile mutations, "
         "3 checkout runtime mutations, "
         "7 profile-build dedup mutations, "
         "7 additive-configure dedup mutations, "

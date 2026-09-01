@@ -26,7 +26,12 @@ PROFILE_OUTPUTS = {
     "build_multiply2_a_hdr": "build-multiply2-a-hdr",
     "build_multiply2_b_hdr": "build-multiply2-b-hdr",
 }
-AGGREGATE_JOBS = ("contracts", "causal_contracts", *PROFILE_OUTPUTS)
+AGGREGATE_JOBS = (
+    "contracts",
+    "causal_contracts",
+    "shading_contracts",
+    *PROFILE_OUTPUTS,
+)
 RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
 
 
@@ -264,9 +269,14 @@ def aggregate(
         )
     if set(expected) != set(actual):
         raise CIVerificationError("expected and actual job sets differ")
-    if expected.get("contracts") != expected.get("causal_contracts"):
+    contract_shards = {
+        expected.get("contracts"),
+        expected.get("causal_contracts"),
+        expected.get("shading_contracts"),
+    }
+    if len(contract_shards) != 1:
         raise CIVerificationError(
-            "contracts and causal-contracts must be required together"
+            "main, causal and shading contracts must be required together"
         )
     failures: list[str] = []
     for name in sorted(expected):
