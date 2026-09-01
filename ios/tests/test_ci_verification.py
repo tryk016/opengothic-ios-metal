@@ -1906,6 +1906,67 @@ def test_contract_profile_build_deduplication() -> None:
     assert killed == 7
 
 
+def test_contract_additive_configure_deduplication() -> None:
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    profile = PROFILE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    duplicate_loop = "for additive_profile in additive-a-hdr additive-b-hdr; do"
+    invalid_gate = "expect_additive_contract_configure_failure() {"
+    membership_terminal = (
+        "RendererIOS Additive source membership oracle: mutations-killed=4"
+    )
+    profile_configure = "# CI_PROFILE_CONFIGURE_BEGIN"
+    profile_pbx = "RendererIOS blend causal PBX oracle: additive-mode="
+    profile_binary = "RendererIOS blend binary marker oracle: profile="
+
+    def validate(
+        candidate_contracts: str,
+        candidate_profile: str,
+        candidate_workflow: str,
+    ) -> None:
+        if duplicate_loop in candidate_contracts:
+            raise ValueError("contracts job duplicates Additive configure")
+        for retained in (invalid_gate, membership_terminal):
+            if candidate_contracts.count(retained) != 1:
+                raise ValueError("retained Additive contract drifted: " + retained)
+        if "RendererIOS Additive cache oracle: profiles=2" in candidate_contracts:
+            raise ValueError("removed Additive cache/PBX duplicate returned")
+        for retained in (profile_configure, profile_pbx, profile_binary):
+            if candidate_profile.count(retained) != 1:
+                raise ValueError("dedicated Additive profile proof drifted: " + retained)
+        validate_workflow(candidate_workflow)
+
+    validate(contracts, profile, workflow)
+    mutations = (
+        (contracts + "\n" + duplicate_loop, profile, workflow),
+        (contracts.replace(invalid_gate, "", 1), profile, workflow),
+        (contracts.replace(membership_terminal, "", 1), profile, workflow),
+        (contracts, profile.replace(profile_configure, "", 1), workflow),
+        (contracts, profile.replace(profile_pbx, "", 1), workflow),
+        (contracts, profile.replace(profile_binary, "", 1), workflow),
+        (
+            contracts,
+            profile,
+            workflow.replace(
+                "run: scripts/ci_build_profile.command additive-a-hdr",
+                "run: true",
+                1,
+            ),
+        ),
+    )
+    killed = 0
+    for mutation_index, mutation in enumerate(mutations):
+        try:
+            validate(*mutation)
+        except ValueError:
+            killed += 1
+        else:
+            raise AssertionError(
+                f"Additive configure dedup mutation survived: {mutation_index}"
+            )
+    assert killed == 7
+
+
 def test_additive_device_group_contract() -> None:
     contracts = CONTRACTS.read_text(encoding="utf-8")
     local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
@@ -3445,6 +3506,7 @@ def main() -> None:
     test_workflow_contract()
     test_checkout_action_runtime_contract()
     test_contract_profile_build_deduplication()
+    test_contract_additive_configure_deduplication()
     test_additive_device_group_contract()
     test_cmake_presets_contract()
     test_causal_build_isolation_source_contract()
@@ -3460,6 +3522,7 @@ def main() -> None:
         "7 workflow mutations, 12 extraction/profile mutations, "
         "3 checkout runtime mutations, "
         "7 profile-build dedup mutations, "
+        "7 additive-configure dedup mutations, "
         "15 additive device group integration mutations, 5 policy mutations, "
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "

@@ -1247,222 +1247,6 @@ for causal_mode_under_test in causal-a causal-b; do
 done
 
 ADDITIVE_CONTRACT_ROOT="$RUNNER_TEMP/renderer-ios-additive-contracts"
-for additive_profile in additive-a-hdr additive-b-hdr; do
-  cmake --preset "renderer-ios-$additive_profile" \
-    -B "$ADDITIVE_CONTRACT_ROOT/$additive_profile" \
-    -DOPENGOTHIC_RENDERER_IOS_BUILD_SHA="$GITHUB_SHA-contract"
-done
-
-python3 - "$ADDITIVE_CONTRACT_ROOT" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-root = Path(sys.argv[1])
-macro_a = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A=1"
-macro_b = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B=1"
-macro_host = "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_HOST_TEST"
-token = re.compile(
-    r"(?<![A-Za-z0-9_])OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_"
-    r"(?:A|B|HOST_TEST)(?:=[^'\",\s;)]+)?(?![A-Za-z0-9_])"
-)
-required_cache = {
-    "OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS": ("BOOL", "ON"),
-    "OPENGOTHIC_RENDERER_IOS_FAULT_MODE": ("STRING", "none"),
-    "OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_MODE": (
-        "STRING", "none"
-    ),
-    "OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST": ("BOOL", "OFF"),
-    "OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST": ("BOOL", "OFF"),
-    "OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST": ("BOOL", "OFF"),
-    "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST": ("BOOL", "OFF"),
-    "OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST": (
-        "BOOL", "OFF"
-    ),
-    "OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE": ("BOOL", "ON"),
-}
-
-
-def parse_cache(source: str) -> dict[str, tuple[str, str]]:
-    result = {}
-    for line in source.splitlines():
-        match = re.fullmatch(r"([^/#][^:]*):([^=]+)=(.*)", line)
-        if match is not None:
-            result[match.group(1)] = (match.group(2), match.group(3))
-    return result
-
-
-def validate_cache(candidate: dict[str, tuple[str, str]], mode: str) -> None:
-    expected = dict(required_cache)
-    expected["OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE"] = (
-        "STRING", mode
-    )
-    for key, value in expected.items():
-        if candidate.get(key) != value:
-            raise ValueError("Additive cache tuple drifted: " + key)
-
-
-def target_configurations(project: str):
-    target = re.search(
-        r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
-        r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
-        project,
-        re.S,
-    )
-    if target is None:
-        raise ValueError("cannot identify Gothic2Notr target")
-    list_id = re.search(
-        r'buildConfigurationList = ([A-F0-9]{24}) /\* '
-        r'Build configuration list for PBXNativeTarget "Gothic2Notr" \*/;',
-        target.group(2),
-    )
-    if list_id is None:
-        raise ValueError("cannot identify Gothic2Notr configuration list")
-    configuration_list = re.search(
-        rf"\b{list_id.group(1)} /\* Build configuration list for "
-        r'PBXNativeTarget "Gothic2Notr" \*/ = \{\n'
-        r"\s*isa = XCConfigurationList;(.*?)\n\s*\};",
-        project,
-        re.S,
-    )
-    if configuration_list is None:
-        raise ValueError("cannot read Gothic2Notr configuration list")
-    configurations = re.findall(
-        r"([A-F0-9]{24}) /\* (Debug|MinSizeRel|Release|RelWithDebInfo) \*/,",
-        configuration_list.group(1),
-    )
-    if [name for _, name in configurations] != [
-        "Debug", "Release", "MinSizeRel", "RelWithDebInfo"
-    ]:
-        raise ValueError("Gothic2Notr configuration entries drifted")
-    return configurations
-
-
-def validate_additive_source_membership(project: str) -> None:
-    source = "iosadditiveinputartifact.cpp"
-    build_files = re.findall(
-        r"/\* [^*\n]*iosadditiveinputartifact\.cpp \*/ = "
-        r"\{isa = PBXBuildFile; fileRef =",
-        project,
-    )
-    if len(build_files) != 1:
-        raise ValueError("Additive artifact PBXBuildFile membership drifted")
-    target = re.search(
-        r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
-        r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
-        project,
-        re.S,
-    )
-    if target is None:
-        raise ValueError("cannot identify Gothic2Notr target for Additive source")
-    source_phase = re.search(r"([A-F0-9]{24}) /\* Sources \*/", target.group(2))
-    if source_phase is None:
-        raise ValueError("Gothic2Notr has no Sources phase")
-    phase = re.search(
-        rf"\b{source_phase.group(1)} /\* Sources \*/ = \{{\n"
-        r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
-        project,
-        re.S,
-    )
-    if phase is None or phase.group(1).count(source) != 1:
-        raise ValueError("Additive artifact target source membership drifted")
-
-
-def validate_pbx(project: str, mode: str) -> None:
-    validate_additive_source_membership(project)
-    expected = (macro_a,) if mode == "causal-a" else (macro_b,)
-    if token.findall(project) != list(expected) * 4:
-        raise ValueError("Additive PBX global entries drifted")
-    alpha = re.compile(
-        r"OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_(?:A|B|HOST_TEST)"
-    )
-    if alpha.search(project) is not None:
-        raise ValueError("AlphaTest causal macro leaked into Additive profile")
-    for identifier, name in target_configurations(project):
-        configuration = re.search(
-            rf"\b{identifier} /\* {name} \*/ = \{{\n"
-            r"\s*isa = XCBuildConfiguration;\n"
-            r"\s*buildSettings = \{(.*?)\n\s*\};\n"
-            rf"\s*name = {name};\n\s*\}};",
-            project,
-            re.S,
-        )
-        if configuration is None:
-            raise ValueError("cannot read Gothic2Notr " + name)
-        lists = re.findall(
-            r"GCC_PREPROCESSOR_DEFINITIONS = \((.*?)\);",
-            configuration.group(1),
-            re.S,
-        )
-        if len(lists) != 1 or token.findall(lists[0]) != list(expected):
-            raise ValueError("Additive PBX exact list drifted: " + name)
-
-
-cache_mutations = 0
-pbx_mutations = 0
-for profile, mode in (
-    ("additive-a-hdr", "causal-a"),
-    ("additive-b-hdr", "causal-b"),
-):
-    build = root / profile
-    cache = parse_cache((build / "CMakeCache.txt").read_text())
-    validate_cache(cache, mode)
-    expected_cache = {
-        **required_cache,
-        "OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_MODE": ("STRING", mode),
-    }
-    for key, (_, value) in expected_cache.items():
-        mutation = dict(cache)
-        mutation[key] = ("STRING", value + "-mutant")
-        try:
-            validate_cache(mutation, mode)
-        except ValueError:
-            cache_mutations += 1
-        else:
-            raise SystemExit("Additive cache mutation survived")
-
-    project = (
-        build / "Gothic2Notr.xcodeproj" / "project.pbxproj"
-    ).read_text()
-    validate_pbx(project, mode)
-    expected_additive = macro_a if mode == "causal-a" else macro_b
-    opposite_additive = macro_b if mode == "causal-a" else macro_a
-    quoted = "\"'" + expected_additive + "'\""
-    if project.count(quoted) != 4:
-        raise SystemExit("Additive PBX mutation entries drifted")
-    mutations = (
-        project.replace(quoted, "", 1),
-        project.replace(quoted, quoted + "," + quoted, 1),
-        project.replace(
-            expected_additive, expected_additive[:-1] + "10", 1
-        ),
-        project.replace(
-            expected_additive, "MUTANT_" + expected_additive, 1
-        ),
-        project.replace(
-            quoted, quoted + ",\"'" + opposite_additive + "'\"", 1
-        ),
-        project.replace(
-            quoted, quoted + ",\"'" + macro_host + "=1'\"", 1
-        ),
-        project.replace(quoted, "", 1) + "\n" + quoted + "\n",
-    )
-    for mutation in mutations:
-        try:
-            validate_pbx(mutation, mode)
-        except ValueError:
-            pbx_mutations += 1
-        else:
-            raise SystemExit("Additive PBX mutation survived")
-
-if cache_mutations != 20:
-    raise SystemExit("Additive cache mutation count drifted")
-if pbx_mutations != 14:
-    raise SystemExit("Additive PBX mutation count drifted")
-print("RendererIOS Additive cache oracle: profiles=2 mutations-killed=20")
-print("RendererIOS Additive PBX oracle: profiles=2 mutations-killed=14")
-PY
-
 expect_additive_contract_configure_failure() {
   local profile="$1"
   local name="$2"
@@ -8501,6 +8285,108 @@ print("P2.6b1 PBX oracle: sources=2 mutations-killed=12")
 PY
 
 printf '\n### CI contract: Assert legacy renderer is not in the target\n'
+python3 - <<'PY'
+from pathlib import Path
+import re
+
+source = "iosadditiveinputartifact.cpp"
+project_path = Path(
+    "build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj"
+)
+project = project_path.read_text()
+
+
+def validate_additive_source_membership(candidate: str) -> None:
+    build_entries = re.findall(
+        r"^.*?/\* [^*\n]*iosadditiveinputartifact\.cpp \*/ = "
+        r"\{isa = PBXBuildFile; fileRef =.*$",
+        candidate,
+        re.M,
+    )
+    if len(build_entries) != 1:
+        raise ValueError("Additive artifact PBXBuildFile membership drifted")
+    targets = re.findall(
+        r"\b([A-F0-9]{24}) /\* [^*]+ \*/ = \{\n"
+        r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+        candidate,
+        re.S,
+    )
+    gothic = [
+        body for _, body in targets
+        if re.search(r"^\s*name = Gothic2Notr;$", body, re.M)
+    ]
+    if len(gothic) != 1:
+        raise ValueError("cannot identify exact Gothic2Notr target")
+    source_phase = re.search(r"([A-F0-9]{24}) /\* Sources \*/", gothic[0])
+    if source_phase is None:
+        raise ValueError("Gothic2Notr has no Sources phase")
+    phase = re.search(
+        rf"\b{source_phase.group(1)} /\* Sources \*/ = \{{\n"
+        r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+        candidate,
+        re.S,
+    )
+    if phase is None or phase.group(1).count(source) != 1:
+        raise ValueError("Additive artifact target source membership drifted")
+
+
+validate_additive_source_membership(project)
+build_entry = re.search(
+    r"^.*?/\* [^*\n]*iosadditiveinputartifact\.cpp \*/ = "
+    r"\{isa = PBXBuildFile; fileRef =.*$",
+    project,
+    re.M,
+)
+if build_entry is None:
+    raise SystemExit("Additive artifact build entry is absent")
+target = re.search(
+    r"\b([A-F0-9]{24}) /\* Gothic2Notr \*/ = \{\n"
+    r"\s*isa = PBXNativeTarget;(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if target is None:
+    raise SystemExit("Additive artifact target is absent")
+phase_id = re.search(r"([A-F0-9]{24}) /\* Sources \*/", target.group(2))
+if phase_id is None:
+    raise SystemExit("Additive artifact source phase is absent")
+phase = re.search(
+    rf"\b{phase_id.group(1)} /\* Sources \*/ = \{{\n"
+    r"\s*isa = PBXSourcesBuildPhase;(.*?)\n\s*\};",
+    project,
+    re.S,
+)
+if phase is None:
+    raise SystemExit("Additive artifact source phase cannot be read")
+source_line = next(
+    (line for line in phase.group(0).splitlines() if source in line),
+    None,
+)
+if source_line is None:
+    raise SystemExit("Additive artifact source entry is absent")
+mutations = (
+    project.replace(build_entry.group(0), "", 1),
+    project.replace(
+        build_entry.group(0),
+        build_entry.group(0) + "\n" + build_entry.group(0),
+        1,
+    ),
+    project.replace(source_line, "", 1),
+    project.replace(source_line, source_line + "\n" + source_line, 1),
+)
+killed = 0
+for mutation in mutations:
+    try:
+        validate_additive_source_membership(mutation)
+    except ValueError:
+        killed += 1
+    else:
+        raise SystemExit("Additive artifact PBX membership mutation survived")
+if killed != 4:
+    raise SystemExit("Additive artifact PBX membership mutation count drifted")
+print("RendererIOS Additive source membership oracle: mutations-killed=4")
+PY
+
 if grep -Eq '(^|[^[:alnum:]_])renderer\.cpp([^[:alnum:]_]|$)' build-renderer-ios/Gothic2Notr.xcodeproj/project.pbxproj; then
   echo 'legacy game/graphics/renderer.cpp is still present in the RendererIOS target'
   exit 1
