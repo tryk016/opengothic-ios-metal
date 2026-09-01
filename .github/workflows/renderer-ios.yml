@@ -128,6 +128,22 @@ jobs:
       - name: Run all host, source, mutation, MSL and harness contracts once
         run: scripts/ci_contracts.command
 
+  causal-contracts:
+    name: RendererIOS causal contracts exactly once
+    needs: classifier
+    if: needs.classifier.result == 'success' && needs.classifier.outputs.contracts == 'true'
+    runs-on: macos-15
+    steps:
+      - name: Checkout with submodules
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Install causal contract prerequisites
+        run: brew install cmake glslang ripgrep
+      - name: Run causal runtime, source, mutation and CMake contracts once
+        run: scripts/ci_causal_contracts.command
+
   build-off:
     name: iOS Release diagnostics OFF
     needs: [classifier, contracts]
@@ -336,7 +352,7 @@ jobs:
 
   required:
     name: RendererIOS required gates
-    needs: [classifier, contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr, build-multiply2-a-hdr, build-multiply2-b-hdr]
+    needs: [classifier, contracts, causal-contracts, build-off, build-on, build-tile, build-forward, build-additive-a-hdr, build-additive-b-hdr, build-multiply2-a-hdr, build-multiply2-b-hdr]
     if: always()
     runs-on: macos-15
     steps:
@@ -350,6 +366,8 @@ jobs:
             --expected-sha "${{ github.sha }}" \
             --expected-contracts "${{ needs.classifier.outputs.contracts }}" \
             --result-contracts "${{ needs.contracts.result }}" \
+            --expected-causal-contracts "${{ needs.classifier.outputs.contracts }}" \
+            --result-causal-contracts "${{ needs.causal-contracts.result }}" \
             --expected-build-off "${{ needs.classifier.outputs.build_off }}" \
             --result-build-off "${{ needs.build-off.result }}" \
             --expected-build-on "${{ needs.classifier.outputs.build_on }}" \
