@@ -7006,29 +7006,6 @@ PY
 configure_profile off OFF
 configure_profile on OFF
 configure_profile tile ON
-TILE_BUILD="$RUNNER_TEMP/renderer-ios-tile-pbx-tile"
-cmake --build "$TILE_BUILD" --config Release -- \
-  -sdk iphoneos \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY=""
-TILE_APP="$TILE_BUILD/opengothic/Release/Gothic2Notr.app"
-TILE_BINARY="$TILE_APP/Gothic2Notr"
-test -f "$TILE_BINARY"
-test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
-  "$TILE_APP/Info.plist")" = true
-TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
-strings "$TILE_BINARY" >"$TILE_STRINGS"
-for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1' \
-    'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
-    'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
-    'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
-    'RendererIOS shading prototype tile self-test: PASS case=tile-prototype-v1 terminal=completed created=1 live=0 released=1 wait-idle=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
-    'RendererIOS shading prototype tile self-test: UNSUPPORTED case=tile-prototype-v1 reason=apple4-required side-effects=0' \
-    'RendererIOS shading prototype tile capture: ACQUIRED'; do
-  test "$(grep -Fxc "$marker" "$TILE_STRINGS" || true)" -eq 1
-done
 
 expect_configure_failure() {
   local name="$1"
@@ -7183,32 +7160,6 @@ awk '
   }
   END { exit found == 1 ? 0 : 1 }
 ' "$FORWARD_PROJECT"
-cmake --build "$FORWARD_BUILD" --config Release -- \
-  -sdk iphoneos \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY=""
-FORWARD_APP="$FORWARD_BUILD/opengothic/Release/Gothic2Notr.app"
-FORWARD_BINARY="$FORWARD_APP/Gothic2Notr"
-test -f "$FORWARD_BINARY"
-test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
-  "$FORWARD_APP/Info.plist")" = true
-FORWARD_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-forward.strings"
-strings "$FORWARD_BINARY" >"$FORWARD_STRINGS"
-for marker in \
-    'RendererIOS shading prototype forward self-test: ARMED case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: FACTORY READY case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: ENCODED case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: SUBMITTED case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: TERMINAL case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: READBACK case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: PASS case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: UNSUPPORTED case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward self-test: FAIL case=forward-prototype-v1 nonce=' \
-    'RendererIOS shading prototype forward capture: ACQUIRED case=forward-prototype-v1 nonce=' \
-    '-renderer-ios-forward-self-test-nonce='; do
-  test "$(grep -Fxc -- "$marker" "$FORWARD_STRINGS" || true)" -eq 1
-done
 
 expect_forward_configure_failure() {
   local name="$1"

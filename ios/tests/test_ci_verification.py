@@ -1822,6 +1822,90 @@ def test_checkout_action_runtime_contract() -> None:
     assert killed == len(workflows)
 
 
+def test_contract_profile_build_deduplication() -> None:
+    contracts = CONTRACTS.read_text(encoding="utf-8")
+    profile = PROFILE.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    tile_build = 'cmake --build "$TILE_BUILD" --config Release -- \\\n'
+    forward_build = 'cmake --build "$FORWARD_BUILD" --config Release -- \\\n'
+    common_build = 'cmake --build build-renderer-ios --config Release -- \\\n'
+    tile_marker = (
+        "RendererIOS shading prototype tile self-test: PASS "
+        "case=tile-prototype-v1 terminal=completed"
+    )
+    forward_marker = (
+        "RendererIOS shading prototype forward self-test: PASS "
+        "case=forward-prototype-v1 nonce="
+    )
+
+    def validate(
+        candidate_contracts: str,
+        candidate_profile: str,
+        candidate_workflow: str,
+    ) -> None:
+        for duplicate in (tile_build, forward_build):
+            if duplicate in candidate_contracts:
+                raise ValueError("contracts job duplicates a profile build")
+        for retained in (
+            "configure_profile off OFF",
+            "configure_profile on OFF",
+            "configure_profile tile ON",
+            'cmake --preset renderer-ios-forward -B "$FORWARD_BUILD"',
+            'FORWARD_PROJECT="$FORWARD_BUILD/Gothic2Notr.xcodeproj/project.pbxproj"',
+        ):
+            if candidate_contracts.count(retained) != 1:
+                raise ValueError("profile source/PBX contract drifted: " + retained)
+        build_scope = candidate_profile.split(
+            "### CI profile Build iOS Release", 1
+        )
+        if len(build_scope) != 2 or build_scope[1].count(common_build) != 1:
+            raise ValueError("dedicated profile build is not exact")
+        for marker in (tile_marker, forward_marker):
+            if marker not in build_scope[1]:
+                raise ValueError("dedicated profile marker contract drifted")
+        validate_workflow(candidate_workflow)
+
+    validate(contracts, profile, workflow)
+    mutations = (
+        (contracts + tile_build, profile, workflow),
+        (contracts + forward_build, profile, workflow),
+        (contracts, profile.replace(common_build, "", 1), workflow),
+        (contracts, profile.replace(tile_marker, ""), workflow),
+        (contracts, profile.replace(forward_marker, ""), workflow),
+        (
+            contracts,
+            profile,
+            workflow.replace(
+                "run: scripts/ci_build_profile.command tile", "run: true", 1
+            ),
+        ),
+        (
+            contracts,
+            profile,
+            workflow.replace(
+                "needs: [classifier, contracts, build-off, build-on, build-tile, "
+                "build-forward, build-additive-a-hdr, build-additive-b-hdr, "
+                "build-multiply2-a-hdr, build-multiply2-b-hdr]",
+                "needs: [classifier, contracts, build-off, build-on, build-forward, "
+                "build-additive-a-hdr, build-additive-b-hdr, "
+                "build-multiply2-a-hdr, build-multiply2-b-hdr]",
+                1,
+            ),
+        ),
+    )
+    killed = 0
+    for mutation_index, mutation in enumerate(mutations):
+        try:
+            validate(*mutation)
+        except ValueError:
+            killed += 1
+        else:
+            raise AssertionError(
+                f"profile build dedup mutation survived: {mutation_index}"
+            )
+    assert killed == 7
+
+
 def test_additive_device_group_contract() -> None:
     contracts = CONTRACTS.read_text(encoding="utf-8")
     local_verify = LOCAL_VERIFY.read_text(encoding="utf-8")
@@ -3360,6 +3444,7 @@ def main() -> None:
     test_aggregation()
     test_workflow_contract()
     test_checkout_action_runtime_contract()
+    test_contract_profile_build_deduplication()
     test_additive_device_group_contract()
     test_cmake_presets_contract()
     test_causal_build_isolation_source_contract()
@@ -3371,9 +3456,10 @@ def main() -> None:
     test_bash32_local_profile_parser()
     print(
         "RendererIOS CI verification tests passed: "
-        "14 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
+        "15 groups, Bash 3.2 candidate/CI-causal/CI-additive/device-causal/local-profile smokes, "
         "7 workflow mutations, 12 extraction/profile mutations, "
         "3 checkout runtime mutations, "
+        "7 profile-build dedup mutations, "
         "15 additive device group integration mutations, 5 policy mutations, "
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
