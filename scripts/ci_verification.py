@@ -26,6 +26,12 @@ PROFILE_OUTPUTS = {
     "build_multiply2_a_hdr": "build-multiply2-a-hdr",
     "build_multiply2_b_hdr": "build-multiply2-b-hdr",
 }
+AGGREGATE_JOBS = (
+    "contracts",
+    "causal_contracts",
+    "shading_contracts",
+    *PROFILE_OUTPUTS,
+)
 RESULTS = frozenset({"success", "failure", "cancelled", "skipped"})
 
 
@@ -263,6 +269,15 @@ def aggregate(
         )
     if set(expected) != set(actual):
         raise CIVerificationError("expected and actual job sets differ")
+    contract_shards = {
+        expected.get("contracts"),
+        expected.get("causal_contracts"),
+        expected.get("shading_contracts"),
+    }
+    if len(contract_shards) != 1:
+        raise CIVerificationError(
+            "main, causal and shading contracts must be required together"
+        )
     failures: list[str] = []
     for name in sorted(expected):
         result = validate_result(actual[name], name)
@@ -373,7 +388,7 @@ def parse_arguments(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     aggregate_parser = subparsers.add_parser("aggregate")
     aggregate_parser.add_argument("--classifier-result", required=True)
     aggregate_parser.add_argument("--expected-sha", default="")
-    for name in ("contracts", *PROFILE_OUTPUTS):
+    for name in AGGREGATE_JOBS:
         aggregate_parser.add_argument(f"--expected-{name.replace('_', '-')}", required=True)
         aggregate_parser.add_argument(f"--result-{name.replace('_', '-')}", required=True)
     for profile in ("additive-a", "additive-b"):
@@ -405,17 +420,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
             emit_classification(classification)
         else:
-            names = ("contracts", *PROFILE_OUTPUTS)
             expected = {
                 name: parse_bool(
                     getattr(arguments, f"expected_{name}"),
                     f"expected {name}",
                 )
-                for name in names
+                for name in AGGREGATE_JOBS
             }
             actual = {
                 name: getattr(arguments, f"result_{name}")
-                for name in names
+                for name in AGGREGATE_JOBS
             }
             def profile_outputs(prefix: str) -> dict[str, str]:
                 return {
