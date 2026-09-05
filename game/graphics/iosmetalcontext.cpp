@@ -1945,7 +1945,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==11u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==12u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2734,7 +2734,7 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==11u);
+    static_assert(Pipeline::OfflineMetallibAbi==12u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
              RendererIOSShadingPrototypeForwardSelfTestArmed),
