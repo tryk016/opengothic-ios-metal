@@ -83,6 +83,32 @@ bool PfxBucket::isEmpty() const {
   return impl.size()==0;
   }
 
+void PfxBucket::visitIOSParticles(uint64_t tickCount, void* context, IOSSceneParticleVisitor visitor) const {
+  const auto& material = decl.visMaterial;
+  const auto* texture = material.tex;
+  if(material.hasFrameAnimation())
+    texture = material.frames[(tickCount/material.texAniFPSInv)%material.frames.size()];
+  if(texture!=nullptr) {
+    const auto visible = [&](size_t index) {
+      const auto& size = pfxCpu[index].size;
+      return particles[index].life!=0 && size.x!=0.f && size.y!=0.f;
+      };
+    for(size_t first=0;first<particles.size();) {
+      if(!visible(first)) {
+        ++first;
+        continue;
+        }
+      size_t end = first+1;
+      while(end<particles.size() && visible(end))
+        ++end;
+      visitor(context,{std::span(pfxCpu).subspan(first,end-first),&material,texture});
+      first = end;
+      }
+    }
+  if(decl.trlTexture!=nullptr && !trlCpu.empty())
+    visitor(context,{trlCpu,&material,decl.trlTexture});
+  }
+
 size_t PfxBucket::allocBlock() {
   for(size_t i=0; i<Resources::MaxFramesInFlight; ++i)
     forceUpdate[i] = true;

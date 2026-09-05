@@ -35,13 +35,14 @@
   },
   "tempestSha": "308ec44c501c6ee86c153ba4acd63d44e39cf38d",
   "metallib": {
-    "abi": 11,
-    "exportCount": 29,
+    "abi": 12,
+    "exportCount": 35,
     "exports": [
       "riosBinkFragment",
       "riosBinkVertex",
       "riosForwardPlusBuildLightList",
       "riosForwardPlusFragment",
+      "riosGhostFragment",
       "riosInstancedVertex",
       "riosInventoryFragment",
       "riosInventoryVertex",
@@ -51,6 +52,7 @@
       "riosLandscapeTransparentFragment",
       "riosLandscapeVertex",
       "riosMorphVertex",
+      "riosParticleVertex",
       "riosRainFragment",
       "riosRainVertex",
       "riosShadingPrototypeVertex",
@@ -66,7 +68,11 @@
       "riosUiColorFragment",
       "riosUiColorVertex",
       "riosUiTextureFragment",
-      "riosUiTextureVertex"
+      "riosUiTextureVertex",
+      "riosUnderwaterFragment",
+      "riosWaterFactors",
+      "riosWaterFragment",
+      "riosWaterPatchVertex"
     ]
   },
   "capture": {

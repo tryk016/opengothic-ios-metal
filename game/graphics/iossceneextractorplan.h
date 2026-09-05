@@ -184,7 +184,9 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     case IOSMaterialCategory::Transparent:
       break;
     case IOSMaterialCategory::Water:
-      return IOSSceneSourcePlanResult::SkippedMaterial;
+    case IOSMaterialCategory::Ghost:
+    case IOSMaterialCategory::Multiply:
+      break;
     default:
       return IOSSceneSourcePlanResult::InvalidSource;
     }
@@ -194,7 +196,10 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
-  if(source.materialCategory==IOSMaterialCategory::Transparent)
+  if(source.materialCategory==IOSMaterialCategory::Transparent ||
+     source.materialCategory==IOSMaterialCategory::Water ||
+     source.materialCategory==IOSMaterialCategory::Ghost ||
+     source.materialCategory==IOSMaterialCategory::Multiply)
     return IOSSceneSourcePlanResult::SkippedMaterial;
 #endif
   if((source.materialCategory==IOSMaterialCategory::Transparent || source.materialCategory==IOSMaterialCategory::AlphaTest) &&
@@ -206,19 +211,22 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
       source.materialCategory==IOSMaterialCategory::Additive;
   const bool isMultiply2 =
       source.materialCategory==IOSMaterialCategory::Multiply2;
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
   if((isAdditive || isMultiply2) &&
      source.kind!=IOSSceneMeshKind::Static)
     return IOSSceneSourcePlanResult::SkippedMaterial;
   if((isAdditive || isMultiply2) &&
      textureAnimation!=IOSSceneTextureAnimationMode::None)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;
+#endif
   const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
   if(source.hasUvAnimation!=periodsHaveUv)
     return IOSSceneSourcePlanResult::InvalidSource;
   if((isAdditive || isMultiply2) &&
-     (!source.hasBaseColorTexture || source.usesFallbackTexture ||
-      source.hasValidFrameSequence || source.frameCount!=0 ||
-      source.framePeriodMs!=0 ||
+     (!(source.hasBaseColorTexture || source.hasValidFrameSequence) || source.usesFallbackTexture ||
       !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
       source.alphaWeight>1.f))
     return IOSSceneSourcePlanResult::InvalidSource;
@@ -289,9 +297,11 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.materialCategory  = source.materialCategory;
   out.baseColorAlpha    = (isAdditive || isMultiply2 || source.materialCategory==IOSMaterialCategory::Transparent || source.materialCategory==IOSMaterialCategory::AlphaTest)
       ? source.alphaWeight : 1.f;
-  out.materialFlags     = isAdditive
+  const bool staticUnanimated = source.kind==IOSSceneMeshKind::Static &&
+      textureAnimation==IOSSceneTextureAnimationMode::None;
+  out.materialFlags     = isAdditive && staticUnanimated
       ? IOSMaterialFlagStaticAdditiveNone
-      : isMultiply2
+      : isMultiply2 && staticUnanimated
       ? IOSMaterialFlagStaticMultiply2None
       : IOSMaterialFlagNone;
   out.visibilityMask    = IOSSceneVisibilityMain;

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <string_view>
 #include <vector>
 
 namespace Tempest {
@@ -150,6 +151,11 @@ class IOSGPUScene final {
     // Must precede all other recording on this command buffer.
     bool encodePreparedEnvironment(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
                                    PreparedFrame& prepared) noexcept;
+
+    Report encodePreparedScene(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+                               PreparedFrame& prepared,
+                               const Tempest::Attachment& sceneHDR,
+                               std::string_view marker = {}) noexcept;
 
     // The encoder must own an active render pass whose color, depth and sample
     // layout exactly matches the TargetLayout used to construct this scene.

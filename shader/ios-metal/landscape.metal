@@ -7,7 +7,7 @@ struct IOSLandscapeDrawConstants {
   float4   baseColor;
   float2   uvOffset;
   uint landscape;
-  uint reserved;
+  float waveMaxAmplitude;
 };
 
 struct IOSDeformationConstants {
@@ -25,7 +25,7 @@ struct IOSLandscapeVertexIn {
 };
 
 struct IOSLandscapeVertexOut {
-  uint landscape [[flat]];
+  uint landscape [[flat]]; // Bits: terrain, water, particle.
   float3 world;
   float3 normal;
   float4 position [[position]];
@@ -151,12 +151,18 @@ static float3 riosTextureAlbedo(float3 color) {
 static float3 riosSceneLighting(IOSLandscapeVertexOut in, bool transparent,
                                constant IOSSceneLightingConstants& scene,
                                const device IOSPointLightConstants* lights,
-                               depth2d<float> nearMap, depth2d<float> farMap) {
+                               depth2d<float> nearMap, depth2d<float> farMap, float alpha = 1.0) {
   constexpr float invPi = 0.31830988618;
   const float3 normal = normalize(in.normal);
   const float shadow = riosSceneShadow(in.world,normal,transparent,scene,nearMap,farMap);
   float lambert = max(0.0,dot(normal,scene.sunDirection.xyz));
-  if(in.landscape!=0 && !transparent) {
+  if(transparent && (in.landscape&4u)!=0) {
+    const float g = alpha*0.63;
+    const float cosine = -dot(normalize(in.world-scene.cameraPosition.xyz),scene.sunDirection.xyz);
+    const float denominator = 1.0+g*g-2.0*g*cosine;
+    lambert = (1.0-g*g)*0.25*invPi/pow(denominator,1.5);
+  }
+  if((in.landscape&1u)!=0 && !transparent) {
     float3 flat = normalize(cross(dfdx(in.world),dfdy(in.world)));
     // Orient the derivative normal consistently across clip-Y conventions.
     flat *= dot(flat,normal)<0.0 ? -1.0 : 1.0;
@@ -215,7 +221,7 @@ fragment float4 riosLandscapeAlphaTestFragment(
     depth2d<float> shadowNear [[texture(1)]],
     depth2d<float> shadowFar [[texture(2)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
-  if(texel.a*in.color.a<0.5)
+  if(texel.a*((in.landscape&4u)!=0 ? 1.0 : in.color.a)<0.5)
     discard_fragment();
   const float3 light = riosSceneLighting(in,false,scene,lights,shadowNear,shadowFar);
   const float3 color = riosSceneFog(riosTextureAlbedo(texel.rgb*in.color.rgb)*light,in.world,scene);
@@ -231,7 +237,7 @@ fragment float4 riosLandscapeTransparentFragment(
     depth2d<float> shadowNear [[texture(1)]],
     depth2d<float> shadowFar [[texture(2)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
-  const float3 light = riosSceneLighting(in,true,scene,lights,shadowNear,shadowFar);
+  const float3 light = riosSceneLighting(in,true,scene,lights,shadowNear,shadowFar,texel.a*in.color.a);
   const float3 color = riosSceneFog(riosTextureAlbedo(texel.rgb*in.color.rgb)*light,in.world,scene);
   return float4(color,texel.a*in.color.a);
 }
@@ -389,7 +395,7 @@ fragment void riosShadowAlphaTestFragment(
     IOSLandscapeVertexOut in [[stage_in]],
     texture2d<float> baseColorTexture [[texture(0)]],
     sampler baseColorSampler [[sampler(0)]]) {
-  if(baseColorTexture.sample(baseColorSampler,in.uv).a*in.color.a<0.5)
+  if(baseColorTexture.sample(baseColorSampler,in.uv).a*((in.landscape&4u)!=0 ? 1.0 : in.color.a)<0.5)
     discard_fragment();
 }
 
@@ -485,18 +491,12 @@ static float4 riosSkySprite(float3 ray, float3 direction, float size,
   return texture.sample(smp,uv);
 }
 
-fragment float4 riosSkyFragment(
-    IOSSkyVertexOut in [[stage_in]],
-    constant IOSSceneLightingConstants& scene [[buffer(0)]],
-    constant float4& cloudOffsets [[buffer(2)]],
-    texture2d<float> sky [[texture(0)]],
-    array<texture2d<float>,6> images [[texture(3)]]) {
+static float3 riosSkyColor(float3 ray,
+    constant IOSSceneLightingConstants& scene, constant float4& cloudOffsets,
+    texture2d<float> sky, array<texture2d<float>,6> images) {
   constexpr float pi = 3.14159265359;
   constexpr sampler skySampler(coord::normalized,s_address::repeat,t_address::clamp_to_edge,filter::linear);
   constexpr sampler imageSampler(coord::normalized,address::repeat,filter::linear,mip_filter::linear);
-  const float4 far = scene.inverseViewProjection*float4(in.clip,1,1);
-  const float4 near = scene.inverseViewProjection*float4(in.clip,0,1);
-  const float3 ray = normalize(far.xyz/far.w-near.xyz/near.w);
   const float altitude = asin(clamp(ray.y,-1.0,1.0))/(pi*0.5);
   const float2 uv = float2(atan2(ray.x,-ray.z)/(2.0*pi)+0.5,
                           copysign(sqrt(abs(altitude)),altitude)*0.5+0.5);
@@ -521,7 +521,19 @@ fragment float4 riosSkyFragment(
     const float4 moon = riosSkySprite(ray,normalize(float3(-1,1,0)),0.05,images[5],imageSampler);
     color += riosLiftLegacyLdrToScene(moon.rgb)*moon.a*night*scene.sunColor.w*0.32;
   }
-  return float4(color,1.0);
+  return color;
+}
+
+fragment float4 riosSkyFragment(
+    IOSSkyVertexOut in [[stage_in]],
+    constant IOSSceneLightingConstants& scene [[buffer(0)]],
+    constant float4& cloudOffsets [[buffer(2)]],
+    texture2d<float> sky [[texture(0)]],
+    array<texture2d<float>,6> images [[texture(3)]]) {
+  const float4 far = scene.inverseViewProjection*float4(in.clip,1,1);
+  const float4 near = scene.inverseViewProjection*float4(in.clip,0,1);
+  return float4(riosSkyColor(normalize(far.xyz/far.w-near.xyz/near.w),
+                            scene,cloudOffsets,sky,images),1.0);
 }
 
 struct IOSRainVertexOut {
@@ -562,4 +574,269 @@ fragment float4 riosRainFragment(IOSRainVertexOut in [[stage_in]],
   const float alpha = (1.0-abs(in.uv.x))*(1.0-abs(in.uv.y))*scene.skyParameters.y*0.35;
   const float3 color = float3(0.55,0.65,0.8)*(scene.ambientColor.rgb+scene.sunColor.rgb*0.1+0.025);
   return float4(color,alpha);
+}
+
+
+struct IOSWaterWave {
+  float3 offset;
+  float3 normal;
+};
+
+static IOSWaterWave riosWaterWave(float3 pos, float footprint, uint iterations,
+                                  float amplitude, uint tick) {
+  float3 offset = 0.0;
+  float3 tangent = float3(1,0,0), binormal = float3(0,0,1);
+  const float weightSum = (1.0-pow(0.8,float(iterations)))/0.2;
+  float frequency = 0.003, speed = 2.0, angle = 0.0, weight = 1.0;
+  for(uint i=0;i<iterations;++i) {
+    if(frequency*footprint>2.0)
+      break;
+    const float2 dir = float2(cos(angle),sin(angle));
+    const float phase = dot(dir,pos.xz)*frequency+float(tick)*0.001*speed;
+    const float a = weight*max(10.0,amplitude*0.5)/weightSum;
+    const float sn = a*sin(phase), cs = a*cos(phase);
+    binormal += float3(-dir.x*dir.y*sn,dir.y*cs,-dir.y*dir.y*sn)*frequency;
+    tangent += float3(-dir.x*dir.x*sn,dir.x*cs,-dir.x*dir.y*sn)*frequency;
+    offset += float3(dir.x*cs,sn,dir.y*cs);
+    pos.xz += cs*weight*dir*0.48;
+    angle += 12.0;
+    weight *= 0.8;
+    frequency *= 1.18;
+    speed *= 1.07;
+  }
+  return {offset,normalize(cross(binormal,tangent))};
+}
+
+struct IOSWaterControlVertex {
+  packed_float3 position;
+  packed_float3 normal;
+  packed_float2 uv;
+  uint color;
+};
+static_assert(sizeof(IOSWaterControlVertex)==36, "water control vertex stride");
+
+kernel void riosWaterFactors(
+    uint patch [[thread_position_in_grid]],
+    const device IOSWaterControlVertex* vertices [[buffer(0)]],
+    constant IOSLandscapeDrawConstants& draw [[buffer(1)]],
+    const device uint* indices [[buffer(2)]],
+    device half4* factors [[buffer(3)]],
+    constant uint& patchCount [[buffer(4)]]) {
+  if(patch>=patchCount)
+    return;
+  float4 clip[3];
+  for(uint i=0;i<3;++i)
+    clip[i] = draw.viewProjection*draw.model*float4(float3(vertices[indices[patch*3+i]].position),1.0);
+  // Each shared edge depends only on its own endpoints, including near-plane crossings.
+  float3 edges;
+  for(uint i=0;i<3;++i) {
+    const float4 a = clip[(i+1)%3], b = clip[(i+2)%3];
+    edges[i] = a.w<=0.0 || b.w<=0.0 ? 16.0 : min((length(a.xyz/a.w-b.xyz/b.w)+0.5)*16.0+1.0,16.0);
+  }
+  float inside = 16.0;
+  if(clip[0].w>0.0 && clip[1].w>0.0 && clip[2].w>0.0) {
+    const float2 a = clip[0].xy/clip[0].w-clip[2].xy/clip[2].w;
+    const float2 b = clip[1].xy/clip[1].w-clip[2].xy/clip[2].w;
+    inside = min((abs(a.x*b.y-b.x*a.y)+0.5)*16.0,16.0);
+  }
+  factors[patch] = half4(float4(edges,inside));
+}
+
+[[patch(triangle,3)]]
+vertex IOSLandscapeVertexOut riosWaterPatchVertex(
+    uint patch [[patch_id]], float3 barycentric [[position_in_patch]],
+    const device IOSWaterControlVertex* vertices [[buffer(0)]],
+    constant IOSLandscapeDrawConstants& draw [[buffer(1)]],
+    const device uint* indices [[buffer(7)]],
+    constant IOSSceneLightingConstants& scene [[buffer(8)]]) {
+  float3 position = 0.0, normal = 0.0;
+  float2 uv = 0.0;
+  float4 color = 0.0;
+  for(uint i=0;i<3;++i) {
+    const IOSWaterControlVertex v = vertices[indices[patch*3+i]];
+    position += float3(v.position)*barycentric[i];
+    normal += float3(v.normal)*barycentric[i];
+    uv += float2(v.uv)*barycentric[i];
+    color += float4((uint4(v.color)>>uint4(0,8,16,24))&255u)/255.0*barycentric[i];
+  }
+  float3 world = (draw.model*float4(position,1.0)).xyz;
+  normal = normalize((draw.model*float4(normal,0.0)).xyz);
+  if(draw.waveMaxAmplitude>0.0) {
+    const IOSWaterWave wave = riosWaterWave(world,0.0,10,draw.waveMaxAmplitude,scene.lightInfo.y);
+    world += wave.offset;
+    normal = wave.normal;
+  }
+  return riosDeformedOutput(world,normal,uv,color,draw);
+}
+
+static float riosWaterFresnel(float3 incident, float3 normal, float ior) {
+  float cosine = clamp(dot(incident,normal),-1.0,1.0);
+  const float etaIn = cosine>0.0 ? ior : 1.0;
+  const float etaOut = cosine>0.0 ? 1.0 : ior;
+  const float sine = etaIn/etaOut*sqrt(max(0.0,1.0-cosine*cosine));
+  if(sine>=1.0)
+    return 1.0;
+  const float transmitted = sqrt(max(0.0,1.0-sine*sine));
+  cosine = abs(cosine);
+  const float rs = (etaOut*cosine-etaIn*transmitted)/(etaOut*cosine+etaIn*transmitted);
+  const float rp = (etaIn*cosine-etaOut*transmitted)/(etaIn*cosine+etaOut*transmitted);
+  return (rs*rs+rp*rp)*0.5;
+}
+
+static float3 riosScenePosition(float2 uv, float depth,
+                                constant IOSSceneLightingConstants& scene) {
+  const float4 position = scene.inverseViewProjection*float4(uv*2.0-1.0,depth,1.0);
+  return position.xyz/position.w;
+}
+
+fragment float4 riosWaterFragment(
+    IOSLandscapeVertexOut in [[stage_in]],
+    constant IOSSceneLightingConstants& scene [[buffer(0)]],
+    constant float4& cloudOffsets [[buffer(2)]],
+    constant IOSLandscapeDrawConstants& draw [[buffer(3)]],
+    array<texture2d<float>,6> images [[texture(3)]],
+    texture2d<float> sceneColor [[texture(9)]],
+    depth2d<float> sceneDepth [[texture(10)]],
+    texture2d<float> sky [[texture(11)]]) {
+  constexpr sampler linearClamp(coord::normalized,address::clamp_to_edge,filter::linear);
+  constexpr sampler nearestClamp(coord::normalized,address::clamp_to_edge,filter::nearest);
+  const float2 uv = in.position.xy/float2(sceneColor.get_width(),sceneColor.get_height());
+  const float3 view = normalize(in.world-scene.cameraPosition.xyz);
+  const float footprint = max(length(dfdx(in.world)),length(dfdy(in.world)));
+  float3 normal = riosWaterWave(in.world,footprint,32,draw.waveMaxAmplitude,scene.lightInfo.y).normal;
+  if(dot(normal,view)>0.0)
+    normal = -normal;
+  const bool underwater = scene.lightInfo.z!=0;
+  float3 reflection = reflect(view,normal);
+  const float fresnel = riosWaterFresnel(reflection,normal,underwater ? 1.52 : 1.0/1.52);
+  float3 back = sceneColor.sample(linearClamp,uv).rgb;
+  if(underwater)
+    return float4(back*(1.0-fresnel),1.0);
+  float depth = sceneDepth.sample(nearestClamp,uv);
+  const float3 ground = riosScenePosition(uv,depth,scene);
+  const float thickness = max(0.0,(draw.viewProjection*float4(ground-in.world,0.0)).w);
+  const float2 refractedUv = uv+normal.xz*min(thickness*0.01,1.0)*0.1;
+  const float refractedDepth = sceneDepth.sample(nearestClamp,refractedUv);
+  if(refractedDepth>in.position.z) {
+    back = sceneColor.sample(linearClamp,refractedUv).rgb;
+    depth = refractedDepth;
+  }
+  const float distance = length(riosScenePosition(uv,depth,scene)-in.world);
+  const float3 transmittance = exp(-distance/5000.0*float3(4,2,1)*2.5);
+  const float solarFresnel = riosWaterFresnel(scene.sunDirection.xyz,normal,1.0/1.52);
+  const float3 scatter = solarFresnel*scene.sunColor.rgb*(1.0-exp(-distance/20000.0))*max(scene.sunDirection.y,0.0);
+  reflection = normalize(float3(reflection.x,max(0.0,reflection.y),reflection.z));
+  const float3 reflected = scene.lightInfo.w!=0
+      ? riosSkyColor(reflection,scene,cloudOffsets,sky,images) : float3(0.0);
+  return float4((back+scatter)*transmittance*(1.0-fresnel)+reflected*float3(0.8,0.9,1.0)*fresnel,1.0);
+}
+
+fragment float4 riosGhostFragment(
+    IOSLandscapeVertexOut in [[stage_in]],
+    texture2d<float> baseColorTexture [[texture(0)]],
+    sampler baseColorSampler [[sampler(0)]],
+    texture2d<float> sceneColor [[texture(9)]],
+    constant float4x4& viewProjection [[buffer(4)]]) {
+  constexpr sampler linearClamp(coord::normalized,address::clamp_to_edge,filter::linear);
+  const float3 projectedNormal = (viewProjection*float4(normalize(in.normal),0.0)).xyz;
+  const float2 uv = in.position.xy/float2(sceneColor.get_width(),sceneColor.get_height())+projectedNormal.xy*0.005;
+  const float3 back = sceneColor.sample(linearClamp,uv).rgb;
+  const float3 tint = riosTextureAlbedo(baseColorTexture.sample(baseColorSampler,in.uv).rgb*in.color.rgb)*5.0;
+  return float4(mix(back*tint,back,0.6),1.0);
+}
+
+fragment float4 riosUnderwaterFragment(
+    IOSSkyVertexOut in [[stage_in]],
+    constant IOSSceneLightingConstants& scene [[buffer(0)]],
+    texture2d<float> sceneColor [[texture(9)]],
+    depth2d<float> sceneDepth [[texture(10)]]) {
+  const uint2 pixel = uint2(in.position.xy);
+  const float2 uv = in.position.xy/float2(sceneColor.get_width(),sceneColor.get_height());
+  const float distance = length(riosScenePosition(uv,sceneDepth.read(pixel),scene)-scene.cameraPosition.xyz);
+  const float3 transmittance = exp(-distance/5000.0*float3(4,2,1)*1.25);
+  const float fresnel = riosWaterFresnel(scene.sunDirection.xyz,float3(0,1,0),1.0/1.52);
+  const float3 scatter = fresnel*scene.sunColor.rgb*(1.0-exp(-distance/20000.0));
+  return float4((sceneColor.read(pixel).rgb+scatter)*transmittance,1.0);
+}
+
+struct IOSParticleVertex {
+  packed_float3 position;
+  uint color;
+  packed_float3 size;
+  uint bits;
+  packed_float3 direction;
+  uint colorB;
+};
+static_assert(sizeof(IOSParticleVertex)==48, "particle storage stride");
+
+struct IOSParticleCameraConstants {
+  float4x4 viewProjection;
+  float4x4 view;
+  float4 left, top, depth;
+};
+static_assert(sizeof(IOSParticleCameraConstants)==176, "particle camera ABI");
+
+vertex IOSLandscapeVertexOut riosParticleVertex(
+    uint vertexId [[vertex_id]], uint instanceId [[instance_id]],
+    const device IOSParticleVertex* particles [[buffer(0)]],
+    constant IOSParticleCameraConstants& camera [[buffer(1)]]) {
+  const IOSParticleVertex particle = particles[instanceId];
+  const float U[6] = {0,1,0,0,1,1};
+  const float V[6] = {1,0,0,1,1,0};
+  const float dxQ[6] = {-0.5,0.5,-0.5,-0.5,0.5,0.5};
+  const float dyQ[6] = {0.5,-0.5,-0.5,0.5,0.5,-0.5};
+  const float dxT[6] = {-0.3333,1.5,-0.3333,0,0,0};
+  const float dyT[6] = {1.5,-0.3333,-0.3333,0,0,0};
+  float3 position = float3(particle.position), size = float3(particle.size);
+  float3 direction = float3(particle.direction);
+  float3 left = camera.left.xyz, top = camera.top.xyz, depth = camera.depth.xyz;
+  float3 normal = -depth;
+  float2 uv = float2(U[vertexId],V[vertexId]);
+  uint packedColor = particle.color;
+  const bool trail = (particle.bits&8u)!=0;
+  const uint orientation = (particle.bits>>4u)&3u;
+  if((particle.bits&4u)!=0) {
+    left.y = 0.0;
+    top = float3(0,-1,0);
+  }
+  if(trail) {
+    normal = float3(0,1,0);
+    if(dyQ[vertexId]>0.0)
+      packedColor = particle.colorB;
+    float3 side = cross(depth,direction);
+    const float sideLength = length(side);
+    side = sideLength>0.0 ? side*(size.x/sideLength) : float3(0.0);
+    position += dxQ[vertexId]*side + (dyQ[vertexId]+0.5)*direction;
+    uv = float2(dxQ[vertexId]+0.5,1.0-mix(size.y,size.z,dyQ[vertexId]+0.5));
+  } else if(orientation==2u) {
+    const float directionLength = length(direction);
+    if(directionLength>0.0)
+      direction /= directionLength;
+    top = -direction;
+    left = -cross(top,depth);
+  } else if(orientation==1u) {
+    float3 dir = (camera.view*float4(direction,0.0)).xyz;
+    const float directionLength = length(dir);
+    dir = directionLength>0.0 ? dir/directionLength : float3(0.0);
+    const float scale = 1.5*(1.0-abs(dir.z));
+    const float angle = (dir.x==0.0 && dir.y==0.0 ? 0.0 : atan2(dir.y,-dir.x)) + M_PI_F*0.5;
+    const float3 rotatedLeft = left*cos(angle)-top*sin(angle);
+    top = (left*sin(angle)+top*cos(angle))*scale;
+    left = rotatedLeft*scale;
+  }
+  if((particle.bits&2u)!=0)
+    position += left*dxQ[vertexId]*size.x + top*dyQ[vertexId]*size.y;
+  else if(!trail)
+    position += left*dxT[vertexId]*size.x + top*dyT[vertexId]*size.y;
+  if((particle.bits&1u)!=0)
+    position -= size.z*depth;
+  IOSLandscapeVertexOut out;
+  out.position = camera.viewProjection*float4(position,1.0);
+  out.position.y = -out.position.y;
+  out.world = position;
+  out.normal = normal;
+  out.landscape = 4u; // Particle forward lighting uses a phase function.
+  out.uv = uv;
+  out.color = float4((uint4(packedColor)>>uint4(0,8,16,24))&255u)/255.0;
+  return out;
 }

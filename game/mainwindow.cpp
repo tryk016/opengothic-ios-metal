@@ -72,6 +72,7 @@ IOSSceneFrameState iosSceneFrameState(const World* world,
   frame.camera.view           = IOSSceneConversion::matrix(camera->view());
   frame.camera.projection     = IOSSceneConversion::matrix(camera->projective());
   frame.camera.viewProjection = IOSSceneConversion::matrix(camera->viewProj());
+  frame.camera.underwater     = camera->isInWater();
   frame.camera.position       = {position.x,position.y,position.z};
   auto inverseViewProjection = camera->viewProj();
   inverseViewProjection.inverse();
@@ -107,7 +108,7 @@ IOSSceneFrameState iosSceneFrameState(const World* world,
       frame.featureMask |= IOSSceneFeatureSky;
     if(world!=nullptr) {
       const auto weather = world->weather();
-      const bool sheltered = world->isSheltered(position);
+      const bool sheltered = world->isSheltered(position) || frame.camera.underwater;
       frame.sky.cloudCoverage = weather.clouds;
       frame.sky.rainIntensity = sheltered ? 0.f : weather.rain;
       if(!sheltered) {
@@ -138,10 +139,14 @@ IOSSceneSkySource readIOSWorldSky(const void* source) {
            sky.cloudsNight().lay[0],sky.cloudsNight().lay[1],&sky.sunImage(),&sky.moonImage()}};
   }
 
+void visitIOSWorldParticles(const void* source, void* context, IOSSceneParticleVisitor visitor) {
+  static_cast<const WorldView*>(source)->particles().visitIOSParticles(context,visitor);
+  }
+
 IOSSceneSourceProvider iosSceneSourceProvider(const WorldView* source) noexcept {
   if(source==nullptr)
     return {};
-  return {source,&visitIOSWorldSources,&visitIOSWorldLights,&readIOSWorldSky};
+  return {source,&visitIOSWorldSources,&visitIOSWorldLights,&readIOSWorldSky,&visitIOSWorldParticles};
   }
 
 constexpr bool rendererIOSPublishesWorldDuringLoad(

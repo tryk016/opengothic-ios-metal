@@ -54,16 +54,20 @@ bool PfxObjects::isInPfxRange(const Vec3& pos) const {
   }
 
 void PfxObjects::preFrameUpdate(uint8_t fId) {
-  for(auto i=bucket.begin(), end = bucket.end(); i!=end; ) {
-    if(i->isEmpty()) {
-      i = bucket.erase(i);
-      } else {
-      ++i;
-      }
-    }
+  std::erase_if(bucket,[](const PfxBucket& value) { return value.isEmpty(); });
 
   for(auto& i:bucket)
     i.preFrameUpdate(scene, fId);
+  }
+
+void PfxObjects::prepareIOSSceneSources(uint64_t ticks) {
+  tick(ticks);
+  std::erase_if(bucket,[](const PfxBucket& value) { return value.isEmpty(); });
+  }
+
+void PfxObjects::visitIOSParticles(void* context, IOSSceneParticleVisitor visitor) const {
+  for(const auto& value:bucket)
+    value.visitIOSParticles(scene.tickCount,context,visitor);
   }
 
 void PfxObjects::drawGBuffer(Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId) {

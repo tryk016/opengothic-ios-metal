@@ -25,7 +25,7 @@ class IOSRenderWorld final {
     IOSTextureHandle  resolveFrameTexture(uint64_t sourceId,
                                           uint64_t frameOrdinal);
     IOSLightHandle    resolveLight(uint64_t stableKey);
-    IOSParticleHandle resolveParticle(uint64_t stableKey);
+    IOSTextureHandle  resolveParticleTexture(uintptr_t texture);
 
     IOSSceneSnapshotPtr buildSnapshot(IOSSceneFrameState&& frame);
     bool acceptsForSubmit(const IOSSceneSnapshotPtr& snapshot) const noexcept;
@@ -63,7 +63,6 @@ class IOSRenderWorld final {
     uint64_t nextMaterialId = 1;
     uint64_t nextTextureId  = 1;
     uint64_t nextLightId    = 1;
-    uint64_t nextParticleId = 1;
 
     std::unordered_map<uint64_t,IOSRenderEntityId> entityRegistry;
     std::unordered_map<uint64_t,IOSMeshHandle>     meshRegistry;
@@ -73,12 +72,11 @@ class IOSRenderWorld final {
     std::unordered_map<FrameTextureKey,IOSTextureHandle,
                        FrameTextureKeyHash> frameTextureRegistry;
     std::unordered_map<uint64_t,IOSLightHandle>    lightRegistry;
-    std::unordered_map<uint64_t,IOSParticleHandle> particleRegistry;
+    std::unordered_map<uint64_t,IOSTextureHandle> particleTextureRegistry;
 
     std::unordered_set<uint64_t> issuedEntityIds;
     std::unordered_set<uint64_t> issuedMeshIds;
     std::unordered_set<uint64_t> issuedMaterialIds;
     std::unordered_set<uint64_t> issuedTextureIds;
     std::unordered_set<uint64_t> issuedLightIds;
-    std::unordered_set<uint64_t> issuedParticleIds;
   };

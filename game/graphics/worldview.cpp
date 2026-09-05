@@ -82,6 +82,14 @@ void WorldView::prepareIOSSceneSources(uint64_t tickCount) {
   gSky.updateLight(owner.time().timeInDay().toInt());
   gLights.tick(tickCount);
   sGlobal.setTime(tickCount);
+#if !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  pfxGroup.prepareIOSSceneSources(tickCount);
+#endif
   visuals.prepareIOSSceneSources();
   }
 

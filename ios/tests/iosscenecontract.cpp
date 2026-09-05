@@ -69,7 +69,6 @@ struct SceneHandles final {
   IOSMaterialHandle material;
   IOSTextureHandle  texture;
   IOSLightHandle    light;
-  IOSParticleHandle particle;
   };
 
 SceneHandles resolveScene(IOSRenderWorld& world, uint64_t keyBase) {
@@ -79,7 +78,6 @@ SceneHandles resolveScene(IOSRenderWorld& world, uint64_t keyBase) {
     world.resolveMaterial(keyBase+3u),
     world.resolveTexture(keyBase+4u),
     world.resolveLight(keyBase+5u),
-    world.resolveParticle(keyBase+6u),
     };
   }
 
@@ -110,12 +108,11 @@ IOSSceneFrameState populatedFrame(const SceneHandles& handles,
   light.id = handles.light;
   frame.lights.push_back(light);
 
-  IOSParticleState particle;
-  particle.id       = handles.particle;
-  particle.texture  = handles.texture;
+  IOSParticleVertex particle;
   particle.position = {objectX,0.f,0.f};
   particle.size     = {1.f,1.f};
   frame.particles.push_back(particle);
+  frame.particleBatches.push_back({{0,1},handles.texture,IOSMaterialCategory::Additive});
   return frame;
   }
 
@@ -262,7 +259,9 @@ int main() {
   assert(handles.material==populatedWorld.resolveMaterial(1003u));
   assert(handles.texture==populatedWorld.resolveTexture(1004u));
   assert(handles.light==populatedWorld.resolveLight(1005u));
-  assert(handles.particle==populatedWorld.resolveParticle(1006u));
+  const auto particleTexture = populatedWorld.resolveParticleTexture(1004u);
+  assert(particleTexture!=handles.texture);
+  assert(particleTexture==populatedWorld.resolveParticleTexture(1004u));
 
   IOSRenderWorld frameTextureWorld;
   const auto frameZero = frameTextureWorld.resolveFrameTexture(0x1001u,0u);
@@ -329,20 +328,24 @@ int main() {
   assert(populatedFirst->materials.size()==1u);
   assert(populatedFirst->lights.size()==1u);
   assert(populatedFirst->particles.size()==1u);
+  auto invalidParticles = *populatedFirst;
+  invalidParticles.particleBatches[0].vertices.count = 2;
+  assert(!invalidParticles.isStructurallyValid());
+  invalidParticles = *populatedFirst;
+  ++invalidParticles.particleBatches[0].texture.generation.value;
+  assert(!invalidParticles.isStructurallyValid());
   assert(populatedWorld.commitAccepted(populatedFirst));
 
   const auto populatedCanceled =
     populatedWorld.buildSnapshot(populatedFrame(handles,20.f,2.f));
   assert(populatedCanceled->historyValid);
   assert(populatedCanceled->entities[0].previousTransform.at(0u,3u)==1.f);
-  assert(populatedCanceled->particles[0].previousPosition.x==1.f);
 
   const auto populatedAccepted =
     populatedWorld.buildSnapshot(populatedFrame(handles,30.f,3.f));
   assert(populatedAccepted->historyValid);
   assert(populatedAccepted->previousCamera.position.x==10.f);
   assert(populatedAccepted->entities[0].previousTransform.at(0u,3u)==1.f);
-  assert(populatedAccepted->particles[0].previousPosition.x==1.f);
   assert(!populatedWorld.acceptsForSubmit(populatedCanceled));
   assert(populatedWorld.commitAccepted(populatedAccepted));
 
@@ -368,7 +371,6 @@ int main() {
     movableWorld.resolveMesh(movablePlanA.meshStableKey),
     movableWorld.resolveMaterial(movablePlanA.materialStableKey),
     movableWorld.resolveTexture(movablePlanA.textureStableKey),
-    {},
     {},
     };
   assert(movableHandles.entity==
@@ -420,7 +422,6 @@ int main() {
     alphaWorld.resolveMesh(alphaPlanA.meshStableKey),
     alphaWorld.resolveMaterial(alphaPlanA.materialStableKey),
     alphaWorld.resolveTexture(alphaPlanA.textureStableKey),
-    {},
     {},
     };
   const auto alphaA =
@@ -598,7 +599,7 @@ int main() {
 
   auto missingAdditiveFlag = additive;
   missingAdditiveFlag.materials[0].flags = IOSMaterialFlagNone;
-  assert(!missingAdditiveFlag.isStructurallyValid());
+  assert(missingAdditiveFlag.isStructurallyValid());
   auto unknownAdditiveFlag = additive;
   unknownAdditiveFlag.materials[0].flags |= uint64_t(1) << 63u;
   assert(!unknownAdditiveFlag.isStructurallyValid());
@@ -624,7 +625,7 @@ int main() {
   assert(!multiplyFallback.isStructurallyValid());
   auto multiplyUv = multiply2;
   multiplyUv.materials[0].uvOffset.y = 0.25f;
-  assert(!multiplyUv.isStructurallyValid());
+  assert(multiplyUv.isStructurallyValid());
   auto multiplyMissingTexture = multiply2;
   multiplyMissingTexture.materials[0].baseColorTexture = {};
   assert(!multiplyMissingTexture.isStructurallyValid());
@@ -650,7 +651,7 @@ int main() {
   assert(!additiveFallback.isStructurallyValid());
   auto additiveUv = additive;
   additiveUv.materials[0].uvOffset.x = 0.25f;
-  assert(!additiveUv.isStructurallyValid());
+  assert(additiveUv.isStructurallyValid());
   auto additiveNegativeZeroUv = additive;
   additiveNegativeZeroUv.materials[0].uvOffset.y = -0.f;
   assert(!additiveNegativeZeroUv.isStructurallyValid());
@@ -670,18 +671,27 @@ int main() {
       static_cast<IOSSceneMeshKind>(255u);
   assert(!fabricatedKindSnapshot.isStructurallyValid());
   auto fabricatedCategorySnapshot = *firstValidAfterRejects;
-  for(const auto category:{
-        IOSMaterialCategory::Water,
-        static_cast<IOSMaterialCategory>(255u)}) {
+  for(const auto category:{static_cast<IOSMaterialCategory>(255u)}) {
     fabricatedCategorySnapshot.materials[0].category = category;
     assert(!fabricatedCategorySnapshot.isStructurallyValid());
     }
+
+  for(const auto category:{IOSMaterialCategory::Water,IOSMaterialCategory::Ghost,IOSMaterialCategory::Multiply}) {
+    auto material = *firstValidAfterRejects;
+    material.materials[0].category = category;
+    material.materials[0].waveMaxAmplitude = 40.f;
+    material.currentCamera.underwater = material.previousCamera.underwater = true;
+    assert(material.isStructurallyValid());
+    material.materials[0].waveMaxAmplitude = std::numeric_limits<float>::quiet_NaN();
+    assert(!material.isStructurallyValid());
+  }
 
   IOSRenderWorld optionalTextureWorld;
   const auto optionalHandles = resolveScene(optionalTextureWorld,4000u);
   auto optionalTextureFrame = populatedFrame(optionalHandles,1.f,1.f);
   optionalTextureFrame.materials[0].baseColorTexture = {};
-  optionalTextureFrame.particles[0].texture = {};
+  optionalTextureFrame.particles.clear();
+  optionalTextureFrame.particleBatches.clear();
   const auto optionalTextureSnapshot =
       optionalTextureWorld.buildSnapshot(std::move(optionalTextureFrame));
   assert(optionalTextureSnapshot->isStructurallyValid());

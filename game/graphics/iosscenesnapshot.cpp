@@ -92,6 +92,8 @@ bool validMaterialCategory(IOSMaterialCategory category) noexcept {
     case IOSMaterialCategory::AlphaTest:
     case IOSMaterialCategory::Transparent:
     case IOSMaterialCategory::Additive:
+    case IOSMaterialCategory::Ghost:
+    case IOSMaterialCategory::Multiply:
     case IOSMaterialCategory::Water:
     case IOSMaterialCategory::Multiply2:
       return true;
@@ -116,20 +118,20 @@ bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
     case IOSMaterialCategory::Additive:
       return bool(material.baseColorTexture) &&
              !material.usesFallbackTexture &&
-             material.uvOffset==IOSFloat2{} &&
              material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
-             material.flags==IOSMaterialFlagStaticAdditiveNone;
+             (material.flags==IOSMaterialFlagNone || material.flags==IOSMaterialFlagStaticAdditiveNone);
     case IOSMaterialCategory::Multiply2:
       return bool(material.baseColorTexture) &&
              !material.usesFallbackTexture &&
-             material.uvOffset==IOSFloat2{} &&
              material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
-             material.flags==IOSMaterialFlagStaticMultiply2None;
+             (material.flags==IOSMaterialFlagNone || material.flags==IOSMaterialFlagStaticMultiply2None);
     case IOSMaterialCategory::Transparent:
       return bool(material.baseColorTexture) && material.flags==IOSMaterialFlagNone &&
              material.baseColor.w>=0.f && material.baseColor.w<=1.f;
     case IOSMaterialCategory::Water:
-      return false;
+    case IOSMaterialCategory::Ghost:
+    case IOSMaterialCategory::Multiply:
+      return bool(material.baseColorTexture) && material.flags==IOSMaterialFlagNone;
     }
   return false;
   }
@@ -237,7 +239,7 @@ static_assert(std::is_trivially_copyable_v<IOSMeshHandle>);
 static_assert(std::is_trivially_copyable_v<IOSMaterialHandle>);
 static_assert(std::is_trivially_copyable_v<IOSTextureHandle>);
 static_assert(std::is_trivially_copyable_v<IOSLightHandle>);
-static_assert(std::is_trivially_copyable_v<IOSParticleHandle>);
+static_assert(std::is_trivially_copyable_v<IOSParticleVertex>);
 static_assert(std::is_same_v<IOSSceneSnapshotPtr,
                              std::shared_ptr<const IOSSceneSnapshot>>);
 
@@ -267,7 +269,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !isCanonicalUVOffset(material.uvOffset) ||
        !isFinite(material.emissive) ||
        !isFinite(material.roughness) || !isFinite(material.metallic) ||
-       !isFinite(material.alphaCutoff) ||
+       !isFinite(material.alphaCutoff) || !isFinite(material.waveMaxAmplitude) ||
        material.roughness<0.f || material.roughness>1.f ||
        material.metallic<0.f || material.metallic>1.f ||
        material.alphaCutoff<0.f || material.alphaCutoff>1.f ||
@@ -294,8 +296,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !validRange(entity.morphRange,currentMorphLayers.size()) ||
        !validVisibility(entity.visibilityMask))
       return false;
-    if((material->category==IOSMaterialCategory::Additive ||
-        material->category==IOSMaterialCategory::Multiply2) &&
+    if((material->flags!=IOSMaterialFlagNone) &&
        entity.kind!=IOSSceneMeshKind::Static)
       return false;
     if(!historyValid && entity.currentTransform!=entity.previousTransform)
@@ -304,8 +305,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
   if(!idsStrictlyIncrease(entities,&IOSRenderEntity::id))
     return false;
   for(const auto& material:materials) {
-    if((material.category==IOSMaterialCategory::Additive ||
-        material.category==IOSMaterialCategory::Multiply2) &&
+    if((material.flags!=IOSMaterialFlagNone) &&
        !hasOnlyStaticEntitiesForMaterial(entities,material.id))
       return false;
     }
@@ -328,18 +328,20 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
     return false;
 
   for(const auto& particle:particles) {
-    if(!validHandle(particle.id,generation) ||
-       !validHandle(particle.texture,generation,true) ||
-       !isFinite(particle.currentPosition) ||
-       !isFinite(particle.previousPosition) ||
-       !isFinite(particle.velocity) || !isFinite(particle.color) ||
-       !isFinite(particle.size) || !isFinite(particle.rotation) ||
-       particle.size.x<0.f || particle.size.y<0.f)
-      return false;
-    if(!historyValid && particle.currentPosition!=particle.previousPosition)
+    if(!isFinite(particle.position) || !isFinite(particle.size) ||
+       !isFinite(particle.direction))
       return false;
     }
-  if(!idsStrictlyIncrease(particles,&IOSParticleSnapshot::id))
+  size_t particleEnd = 0;
+  for(const auto& batch:particleBatches) {
+    if(batch.vertices.offset!=particleEnd || batch.vertices.count==0 ||
+       batch.vertices.count>particles.size()-particleEnd ||
+       !validHandle(batch.texture,generation) ||
+       !validMaterialCategory(batch.material) || batch.material==IOSMaterialCategory::Water)
+      return false;
+    particleEnd += batch.vertices.count;
+    }
+  if(particleEnd!=particles.size())
     return false;
 
   if(!std::all_of(currentBones.begin(),currentBones.end(),

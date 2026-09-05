@@ -28,6 +28,8 @@ class PfxObjects final {
     bool       isInPfxRange(const Tempest::Vec3& pos) const;
 
     void       preFrameUpdate(uint8_t fId);
+    void       prepareIOSSceneSources(uint64_t ticks);
+    void       visitIOSParticles(void* context, IOSSceneParticleVisitor visitor) const;
 
     void       drawGBuffer    (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
     void       drawShadow     (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId, int layer);

@@ -699,7 +699,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=11 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1356,9 +1356,7 @@ struct IOSMetalContext::Impl final {
     runIOSResourceAllocatorSelfTest(resourceAllocator,device);
 #endif
     static constexpr TextureFormat depthCandidates[] = {
-      TextureFormat::Depth16,
       TextureFormat::Depth32F,
-      TextureFormat::Depth24x8,
       };
     for(const auto format:depthCandidates) {
       if(device.properties().hasDepthFormat(format)) {
@@ -2741,7 +2739,7 @@ struct IOSMetalContext::Impl final {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
              RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=11 minimum-apple=4");
+             " contract=1 metallib-abi=12 minimum-apple=4");
       }
     catch(...) {
       }
@@ -5591,8 +5589,11 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     {
       auto encoder = command.startEncoding(impl->device);
 #if !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
       if(linearHDRSceneActive && !impl->gpuScene->encodePreparedEnvironment(encoder,preparedScene))
         throw std::runtime_error("RendererIOS environment encoding failed");
+#endif
 #endif
       if(frameContext.videoFrame) {
         if(impl->gpuBink==nullptr)
@@ -5700,13 +5701,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             throw std::runtime_error(
               "RendererIOS HDR proof preparation failed");
           }
-        encoder.setDebugMarker(
-          linearHDRProofPrepared
-            ? impl->linearHDRProof->sceneMarker()
-            : std::string_view("RendererIOS native Landscape HDR"));
+        const auto sceneMarker = linearHDRProofPrepared
+            ? impl->linearHDRProof->sceneMarker() : std::string_view{};
 #else
-        encoder.setDebugMarker("RendererIOS native Landscape HDR");
+        constexpr std::string_view sceneMarker;
 #endif
+        encoder.setDebugMarker(sceneMarker.empty()
+            ? std::string_view("RendererIOS native Landscape HDR") : sceneMarker);
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
         IOSGPUScene::Report report;
         if(multiply2CausalSplitPhase) {
@@ -5747,9 +5748,15 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
               encoder,preparedScene,impl->linearHDRTargets.color);
           }
 #else
+#if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
         encoder.setFramebuffer({{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});
         const auto report =
           impl->gpuScene->encodePrepared(encoder,preparedScene);
+#else
+        const auto report = impl->gpuScene->encodePreparedScene(
+            encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker);
+#endif
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(report.result!=IOSGPUScene::Result::Success ||

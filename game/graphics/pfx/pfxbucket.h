@@ -6,6 +6,7 @@
 
 #include "graphics/pfx/pfxobjects.h"
 #include "resources.h"
+#include "pfxparticle.h"
 
 class ParticleFx;
 class VisualObjects;
@@ -41,14 +42,9 @@ class PfxBucket {
       std::unique_ptr<PfxEmitter> next;
       };
 
-    struct PfxState {
-      Tempest::Vec3 pos;
-      uint32_t      color  = 0;
-      Tempest::Vec3 size;
-      uint32_t      bits0  = 0;
-      Tempest::Vec3 dir;
-      uint32_t      colorB = 0;
-      };
+    using PfxState = PfxParticle;
+
+    void visitIOSParticles(uint64_t tickCount, void* context, IOSSceneParticleVisitor visitor) const;
 
     const ParticleFx&           decl;
     PfxObjects&                 parent;

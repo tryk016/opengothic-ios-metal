@@ -239,12 +239,12 @@ required_once = {
         "const auto encodePhase = [&](",
         """[encoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)draw.pipelineState];""",
-        "if(context.phase==0u || context.phase==1u) {",
+        "if(context.phase==0u || context.phase==1u || context.phase==3u) {",
         "encodePhase(context.prepared->base,context.scene->baseDepthState);",
         """encodePhase(context.prepared->multiply2,
                   context.scene->multiply2DepthState);""",
         "context.prepared->nativeBaseMultiplyCompleted = true;",
-        "if(context.phase==0u || context.phase==2u) {",
+        "if(context.phase==0u || context.phase==2u || context.phase==4u) {",
         """encodePhase(context.prepared->additive,
                   context.scene->additiveDepthState);""",
         "context.prepared->nativeAdditiveCompleted = true;",
@@ -268,9 +268,14 @@ required_once = {
 expected_draw_operations = [
     "setRenderPipelineState",
     "bindGeometry",
+    "setFragmentBytes",
     "setFragmentTexture",
     "insertDebugSignpost",
     "insertDebugSignpost",
+    "setVertexBuffer",
+    "setVertexBytes",
+    "setTessellationFactorBuffer",
+    "drawPatches",
     "drawIndexedPrimitives",
 ]
 
@@ -4580,7 +4585,7 @@ grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
 grep -Fq 'opengothic-ios-patch-stack-v17' \
   ios/patches/apply-patches.sh
 
-grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-11.binaryarchive' \
+grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-12.binaryarchive' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'PreviousArchiveFileName' \
   game/graphics/iospipelinearchivepolicy.h
@@ -4961,25 +4966,16 @@ paths = {
 }
 required = (
 
-    ("extractor-additive-static-only",
+    ("extractor-causal-additive-static-only",
      "game/graphics/iossceneextractorplan.h",
      """if((isAdditive || isMultiply2) &&
      source.kind!=IOSSceneMeshKind::Static)
     return IOSSceneSourcePlanResult::SkippedMaterial;"""),
-    ("extractor-additive-no-texture-animation",
+    ("extractor-causal-additive-no-texture-animation",
      "game/graphics/iossceneextractorplan.h",
      """if((isAdditive || isMultiply2) &&
      textureAnimation!=IOSSceneTextureAnimationMode::None)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;"""),
-    ("extractor-additive-texture-provenance",
-     "game/graphics/iossceneextractorplan.h",
-     """if((isAdditive || isMultiply2) &&
-     (!source.hasBaseColorTexture || source.usesFallbackTexture ||
-      source.hasValidFrameSequence || source.frameCount!=0 ||
-      source.framePeriodMs!=0 ||
-      !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
-      source.alphaWeight>1.f))
-    return IOSSceneSourcePlanResult::InvalidSource;"""),
 
     ("extractor-uv-period-provenance",
      "game/graphics/iossceneextractorplan.h",
@@ -5066,35 +5062,7 @@ required = (
       return IOSGPUScenePipelineSelector::AlphaTest;
     case IOSMaterialCategory::Additive:
       return IOSGPUScenePipelineSelector::Additive;"""),
-    ("gpu-plan-additive-restrictions",
-     "game/graphics/iosgpusceneplan.h",
-     """if(pipeline==IOSGPUScenePipelineSelector::Additive) {
-    if(source.entity.kind!=IOSSceneMeshKind::Static ||
-       source.material.flags!=IOSMaterialFlagStaticAdditiveNone ||
-       source.material.uvOffset.x!=0.f ||
-       source.material.uvOffset.y!=0.f ||
-       std::signbit(source.material.uvOffset.x) ||
-       std::signbit(source.material.uvOffset.y) ||
-       !std::isfinite(source.material.baseColor.w) ||
-       source.material.baseColor.w<0.f ||
-       source.material.baseColor.w>1.f)
-      return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
-    }
-  else if(pipeline==IOSGPUScenePipelineSelector::Multiply2) {
-    if(source.entity.kind!=IOSSceneMeshKind::Static ||
-       source.material.flags!=IOSMaterialFlagStaticMultiply2None ||
-       source.material.uvOffset.x!=0.f ||
-       source.material.uvOffset.y!=0.f ||
-       std::signbit(source.material.uvOffset.x) ||
-       std::signbit(source.material.uvOffset.y) ||
-       !std::isfinite(source.material.baseColor.w) ||
-       source.material.baseColor.w<0.f ||
-       source.material.baseColor.w>1.f)
-      return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
-    }
-  else if(source.material.flags!=IOSMaterialFlagNone) {
-    return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
-    }"""),
+
     ("gpu-plan-alpha-texture-provenance",
      "game/graphics/iosgpusceneplan.h",
      """if(pipeline==IOSGPUScenePipelineSelector::AlphaTest) {
@@ -5860,7 +5828,7 @@ link_rendererios_metallib \
   "$P25C1A_CANDIDATE_AIR" "$P25C1A_CANDIDATE_METALLIB"
 
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
-  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment \
+  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
@@ -5878,7 +5846,7 @@ require_exact_rendererios_exports() {
   local exports
   local function
   for function in \
-      riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment \
+      riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
       riosLandscapeAlphaTestFragment \
       riosLandscapeAdditiveFragment \
       riosToneResolveVertex riosToneResolveFragment \
@@ -5896,7 +5864,7 @@ require_exact_rendererios_exports() {
   exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
     awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
   test "$exports" = "$EXPECTED_RIOS_EXPORTS"
-  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 29
+  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 35
 }
 require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
 require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
@@ -5926,7 +5894,7 @@ int main(int argc, char** argv) {
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==11u);
+  static_assert(Archive::MetallibAbiVersion==12u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
   static_assert(
     Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
@@ -5934,7 +5902,7 @@ int main(int argc, char** argv) {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-11.binaryarchive");
+    "RendererIOS-abi-12.binaryarchive");
   if(argc!=3)
     return 1;
   const std::string_view candidate = argv[1];
@@ -5953,9 +5921,9 @@ int main(int argc, char** argv) {
     "provenance-schema=1\n"
     "cache-schema=1\n"
     "pipeline-key-abi=1\n"
-    "metallib-abi=11\n"
+    "metallib-abi=12\n"
     "metallib-sha256="+std::string(candidate)+"\n"
-    "archive-file=RendererIOS-abi-11.binaryarchive\n";
+    "archive-file=RendererIOS-abi-12.binaryarchive\n";
   return record==expected ? 0 : 4;
 }
 CPP
@@ -6724,7 +6692,7 @@ profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
-    "case=tile-prototype-v1 contract=1 metallib-abi=11 "
+    "case=tile-prototype-v1 contract=1 metallib-abi=12 "
     "minimum-apple=4 output=4x4 rgba8-private=1",
     "RendererIOS shading prototype tile self-test: FACTORY READY "
     "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
@@ -6924,7 +6892,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
 TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
 strings "$TILE_BINARY" >"$TILE_STRINGS"
 for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=11 minimum-apple=4 output=4x4 rgba8-private=1' \
+    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1' \
     'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
     'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

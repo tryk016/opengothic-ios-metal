@@ -151,17 +151,6 @@ struct IOSLightHandle final {
   constexpr bool operator==(const IOSLightHandle&) const noexcept = default;
   };
 
-struct IOSParticleHandle final {
-  IOSWorldGeneration generation;
-  uint64_t            value = 0;
-
-  constexpr explicit operator bool() const noexcept {
-    return bool(generation) && value!=0;
-    }
-
-  constexpr bool operator==(const IOSParticleHandle&) const noexcept = default;
-  };
-
 enum class IOSMaterialCategory : uint8_t {
   Opaque,
   AlphaTest,
@@ -169,6 +158,8 @@ enum class IOSMaterialCategory : uint8_t {
   Additive,
   Water,
   Multiply2,
+  Ghost,
+  Multiply,
   };
 
 enum IOSMaterialFlag : uint64_t {
@@ -237,6 +228,7 @@ struct IOSCameraState final {
   IOSFloat3    position;
   IOSFloat2    jitter;
   IOSViewport  viewport;
+  bool         underwater = false;
   float        nearPlane = 0.1f;
   float        farPlane  = 1.f;
 
@@ -283,6 +275,7 @@ struct IOSMaterial final {
   IOSFloat4          baseColor = {1.f,1.f,1.f,1.f};
   IOSFloat2          uvOffset;
   IOSFloat3          emissive;
+  float              waveMaxAmplitude = 0.f;
   float              roughness  = 1.f;
   float              metallic   = 0.f;
   float              alphaCutoff = 0.5f;
@@ -307,29 +300,27 @@ struct IOSLight final {
   constexpr bool operator==(const IOSLight&) const noexcept = default;
   };
 
-struct IOSParticleState final {
-  IOSParticleHandle id;
-  IOSFloat3         position;
-  IOSFloat3         velocity;
-  IOSFloat4         color = {1.f,1.f,1.f,1.f};
-  IOSFloat2         size;
-  float             rotation = 0.f;
-  IOSTextureHandle  texture;
+struct IOSParticleVertex final {
+  IOSFloat3 position;
+  uint32_t color = 0;
+  IOSFloat3 size;
+  uint32_t bits = 0;
+  IOSFloat3 direction;
+  uint32_t colorB = 0;
 
-  constexpr bool operator==(const IOSParticleState&) const noexcept = default;
+  constexpr bool operator==(const IOSParticleVertex&) const noexcept = default;
   };
+static_assert(sizeof(IOSParticleVertex)==48);
+static_assert(offsetof(IOSParticleVertex,color)==12);
+static_assert(offsetof(IOSParticleVertex,bits)==28);
+static_assert(offsetof(IOSParticleVertex,colorB)==44);
 
-struct IOSParticleSnapshot final {
-  IOSParticleHandle id;
-  IOSFloat3         currentPosition;
-  IOSFloat3         previousPosition;
-  IOSFloat3         velocity;
-  IOSFloat4         color = {1.f,1.f,1.f,1.f};
-  IOSFloat2         size;
-  float             rotation = 0.f;
-  IOSTextureHandle  texture;
+struct IOSParticleBatch final {
+  IOSIndexRange vertices;
+  IOSTextureHandle texture;
+  IOSMaterialCategory material = IOSMaterialCategory::AlphaTest;
 
-  constexpr bool operator==(const IOSParticleSnapshot&) const noexcept = default;
+  constexpr bool operator==(const IOSParticleBatch&) const noexcept = default;
   };
 
 struct IOSSkyState final {
@@ -371,7 +362,8 @@ struct IOSSceneFrameState final {
   std::vector<IOSLight>             lights;
   std::vector<IOSMatrix4x4>         bones;
   std::vector<IOSMorphLayer>        morphLayers;
-  std::vector<IOSParticleState>     particles;
+  std::vector<IOSParticleVertex>    particles;
+  std::vector<IOSParticleBatch>     particleBatches;
   std::vector<IOSEffectRequest>     effects;
   uint64_t                          featureMask = IOSSceneFeatureNone;
   bool                              resetHistory = false;
@@ -392,7 +384,8 @@ struct IOSSceneSnapshot final {
   std::vector<IOSMatrix4x4>       previousBones;
   std::vector<IOSMorphLayer>      currentMorphLayers;
   std::vector<IOSMorphLayer>      previousMorphLayers;
-  std::vector<IOSParticleSnapshot> particles;
+  std::vector<IOSParticleVertex>   particles;
+  std::vector<IOSParticleBatch>    particleBatches;
   std::vector<IOSEffectRequest>   effects;
   uint64_t                        featureMask = IOSSceneFeatureNone;
   bool                            historyValid = false;

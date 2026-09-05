@@ -1,4 +1,5 @@
 #include "iossceneextractor.h"
+#include "pfx/pfxparticle.h"
 
 #include "iosrenderworld.h"
 #include "iossceneconversion.h"
@@ -52,6 +53,48 @@ void visitLight(void* opaque, const IOSSceneLightSource& source) {
   light.range = source.range;
   context.staging.lights.push_back(light);
   }
+
+#if !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+void visitParticles(void* opaque, const IOSSceneParticleSource& source) {
+  auto& context = *static_cast<ExtractionContext*>(opaque);
+  if(context.report.result!=IOSSceneExtractionResult::Success)
+    return;
+  const auto& material = *source.material;
+  const auto mapping = iosSceneMaterialMapping(material.isGhost ? Material::Ghost : material.alpha);
+  if(!mapping.mapped || mapping.category==IOSMaterialCategory::Water)
+    return;
+  IOSParticleBatch batch;
+  batch.material = mapping.category;
+  batch.texture = context.renderWorld->resolveParticleTexture(uintptr_t(source.texture));
+  const auto bound = context.assets->bindTexture(*context.device,batch.texture,*source.texture);
+  if(!isIOSSceneAssetBindSuccess(bound)) {
+    context.report.result = IOSSceneExtractionResult::AssetBindFailed;
+    context.report.bindFailure = bound;
+    return;
+    }
+  auto& vertices = context.staging.particles;
+  if(source.particles.size()>std::numeric_limits<uint32_t>::max()-vertices.size()) {
+    context.report.result = IOSSceneExtractionResult::InvalidSource;
+    return;
+    }
+  batch.vertices = {uint32_t(vertices.size()),uint32_t(source.particles.size())};
+  for(const auto& particle:source.particles)
+    vertices.push_back({{particle.pos.x,particle.pos.y,particle.pos.z},particle.color,
+                       {particle.size.x,particle.size.y,particle.size.z},particle.bits0,
+                       {particle.dir.x,particle.dir.y,particle.dir.z},particle.colorB});
+  auto& batches = context.staging.particleBatches;
+  if(!batches.empty() && batches.back().texture==batch.texture &&
+     batches.back().material==batch.material)
+    batches.back().vertices.count += batch.vertices.count;
+  else
+    batches.push_back(batch);
+  }
+#endif
 
 void visitSource(void* opaque, const IOSSceneSource& source) {
   auto& context = *static_cast<ExtractionContext*>(opaque);
@@ -234,6 +277,7 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   materialRecord.usesFallbackTexture = plan.usesFallbackTexture;
   materialRecord.category         = plan.materialCategory;
   materialRecord.baseColor.w      = plan.baseColorAlpha;
+  materialRecord.waveMaxAmplitude = source.material->waveMaxAmplitude;
   materialRecord.uvOffset         = plan.uvOffset;
   materialRecord.flags            = plan.materialFlags;
   context.staging.materials.push_back(materialRecord);
@@ -288,7 +332,8 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     IOSSceneFrameState& frame) const {
   IOSSceneExtractionReport report;
   if(!frame.entities.empty() || !frame.materials.empty() ||
-     !frame.bones.empty() || !frame.morphLayers.empty() || !frame.lights.empty()) {
+     !frame.bones.empty() || !frame.morphLayers.empty() || !frame.lights.empty() ||
+     !frame.particles.empty() || !frame.particleBatches.empty()) {
     report.result = IOSSceneExtractionResult::FrameAlreadyPopulated;
     return report;
     }
@@ -359,6 +404,17 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     return context.report;
     }
 
+#if !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  if(source.enumerateParticles!=nullptr)
+    source.enumerateParticles(source.sourceContext,&context,&visitParticles);
+  if(context.report.result!=IOSSceneExtractionResult::Success)
+    return context.report;
+#endif
   source.visitLights(&context,&visitLight);
   auto sky = frame.sky;
   if(source.readSky!=nullptr) {

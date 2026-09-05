@@ -225,7 +225,7 @@ def verify_metallib(raw: bytes, expected_exports: Sequence[str]) -> None:
             exports.append(fields[2])
     require(sorted(exports) == list(expected_exports) and
             len(exports) == len(set(exports)),
-            "RendererIOS.metallib exports are not the exact export29 set")
+            "RendererIOS.metallib exports are not the exact export35 set")
 
 
 def checked_meta(value: Any, root: pathlib.Path, label: str,
@@ -371,7 +371,7 @@ def _build_attestation_document(spec_path: pathlib.Path,
         })
         require(export_raw == ("\n".join(spec["metallib"]["exports"]) +
                                "\n").encode("ascii"),
-                f"run {label} export manifest is not exact export29")
+                f"run {label} export manifest is not exact export35")
         input_meta, input_raw = _builder_meta(
             evidence_root, manifest["inputArtifactFile"],
             f"run {label} input artifact")
@@ -495,12 +495,12 @@ def validate_spec(path: pathlib.Path) -> tuple[dict[str, Any], bytes]:
     exports = metallib["exports"]
     require(type(metallib["abi"]) is int and
             type(metallib["exportCount"]) is int and
-            metallib["abi"] == 11 and metallib["exportCount"] == 29 and
-            type(exports) is list and len(exports) == 29 and
+            metallib["abi"] == 12 and metallib["exportCount"] == 35 and
+            type(exports) is list and len(exports) == 35 and
             all(type(item) is str for item in exports) and
             exports == sorted(set(exports)) and
             "riosLandscapeAdditiveFragment" in exports,
-            "metallib ABI11 exact export29 set is invalid")
+            "metallib ABI12 exact export35 set is invalid")
     capture = exact_keys(spec["capture"],
                          ("resourceRoles", "compareNativeIdsAcrossRuns"),
                          "capture spec")
@@ -832,9 +832,9 @@ def validate_pair(spec_path: pathlib.Path, attestation_path: pathlib.Path,
             run["metallib"], evidence_root, f"run {label} metallib", (
                 "exportManifestFile", "exportManifestBytes",
                 "exportManifestSha256", "abi", "exportCount"))
-        require(metallib_meta["abi"] == 11 and
-                metallib_meta["exportCount"] == 29,
-                f"run {label} metallib ABI/export count is not 11/29")
+        require(metallib_meta["abi"] == 12 and
+                metallib_meta["exportCount"] == 35,
+                f"run {label} metallib ABI/export count is not 12/35")
         manifest_leaf = metallib_meta["exportManifestFile"]
         require(type(manifest_leaf) is str and
                 SAFE_LEAF_RE.fullmatch(manifest_leaf) is not None,
@@ -847,10 +847,10 @@ def validate_pair(spec_path: pathlib.Path, attestation_path: pathlib.Path,
         expected_manifest = ("\n".join(spec["metallib"]["exports"]) +
                              "\n").encode("ascii")
         require(manifest_raw == expected_manifest,
-                f"run {label} export manifest is not exact export29")
+                f"run {label} export manifest is not exact export35")
         require(all(name.encode("ascii") in metallib_raw
                     for name in spec["metallib"]["exports"]),
-                f"run {label} metallib lacks an export29 symbol")
+                f"run {label} metallib lacks an export35 symbol")
         if verify_external_tools:
             verify_metallib(metallib_raw, spec["metallib"]["exports"])
 
@@ -912,7 +912,7 @@ def validate_pair(spec_path: pathlib.Path, attestation_path: pathlib.Path,
             (b["metallib"]["sha256"], b["metallib"]["abi"],
              b["metallib"]["exportCount"],
              b["metallib"]["exportManifestSha256"]),
-            "A/B ABI11 metallib/export29 identity differs")
+            "A/B ABI12 metallib/export35 identity differs")
     require(a["input"]["basePayload"] == b["input"]["basePayload"],
             "A/B base input record bytes differ")
     require(a["input"]["additivePayload"] == b["input"]["additivePayload"],
@@ -1064,7 +1064,7 @@ def _build_fixture(
                           "exportManifestFile": export_path.name,
                           "exportManifestBytes": len(export_raw),
                           "exportManifestSha256": sha256(export_raw),
-                          "abi": 11, "exportCount": 29}
+                          "abi": 12, "exportCount": 35}
         runs.append({
             "label": label, "mode": profile["mode"],
             "launchArgument": profile["launchArgument"],

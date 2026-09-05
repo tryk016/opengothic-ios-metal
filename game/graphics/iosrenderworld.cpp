@@ -156,9 +156,9 @@ IOSLightHandle IOSRenderWorld::resolveLight(uint64_t stableKey) {
                              worldGeneration,nextLightId);
   }
 
-IOSParticleHandle IOSRenderWorld::resolveParticle(uint64_t stableKey) {
-  return resolveStableHandle(particleRegistry,issuedParticleIds,stableKey,
-                             worldGeneration,nextParticleId);
+IOSTextureHandle IOSRenderWorld::resolveParticleTexture(uintptr_t texture) {
+  return resolveStableHandle(particleTextureRegistry,issuedTextureIds,texture,
+                             worldGeneration,nextTextureId);
   }
 
 IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
@@ -196,19 +196,8 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       });
     }
 
-  snapshot->particles.reserve(frame.particles.size());
-  for(auto& particle:frame.particles) {
-    snapshot->particles.push_back({
-      particle.id,
-      particle.position,
-      particle.position,
-      particle.velocity,
-      particle.color,
-      particle.size,
-      particle.rotation,
-      particle.texture,
-      });
-    }
+  snapshot->particles = std::move(frame.particles);
+  snapshot->particleBatches = std::move(frame.particleBatches);
 
   const auto byId = [](const auto& lhs, const auto& rhs) {
     return lhs.id.value<rhs.id.value;
@@ -216,7 +205,6 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
   std::sort(snapshot->entities.begin(),snapshot->entities.end(),byId);
   std::sort(snapshot->materials.begin(),snapshot->materials.end(),byId);
   std::sort(snapshot->lights.begin(),snapshot->lights.end(),byId);
-  std::sort(snapshot->particles.begin(),snapshot->particles.end(),byId);
 
   const bool viewportCompatible =
     committedSnapshot!=nullptr &&
@@ -263,16 +251,6 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
         }
       }
 
-    std::size_t previousParticle = 0;
-    for(auto& particle:snapshot->particles) {
-      while(previousParticle<committedSnapshot->particles.size() &&
-            committedSnapshot->particles[previousParticle].id.value<particle.id.value)
-        ++previousParticle;
-      if(previousParticle<committedSnapshot->particles.size() &&
-         committedSnapshot->particles[previousParticle].id==particle.id)
-        particle.previousPosition =
-          committedSnapshot->particles[previousParticle].currentPosition;
-      }
     }
 
   const bool issuedHandlesValid = std::all_of(
@@ -296,11 +274,9 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       [&](const IOSLight& light) {
         return isIssuedHandle(issuedLightIds,light.id,worldGeneration);
         }) &&
-    std::all_of(snapshot->particles.begin(),snapshot->particles.end(),
-      [&](const IOSParticleSnapshot& particle) {
-        return isIssuedHandle(issuedParticleIds,particle.id,worldGeneration) &&
-               isIssuedHandle(issuedTextureIds,particle.texture,
-                              worldGeneration,true);
+    std::all_of(snapshot->particleBatches.begin(),snapshot->particleBatches.end(),
+      [&](const IOSParticleBatch& batch) {
+        return isIssuedHandle(issuedTextureIds,batch.texture,worldGeneration);
         });
 
   const bool skyHandlesValid = std::all_of(frame.sky.textures.begin(),frame.sky.textures.end(),
@@ -351,13 +327,12 @@ void IOSRenderWorld::resetWorld() noexcept {
   skyTextureRegistry.clear();
   frameTextureRegistry.clear();
   lightRegistry.clear();
-  particleRegistry.clear();
+  particleTextureRegistry.clear();
   issuedEntityIds.clear();
   issuedMeshIds.clear();
   issuedMaterialIds.clear();
   issuedTextureIds.clear();
   issuedLightIds.clear();
-  issuedParticleIds.clear();
   worldGeneration = allocateGeneration();
   nextSequence     = {1};
   lastBuiltSequence = {};

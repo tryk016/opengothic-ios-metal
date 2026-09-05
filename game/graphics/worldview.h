@@ -86,6 +86,7 @@ class WorldView {
     const Sky&          sky() const { return gSky; }
     const Landscape&    landscape() const { return land; }
     const LightGroup&   lights() const { return gLights; }
+    const PfxObjects&   particles() const { return pfxGroup; }
     const DrawClusters& clusters() const;
     const DrawCommands& drawCommands() const;
     const DrawBuckets&  drawBuckets() const;

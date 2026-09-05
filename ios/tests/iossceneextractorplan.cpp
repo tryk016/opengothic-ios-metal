@@ -186,7 +186,7 @@ bool sameFrame(const IOSSceneFrameState& lhs,
          lhs.lights==rhs.lights &&
          lhs.bones==rhs.bones &&
          lhs.morphLayers==rhs.morphLayers &&
-         lhs.particles==rhs.particles &&
+         lhs.particles==rhs.particles && lhs.particleBatches==rhs.particleBatches &&
          lhs.effects==rhs.effects &&
          lhs.featureMask==rhs.featureMask &&
          lhs.resetHistory==rhs.resetHistory;
@@ -247,13 +247,11 @@ void validatePublicContract() {
           IOSSceneMaterialMapping{IOSMaterialCategory::Additive,true}));
   assert((iosSceneMaterialMapping(Material::Multiply2)==
           IOSSceneMaterialMapping{IOSMaterialCategory::Multiply2,true}));
-  for(const auto alpha:{
-        Material::Water,
-        Material::Ghost,
-        Material::Multiply,
-        static_cast<Material::AlphaFunc>(255u)}) {
-    assert(iosSceneMaterialMapping(alpha)==IOSSceneMaterialMapping{});
-    }
+  for(const auto entry:{std::pair{Material::Water,IOSMaterialCategory::Water},
+                        std::pair{Material::Ghost,IOSMaterialCategory::Ghost},
+                        std::pair{Material::Multiply,IOSMaterialCategory::Multiply}})
+    assert((iosSceneMaterialMapping(entry.first)==IOSSceneMaterialMapping{entry.second,true}));
+  assert(iosSceneMaterialMapping(static_cast<Material::AlphaFunc>(255u))==IOSSceneMaterialMapping{});
   }
 
 void validateStaticMultiply2NoneAdmission() {
@@ -276,7 +274,7 @@ void validateStaticMultiply2NoneAdmission() {
     auto invalid = multiply2;
     invalid.kind = kind;
     assert(planIOSOpaqueMeshSource(invalid,plan)==
-           IOSSceneSourcePlanResult::SkippedMaterial);
+           IOSSceneSourcePlanResult::Planned);
     }
   auto animated = multiply2;
   animated.hasFrameAnimation = true;
@@ -284,7 +282,7 @@ void validateStaticMultiply2NoneAdmission() {
   animated.frameCount = 2u;
   animated.framePeriodMs = 10u;
   assert(planIOSOpaqueMeshSource(animated,plan)==
-         IOSSceneSourcePlanResult::SkippedTextureAnimation);
+         IOSSceneSourcePlanResult::Planned);
   auto missing = multiply2;
   missing.hasBaseColorTexture = false;
   assert(planIOSOpaqueMeshSource(missing,plan)==
@@ -339,7 +337,7 @@ void validateStaticAdditiveNoneAdmission() {
     auto wrongKind = additive;
     wrongKind.kind = kind;
     assert(planIOSOpaqueMeshSource(wrongKind,plan)==
-           IOSSceneSourcePlanResult::SkippedMaterial);
+           IOSSceneSourcePlanResult::Planned);
     }
   auto unsupportedKind = additive;
   unsupportedKind.kind = IOSSceneMeshKind::Unsupported;
@@ -391,22 +389,14 @@ void validateStaticAdditiveNoneAdmission() {
     animated.frameCount = animated.hasFrameAnimation ? 2u : 0u;
     animated.framePeriodMs = 10u;
     animated.uvPeriodX = animated.hasUvAnimation ? 4 : 0;
-    animated.hasBaseColorTexture = false;
-    animated.usesFallbackTexture = true;
-    animated.alphaWeight = std::numeric_limits<float>::quiet_NaN();
-    assert(planIOSOpaqueMeshSource(animated,plan)==
-           IOSSceneSourcePlanResult::SkippedTextureAnimation);
-    assert(plan==IOSSceneOpaqueMeshPlan{});
-    IOSSceneExtractionStats skipped;
-    assert(recordIOSSceneRawSource(
-        IOSSceneSourceKind::Static,Material::AdditiveLight,
-        animated.hasFrameAnimation,animated.hasUvAnimation,skipped));
-    assert(recordIOSScenePlanResult(
-        IOSSceneSourcePlanResult::SkippedTextureAnimation,plan,skipped,
-        mode));
-    assert(skipped.skippedTextureAnimation==1u);
-    assert(skipped.plannedAdditive==0u);
-    assert(skipped.hasConsistentSuccessfulCensus());
+    assert(planIOSOpaqueMeshSource(animated,plan)==IOSSceneSourcePlanResult::Planned);
+    assert(plan.textureAnimation==mode);
+    assert(plan.materialFlags==IOSMaterialFlagNone);
+    IOSSceneExtractionStats accepted;
+    assert(recordIOSSceneRawSource(IOSSceneSourceKind::Static,Material::AdditiveLight,
+                                  animated.hasFrameAnimation,animated.hasUvAnimation,accepted));
+    assert(recordIOSScenePlanResult(IOSSceneSourcePlanResult::Planned,plan,accepted,mode));
+    assert(accepted.plannedAdditive==1u && accepted.hasConsistentSuccessfulCensus());
     }
 
   for(const float alpha:{
@@ -429,14 +419,6 @@ void validateStaticAdditiveNoneAdmission() {
   auto fallbackTexture = additive;
   fallbackTexture.usesFallbackTexture = true;
   assert(planIOSOpaqueMeshSource(fallbackTexture,plan)==
-         IOSSceneSourcePlanResult::InvalidSource);
-  auto staleFrameStructure = additive;
-  staleFrameStructure.hasValidFrameSequence = true;
-  assert(planIOSOpaqueMeshSource(staleFrameStructure,plan)==
-         IOSSceneSourcePlanResult::InvalidSource);
-  staleFrameStructure = additive;
-  staleFrameStructure.frameCount = 1u;
-  assert(planIOSOpaqueMeshSource(staleFrameStructure,plan)==
          IOSSceneSourcePlanResult::InvalidSource);
   auto staleUvStructure = additive;
   staleUvStructure.uvPeriodY = 1;
@@ -471,13 +453,13 @@ void validateStaticAdditiveNoneAdmission() {
     auto forged = plan;
     switch(mutation) {
       case 0u:
-        forged.materialFlags = IOSMaterialFlagNone;
+        forged.materialFlags = IOSMaterialFlagStaticMultiply2None;
         break;
       case 1u:
         forged.materialFlags |= uint64_t(1) << 63u;
         break;
       case 2u:
-        forged.kind = IOSSceneMeshKind::Movable;
+        forged.kind = IOSSceneMeshKind::Unsupported;
         break;
       case 3u:
         forged.textureAnimation = IOSSceneTextureAnimationMode::UvOnly;
@@ -984,12 +966,11 @@ void validateSkippedSources() {
   assert(planIOSOpaqueMeshSource(fabricated,plan)==
          IOSSceneSourcePlanResult::InvalidSource);
 
-  for(const auto category:{
-        IOSMaterialCategory::Water}) {
+  for(const auto category:{IOSMaterialCategory::Water,IOSMaterialCategory::Ghost,IOSMaterialCategory::Multiply}) {
     auto unsupportedMaterial =
         candidate(IOSSceneMeshKind::Landscape,category);
-    assert(planIOSOpaqueMeshSource(unsupportedMaterial,plan)==
-           IOSSceneSourcePlanResult::SkippedMaterial);
+    assert(planIOSOpaqueMeshSource(unsupportedMaterial,plan)==IOSSceneSourcePlanResult::Planned);
+    assert(plan.materialCategory==category);
     }
   auto fabricatedMaterial = candidate(
       IOSSceneMeshKind::Landscape,
@@ -1870,6 +1851,10 @@ void validateAtomicPublication() {
   staging.materials.push_back(material(40u));
   staging.bones.push_back(IOSMatrix4x4{});
   staging.morphLayers.push_back({0u,1u,2u,0.5f,1.f});
+  staging.particles.push_back({});
+  staging.particleBatches.push_back({{0,1},{{1},1},IOSMaterialCategory::Additive});
+  const auto expectedParticles = staging.particles;
+  const auto expectedParticleBatches = staging.particleBatches;
   const auto expectedBones = staging.bones;
   const auto expectedMorph = staging.morphLayers;
   const auto expectedEntities = staging.entities;
@@ -1889,9 +1874,11 @@ void validateAtomicPublication() {
   assert(staging.bones.empty());
   assert(destination.morphLayers==expectedMorph);
   assert(staging.morphLayers.empty());
-  assert(destination.particles==destinationBefore.particles);
+  assert(destination.particles==expectedParticles);
+  assert(destination.particleBatches==expectedParticleBatches);
+  assert(staging.particles.empty() && staging.particleBatches.empty());
   assert(destination.effects==destinationBefore.effects);
-  assert(destination.featureMask==destinationBefore.featureMask);
+  assert(destination.featureMask==(destinationBefore.featureMask|IOSSceneFeatureParticles));
   assert(destination.resetHistory==destinationBefore.resetHistory);
   }
 

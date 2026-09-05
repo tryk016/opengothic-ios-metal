@@ -517,25 +517,16 @@ paths = {
 }
 required = (
 
-    ("extractor-additive-static-only",
+    ("extractor-causal-additive-static-only",
      "game/graphics/iossceneextractorplan.h",
      """if((isAdditive || isMultiply2) &&
      source.kind!=IOSSceneMeshKind::Static)
     return IOSSceneSourcePlanResult::SkippedMaterial;"""),
-    ("extractor-additive-no-texture-animation",
+    ("extractor-causal-additive-no-texture-animation",
      "game/graphics/iossceneextractorplan.h",
      """if((isAdditive || isMultiply2) &&
      textureAnimation!=IOSSceneTextureAnimationMode::None)
     return IOSSceneSourcePlanResult::SkippedTextureAnimation;"""),
-    ("extractor-additive-texture-provenance",
-     "game/graphics/iossceneextractorplan.h",
-     """if((isAdditive || isMultiply2) &&
-     (!source.hasBaseColorTexture || source.usesFallbackTexture ||
-      source.hasValidFrameSequence || source.frameCount!=0 ||
-      source.framePeriodMs!=0 ||
-      !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
-      source.alphaWeight>1.f))
-    return IOSSceneSourcePlanResult::InvalidSource;"""),
 
     ("extractor-uv-period-provenance",
      "game/graphics/iossceneextractorplan.h",
@@ -622,35 +613,7 @@ required = (
       return IOSGPUScenePipelineSelector::AlphaTest;
     case IOSMaterialCategory::Additive:
       return IOSGPUScenePipelineSelector::Additive;"""),
-    ("gpu-plan-additive-restrictions",
-     "game/graphics/iosgpusceneplan.h",
-     """if(pipeline==IOSGPUScenePipelineSelector::Additive) {
-    if(source.entity.kind!=IOSSceneMeshKind::Static ||
-       source.material.flags!=IOSMaterialFlagStaticAdditiveNone ||
-       source.material.uvOffset.x!=0.f ||
-       source.material.uvOffset.y!=0.f ||
-       std::signbit(source.material.uvOffset.x) ||
-       std::signbit(source.material.uvOffset.y) ||
-       !std::isfinite(source.material.baseColor.w) ||
-       source.material.baseColor.w<0.f ||
-       source.material.baseColor.w>1.f)
-      return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
-    }
-  else if(pipeline==IOSGPUScenePipelineSelector::Multiply2) {
-    if(source.entity.kind!=IOSSceneMeshKind::Static ||
-       source.material.flags!=IOSMaterialFlagStaticMultiply2None ||
-       source.material.uvOffset.x!=0.f ||
-       source.material.uvOffset.y!=0.f ||
-       std::signbit(source.material.uvOffset.x) ||
-       std::signbit(source.material.uvOffset.y) ||
-       !std::isfinite(source.material.baseColor.w) ||
-       source.material.baseColor.w<0.f ||
-       source.material.baseColor.w>1.f)
-      return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
-    }
-  else if(source.material.flags!=IOSMaterialFlagNone) {
-    return IOSGPUSceneDrawPlanResult::UnsupportedMaterial;
-    }"""),
+
     ("gpu-plan-alpha-texture-provenance",
      "game/graphics/iosgpusceneplan.h",
      """if(pipeline==IOSGPUScenePipelineSelector::AlphaTest) {
@@ -1224,12 +1187,12 @@ required_once = {
         "const auto encodePhase = [&](",
         """[encoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)draw.pipelineState];""",
-        "if(context.phase==0u || context.phase==1u) {",
+        "if(context.phase==0u || context.phase==1u || context.phase==3u) {",
         "encodePhase(context.prepared->base,context.scene->baseDepthState);",
         """encodePhase(context.prepared->multiply2,
                   context.scene->multiply2DepthState);""",
         "context.prepared->nativeBaseMultiplyCompleted = true;",
-        "if(context.phase==0u || context.phase==2u) {",
+        "if(context.phase==0u || context.phase==2u || context.phase==4u) {",
         """encodePhase(context.prepared->additive,
                   context.scene->additiveDepthState);""",
         "context.prepared->nativeAdditiveCompleted = true;",
@@ -1253,9 +1216,14 @@ required_once = {
 expected_draw_operations = [
     "setRenderPipelineState",
     "bindGeometry",
+    "setFragmentBytes",
     "setFragmentTexture",
     "insertDebugSignpost",
     "insertDebugSignpost",
+    "setVertexBuffer",
+    "setVertexBytes",
+    "setTessellationFactorBuffer",
+    "drawPatches",
     "drawIndexedPrimitives",
 ]
 
@@ -1908,7 +1876,7 @@ xcrun --sdk iphoneos metallib \
   "$TMP_GATE/ios-shading-prototypes.air" \
   -o "$TMP_GATE/RendererIOS.metallib"
 for function in \
-    riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment \
+    riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
     riosLandscapeAlphaTestFragment \
     riosLandscapeAdditiveFragment \
     riosToneResolveVertex riosToneResolveFragment \
@@ -1928,7 +1896,7 @@ RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   "$TMP_GATE/RendererIOS.metallib" |
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
-  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment \
+  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
@@ -1942,9 +1910,9 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 29-export ABI11"
-[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 29 ] ||
-  fail "RendererIOS.metallib export count nie wynosi 29"
+  fail "RendererIOS.metallib nie ma exact 35-export ABI12"
+[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 35 ] ||
+  fail "RendererIOS.metallib export count nie wynosi 34"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   shasum -a 256 "$TMP_GATE/RendererIOS.metallib" | awk '{print $1}'
 )"
@@ -2299,7 +2267,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=11 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -3329,7 +3297,7 @@ PY
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=11 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
@@ -3840,7 +3808,7 @@ if wants_profile multiply2-a-hdr && wants_profile multiply2-b-hdr; then
   [ -n "$MULTIPLY2_A_METALLIB_SHA256" ] &&
     [ -n "$MULTIPLY2_B_METALLIB_SHA256" ] &&
     [ "$MULTIPLY2_A_METALLIB_SHA256" = "$MULTIPLY2_B_METALLIB_SHA256" ] ||
-    fail "Multiply2 A/B nie maja tego samego ABI11 metallib"
+    fail "Multiply2 A/B nie maja tego samego ABI12 metallib"
   [ -n "$MULTIPLY2_A_BINARY_SHA256" ] &&
     [ -n "$MULTIPLY2_B_BINARY_SHA256" ] &&
     [ "$MULTIPLY2_A_BINARY_SHA256" != "$MULTIPLY2_B_BINARY_SHA256" ] ||
@@ -3857,7 +3825,7 @@ if wants_profile additive-a-hdr && wants_profile additive-b-hdr; then
   [ -n "$ADDITIVE_A_METALLIB_SHA256" ] &&
     [ -n "$ADDITIVE_B_METALLIB_SHA256" ] &&
     [ "$ADDITIVE_A_METALLIB_SHA256" = "$ADDITIVE_B_METALLIB_SHA256" ] ||
-    fail "Additive A/B nie maja tego samego ABI11 metallib"
+    fail "Additive A/B nie maja tego samego ABI12 metallib"
   [ -n "$ADDITIVE_A_BINARY_SHA256" ] &&
     [ -n "$ADDITIVE_B_BINARY_SHA256" ] &&
     [ "$ADDITIVE_A_BINARY_SHA256" != "$ADDITIVE_B_BINARY_SHA256" ] ||

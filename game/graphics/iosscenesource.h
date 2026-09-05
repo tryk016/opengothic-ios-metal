@@ -14,6 +14,7 @@ namespace Tempest { class Texture2d; }
 class Material;
 class StaticMesh;
 class AnimMesh;
+struct PfxParticle;
 
 enum class IOSSceneSourceKind : uint8_t {
   Landscape,
@@ -77,11 +78,20 @@ struct IOSSceneSkySource final {
   };
 using IOSSceneSkyReader = IOSSceneSkySource (*)(const void*);
 
+struct IOSSceneParticleSource final {
+  std::span<const PfxParticle> particles;
+  const Material* material = nullptr;
+  const Tempest::Texture2d* texture = nullptr;
+  };
+using IOSSceneParticleVisitor = void (*)(void*, const IOSSceneParticleSource&);
+using IOSSceneParticleEnumerator = void (*)(const void*, void*, IOSSceneParticleVisitor);
+
 struct IOSSceneSourceProvider final {
   const void*              sourceContext = nullptr;
   IOSSceneSourceEnumerator enumerate     = nullptr;
   IOSSceneLightEnumerator  enumerateLights = nullptr;
   IOSSceneSkyReader         readSky = nullptr;
+  IOSSceneParticleEnumerator enumerateParticles = nullptr;
 
   constexpr explicit operator bool() const noexcept {
     return sourceContext!=nullptr && enumerate!=nullptr;

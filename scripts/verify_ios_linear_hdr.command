@@ -2128,7 +2128,7 @@ def validate(header: str, model: str, native: str, context: str) -> None:
     ordered(submit, (
         "linearHDRProof->prepareFrame(",
         "linearHDRProof->sceneMarker()",
-        "impl->gpuScene->encodePrepared(",
+        "impl->gpuScene->encodePreparedScene(",
         "advanceLinearHDR(IOSLinearHDRFrameEvent::SceneHDR);",
         "linearHDRProof->copyMarker()",
         "linearHDRProof->encodeCopy(",
@@ -2406,10 +2406,8 @@ def validate(renderer: str, context: str, native: str) -> None:
         "IOSMetalContext::SubmitResult IOSMetalContext::submitFrame("))
     ordered = (
         "boollinearHDRSceneActive=sceneVisible&&",
-        "encoder.setFramebuffer({{impl->linearHDRTargets.color,"
-        "Tempest::Vec4(0.f),Tempest::Preserve}},"
-        "{impl->linearHDRTargets.depth,1.f,Tempest::Discard});",
-        "impl->gpuScene->encodePrepared(",
+        "impl->gpuScene->encodePreparedScene("
+        "encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker)",
         "constIOSToneResolveConstantsconstants={tone.brightness,"
         "tone.contrast,tone.gamma,tone.exposure,};",
         "encoder.setFramebuffer({});"
@@ -2431,7 +2429,7 @@ def validate(renderer: str, context: str, native: str) -> None:
     positions = [require_once(submit, value, value) for value in ordered]
     if positions != sorted(positions):
         raise ValueError("scene/resolve/overlay/present order changed")
-    if submit.count("impl->gpuScene->encodePrepared(") != 1:
+    if submit.count("impl->gpuScene->encodePreparedScene(") != 1:
         raise ValueError("native scene encode count changed")
     if submit.count("impl->linearHDRMetal->encodeToneResolve(") != 1:
         raise ValueError("tone resolve encode count changed")
@@ -2574,8 +2572,10 @@ mutations.append((
     renderer,
     replace_once(
         context,
-        "        encoder.setFramebuffer({{impl->linearHDRTargets.color,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});\n",
-        "        encoder.setFramebuffer({{drawable,Tempest::Vec4(0.f),Tempest::Preserve}},{impl->linearHDRTargets.depth,1.f,Tempest::Discard});\n"),
+        "        const auto report = impl->gpuScene->encodePreparedScene(\n"
+        "            encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker);\n",
+        "        const auto report = impl->gpuScene->encodePreparedScene(\n"
+        "            encoder,preparedScene,drawable,sceneMarker);\n"),
     native,
 ))
 ui_draw = "      frameContext.uiMesh.draw(encoder);\n"

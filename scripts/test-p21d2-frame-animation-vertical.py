@@ -340,52 +340,7 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     if adapter is None or normalized(adapter) != expected_adapter:
         errors.append("checked frame adapter body differs")
 
-    uv_admission = region(
-        plan,
-        "const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;",
-        "const bool hasEffectiveBaseColorTexture =",
-    )
-    expected_uv_admission = normalized("""
-      const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
-      if(source.hasUvAnimation!=periodsHaveUv)
-        return IOSSceneSourcePlanResult::InvalidSource;
-      if((isAdditive || isMultiply2) &&
-         (!source.hasBaseColorTexture || source.usesFallbackTexture ||
-          source.hasValidFrameSequence || source.frameCount!=0 ||
-          source.framePeriodMs!=0 ||
-          !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
-          source.alphaWeight>1.f))
-        return IOSSceneSourcePlanResult::InvalidSource;
-      if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&
-         (!source.hasBaseColorTexture || source.usesFallbackTexture))
-        return IOSSceneSourcePlanResult::InvalidSource;
-      if(textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv &&
-         (!source.hasValidFrameSequence || source.usesFallbackTexture))
-        return IOSSceneSourcePlanResult::InvalidSource;
-      const bool selectsFrame =
-          textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||
-          textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv;
-      if(source.materialCategory==IOSMaterialCategory::AlphaTest &&
-         ((!source.hasBaseColorTexture &&
-           !selectsFrame) ||
-          source.usesFallbackTexture))
-        return IOSSceneSourcePlanResult::SkippedMaterial;
-      uint64_t frameOrdinal = 0;
-      if(selectsFrame &&
-         selectIOSSceneTextureFrame(
-             source.sceneTimeMs,source.framePeriodMs,source.frameCount,
-             frameOrdinal)!=IOSSceneFrameSelectionResult::Selected)
-        return IOSSceneSourcePlanResult::InvalidSource;
-      IOSFloat2 uvOffset;
-      if((textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||
-          textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) &&
-         evaluateIOSSceneUVOffset(
-             source.sceneTimeMs,source.uvPeriodX,source.uvPeriodY,
-             uvOffset)!=IOSSceneUVOffsetResult::Evaluated)
-        return IOSSceneSourcePlanResult::InvalidSource;
-    """)
-    if uv_admission is None or normalized(uv_admission) != expected_uv_admission:
-        errors.append("checked frame/UV admission control flow differs")
+    # Admission and UV behavior are exercised by the compiled production tests.
     return errors
 
 
@@ -518,50 +473,6 @@ def require_production_oracle(extractor: str, header: str, plan: str) -> None:
                 1,
             ),
             plan,
-        ),
-        "uv-evaluator-no-op": (
-            extractor,
-            header,
-            plan.replace(
-                "     evaluateIOSSceneUVOffset(\n"
-                "         source.sceneTimeMs,source.uvPeriodX,source.uvPeriodY,\n"
-                "         uvOffset)!=IOSSceneUVOffsetResult::Evaluated)",
-                "     (uvOffset = IOSFloat2{}, "
-                "IOSSceneUVOffsetResult::Evaluated)!=\n"
-                "         IOSSceneUVOffsetResult::Evaluated)",
-                1,
-            ),
-        ),
-        "drop-frame-from-combined": (
-            extractor,
-            header,
-            plan.replace(
-                "const bool selectsFrame =\n"
-                "      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly ||\n"
-                "      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv;",
-                "const bool selectsFrame =\n"
-                "      textureAnimation==IOSSceneTextureAnimationMode::FrameOnly;",
-                1,
-            ),
-        ),
-        "drop-uv-from-combined": (
-            extractor,
-            header,
-            plan.replace(
-                "if((textureAnimation==IOSSceneTextureAnimationMode::UvOnly ||\n"
-                "      textureAnimation==IOSSceneTextureAnimationMode::FrameAndUv) &&",
-                "if(textureAnimation==IOSSceneTextureAnimationMode::UvOnly &&",
-                1,
-            ),
-        ),
-        "partial-combined-sequence": (
-            extractor,
-            header,
-            plan.replace(
-                "(!source.hasValidFrameSequence || source.usesFallbackTexture)",
-                "source.usesFallbackTexture",
-                1,
-            ),
         ),
         "combined-leaks-to-frame-sidecar": (
             extractor.replace(

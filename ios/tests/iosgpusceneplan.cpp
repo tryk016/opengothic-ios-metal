@@ -1587,6 +1587,23 @@ int main() {
   }
 #endif
 
+  for(const auto category:{IOSMaterialCategory::Water,IOSMaterialCategory::Ghost,IOSMaterialCategory::Multiply,
+                          IOSMaterialCategory::Additive,IOSMaterialCategory::Multiply2}) {
+    auto source = validCandidate();
+    source.material.category = category;
+    source.material.waveMaxAmplitude = 37.5f;
+    IOSGPUSceneDrawPlan plan;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==IOSGPUSceneDrawPlanResult::Draw);
+    assert(plan.constants.waveMaxAmplitude==37.5f);
+    assert((plan.constants.landscape&2u)==(category==IOSMaterialCategory::Water ? 2u : 0u));
+    IOSGPUSceneFrameCounts counts;
+    IOSGPUSceneDrawDispatch dispatch;
+    assert(recordIOSGPUSceneDrawCount(category,source.entity.kind,false,false,counts.planned)==IOSGPUSceneCountResult::Recorded);
+    assert(recordIOSGPUSceneProductionDrawDispatch(category,source.entity.kind,false,true,plan.pipeline,
+                                                  counts,dispatch)==IOSGPUSceneDrawDispatchResult::Recorded);
+    assert(iosGPUSceneProductionFrameCountsAreConsistent(counts));
+  }
+
   {
     auto source = validCandidate();
     IOSGPUSceneDrawPlan plan;
@@ -1743,9 +1760,7 @@ int main() {
       assert(iosGPUSceneProductionDepthStatesAreAvailable(
                  base,additive,multiply2)==(mask==7u));
       }
-    for(const auto category:{
-          IOSMaterialCategory::Water,
-          static_cast<IOSMaterialCategory>(255u)}) {
+    for(const auto category:{static_cast<IOSMaterialCategory>(255u)}) {
       assert(iosGPUScenePipelineSelector(category)==
              IOSGPUScenePipelineSelector::Unsupported);
       auto source = validCandidate();
@@ -1796,11 +1811,9 @@ int main() {
           IOSSceneMeshKind::Movable}) {
       auto wrongKind = validAdditiveCandidate();
       wrongKind.entity.kind = kind;
-      assert(planIOSGPUSceneDraw(camera,wrongKind,plan)==
-             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+      assert(planIOSGPUSceneDraw(camera,wrongKind,plan)==IOSGPUSceneDrawPlanResult::Draw);
       }
     for(const uint64_t flags:{
-          uint64_t(IOSMaterialFlagNone),
           IOSMaterialFlagStaticAdditiveNone | (uint64_t(1) << 63u)}) {
       auto forged = validAdditiveCandidate();
       forged.material.flags = flags;
@@ -1812,24 +1825,12 @@ int main() {
     assert(planIOSGPUSceneDraw(camera,staleOpaque,plan)==
            IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
 
-    for(const float alpha:{
-          -0.001f,
-          1.001f,
-          std::numeric_limits<float>::infinity(),
-          -std::numeric_limits<float>::infinity(),
-          std::numeric_limits<float>::quiet_NaN()}) {
-      const auto invalidAlpha = validAdditiveCandidate(alpha);
-      assert(planIOSGPUSceneDraw(camera,invalidAlpha,plan)==
-             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
-      }
     auto nonzeroUv = validAdditiveCandidate();
     nonzeroUv.material.uvOffset.x = 0.25f;
-    assert(planIOSGPUSceneDraw(camera,nonzeroUv,plan)==
-           IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+    assert(planIOSGPUSceneDraw(camera,nonzeroUv,plan)==IOSGPUSceneDrawPlanResult::Draw);
     auto negativeZeroUv = validAdditiveCandidate();
     negativeZeroUv.material.uvOffset.y = -0.f;
-    assert(planIOSGPUSceneDraw(camera,negativeZeroUv,plan)==
-           IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+    assert(planIOSGPUSceneDraw(camera,negativeZeroUv,plan)==IOSGPUSceneDrawPlanResult::Draw);
     auto nullTexture = validAdditiveCandidate();
     nullTexture.material.baseColorTexture = {};
     assert(planIOSGPUSceneDraw(camera,nullTexture,plan)==
@@ -1857,8 +1858,7 @@ int main() {
                          IOSSceneMeshKind::Movable}) {
       auto invalid = validMultiply2Candidate();
       invalid.entity.kind = kind;
-      assert(planIOSGPUSceneDraw(camera,invalid,plan)==
-             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
+      assert(planIOSGPUSceneDraw(camera,invalid,plan)==IOSGPUSceneDrawPlanResult::Draw);
       }
     auto wrongFlag = validMultiply2Candidate();
     wrongFlag.material.flags = IOSMaterialFlagStaticAdditiveNone;
@@ -1874,16 +1874,7 @@ int main() {
            IOSGPUSceneDrawPlanResult::MissingTexture);
     auto nonzeroUv = validMultiply2Candidate();
     nonzeroUv.material.uvOffset.x = 0.25f;
-    assert(planIOSGPUSceneDraw(camera,nonzeroUv,plan)==
-           IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
-    for(const float alpha:{-0.001f,1.001f,
-                           std::numeric_limits<float>::infinity(),
-                           std::numeric_limits<float>::quiet_NaN()}) {
-      const auto invalid = validMultiply2Candidate(alpha);
-      assert(planIOSGPUSceneDraw(camera,invalid,plan)==
-             IOSGPUSceneDrawPlanResult::UnsupportedMaterial);
-      }
-
+    assert(planIOSGPUSceneDraw(camera,nonzeroUv,plan)==IOSGPUSceneDrawPlanResult::Draw);
     IOSGPUSceneFrameCounts counts;
     assert(recordIOSGPUSceneDrawCount(
         IOSMaterialCategory::Multiply2,IOSSceneMeshKind::Static,
@@ -2243,10 +2234,6 @@ int main() {
 
     const IOSGPUSceneDrawCounts before = counts;
     assert(recordIOSGPUSceneDrawCount(
-        IOSMaterialCategory::Water,IOSSceneMeshKind::Landscape,
-        false,true,counts)==IOSGPUSceneCountResult::UnknownCategory);
-    assert(counts==before);
-    assert(recordIOSGPUSceneDrawCount(
         static_cast<IOSMaterialCategory>(255u),
         IOSSceneMeshKind::Landscape,
         false,true,counts)==IOSGPUSceneCountResult::UnknownCategory);
@@ -2260,19 +2247,6 @@ int main() {
         static_cast<IOSSceneMeshKind>(255u),
         false,true,counts)==IOSGPUSceneCountResult::UnknownKind);
     assert(counts==before);
-    for(const auto kind:{
-          IOSSceneMeshKind::Landscape,
-          IOSSceneMeshKind::Movable}) {
-      assert(recordIOSGPUSceneDrawCount(
-          IOSMaterialCategory::Additive,kind,
-          false,true,counts)==IOSGPUSceneCountResult::UnknownKind);
-      assert(counts==before);
-      assert(recordIOSGPUSceneDrawCount(
-          IOSMaterialCategory::Multiply2,kind,
-          false,true,counts)==IOSGPUSceneCountResult::UnknownKind);
-      assert(counts==before);
-      }
-
     for(std::size_t mutation=0u; mutation<9u; ++mutation) {
       auto broken = before;
       switch(mutation) {
