@@ -3054,15 +3054,19 @@ xcrun() {{
         for flag in ("-Wall", "-Wextra", "-Werror")
     )
 
-    old_abi8_exports = tuple(
+    missing_additive_exports = tuple(
         name for name in exports
         if name != "riosLandscapeAdditiveFragment"
+    )
+    old_abi8_exports = tuple(
+        name for name in missing_additive_exports
+        if name not in ("riosSkinnedVertex", "riosMorphVertex", "riosInstancedVertex")
     )
     assert len(old_abi8_exports) == 18
     export_mutations = (
         (
             "missing-additive-fragment",
-            old_abi8_exports,
+            missing_additive_exports,
         ),
         (
             "missing-tone-fragment",
