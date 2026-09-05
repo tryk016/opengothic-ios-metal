@@ -136,7 +136,15 @@ int main(int argc,char** argv) {
     assert(contents(slot)=="previous save");
     });
   const auto saved = contents(slot);
-  assert(std::vector<uint8_t>(saved.begin(),saved.end())==archive);
+  const std::vector<uint8_t> savedBytes(saved.begin(),saved.end());
+  {
+  Tempest::MemReader input(savedBytes);
+  Serialize reader(input);
+  assert(reader.setEntry("header"));
+  uint32_t value = 0;
+  reader.read(value);
+  assert(value==123);
+  }
   assert(!std::filesystem::exists(slot.string()+".tmp"));
   assert(liveZipAllocations==0);
   }
