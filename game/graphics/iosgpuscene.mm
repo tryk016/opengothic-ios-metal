@@ -14,6 +14,7 @@
 #include "iosgpusceneplan.h"
 #include "ioslandscapeshaderabi.h"
 #include "iossceneassetregistry.h"
+#include "iosscenelighting.h"
 #include "resources.h"
 
 #include <Tempest/CommandBuffer>
@@ -313,6 +314,13 @@ bool drawConstantsReflectionMatches(
   return matchingArguments==NSUInteger(1u);
   }
 
+bool lightingReflectionMatches(MTLRenderPipelineReflection* reflection) {
+  for(id<MTLBinding> binding in reflection.fragmentBindings)
+    if(binding.index==0 && binding.type==MTLBindingTypeBuffer)
+      return ((id<MTLBufferBinding>)binding).bufferDataSize==sizeof(IOSSceneLightingConstants);
+  return false;
+  }
+
 std::string drawConstantsReflectionDetails(
     MTLRenderPipelineReflection* reflection) {
   if(reflection==nil)
@@ -537,7 +545,7 @@ struct alignas(16) IOSGPUInstance final {
   IOSFloat4 baseColor;
   IOSFloat2 uvOffset;
   float fatness = 0.f;
-  uint32_t padding = 0;
+  uint32_t landscape = 0;
   };
 static_assert(sizeof(IOSGPUInstance)==96);
 
@@ -550,6 +558,8 @@ struct IOSGPUSceneNativePreparedDraw final {
   id instanceBuffer = nil;
   size_t instanceOffset = 0;
   size_t instanceCount = 1;
+  float cameraDepth = 0.f;
+  uint64_t sourceId = 0;
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
   IOSMultiply2VisibilityClipClass visibilityClipClass =
       IOSMultiply2VisibilityClipClass::Indeterminate;
@@ -862,6 +872,7 @@ struct IOSGPUScene::PreparedFrame::Uploads final {
   OwnedObjectiveC bones;
   OwnedObjectiveC morphLayers;
   OwnedObjectiveC instances;
+  OwnedObjectiveC lights;
 
   static void write(id<MTLDevice> device, OwnedObjectiveC& storage,
                     const void* bytes, size_t size) {
@@ -884,6 +895,14 @@ struct IOSGPUScene::PreparedFrame::Impl final {
   std::vector<IOSGPUSceneNativePreparedDraw> base;
   std::vector<IOSGPUSceneNativePreparedDraw> multiply2;
   std::vector<IOSGPUSceneNativePreparedDraw> additive;
+  std::vector<IOSGPUSceneNativePreparedDraw> transparent;
+  std::array<std::vector<IOSGPUSceneNativePreparedDraw>,2> shadows;
+  IOSSceneLightingConstants lighting;
+  id lightBuffer = nil;
+  std::array<id,6> skyImages = {};
+  IOSFloat4 cloudOffsets;
+  IOSMatrix4x4 viewProjection;
+  bool skyReady = false;
   IOSGPUScene::Report report;
   IOSGPUScene::AdditiveInputArtifact additiveInput;
   IOSGPUScene::Multiply2InputArtifact multiply2Input;
@@ -972,6 +991,12 @@ struct IOSGPUScene::Impl final {
 
   static void encodeLandscape(void* opaque,
                               MTL::RenderCommandEncoder* nativeEncoder);
+  static void encodeEnvironment(void* opaque, MTL::CommandBuffer* command);
+  bool encodeShadows(id<MTLCommandBuffer> command, PreparedFrame::Impl& prepared);
+  void bindLighting(id<MTLRenderCommandEncoder> encoder, const PreparedFrame::Impl& prepared);
+  bool encodeSkyLut(id<MTLCommandBuffer> command, const PreparedFrame::Impl& prepared);
+  void encodeSky(id<MTLRenderCommandEncoder> encoder, const PreparedFrame::Impl& prepared);
+  void encodeRain(id<MTLRenderCommandEncoder> encoder, const PreparedFrame::Impl& prepared);
 
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
@@ -1256,7 +1281,8 @@ struct IOSGPUScene::Impl final {
                                             reflection:&opaquePipelineReflection
                                                  error:&opaquePipelineError]);
       const bool opaqueReflectionMatches =
-          drawConstantsReflectionMatches(opaquePipelineReflection);
+          drawConstantsReflectionMatches(opaquePipelineReflection) &&
+          lightingReflectionMatches(opaquePipelineReflection);
       if(opaquePipelineOwner.get()==nil || !opaqueReflectionMatches) {
         if(opaquePipelineOwner.get()==nil)
           Tempest::Log::e(
@@ -1569,6 +1595,106 @@ struct IOSGPUScene::Impl final {
           }
         }
 
+      OwnedObjectiveC skyVertex([nativeLibrary newFunctionWithName:@"riosSkyVertex"]);
+      OwnedObjectiveC skyFragment([nativeLibrary newFunctionWithName:@"riosSkyFragment"]);
+      OwnedObjectiveC skyCompute([nativeLibrary newFunctionWithName:@"riosSkyLut"]);
+      NSError* skyError = nil;
+      skyComputePipeline = OwnedObjectiveC([device newComputePipelineStateWithFunction:
+          (id<MTLFunction>)skyCompute.get() error:&skyError]);
+      if(skyComputePipeline.get()==nil)
+        throw std::runtime_error(metalFailure("RendererIOS sky compute pipeline",skyError));
+      pipelineDesc.vertexFunction = (id<MTLFunction>)skyVertex.get();
+      pipelineDesc.vertexDescriptor = nil;
+      pipelineDesc.fragmentFunction = (id<MTLFunction>)skyFragment.get();
+      pipelineDesc.colorAttachments[0].writeMask = MTLColorWriteMaskAll;
+      skyPipeline = OwnedObjectiveC([device newRenderPipelineStateWithDescriptor:pipelineDesc error:&skyError]);
+      if(skyPipeline.get()==nil)
+        throw std::runtime_error(metalFailure("RendererIOS sky render pipeline",skyError));
+      MTLTextureDescriptor* skyTexture = [MTLTextureDescriptor
+          texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA16Float width:128 height:64 mipmapped:NO];
+      skyTexture.storageMode = MTLStorageModePrivate;
+      skyTexture.hazardTrackingMode = MTLHazardTrackingModeTracked;
+      skyTexture.usage = MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite;
+      skyLut = OwnedObjectiveC([device newTextureWithDescriptor:skyTexture]);
+      if(skyLut.get()==nil)
+        throw std::bad_alloc();
+
+      OwnedObjectiveC transparentFragment([nativeLibrary newFunctionWithName:@"riosLandscapeTransparentFragment"]);
+      if(transparentFragment.get()==nil)
+        throw std::runtime_error("RendererIOS transparent shader is missing");
+      for(size_t geometry=0;geometry<3;++geometry) {
+        OwnedObjectiveC function([nativeLibrary newFunctionWithName:
+            geometry==0 ? @"riosLandscapeVertex" :
+            geometry==1 ? @"riosSkinnedVertex" : @"riosMorphVertex"]);
+        pipelineDesc.vertexFunction = (id<MTLFunction>)function.get();
+        pipelineDesc.vertexDescriptor = geometry==1 ? nil : descriptor;
+        pipelineDesc.fragmentFunction = (id<MTLFunction>)transparentFragment.get();
+        auto color = pipelineDesc.colorAttachments[0];
+        color.writeMask = MTLColorWriteMaskAll;
+        color.blendingEnabled = YES;
+        color.sourceRGBBlendFactor = MTLBlendFactorSourceAlpha;
+        color.destinationRGBBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        color.sourceAlphaBlendFactor = MTLBlendFactorSourceAlpha;
+        color.destinationAlphaBlendFactor = MTLBlendFactorOneMinusSourceAlpha;
+        NSError* error = nil;
+        transparentPipelines[geometry] = OwnedObjectiveC(
+            [device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error]);
+        if(transparentPipelines[geometry].get()==nil)
+          throw std::runtime_error(metalFailure("RendererIOS transparent pipeline",error));
+        }
+
+      OwnedObjectiveC rainVertex([nativeLibrary newFunctionWithName:@"riosRainVertex"]);
+      OwnedObjectiveC rainFragment([nativeLibrary newFunctionWithName:@"riosRainFragment"]);
+      pipelineDesc.vertexFunction = (id<MTLFunction>)rainVertex.get();
+      pipelineDesc.vertexDescriptor = nil;
+      pipelineDesc.fragmentFunction = (id<MTLFunction>)rainFragment.get();
+      NSError* rainError = nil;
+      rainPipeline = OwnedObjectiveC([device newRenderPipelineStateWithDescriptor:pipelineDesc error:&rainError]);
+      if(rainPipeline.get()==nil)
+        throw std::runtime_error(metalFailure("RendererIOS rain pipeline",rainError));
+
+      OwnedObjectiveC shadowAlpha([nativeLibrary newFunctionWithName:@"riosShadowAlphaTestFragment"]);
+      if(shadowAlpha.get()==nil)
+        throw std::runtime_error("RendererIOS shadow alpha shader is missing");
+      pipelineDesc.colorAttachments[0].pixelFormat = MTLPixelFormatInvalid;
+      pipelineDesc.colorAttachments[0].blendingEnabled = NO;
+      pipelineDesc.depthAttachmentPixelFormat = MTLPixelFormatDepth32Float;
+      pipelineDesc.stencilAttachmentPixelFormat = MTLPixelFormatInvalid;
+      pipelineDesc.rasterSampleCount = 1;
+      for(size_t geometry=0;geometry<3;++geometry) {
+        OwnedObjectiveC function([nativeLibrary newFunctionWithName:
+            geometry==0 ? @"riosLandscapeVertex" :
+            geometry==1 ? @"riosSkinnedVertex" : @"riosMorphVertex"]);
+        pipelineDesc.vertexFunction = (id<MTLFunction>)function.get();
+        pipelineDesc.vertexDescriptor = geometry==1 ? nil : descriptor;
+        for(size_t alpha=0;alpha<2;++alpha) {
+          pipelineDesc.fragmentFunction = alpha==0 ? nil : (id<MTLFunction>)shadowAlpha.get();
+          NSError* error = nil;
+          OwnedObjectiveC pipeline([device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error]);
+          if(pipeline.get()==nil)
+            throw std::runtime_error(metalFailure("RendererIOS shadow pipeline",error));
+          shadowPipelines[geometry*2+alpha] = std::move(pipeline);
+          }
+        }
+      depthDesc.frontFaceStencil = nil;
+      depthDesc.backFaceStencil = nil;
+      depthDesc.depthCompareFunction = MTLCompareFunctionGreater;
+      depthDesc.depthWriteEnabled = YES;
+      shadowDepthState = OwnedObjectiveC([device newDepthStencilStateWithDescriptor:depthDesc]);
+      if(shadowDepthState.get()==nil)
+        throw std::runtime_error("RendererIOS shadow depth state is unavailable");
+      for(size_t layer=0;layer<shadowMaps.size();++layer) {
+        const NSUInteger size = layer==0 ? 2048u : 1024u;
+        MTLTextureDescriptor* texture = [MTLTextureDescriptor
+            texture2DDescriptorWithPixelFormat:MTLPixelFormatDepth32Float width:size height:size mipmapped:NO];
+        texture.storageMode = MTLStorageModePrivate;
+        texture.hazardTrackingMode = MTLHazardTrackingModeTracked;
+        texture.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
+        shadowMaps[layer] = OwnedObjectiveC([device newTextureWithDescriptor:texture]);
+        if(shadowMaps[layer].get()==nil)
+          throw std::bad_alloc();
+        }
+
       opaquePipelineState    = opaquePipelineOwner.relinquish();
       alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
       additivePipelineState  = additivePipelineOwner.relinquish();
@@ -1624,6 +1750,14 @@ struct IOSGPUScene::Impl final {
   Tempest::BorrowedMetalDevice      nativeDevice;
   bool                            geometryReported = false;
   std::array<OwnedObjectiveC,6>     geometryPipelines;
+  std::array<OwnedObjectiveC,6>     shadowPipelines;
+  std::array<OwnedObjectiveC,3>     transparentPipelines;
+  std::array<OwnedObjectiveC,2>     shadowMaps;
+  OwnedObjectiveC                 shadowDepthState;
+  OwnedObjectiveC                 skyLut;
+  OwnedObjectiveC                 skyComputePipeline;
+  OwnedObjectiveC                 skyPipeline;
+  OwnedObjectiveC                 rainPipeline;
   id                               opaquePipelineState = nil;
   id                               alphaTestPipelineState = nil;
   id                               additivePipelineState = nil;
@@ -1898,6 +2032,9 @@ void IOSGPUScene::Impl::encodeMultiply2(
          !modeNativeResourcesAreValid)
         return;
 
+      if(!context.scene->encodeShadows(command,*context.prepared) ||
+         !context.scene->encodeSkyLut(command,*context.prepared))
+        return;
       const MTLViewport viewport = {
           0.0,0.0,double(context.width),double(context.height),0.0,1.0};
       const MTLScissorRect scissor = {
@@ -1906,6 +2043,7 @@ void IOSGPUScene::Impl::encodeMultiply2(
                                    const auto& draws,
                                    id depthState,
                                    uint32_t stencilReference) {
+        context.scene->bindLighting(encoder,*context.prepared);
         [encoder setDepthStencilState:(id<MTLDepthStencilState>)depthState];
         [encoder setStencilReferenceValue:stencilReference];
         for(const auto& draw:draws) {
@@ -1975,6 +2113,7 @@ void IOSGPUScene::Impl::encodeMultiply2(
       [renderEncoder setCullMode:MTLCullModeFront];
       [renderEncoder setFragmentSamplerState:
           (id<MTLSamplerState>)context.scene->samplerState atIndex:0u];
+      context.scene->encodeSky(renderEncoder,*context.prepared);
       encodeDraws(renderEncoder,context.prepared->base,
                   context.scene->baseDepthState,0u);
       [renderEncoder setDepthStencilState:
@@ -2181,6 +2320,9 @@ void IOSGPUScene::Impl::encodeMultiply2(
           (id<MTLSamplerState>)context.scene->samplerState atIndex:0u];
       encodeDraws(renderEncoder,context.prepared->additive,
                   context.scene->additiveDepthState,0u);
+      encodeDraws(renderEncoder,context.prepared->transparent,
+                  context.scene->additiveDepthState,0u);
+      context.scene->encodeRain(renderEncoder,*context.prepared);
       [renderEncoder setFragmentTexture:nil atIndex:0u];
       [renderEncoder setFragmentSamplerState:nil atIndex:0u];
       [renderEncoder popDebugGroup];
@@ -2233,6 +2375,130 @@ IOSGPUScene::Report IOSGPUScene::Impl::runMultiply2(
   }
 }
 #endif
+
+void IOSGPUScene::Impl::bindLighting(id<MTLRenderCommandEncoder> encoder,
+                                    const PreparedFrame::Impl& prepared) {
+  [encoder setFragmentBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:0];
+  [encoder setFragmentBuffer:(id<MTLBuffer>)prepared.lightBuffer offset:0 atIndex:1];
+  for(size_t layer=0;layer<shadowMaps.size();++layer)
+    [encoder setFragmentTexture:(id<MTLTexture>)shadowMaps[layer].get() atIndex:layer+1];
+  }
+
+bool IOSGPUScene::Impl::encodeShadows(id<MTLCommandBuffer> command,
+                                     PreparedFrame::Impl& prepared) {
+  @autoreleasepool {
+    for(size_t layer=0;layer<shadowMaps.size();++layer) {
+      id<MTLTexture> map = (id<MTLTexture>)shadowMaps[layer].get();
+      MTLRenderPassDescriptor* pass = [MTLRenderPassDescriptor renderPassDescriptor];
+      pass.depthAttachment.texture = map;
+      pass.depthAttachment.loadAction = MTLLoadActionClear;
+      pass.depthAttachment.storeAction = MTLStoreActionStore;
+      pass.depthAttachment.clearDepth = 0.0;
+      id<MTLRenderCommandEncoder> encoder = [command renderCommandEncoderWithDescriptor:pass];
+      if(encoder==nil)
+        return false;
+      @try {
+        encoder.label = layer==0 ? @"RendererIOS shadow near" : @"RendererIOS shadow far";
+        [encoder setViewport:MTLViewport{0,0,double(map.width),double(map.height),0,1}];
+        [encoder setDepthStencilState:(id<MTLDepthStencilState>)shadowDepthState.get()];
+        [encoder setFrontFacingWinding:MTLWindingClockwise];
+        [encoder setCullMode:MTLCullModeFront];
+        [encoder setFragmentSamplerState:(id<MTLSamplerState>)samplerState atIndex:0];
+        for(const auto& draw:prepared.shadows[layer]) {
+          [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)draw.pipelineState];
+          bindGeometry(encoder,draw);
+          [encoder setFragmentTexture:(id<MTLTexture>)draw.baseColorTexture atIndex:0];
+          [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:draw.plan.indexCount
+                               indexType:MTLIndexTypeUInt32 indexBuffer:(id<MTLBuffer>)draw.indexBuffer
+                       indexBufferOffset:draw.plan.indexBufferOffset];
+          }
+        }
+      @finally {
+        [encoder endEncoding];
+        }
+      }
+    }
+  return true;
+  }
+
+bool IOSGPUScene::Impl::encodeSkyLut(id<MTLCommandBuffer> command,
+                                    const PreparedFrame::Impl& prepared) {
+  if(!prepared.skyReady)
+    return true;
+  id<MTLComputeCommandEncoder> encoder = [command computeCommandEncoder];
+  if(encoder==nil)
+    return false;
+  @try {
+    encoder.label = @"RendererIOS atmosphere LUT";
+    [encoder setComputePipelineState:(id<MTLComputePipelineState>)skyComputePipeline.get()];
+    [encoder setBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:0];
+    [encoder setTexture:(id<MTLTexture>)skyLut.get() atIndex:0];
+    [encoder dispatchThreads:MTLSizeMake(128,64,1) threadsPerThreadgroup:MTLSizeMake(8,8,1)];
+    }
+  @finally {
+    [encoder endEncoding];
+    }
+  return true;
+  }
+
+void IOSGPUScene::Impl::encodeSky(id<MTLRenderCommandEncoder> encoder,
+                                 const PreparedFrame::Impl& prepared) {
+  if(!prepared.skyReady)
+    return;
+  [encoder setCullMode:MTLCullModeNone];
+  [encoder setDepthStencilState:(id<MTLDepthStencilState>)additiveDepthState];
+  [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)skyPipeline.get()];
+  bindLighting(encoder,prepared);
+  [encoder setFragmentBytes:&prepared.cloudOffsets length:sizeof(prepared.cloudOffsets) atIndex:2];
+  [encoder setFragmentTexture:(id<MTLTexture>)skyLut.get() atIndex:0];
+  for(size_t i=0;i<prepared.skyImages.size();++i)
+    [encoder setFragmentTexture:(id<MTLTexture>)prepared.skyImages[i] atIndex:i+3];
+  [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+  [encoder setCullMode:MTLCullModeFront];
+  }
+
+void IOSGPUScene::Impl::encodeRain(id<MTLRenderCommandEncoder> encoder,
+                                  const PreparedFrame::Impl& prepared) {
+  if(prepared.lighting.skyParameters.y<=0.f)
+    return;
+  [encoder setCullMode:MTLCullModeNone];
+  [encoder setDepthStencilState:(id<MTLDepthStencilState>)additiveDepthState];
+  [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)rainPipeline.get()];
+  [encoder setVertexBytes:&prepared.viewProjection length:sizeof(prepared.viewProjection) atIndex:0];
+  [encoder setVertexBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:1];
+  [encoder setFragmentBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:0];
+  [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6 instanceCount:256];
+  [encoder setCullMode:MTLCullModeFront];
+  }
+
+void IOSGPUScene::Impl::encodeEnvironment(void* opaque, MTL::CommandBuffer* command) {
+  auto& context = *static_cast<NativeEncodeContext*>(opaque);
+  @try {
+    if(!context.scene->encodeShadows((id<MTLCommandBuffer>)(void*)command,*context.prepared) ||
+       !context.scene->encodeSkyLut((id<MTLCommandBuffer>)(void*)command,*context.prepared))
+      context.report.result = Result::NativeEncodingFailed;
+    }
+  @catch(NSException*) {
+    context.report.result = Result::NativeEncodingFailed;
+    }
+  }
+
+bool IOSGPUScene::encodePreparedEnvironment(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+                                           PreparedFrame& prepared) noexcept {
+  if(impl==nullptr || prepared.impl==nullptr || !prepared.impl->ready)
+    return false;
+  Impl::NativeEncodeContext context;
+  context.scene = impl.get();
+  context.prepared = prepared.impl.get();
+  context.report.result = Result::Success;
+  try {
+    return Tempest::MetalApi::withActiveCommandBuffer(impl->owner,encoder,&context,&Impl::encodeEnvironment) &&
+           context.report.result==Result::Success;
+    }
+  catch(...) {
+    return false;
+    }
+  }
 
 void IOSGPUScene::Impl::encodeLandscape(
     void* opaque,
@@ -2304,12 +2570,14 @@ void IOSGPUScene::Impl::encodeLandscape(
     };
 
   @try {
+    context.scene->bindLighting(encoder,*context.prepared);
     [encoder setFrontFacingWinding:MTLWindingClockwise];
     [encoder setCullMode:MTLCullModeFront];
     [encoder setFragmentSamplerState:
         (id<MTLSamplerState>)context.scene->samplerState
                             atIndex:0u];
     if(context.phase==0u || context.phase==1u) {
+      context.scene->encodeSky(encoder,*context.prepared);
       encodePhase(context.prepared->base,context.scene->baseDepthState);
       encodePhase(context.prepared->multiply2,
                   context.scene->multiply2DepthState);
@@ -2318,6 +2586,9 @@ void IOSGPUScene::Impl::encodeLandscape(
     if(context.phase==0u || context.phase==2u) {
       encodePhase(context.prepared->additive,
                   context.scene->additiveDepthState);
+      encodePhase(context.prepared->transparent,
+                  context.scene->additiveDepthState);
+      context.scene->encodeRain(encoder,*context.prepared);
       context.prepared->nativeAdditiveCompleted = true;
       }
     restoreEncoderState();
@@ -2502,6 +2773,32 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         snapshot.currentMorphLayers.data(),snapshot.currentMorphLayers.size()*sizeof(IOSMorphLayer));
     auto candidateFrame = std::make_unique<PreparedFrame::Impl>();
     candidateFrame->owner = impl.get();
+    candidateFrame->lighting = iosSceneLighting(snapshot.currentSky,snapshot.currentCamera);
+    candidateFrame->lighting.fogParameters.z = float(snapshot.sceneTimeMs%60000u)/1000.f;
+    candidateFrame->viewProjection = snapshot.currentCamera.viewProjection;
+    std::vector<IOSPointLightConstants> lights;
+    lights.reserve(std::max(size_t(1),snapshot.lights.size()));
+    for(const auto& light:snapshot.lights) {
+      if(light.type!=IOSLightType::Point || light.range<=0.f ||
+         (light.visibilityMask&IOSSceneVisibilityMain)==0)
+        continue;
+      const float scale = light.intensity*candidateFrame->lighting.ambientColor.w;
+      lights.push_back({{light.position.x,light.position.y,light.position.z,light.range},
+                        {light.color.x*scale,light.color.y*scale,light.color.z*scale,0.f}});
+      }
+    candidateFrame->lighting.lightInfo[0] = uint32_t(lights.size());
+    if(lights.empty())
+      lights.emplace_back();
+    PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->lights,
+        lights.data(),lights.size()*sizeof(IOSPointLightConstants));
+    candidateFrame->lightBuffer = prepared.uploads->lights.get();
+    candidateFrame->cloudOffsets = snapshot.currentSky.cloudOffsets;
+    candidateFrame->skyReady = (snapshot.featureMask&IOSSceneFeatureSky)!=0;
+    for(size_t i=0;i<candidateFrame->skyImages.size();++i) {
+      const auto* image = assets.lookupTexture(snapshot.currentSky.textures[i]);
+      candidateFrame->skyImages[i] = image!=nullptr ? (id)(void*)image->texture.get() : nil;
+      candidateFrame->skyReady &= candidateFrame->skyImages[i]!=nil;
+      }
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
     candidateFrame->causalRoute = causalRoute;
@@ -2547,6 +2844,39 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
 #endif
         recordPlanFailure(report,planned,source);
         return report;
+        }
+      const auto* mesh = assets.lookupMesh(entity.mesh);
+      const auto* texture = assets.lookupTexture(plan.baseColorTexture);
+      const auto nativeDraw = [&]() {
+        IOSGPUSceneNativePreparedDraw draw;
+        draw.plan = plan;
+        draw.deformation = {entity.boneRange.offset,entity.morphRange.offset,
+                            entity.morphRange.count,entity.fatness};
+        draw.deformationBuffer = plan.kind==IOSSceneMeshKind::Animated
+            ? prepared.uploads->bones.get() : prepared.uploads->morphLayers.get();
+        draw.morphIndices = (id)(void*)mesh->morphIndices.get();
+        draw.morphSamples = (id)(void*)mesh->morphSamples.get();
+        draw.vertexBuffer = (id)(void*)mesh->vertexBuffer.get();
+        draw.indexBuffer = (id)(void*)mesh->indexBuffer.get();
+        draw.baseColorTexture = (id)(void*)texture->texture.get();
+        return draw;
+        };
+      if(snapshot.currentSky.shadowsEnabled && (entity.visibilityMask&IOSSceneVisibilityShadow)!=0 &&
+         (plan.pipeline==IOSGPUScenePipelineSelector::Opaque ||
+          plan.pipeline==IOSGPUScenePipelineSelector::AlphaTest)) {
+        const size_t geometry = plan.kind==IOSSceneMeshKind::Animated ? 1u :
+                                plan.kind==IOSSceneMeshKind::Morph ? 2u : 0u;
+        const size_t alpha = plan.pipeline==IOSGPUScenePipelineSelector::AlphaTest ? 1u : 0u;
+        for(size_t layer=0;layer<2;++layer) {
+          if(geometry==0 && entity.fatness==0.f &&
+             classifyIOSGPUSceneMultiply2ClipBounds(entity.bounds,plan.constants.model,
+                 snapshot.currentSky.viewShadow[layer])==IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside)
+            continue;
+          auto draw = nativeDraw();
+          draw.plan.constants.viewProjection = snapshot.currentSky.viewShadow[layer];
+          draw.pipelineState = impl->shadowPipelines[geometry*2+alpha].get();
+          candidateFrame->shadows[layer].push_back(std::move(draw));
+          }
         }
       const auto selectedTexture = [&](const auto& selection) {
         return selection.selectedHandle==plan.baseColorTexture;
@@ -2599,8 +2929,6 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         return report;
         }
 
-      const auto* mesh = assets.lookupMesh(entity.mesh);
-      const auto* texture = assets.lookupTexture(plan.baseColorTexture);
       if(mesh==nullptr || texture==nullptr ||
          !mesh->vertexBuffer || !mesh->indexBuffer ||
          !texture->texture) {
@@ -2677,13 +3005,17 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
           pipelineState =
               (id<MTLRenderPipelineState>)impl->multiply2PipelineState;
           break;
+        case IOSGPUScenePipelineSelector::Transparent:
+          pipelineState = (id<MTLRenderPipelineState>)impl->transparentPipelines[0].get();
+          break;
         case IOSGPUScenePipelineSelector::Unsupported:
           break;
         }
       if(plan.kind==IOSSceneMeshKind::Animated || plan.kind==IOSSceneMeshKind::Morph) {
         const size_t geometry = plan.kind==IOSSceneMeshKind::Animated ? 0u : 1u;
         const size_t alpha = dispatch.effective==IOSGPUScenePipelineSelector::AlphaTest ? 1u : 0u;
-        pipelineState = (id<MTLRenderPipelineState>)impl->geometryPipelines[geometry*2+alpha].get();
+        pipelineState = (id<MTLRenderPipelineState>)(dispatch.effective==IOSGPUScenePipelineSelector::Transparent
+            ? impl->transparentPipelines[geometry+1].get() : impl->geometryPipelines[geometry*2+alpha].get());
         }
       id<MTLBuffer> vertexBuffer =
           (id<MTLBuffer>)(void*)mesh->vertexBuffer.get();
@@ -2730,14 +3062,9 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
           }
         }
 
-      IOSGPUSceneNativePreparedDraw draw;
-      draw.plan = plan;
-      draw.deformation = {entity.boneRange.offset,entity.morphRange.offset,
-                          entity.morphRange.count,entity.fatness};
-      draw.deformationBuffer = plan.kind==IOSSceneMeshKind::Animated
-          ? prepared.uploads->bones.get() : prepared.uploads->morphLayers.get();
-      draw.morphIndices = (id)(void*)mesh->morphIndices.get();
-      draw.morphSamples = (id)(void*)mesh->morphSamples.get();
+      auto draw = nativeDraw();
+      draw.sourceId = entity.id.value;
+      draw.cameraDepth = iosSceneCameraDepth(entity.bounds,plan.constants.model,snapshot.currentCamera.view);
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
       if(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2) {
         switch(classifyIOSGPUSceneMultiply2ClipBounds(
@@ -2759,9 +3086,6 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       }
 #endif
       draw.pipelineState = pipelineState;
-      draw.vertexBuffer = vertexBuffer;
-      draw.indexBuffer = indexBuffer;
-      draw.baseColorTexture = baseColorTexture;
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
       if(causalRoute==IOSGPUSceneCausalFrameRoute::Target) {
@@ -2899,6 +3223,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         candidateFrame->additive.emplace_back(std::move(draw));
       else if(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2)
         candidateFrame->multiply2.emplace_back(std::move(draw));
+      else if(plan.pipeline==IOSGPUScenePipelineSelector::Transparent)
+        candidateFrame->transparent.emplace_back(std::move(draw));
       else
         candidateFrame->base.emplace_back(std::move(draw));
       }
@@ -2947,7 +3273,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         for(size_t i=first;i<end;++i) {
           const auto& draw = draws[i];
           instances.push_back({draw.plan.constants.model,draw.plan.constants.baseColor,
-                               draw.plan.constants.uvOffset,draw.deformation.fatness,0u});
+                               draw.plan.constants.uvOffset,draw.deformation.fatness,draw.plan.constants.landscape});
           }
         }
       batches.push_back(std::move(draws[first]));
@@ -2960,10 +3286,16 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         draw.instanceBuffer = prepared.uploads->instances.get();
     draws = std::move(batches);
 #endif
+    auto& transparent = candidateFrame->transparent;
+    std::sort(transparent.begin(),transparent.end(),[](const auto& a,const auto& b) {
+      return a.cameraDepth!=b.cameraDepth ? a.cameraDepth>b.cameraDepth : a.sourceId<b.sourceId;
+      });
     if(!impl->geometryReported && !candidateFrame->base.empty()) {
       Tempest::Log::i("RendererIOS native geometry: entities=",report.counts.drawn.material.total,
-          " draw-calls=",candidateFrame->base.size()+candidateFrame->multiply2.size()+candidateFrame->additive.size(),
-          " animated=",report.counts.drawn.kind.animated," morph=",report.counts.drawn.kind.morph);
+          " draw-calls=",candidateFrame->base.size()+candidateFrame->multiply2.size()+candidateFrame->additive.size()+candidateFrame->transparent.size(),
+          " animated=",report.counts.drawn.kind.animated," morph=",report.counts.drawn.kind.morph,
+          " lights=",snapshot.lights.size()," transparent=",candidateFrame->transparent.size(),
+          " sun-y=",snapshot.currentSky.sunDirection.y," rain=",snapshot.currentSky.rainIntensity);
       impl->geometryReported = true;
       }
 

@@ -5,6 +5,7 @@
 #include <zenkit/vobs/Light.hh>
 
 #include "lightsource.h"
+#include "iosscenesource.h"
 #include "resources.h"
 
 class DbgPainter;
@@ -48,6 +49,7 @@ class LightGroup final {
     size_t size() const { return lightSourceData.size(); }
 
     void   tick(uint64_t time);
+    void   visitIOSSceneLights(void* context, IOSSceneLightVisitor visitor) const;
     bool   updateLights();
     auto&  lightsSsbo() const { return lightSourceSsbo; }
 
@@ -90,6 +92,8 @@ class LightGroup final {
     std::vector<size_t>              freeList;
     std::vector<LightSource>         lightSourceDesc;
     std::vector<LightSsbo>           lightSourceData;
+    std::vector<uint64_t>            sourceIdentities;
+    IOSSceneSourceIdentityAllocator sourceIdentityAllocator;
     std::unordered_set<size_t>       animatedLights;
     std::vector<uint32_t>            duryBit;
 

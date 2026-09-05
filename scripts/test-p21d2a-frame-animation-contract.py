@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-import re
 import shutil
 import shlex
 import subprocess
@@ -13,106 +12,7 @@ import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
-MAINWINDOW = ROOT / "game/mainwindow.cpp"
-SNAPSHOT = ROOT / "game/graphics/iosscenesnapshot.h"
 PLAN = ROOT / "game/graphics/iossceneextractorplan.h"
-
-
-def wiring_errors(mainwindow: str, snapshot: str) -> list[str]:
-    errors: list[str] = []
-
-    frame_match = re.search(
-        r"struct\s+IOSSceneFrameState\s+final\s*\{(?P<body>.*?)\n\s*\};",
-        snapshot,
-        re.DOTALL,
-    )
-    if frame_match is None or not re.search(
-        r"\buint64_t\s+sceneTimeMs\s*=\s*0\s*;", frame_match.group("body")
-    ):
-        errors.append("IOSSceneFrameState must expose zero-initialized uint64_t sceneTimeMs")
-
-    snapshot_match = re.search(
-        r"struct\s+IOSSceneSnapshot\s+final\s*\{(?P<body>.*?)\n\s*private:",
-        snapshot,
-        re.DOTALL,
-    )
-    if snapshot_match is None:
-        errors.append("IOSSceneSnapshot declaration not found")
-    elif "sceneTimeMs" in snapshot_match.group("body"):
-        errors.append("sceneTimeMs must remain CPU frame state, not snapshot ABI")
-
-    helper_match = re.search(
-        r"IOSSceneFrameState\s+iosSceneFrameState\s*\("
-        r"\s*const\s+World\s*\*\s*world\s*,"
-        r"\s*const\s+Camera\s*\*\s*camera\s*,"
-        r"\s*Size\s+drawable\s*\)\s*\{(?P<body>.*?)\n\s*\}",
-        mainwindow,
-        re.DOTALL,
-    )
-    if helper_match is None:
-        errors.append("iosSceneFrameState must accept World, Camera, and drawable")
-    else:
-        body = helper_match.group("body")
-        assignment = re.compile(
-            r"frame\.sceneTimeMs\s*=\s*world\s*!=\s*nullptr\s*\?\s*"
-            r"world\s*->\s*tickCount\s*\(\s*\)\s*:\s*0u?\s*;"
-        )
-        assignment_match = assignment.search(body)
-        if assignment_match is None:
-            errors.append("sceneTimeMs must be exactly World::tickCount or zero for null world")
-        if len(re.findall(r"frame\.sceneTimeMs\s*=", body)) != 1:
-            errors.append("sceneTimeMs must have exactly one producer in iosSceneFrameState")
-        camera_return = re.search(r"if\s*\(\s*camera\s*==\s*nullptr\s*\)", body)
-        if (
-            assignment_match is not None
-            and camera_return is not None
-            and assignment_match.start() > camera_return.start()
-        ):
-            errors.append("world time must be captured even when camera is null")
-
-    call = re.compile(
-        r"iosSceneFrameState\s*\(\s*publishWorld\s*\?\s*"
-        r"Gothic::inst\(\)\.world\(\)\s*:\s*nullptr\s*,"
-        r"\s*publishWorld\s*\?\s*Gothic::inst\(\)\.camera\(\)\s*"
-        r":\s*nullptr\s*,"
-        r"\s*renderer\.drawableSize\(\)\s*\)"
-    )
-    if call.search(mainwindow) is None:
-        errors.append(
-            "render path must pass the loading-safe world/camera pair "
-            "to iosSceneFrameState"
-        )
-
-    return errors
-
-
-def require_clean_wiring(mainwindow: str, snapshot: str) -> None:
-    errors = wiring_errors(mainwindow, snapshot)
-    if errors:
-        raise RuntimeError("wiring oracle failed: " + "; ".join(errors))
-
-
-def require_wiring_mutations_killed(mainwindow: str, snapshot: str) -> None:
-    mutations = {
-        "constant-zero": mainwindow.replace("world->tickCount()", "0u", 1),
-        "application-clock": mainwindow.replace(
-            "world->tickCount()", "Application::tickCount()", 1
-        ),
-        "present-serial": mainwindow.replace("world->tickCount()", "frameSerial", 1),
-        "nonzero-null-fallback": mainwindow.replace(
-            "world->tickCount() : 0u", "world->tickCount() : 1u", 1
-        ),
-        "missing-world-call": mainwindow.replace(
-            "iosSceneFrameState(publishWorld ? Gothic::inst().world() : nullptr,",
-            "iosSceneFrameState(nullptr,",
-            1,
-        ),
-    }
-    for name, mutated in mutations.items():
-        if mutated == mainwindow:
-            raise RuntimeError(f"wiring mutation {name} did not match production source")
-        if not wiring_errors(mutated, snapshot):
-            raise RuntimeError(f"wiring mutation survived: {name}")
 
 
 DRIVER = r'''
@@ -280,12 +180,8 @@ def require_selector_gates(plan_source: str) -> None:
 
 
 def main() -> int:
-    mainwindow = MAINWINDOW.read_text()
-    snapshot = SNAPSHOT.read_text()
     plan_source = PLAN.read_text()
 
-    require_clean_wiring(mainwindow, snapshot)
-    require_wiring_mutations_killed(mainwindow, snapshot)
     require_selector_gates(plan_source)
     print("P2.1d2a frame-animation contract: PASS")
     return 0

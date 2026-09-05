@@ -181,13 +181,25 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     case IOSMaterialCategory::AlphaTest:
     case IOSMaterialCategory::Additive:
     case IOSMaterialCategory::Multiply2:
-      break;
     case IOSMaterialCategory::Transparent:
+      break;
     case IOSMaterialCategory::Water:
       return IOSSceneSourcePlanResult::SkippedMaterial;
     default:
       return IOSSceneSourcePlanResult::InvalidSource;
     }
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  if(source.materialCategory==IOSMaterialCategory::Transparent)
+    return IOSSceneSourcePlanResult::SkippedMaterial;
+#endif
+  if((source.materialCategory==IOSMaterialCategory::Transparent || source.materialCategory==IOSMaterialCategory::AlphaTest) &&
+     (!std::isfinite(source.alphaWeight) || source.alphaWeight<0.f || source.alphaWeight>1.f))
+    return IOSSceneSourcePlanResult::InvalidSource;
   if(!source.hasMappedMaterialCategory)
     return IOSSceneSourcePlanResult::SkippedMaterial;
   const bool isAdditive =
@@ -275,7 +287,7 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   out.localBounds       = source.localBounds;
   out.indices           = source.indices;
   out.materialCategory  = source.materialCategory;
-  out.baseColorAlpha    = (isAdditive || isMultiply2)
+  out.baseColorAlpha    = (isAdditive || isMultiply2 || source.materialCategory==IOSMaterialCategory::Transparent || source.materialCategory==IOSMaterialCategory::AlphaTest)
       ? source.alphaWeight : 1.f;
   out.materialFlags     = isAdditive
       ? IOSMaterialFlagStaticAdditiveNone

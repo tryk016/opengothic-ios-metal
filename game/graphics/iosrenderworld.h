@@ -21,6 +21,7 @@ class IOSRenderWorld final {
     IOSMeshHandle     resolveMesh(uint64_t stableKey);
     IOSMaterialHandle resolveMaterial(uint64_t stableKey);
     IOSTextureHandle  resolveTexture(uint64_t stableKey);
+    IOSTextureHandle  resolveSkyTexture(size_t slot);
     IOSTextureHandle  resolveFrameTexture(uint64_t sourceId,
                                           uint64_t frameOrdinal);
     IOSLightHandle    resolveLight(uint64_t stableKey);
@@ -68,6 +69,7 @@ class IOSRenderWorld final {
     std::unordered_map<uint64_t,IOSMeshHandle>     meshRegistry;
     std::unordered_map<uint64_t,IOSMaterialHandle> materialRegistry;
     std::unordered_map<uint64_t,IOSTextureHandle>  textureRegistry;
+    std::unordered_map<uint64_t,IOSTextureHandle>  skyTextureRegistry;
     std::unordered_map<FrameTextureKey,IOSTextureHandle,
                        FrameTextureKeyHash> frameTextureRegistry;
     std::unordered_map<uint64_t,IOSLightHandle>    lightRegistry;

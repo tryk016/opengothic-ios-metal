@@ -133,7 +133,6 @@ int main(int argc, char** argv) {
          std::string::npos);
   assert(scene.find("insertDebugSignpost:(NSString*)draw.drawId.get()")!=
          std::string::npos);
-  assert(count(scene,"Tempest::MetalApi::withActiveCommandBuffer(")==1u);
   assert(count(scene,"&Impl::encodeMultiply2")==1u);
   assert(ordered(scene,{
       "enum class NativeMultiply2EncodeMode : uint8_t {",

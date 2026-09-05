@@ -251,7 +251,6 @@ void validatePublicContract() {
         Material::Water,
         Material::Ghost,
         Material::Multiply,
-        Material::Transparent,
         static_cast<Material::AlphaFunc>(255u)}) {
     assert(iosSceneMaterialMapping(alpha)==IOSSceneMaterialMapping{});
     }
@@ -949,6 +948,31 @@ void validateAcceptedKinds() {
     }
   }
 
+void validateAlphaWeight() {
+  auto source = candidate(IOSSceneMeshKind::Static,IOSMaterialCategory::AlphaTest);
+  source.alphaWeight = 0.4f;
+  IOSSceneOpaqueMeshPlan plan;
+  assert(planIOSOpaqueMeshSource(source,plan)==IOSSceneSourcePlanResult::Planned);
+  assert(plan.baseColorAlpha==0.4f);
+  IOSSceneExtractionStats stats;
+  assert(recordIOSScenePlanResult(IOSSceneSourcePlanResult::Planned,plan,stats));
+  source.alphaWeight = -0.1f;
+  assert(planIOSOpaqueMeshSource(source,plan)==IOSSceneSourcePlanResult::InvalidSource);
+  }
+
+void validateTransparentAdmission() {
+  assert((iosSceneMaterialMapping(Material::Transparent)==
+          IOSSceneMaterialMapping{IOSMaterialCategory::Transparent,true}));
+  auto source = candidate(IOSSceneMeshKind::Morph,IOSMaterialCategory::Transparent);
+  source.alphaWeight = 0.4f;
+  IOSSceneOpaqueMeshPlan plan;
+  assert(planIOSOpaqueMeshSource(source,plan)==IOSSceneSourcePlanResult::Planned);
+  assert(plan.baseColorAlpha==0.4f);
+  IOSSceneExtractionStats stats;
+  assert(recordIOSScenePlanResult(IOSSceneSourcePlanResult::Planned,plan,stats));
+  assert(stats.plannedTransparent==1 && stats.hasConsistentPlannedCounts());
+  }
+
 void validateSkippedSources() {
   IOSSceneOpaqueMeshPlan plan;
   auto unsupported = candidate(IOSSceneMeshKind::Unsupported);
@@ -961,7 +985,6 @@ void validateSkippedSources() {
          IOSSceneSourcePlanResult::InvalidSource);
 
   for(const auto category:{
-        IOSMaterialCategory::Transparent,
         IOSMaterialCategory::Water}) {
     auto unsupportedMaterial =
         candidate(IOSSceneMeshKind::Landscape,category);
@@ -1890,6 +1913,8 @@ int main() {
   validateUVAdmission();
   validateFrameTextureAdapter();
   validateAcceptedKinds();
+  validateAlphaWeight();
+  validateTransparentAdmission();
   validateSkippedSources();
   validateMalformedAcceptedKinds();
   validateFallbackAndMixedCounters();

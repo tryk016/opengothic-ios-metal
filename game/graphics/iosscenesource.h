@@ -9,6 +9,8 @@
 
 #include "iosscenesnapshot.h"
 
+namespace Tempest { class Texture2d; }
+
 class Material;
 class StaticMesh;
 class AnimMesh;
@@ -59,9 +61,27 @@ using IOSSceneSourceEnumerator = void (*)(
     void* visitorContext,
     IOSSceneSourceVisitor visitor);
 
+struct IOSSceneLightSource final {
+  uint64_t sourceId = 0;
+  IOSFloat3 position;
+  IOSFloat3 color;
+  float range = 0.f;
+  };
+
+using IOSSceneLightVisitor = void (*)(void*, const IOSSceneLightSource&);
+using IOSSceneLightEnumerator = void (*)(const void*, void*, IOSSceneLightVisitor);
+
+struct IOSSceneSkySource final {
+  // Day layers, night layers, sun and moon. Borrowed only during extraction.
+  std::array<const Tempest::Texture2d*,6> textures = {};
+  };
+using IOSSceneSkyReader = IOSSceneSkySource (*)(const void*);
+
 struct IOSSceneSourceProvider final {
   const void*              sourceContext = nullptr;
   IOSSceneSourceEnumerator enumerate     = nullptr;
+  IOSSceneLightEnumerator  enumerateLights = nullptr;
+  IOSSceneSkyReader         readSky = nullptr;
 
   constexpr explicit operator bool() const noexcept {
     return sourceContext!=nullptr && enumerate!=nullptr;
@@ -70,6 +90,11 @@ struct IOSSceneSourceProvider final {
   void visit(void* visitorContext, IOSSceneSourceVisitor visitor) const {
     if(bool(*this) && visitor!=nullptr)
       enumerate(sourceContext,visitorContext,visitor);
+    }
+
+  void visitLights(void* context, IOSSceneLightVisitor visitor) const {
+    if(sourceContext!=nullptr && enumerateLights!=nullptr)
+      enumerateLights(sourceContext,context,visitor);
     }
   };
 

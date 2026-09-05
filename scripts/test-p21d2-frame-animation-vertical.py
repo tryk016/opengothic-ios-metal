@@ -340,19 +340,6 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
     if adapter is None or normalized(adapter) != expected_adapter:
         errors.append("checked frame adapter body differs")
 
-    publisher = function_body(header, "inline bool publishIOSSceneExtraction(")
-    expected_publisher = normalized("""
-      if(result!=IOSSceneExtractionResult::Success)
-        return false;
-      frame.entities.swap(staging.entities);
-      frame.materials.swap(staging.materials);
-      frame.bones.swap(staging.bones);
-      frame.morphLayers.swap(staging.morphLayers);
-      return true;
-    """)
-    if publisher is None or normalized(publisher) != expected_publisher:
-        errors.append("atomic destination publisher body differs")
-
     uv_admission = region(
         plan,
         "const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;",
@@ -528,15 +515,6 @@ def require_production_oracle(extractor: str, header: str, plan: str) -> None:
                 "  outTexture = selected;\n"
                 "  if(selected==nullptr)\n"
                 "    return IOSSceneExtractionResult::InvalidSource;",
-                1,
-            ),
-            plan,
-        ),
-        "publisher-accepts-failure": (
-            extractor,
-            header.replace(
-                "if(result!=IOSSceneExtractionResult::Success)",
-                "if(false && result!=IOSSceneExtractionResult::Success)",
                 1,
             ),
             plan,

@@ -121,6 +121,11 @@ IOSTextureHandle IOSRenderWorld::resolveTexture(uint64_t stableKey) {
                              worldGeneration,nextTextureId);
   }
 
+IOSTextureHandle IOSRenderWorld::resolveSkyTexture(size_t slot) {
+  return resolveStableHandle(skyTextureRegistry,issuedTextureIds,uint64_t(slot)+1,
+                             worldGeneration,nextTextureId);
+  }
+
 IOSTextureHandle IOSRenderWorld::resolveFrameTexture(
     uint64_t sourceId, uint64_t frameOrdinal) {
   if(sourceId==0)
@@ -162,6 +167,7 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
   snapshot->sequence            = nextSequence;
   snapshot->currentCamera       = frame.camera;
   snapshot->previousCamera      = frame.camera;
+  snapshot->sceneTimeMs         = frame.sceneTimeMs;
   snapshot->currentSky          = frame.sky;
   snapshot->previousSky         = frame.sky;
   snapshot->materials           = std::move(frame.materials);
@@ -297,7 +303,11 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
                               worldGeneration,true);
         });
 
-  if(!issuedHandlesValid)
+  const bool skyHandlesValid = std::all_of(frame.sky.textures.begin(),frame.sky.textures.end(),
+      [&](const IOSTextureHandle handle) {
+        return isIssuedHandle(issuedTextureIds,handle,worldGeneration,true);
+        });
+  if(!issuedHandlesValid || !skyHandlesValid)
     throw std::invalid_argument("RendererIOS scene snapshot contains an unissued handle");
   if(!snapshot->isStructurallyValid())
     throw std::invalid_argument("RendererIOS scene snapshot failed structural validation");
@@ -338,6 +348,7 @@ void IOSRenderWorld::resetWorld() noexcept {
   meshRegistry.clear();
   materialRegistry.clear();
   textureRegistry.clear();
+  skyTextureRegistry.clear();
   frameTextureRegistry.clear();
   lightRegistry.clear();
   particleRegistry.clear();

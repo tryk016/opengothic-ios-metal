@@ -79,6 +79,8 @@ void WorldView::prepareGlobals(Tempest::Encoder<Tempest::CommandBuffer>& cmd, ui
   }
 
 void WorldView::prepareIOSSceneSources(uint64_t tickCount) {
+  gSky.updateLight(owner.time().timeInDay().toInt());
+  gLights.tick(tickCount);
   sGlobal.setTime(tickCount);
   visuals.prepareIOSSceneSources();
   }

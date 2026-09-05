@@ -3,6 +3,8 @@
 #include "graphics/iosrenderworld.h"
 #include "graphics/iossceneextractorplan.h"
 #include "graphics/iosscenesnapshot.h"
+#include "graphics/iosscenelighting.h"
+#include "world/worldweather.h"
 
 #include <array>
 #include <cassert>
@@ -560,6 +562,12 @@ int main() {
     alpha.materials[0].alphaCutoff = 0.5f;
     alpha.materials[0].usesFallbackTexture = false;
     assert(alpha.isStructurallyValid());
+    alpha.materials[0].baseColor.w = -0.1f;
+    assert(!alpha.isStructurallyValid());
+    alpha.materials[0].baseColor.w = 1.1f;
+    assert(!alpha.isStructurallyValid());
+    alpha.materials[0].baseColor.w = 0.4f;
+    assert(alpha.isStructurallyValid());
     alpha.materials[0].usesFallbackTexture = true;
     assert(!alpha.isStructurallyValid());
     alpha.materials[0].usesFallbackTexture = false;
@@ -663,7 +671,6 @@ int main() {
   assert(!fabricatedKindSnapshot.isStructurallyValid());
   auto fabricatedCategorySnapshot = *firstValidAfterRejects;
   for(const auto category:{
-        IOSMaterialCategory::Transparent,
         IOSMaterialCategory::Water,
         static_cast<IOSMaterialCategory>(255u)}) {
     fabricatedCategorySnapshot.materials[0].category = category;
@@ -713,5 +720,57 @@ int main() {
   const auto newWorldFirst = world.buildSnapshot(frameState(5.f));
   assert(newWorldFirst->sequence.value==1u);
   assert(!newWorldFirst->historyValid);
+  // Lighting stays finite, and scene metering must not change with camera altitude.
+  IOSSkyState daylight;
+  daylight.sunDirection = {0.f,1.f,0.f};
+  daylight.sunColor = {128000.f,128000.f,128000.f};
+  daylight.ambientColor = {5000.f,5000.f,5000.f};
+  daylight.fogColor = {0.5f,0.5f,0.5f};
+  const auto lit = iosSceneLighting(daylight,{});
+  daylight.altitudeMeters = 1000.f;
+  const auto high = iosSceneLighting(daylight,{});
+  const auto night = iosSceneLighting({},{});
+  assert(lit.sunColor==high.sunColor);
+  assert(lit.sunColor.w>0.f && lit.sunColor.w<night.sunColor.w);
+  assert(night.sunColor.w>0.6f && night.sunColor.w<0.7f);
+  assert(lit.sunColor.x>lit.sunColor.z && std::isfinite(lit.sunColor.x));
+  assert(iosAtmosphereTransmittance(-1.f,1.f)==IOSFloat3{});
+  // Raw solar intensity remains high at night; fog must follow attenuated light.
+  daylight.sunDirection = {0.f,-1.f,0.f};
+  const auto nightFog = iosSceneLighting(daylight,{}).fogColor;
+  assert(nightFog.x>0.f && nightFog.x<nightFog.z && nightFog.z<0.1f);
+
+  IOSRenderWorld skyWorld;
+  const auto skyTexture = skyWorld.resolveSkyTexture(0);
+  assert(skyTexture==skyWorld.resolveSkyTexture(0));
+  assert(skyTexture!=skyWorld.resolveTexture(1));
+  assert(skyTexture!=skyWorld.resolveFrameTexture(1,0));
+  auto skyFrame = frameState(0.f);
+  skyFrame.sky.textures[0] = skyTexture;
+  skyFrame.sceneTimeMs = 1234;
+  const auto skySnapshot = skyWorld.buildSnapshot(std::move(skyFrame));
+  assert(skySnapshot->currentSky.textures[0]==skyTexture && skySnapshot->sceneTimeMs==1234);
+
+  bool sawRain = false, sawClear = false;
+  for(int hour=0;hour<24*7;++hour) {
+    const auto weather = worldWeather(gtime(hour,0),123u);
+    assert(weather.rain>=0.f && weather.rain<=1.f && weather.clouds>=0.f && weather.clouds<=1.f);
+    assert(weather.rain==worldWeather(gtime(hour,0),123u).rain);
+    sawRain |= weather.rain>0.f;
+    sawClear |= weather.rain==0.f;
+    }
+  assert(sawRain && sawClear);
+  assert(worldWeather(gtime(1,0),123u,1.f).rain==1.f);
+  assert(worldWeather(gtime(1,0),123u,0.f).rain==0.f);
+
+  // Transparent sorting follows camera depth, not world Z or radial distance.
+  IOSMatrix4x4 rotatedView;
+  rotatedView.elements[2] = 1.f;
+  rotatedView.elements[10] = 0.f;
+  IOSMatrix4x4 model;
+  model.elements[12] = 20.f;
+  model.elements[14] = 100.f;
+  assert(iosSceneCameraDepth({},model,rotatedView)==20.f);
+
   return 0;
   }

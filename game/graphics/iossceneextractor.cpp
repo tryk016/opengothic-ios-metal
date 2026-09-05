@@ -43,6 +43,16 @@ IOSBounds bounds(const IOSSceneSource& source) noexcept {
     };
   }
 
+void visitLight(void* opaque, const IOSSceneLightSource& source) {
+  auto& context = *static_cast<ExtractionContext*>(opaque);
+  IOSLight light;
+  light.id = context.renderWorld->resolveLight(source.sourceId);
+  light.position = source.position;
+  light.color = source.color;
+  light.range = source.range;
+  context.staging.lights.push_back(light);
+  }
+
 void visitSource(void* opaque, const IOSSceneSource& source) {
   auto& context = *static_cast<ExtractionContext*>(opaque);
   if(context.report.result!=IOSSceneExtractionResult::Success)
@@ -236,6 +246,9 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   entityRecord.transform      = plan.transform;
   entityRecord.bounds         = plan.localBounds;
   entityRecord.visibilityMask = plan.visibilityMask;
+  if(plan.materialCategory==IOSMaterialCategory::Opaque ||
+     plan.materialCategory==IOSMaterialCategory::AlphaTest)
+    entityRecord.visibilityMask |= IOSSceneVisibilityShadow;
   entityRecord.fatness = source.fatness;
   if(plan.kind==IOSSceneMeshKind::Animated) {
     const auto count = source.boneBytes.size()/sizeof(Tempest::Matrix4x4);
@@ -275,7 +288,7 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     IOSSceneFrameState& frame) const {
   IOSSceneExtractionReport report;
   if(!frame.entities.empty() || !frame.materials.empty() ||
-     !frame.bones.empty() || !frame.morphLayers.empty()) {
+     !frame.bones.empty() || !frame.morphLayers.empty() || !frame.lights.empty()) {
     report.result = IOSSceneExtractionResult::FrameAlreadyPopulated;
     return report;
     }
@@ -346,10 +359,28 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     return context.report;
     }
 
+  source.visitLights(&context,&visitLight);
+  auto sky = frame.sky;
+  if(source.readSky!=nullptr) {
+    const auto nativeSky = source.readSky(source.sourceContext);
+    for(size_t i=0;i<nativeSky.textures.size();++i) {
+      if(nativeSky.textures[i]==nullptr)
+        continue;
+      const auto handle = renderWorld.resolveSkyTexture(i);
+      const auto bound = assets.bindTexture(device,handle,*nativeSky.textures[i]);
+      if(!isIOSSceneAssetBindSuccess(bound)) {
+        context.report.result = IOSSceneExtractionResult::AssetBindFailed;
+        context.report.bindFailure = bound;
+        return context.report;
+        }
+      sky.textures[i] = handle;
+      }
+    }
   if(!publishIOSSceneExtraction(
        context.report.result,context.staging,frame)) {
     context.report.result = IOSSceneExtractionResult::InvalidSource;
     return context.report;
     }
+  frame.sky = sky;
   return context.report;
   }

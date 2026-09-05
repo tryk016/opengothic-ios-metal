@@ -770,8 +770,8 @@ def validate_log(
     )
     require(
         "RendererIOS shader library: source=offline-metallib "
-        "resource=RendererIOS.metallib abi=10" in log,
-        "offline metallib ABI 10 marker is missing",
+        "resource=RendererIOS.metallib abi=11" in log,
+        "offline metallib ABI 11 marker is missing",
     )
     require(
         "Shader compilation took:" not in log,
@@ -941,7 +941,7 @@ def synthetic_log(
         f"build={source_sha}-local gpu=synthetic",
         "RendererIOS diagnostics: ON",
         "RendererIOS shader library: source=offline-metallib "
-        "resource=RendererIOS.metallib abi=10",
+        "resource=RendererIOS.metallib abi=11",
         PROVENANCE_PREFIX
         + "configured=1 schema=1 key=1 metallib=9 "
         + f"digest={metallib_sha256} stale-reset=0",

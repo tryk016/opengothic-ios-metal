@@ -59,7 +59,8 @@ namespace {
 
 IOSSceneFrameState iosSceneFrameState(const World* world,
                                       const Camera* camera,
-                                      Size drawable) {
+                                      Size drawable,
+                                      const WorldView* worldView) {
   IOSSceneFrameState frame;
   frame.sceneTimeMs            = world!=nullptr ? world->tickCount() : 0u;
   frame.camera.viewport.width  = uint32_t(std::max(drawable.w,1));
@@ -72,8 +73,51 @@ IOSSceneFrameState iosSceneFrameState(const World* world,
   frame.camera.projection     = IOSSceneConversion::matrix(camera->projective());
   frame.camera.viewProjection = IOSSceneConversion::matrix(camera->viewProj());
   frame.camera.position       = {position.x,position.y,position.z};
+  auto inverseViewProjection = camera->viewProj();
+  inverseViewProjection.inverse();
+  frame.camera.inverseViewProjection = IOSSceneConversion::matrix(inverseViewProjection);
   frame.camera.nearPlane      = camera->zNear();
   frame.camera.farPlane       = camera->zFar();
+  if(worldView!=nullptr) {
+    const auto& light = worldView->mainLight();
+    const auto direction = light.dir();
+    const auto color = light.color();
+    const auto ambient = worldView->ambientLight();
+    frame.sky.sunDirection = {direction.x,direction.y,direction.z};
+    frame.sky.sunColor = {color.x,color.y,color.z};
+    frame.sky.ambientColor = {ambient.x,ambient.y,ambient.z};
+    frame.sky.sunIntensity = worldView->sky().sunIntensity();
+    frame.sky.cloudOffsets = {float(frame.sceneTimeMs%90000u)/90000.f,0.f,
+                              float(frame.sceneTimeMs%270000u)/270000.f,0.f};
+    frame.sky.timeOfDay = world!=nullptr ? float(world->time().timeInDay().toInt())/float(gtime(1,0,0).toInt()) : 0.f;
+    frame.sky.altitudeMeters = std::clamp((position.y-worldView->bbox().first.y)*0.01f,0.f,1000.f);
+    const auto nearShadow = camera->viewShadow(direction,0);
+    const auto farShadow = camera->viewShadow(direction,1);
+    frame.sky.viewShadow = {IOSSceneConversion::matrix(nearShadow),IOSSceneConversion::matrix(farShadow)};
+    auto inverseShadow = nearShadow;
+    inverseShadow.inverse();
+    Vec3 nearSlice = {0.f,0.75f,0.f}, farSlice = {0.f,0.75f,0.9f};
+    inverseShadow.project(nearSlice);
+    inverseShadow.project(farSlice);
+    farShadow.project(nearSlice);
+    farShadow.project(farSlice);
+    frame.sky.closeupShadowSlice = {nearSlice.z,farSlice.z};
+    frame.sky.shadowsEnabled = direction.y>Camera::minShadowY && (world==nullptr || world->isOutdoor());
+    if(world==nullptr || world->isOutdoor())
+      frame.featureMask |= IOSSceneFeatureSky;
+    if(world!=nullptr) {
+      const auto weather = world->weather();
+      const bool sheltered = world->isSheltered(position);
+      frame.sky.cloudCoverage = weather.clouds;
+      frame.sky.rainIntensity = sheltered ? 0.f : weather.rain;
+      if(!sheltered) {
+        frame.featureMask |= IOSSceneFeatureFog;
+        frame.sky.fogColor = {0.5f,0.5f,0.5f};
+        frame.sky.fogNear = camera->zFar()*(0.45f-0.3f*weather.rain);
+        frame.sky.fogFar = camera->zFar()*(1.f-0.55f*weather.rain);
+        }
+      }
+    }
   return frame;
   }
 
@@ -84,10 +128,20 @@ void visitIOSWorldSources(const void* sourceContext,
   source.visitIOSSceneSources(visitorContext,visitor);
   }
 
+void visitIOSWorldLights(const void* source, void* context, IOSSceneLightVisitor visitor) {
+  static_cast<const WorldView*>(source)->lights().visitIOSSceneLights(context,visitor);
+  }
+
+IOSSceneSkySource readIOSWorldSky(const void* source) {
+  const auto& sky = static_cast<const WorldView*>(source)->sky();
+  return {{sky.cloudsDay().lay[0],sky.cloudsDay().lay[1],
+           sky.cloudsNight().lay[0],sky.cloudsNight().lay[1],&sky.sunImage(),&sky.moonImage()}};
+  }
+
 IOSSceneSourceProvider iosSceneSourceProvider(const WorldView* source) noexcept {
   if(source==nullptr)
     return {};
-  return {source,&visitIOSWorldSources};
+  return {source,&visitIOSWorldSources,&visitIOSWorldLights,&readIOSWorldSky};
   }
 
 constexpr bool rendererIOSPublishesWorldDuringLoad(
@@ -2604,7 +2658,8 @@ void MainWindow::render(){
       iosSceneSourceProvider(publishWorld ? Gothic::inst().worldView() : nullptr),
       iosSceneFrameState(publishWorld ? Gothic::inst().world() : nullptr,
                          publishWorld ? Gothic::inst().camera() : nullptr,
-                         renderer.drawableSize()));
+                         renderer.drawableSize(),
+                         publishWorld ? Gothic::inst().worldView() : nullptr));
 
     const bool videoActive = video.isActive();
     IOSVideoPacket videoPacket;

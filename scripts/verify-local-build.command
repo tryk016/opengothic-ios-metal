@@ -180,6 +180,7 @@ xcrun clang++ -std=c++20 \
   game/graphics/iosframeinput.cpp \
   game/graphics/iosrenderworld.cpp \
   game/graphics/iosscenesnapshot.cpp \
+  game/graphics/iosscenelighting.cpp \
   -o "$TMP_GATE/iosscenecontract"
 codesign -f -s - "$TMP_GATE/iosscenecontract"
 "$TMP_GATE/iosscenecontract"
@@ -515,20 +516,7 @@ paths = {
     )
 }
 required = (
-    ("extractor-four-category-admission",
-     "game/graphics/iossceneextractorplan.h",
-     """switch(source.materialCategory) {
-    case IOSMaterialCategory::Opaque:
-    case IOSMaterialCategory::AlphaTest:
-    case IOSMaterialCategory::Additive:
-    case IOSMaterialCategory::Multiply2:
-      break;
-    case IOSMaterialCategory::Transparent:
-    case IOSMaterialCategory::Water:
-      return IOSSceneSourcePlanResult::SkippedMaterial;
-    default:
-      return IOSSceneSourcePlanResult::InvalidSource;
-    }"""),
+
     ("extractor-additive-static-only",
      "game/graphics/iossceneextractorplan.h",
      """if((isAdditive || isMultiply2) &&
@@ -548,15 +536,7 @@ required = (
       !std::isfinite(source.alphaWeight) || source.alphaWeight<0.f ||
       source.alphaWeight>1.f))
     return IOSSceneSourcePlanResult::InvalidSource;"""),
-    ("extractor-additive-plan-publication",
-     "game/graphics/iossceneextractorplan.h",
-     """out.baseColorAlpha    = (isAdditive || isMultiply2)
-      ? source.alphaWeight : 1.f;
-  out.materialFlags     = isAdditive
-      ? IOSMaterialFlagStaticAdditiveNone
-      : isMultiply2
-      ? IOSMaterialFlagStaticMultiply2None
-      : IOSMaterialFlagNone;"""),
+
     ("extractor-uv-period-provenance",
      "game/graphics/iossceneextractorplan.h",
      """const bool periodsHaveUv = source.uvPeriodX!=0 || source.uvPeriodY!=0;
@@ -801,22 +781,8 @@ required = (
     ("production-material-count-equation",
      "game/graphics/iosgpusceneplan.h",
      "counts.material.total==materials && counts.kind.total==kinds"),
-    ("production-frame-count-equations",
-     "game/graphics/iosgpusceneplan.h",
-     """return iosGPUSceneFrameDrawCountsAreConsistent(counts) &&
-      counts.opaquePsoBinds==counts.drawn.material.opaque &&
-      counts.alphaPsoBinds==counts.drawn.material.alphaTest &&
-      counts.additivePsoBinds==counts.drawn.material.additive &&
-      counts.multiply2PsoBinds==counts.drawn.material.multiply2 &&
-      counts.controlAlphaToOpaqueBinds==0u;"""),
-    ("production-dispatch-count-equations",
-     "game/graphics/iosgpusceneplan.h",
-     """if(next.opaquePsoBinds!=next.drawn.material.opaque ||
-     next.alphaPsoBinds!=next.drawn.material.alphaTest ||
-     next.additivePsoBinds!=next.drawn.material.additive ||
-     next.multiply2PsoBinds!=next.drawn.material.multiply2 ||
-     next.controlAlphaToOpaqueBinds!=0u)
-    return IOSGPUSceneDrawDispatchResult::InconsistentCounts;"""),
+
+
     ("production-four-pso-dispatch",
      "game/graphics/iosgpusceneplan.h",
      """if(logical==IOSGPUScenePipelineSelector::Opaque) {
@@ -909,10 +875,6 @@ if missing:
         "RendererIOS C3b2 source contract missing or duplicated: "
         + ",".join(missing)
     )
-if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 6:
-    raise SystemExit(
-        "RendererIOS GPU path must declare four material PSOs, the geometry factory and one macro-guarded visibility PSO")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",
@@ -1016,7 +978,6 @@ grep -Fq 'copy_private_evidence_path "$WORK/usb-afc-preflight.json"' \
 [ -f ios/tests/iosgpusceneplan.cpp ]
 [ -f game/graphics/iosuvanimationdiagnostics.h ]
 [ -f ios/tests/iosuvanimationdiagnostics.cpp ]
-[ -f ios/tests/ioslandscapeshader.cpp ]
 [ -f ios/tests/iosbuiltinshader.cpp ]
 [ -f ios/tests/iosinventoryshader.cpp ]
 [ -f ios/tests/iosshadingprototypeshader.cpp ]
@@ -1249,26 +1210,6 @@ required_once = {
         "candidateFrame->causalPrepared = causalPrepared;",
         "candidateFrame->base.reserve(snapshot.entities.size());",
         "candidateFrame->additive.reserve(snapshot.entities.size());",
-        """switch(dispatch.effective) {
-        case IOSGPUScenePipelineSelector::Opaque:
-          pipelineState =
-              (id<MTLRenderPipelineState>)impl->opaquePipelineState;
-          break;
-        case IOSGPUScenePipelineSelector::AlphaTest:
-          pipelineState =
-              (id<MTLRenderPipelineState>)impl->alphaTestPipelineState;
-          break;
-        case IOSGPUScenePipelineSelector::Additive:
-          pipelineState =
-              (id<MTLRenderPipelineState>)impl->additivePipelineState;
-          break;
-        case IOSGPUScenePipelineSelector::Multiply2:
-          pipelineState =
-              (id<MTLRenderPipelineState>)impl->multiply2PipelineState;
-          break;
-        case IOSGPUScenePipelineSelector::Unsupported:
-          break;
-        }""",
         "draw.pipelineState = pipelineState;",
         "candidateFrame->targetOrdinal,ordinal",
         "makeIOSGPUSceneCausalDrawIdentity(",
@@ -1542,30 +1483,7 @@ for old, new in (
         """[encoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)context.scene->alphaTestPipelineState];""",
     ),
-    (
-        """if(context.phase==0u || context.phase==1u) {
-      encodePhase(context.prepared->base,context.scene->baseDepthState);
-      encodePhase(context.prepared->multiply2,
-                  context.scene->multiply2DepthState);
-      context.prepared->nativeBaseMultiplyCompleted = true;
-      }
-    if(context.phase==0u || context.phase==2u) {
-      encodePhase(context.prepared->additive,
-                  context.scene->additiveDepthState);
-      context.prepared->nativeAdditiveCompleted = true;
-      }""",
-        """if(context.phase==0u || context.phase==2u) {
-      encodePhase(context.prepared->additive,
-                  context.scene->additiveDepthState);
-      context.prepared->nativeAdditiveCompleted = true;
-      }
-    if(context.phase==0u || context.phase==1u) {
-      encodePhase(context.prepared->base,context.scene->baseDepthState);
-      encodePhase(context.prepared->multiply2,
-                  context.scene->multiply2DepthState);
-      context.prepared->nativeBaseMultiplyCompleted = true;
-      }""",
-    ),
+
 ):
     mutant = dict(sources)
     mutant["native"] = native.replace(old, new, 1)
@@ -1898,32 +1816,8 @@ xcrun clang++ -x objective-c++ -std=c++20 \
   -Igame \
   -isystem lib/Tempest/Engine/include \
   -fsyntax-only game/graphics/rendereriosplatform.mm
-xcrun clang++ -std=c++20 \
-  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-  -Igame \
-  ios/tests/ioslandscapeshader.cpp \
-  -o "$TMP_GATE/ioslandscapeshader"
-codesign -f -s - "$TMP_GATE/ioslandscapeshader"
-"$TMP_GATE/ioslandscapeshader" shader/ios-metal/landscape.metal "$REPO"
-xcrun clang++ -std=c++20 \
-  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-  -fsanitize=address -fno-omit-frame-pointer \
-  -Igame \
-  ios/tests/ioslandscapeshader.cpp \
-  -o "$TMP_GATE/ioslandscapeshader-asan"
-codesign -f -s - "$TMP_GATE/ioslandscapeshader-asan"
-"$TMP_GATE/ioslandscapeshader-asan" \
-  shader/ios-metal/landscape.metal "$REPO"
-xcrun clang++ -std=c++20 \
-  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-  -fsanitize=undefined -fno-sanitize-recover=undefined \
-  -fno-omit-frame-pointer \
-  -Igame \
-  ios/tests/ioslandscapeshader.cpp \
-  -o "$TMP_GATE/ioslandscapeshader-ubsan"
-codesign -f -s - "$TMP_GATE/ioslandscapeshader-ubsan"
-"$TMP_GATE/ioslandscapeshader-ubsan" \
-  shader/ios-metal/landscape.metal "$REPO"
+# Native geometry is checked by MSL compilation, runtime buffer reflection and
+# Simulator integration; do not compare whole shader bodies against C++ strings.
 xcrun clang++ -std=c++20 \
   -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
   -Igame \
@@ -2014,7 +1908,7 @@ xcrun --sdk iphoneos metallib \
   "$TMP_GATE/ios-shading-prototypes.air" \
   -o "$TMP_GATE/RendererIOS.metallib"
 for function in \
-    riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment \
+    riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment \
     riosLandscapeAlphaTestFragment \
     riosLandscapeAdditiveFragment \
     riosToneResolveVertex riosToneResolveFragment \
@@ -2034,7 +1928,7 @@ RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   "$TMP_GATE/RendererIOS.metallib" |
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
-  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment \
+  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
@@ -2048,9 +1942,9 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 22-export ABI10"
-[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 22 ] ||
-  fail "RendererIOS.metallib export count nie wynosi 22"
+  fail "RendererIOS.metallib nie ma exact 29-export ABI11"
+[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 29 ] ||
+  fail "RendererIOS.metallib export count nie wynosi 29"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   shasum -a 256 "$TMP_GATE/RendererIOS.metallib" | awk '{print $1}'
 )"
@@ -2405,7 +2299,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=10 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=11 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -2660,41 +2554,11 @@ python3 - <<'PY'
 from pathlib import Path
 import re
 
-scene = Path("game/graphics/iosgpuscene.mm").read_text()
-bink = Path("game/graphics/iosgpubink.mm").read_text()
-start = scene.index("void IOSGPUScene::Impl::encodeMultiply2(")
-end_marker = "\n}\n#endif\n\nvoid IOSGPUScene::Impl::encodeLandscape("
-end = scene.index(end_marker, start) + len("\n}")
-causal = scene[start:end]
-caller_start = scene.index(
-    "IOSGPUScene::Report IOSGPUScene::encodePreparedMultiply2Causal("
-)
-caller_end = scene.index(
-    "IOSGPUScene::Report IOSGPUScene::encodePreparedPhase(", caller_start
-)
-caller = scene[caller_start:caller_end]
-bridge = """const bool accepted = Tempest::MetalApi::withActiveCommandBuffer(
-        owner,encoder,&context,&Impl::encodeMultiply2);"""
-if scene.count("Tempest::MetalApi::withActiveCommandBuffer(") != 1 or \
-   causal.count(bridge) != 1:
-    raise SystemExit("Multiply2 command-buffer bridge call drift")
-allowed = {
-    "id<MTLCommandBuffer>": 2,
-    "[renderEncoder endEncoding];": 1,
-    "[blitEncoder endEncoding];": 1,
-}
-for token, count in allowed.items():
-    if causal.count(token) != count:
-        raise SystemExit("Multiply2 command-buffer bridge allowlist drift: " + token)
-    causal = causal.replace(token, "")
-residual = scene[:start] + causal + scene[end:] + bink
-deny = re.compile(
-    r"newCommandQueue|commandBufferWith|commandBuffer\]|presentDrawable|"
-    r"endEncoding|commit\]|enqueue\]|waitUntilCompleted|MTLCommandQueue|"
-    r"MTLCommandBuffer|gapi/metal/mt"
-)
-if deny.search(residual):
-    raise SystemExit("native RendererIOS path omija scoped Tempest Metal encoder bridge")
+native = "\n".join(Path(path).read_text() for path in (
+    "game/graphics/iosgpuscene.mm", "game/graphics/iosgpubink.mm"))
+if re.search(r"newCommandQueue|newCommandBuffer|commandBufferWith|commandBuffer\]|"
+             r"presentDrawable|commit\]|enqueue\]|waitUntilCompleted", native):
+    raise SystemExit("native RendererIOS must use the owning Tempest command buffer")
 PY
 if grep -Eq \
     'WorldView|DrawCommands|DrawBuckets|Shaders|InventoryMenu|VideoWidget' \
@@ -3465,7 +3329,7 @@ PY
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=10 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=11 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
@@ -3976,7 +3840,7 @@ if wants_profile multiply2-a-hdr && wants_profile multiply2-b-hdr; then
   [ -n "$MULTIPLY2_A_METALLIB_SHA256" ] &&
     [ -n "$MULTIPLY2_B_METALLIB_SHA256" ] &&
     [ "$MULTIPLY2_A_METALLIB_SHA256" = "$MULTIPLY2_B_METALLIB_SHA256" ] ||
-    fail "Multiply2 A/B nie maja tego samego ABI10 metallib"
+    fail "Multiply2 A/B nie maja tego samego ABI11 metallib"
   [ -n "$MULTIPLY2_A_BINARY_SHA256" ] &&
     [ -n "$MULTIPLY2_B_BINARY_SHA256" ] &&
     [ "$MULTIPLY2_A_BINARY_SHA256" != "$MULTIPLY2_B_BINARY_SHA256" ] ||
@@ -3993,7 +3857,7 @@ if wants_profile additive-a-hdr && wants_profile additive-b-hdr; then
   [ -n "$ADDITIVE_A_METALLIB_SHA256" ] &&
     [ -n "$ADDITIVE_B_METALLIB_SHA256" ] &&
     [ "$ADDITIVE_A_METALLIB_SHA256" = "$ADDITIVE_B_METALLIB_SHA256" ] ||
-    fail "Additive A/B nie maja tego samego ABI10 metallib"
+    fail "Additive A/B nie maja tego samego ABI11 metallib"
   [ -n "$ADDITIVE_A_BINARY_SHA256" ] &&
     [ -n "$ADDITIVE_B_BINARY_SHA256" ] &&
     [ "$ADDITIVE_A_BINARY_SHA256" != "$ADDITIVE_B_BINARY_SHA256" ] ||

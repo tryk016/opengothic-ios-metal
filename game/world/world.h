@@ -1,5 +1,7 @@
 #pragma once
 
+#include "worldweather.h"
+
 #include <Tempest/VertexBuffer>
 #include <Tempest/IndexBuffer>
 #include <Tempest/Matrix4x4>
@@ -113,13 +115,17 @@ class World final {
     Npc*                 player() const { return npcPlayer; }
     Npc*                 findNpcByInstance(size_t instance, size_t n = 0);
     Item*                findItemByInstance(size_t instance, size_t n = 0);
-    std::string_view     roomAt(const Tempest::Vec3& arr);
+    std::string_view     roomAt(const Tempest::Vec3& arr) const;
 
     void                 scaleTime(uint64_t& dt);
     void                 tick(uint64_t dt);
     uint64_t             tickCount() const;
     void                 setDayTime(int32_t h,int32_t min);
     gtime                time() const;
+    WorldWeather         weather() const { return outdoorWorld ? worldWeather(time(),weatherSeed,rainOverride) : WorldWeather{0.f,0.f}; }
+    bool                 isOutdoor() const { return outdoorWorld; }
+    bool                 isSheltered(const Tempest::Vec3& pos) const { return !outdoorWorld || !roomAt(pos).empty(); }
+    void                 setRain(float rain) { rainOverride = std::clamp(rain,0.f,1.f); }
 
     Focus                validateFocus(const Focus& def);
     Focus                findFocus(const Npc& pl, const Focus &def);
@@ -212,6 +218,9 @@ class World final {
       std::vector<BspSector>              sectorsData;
       } bsp;
 
+    bool                                 outdoorWorld = true;
+    uint32_t                             weatherSeed = 2166136261u;
+    float                                rainOverride = -1.f;
     Npc*                                  npcPlayer=nullptr;
 
     std::unique_ptr<DynamicWorld>         wdynamic;
@@ -221,7 +230,7 @@ class World final {
     WorldObjects                          wobj;
     std::unique_ptr<Npc>                  lvlInspector;
 
-    auto         roomAt(const zenkit::BspNode &node) -> std::string_view;
+    auto         roomAt(const zenkit::BspNode &node) const -> std::string_view;
     auto         portalAt(std::string_view tag) -> BspSector*;
 
     void         initScripts(bool firstTime);

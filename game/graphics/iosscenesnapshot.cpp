@@ -63,7 +63,7 @@ bool validBounds(const IOSBounds& bounds) noexcept {
   }
 
 bool validCamera(const IOSCameraState& camera) noexcept {
-  return isFinite(camera.view) && isFinite(camera.projection) &&
+  return isFinite(camera.inverseViewProjection) && isFinite(camera.view) && isFinite(camera.projection) &&
          isFinite(camera.viewProjection) && isFinite(camera.position) &&
          isFinite(camera.jitter) && isFinite(camera.nearPlane) &&
          isFinite(camera.farPlane) &&
@@ -72,7 +72,11 @@ bool validCamera(const IOSCameraState& camera) noexcept {
   }
 
 bool validSky(const IOSSkyState& sky) noexcept {
-  return isFinite(sky.sunDirection) && isFinite(sky.sunColor) &&
+  return isFinite(sky.cloudOffsets) && isFinite(sky.viewShadow[0]) && isFinite(sky.viewShadow[1]) &&
+         isFinite(sky.closeupShadowSlice) && isFinite(sky.altitudeMeters) &&
+         isFinite(sky.sunIntensity) && sky.sunIntensity>=0.f &&
+         sky.altitudeMeters>=0.f && sky.altitudeMeters<=1000.f &&
+         isFinite(sky.sunDirection) && isFinite(sky.sunColor) &&
          isFinite(sky.ambientColor) && isFinite(sky.fogColor) &&
          isFinite(sky.fogNear) && isFinite(sky.fogFar) &&
          isFinite(sky.cloudCoverage) && isFinite(sky.rainIntensity) &&
@@ -107,6 +111,7 @@ bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
       return bool(material.baseColorTexture) &&
              !material.usesFallbackTexture &&
              material.alphaCutoff==0.5f &&
+             material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
              material.flags==IOSMaterialFlagNone;
     case IOSMaterialCategory::Additive:
       return bool(material.baseColorTexture) &&
@@ -121,6 +126,8 @@ bool validNativeSceneMaterial(const IOSMaterial& material) noexcept {
              material.baseColor.w>=0.f && material.baseColor.w<=1.f &&
              material.flags==IOSMaterialFlagStaticMultiply2None;
     case IOSMaterialCategory::Transparent:
+      return bool(material.baseColorTexture) && material.flags==IOSMaterialFlagNone &&
+             material.baseColor.w>=0.f && material.baseColor.w<=1.f;
     case IOSMaterialCategory::Water:
       return false;
     }
@@ -247,6 +254,10 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
      currentMorphLayers.size()!=previousMorphLayers.size())
     return false;
 
+  for(const auto* sky:{&currentSky,&previousSky})
+    for(const auto handle:sky->textures)
+      if(!validHandle(handle,generation,true))
+        return false;
   for(const auto& material:materials) {
     if(!validHandle(material.id,generation) ||
        !validHandle(material.baseColorTexture,generation,true) ||

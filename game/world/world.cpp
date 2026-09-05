@@ -65,6 +65,8 @@ const char* materialTag(zenkit::MaterialGroup src) {
 
 World::World(GameSession& game, std::string_view file, bool startup, std::function<void(int)> loadProgress)
   :wname(std::move(file)), game(game), wsound(game,*this), wobj(*this) {
+  for(char c:wname)
+    weatherSeed = (weatherSeed^uint8_t(c))*16777619u;
   const auto* entry = Resources::vdfsIndex().find(wname);
 
   if(entry == nullptr) {
@@ -78,6 +80,7 @@ World::World(GameSession& game, std::string_view file, bool startup, std::functi
     world.load(buf.get(), version().game == 1 ? zenkit::GameVersion::GOTHIC_1
                                               : zenkit::GameVersion::GOTHIC_2);
 
+    outdoorWorld = world.world_bsp_tree.mode==zenkit::BspTreeType::OUTDOOR;
     loadProgress(20);
     auto& worldMesh = world.world_mesh;
 
@@ -316,7 +319,7 @@ Npc *World::findNpcByInstance(size_t instance, size_t n) {
   return wobj.findNpcByInstance(instance,n);
   }
 
-std::string_view World::roomAt(const Tempest::Vec3& p) {
+std::string_view World::roomAt(const Tempest::Vec3& p) const {
   if(bsp.nodes.empty())
     return "";
 
@@ -341,7 +344,7 @@ std::string_view World::roomAt(const Tempest::Vec3& p) {
   return "";
   }
 
-std::string_view World::roomAt(const zenkit::BspNode& node) {
+std::string_view World::roomAt(const zenkit::BspNode& node) const {
   const std::string* ret=nullptr;
   size_t       count=0;
   auto         id = &node-bsp.nodes.data();(void)id;

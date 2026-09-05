@@ -56,7 +56,7 @@ void LightGroup::Light::setEnabled(bool e) {
   data.setEnabled(e);
 
   auto& ssbo = owner->lightSourceData[id];
-  ssbo.range = 0;
+  ssbo.range = e ? clampRange(data.currentRange()) : 0;
   owner->markAsDurty(id);
   }
 
@@ -250,6 +250,7 @@ size_t LightGroup::alloc(bool dynamic) {
   if(freeList.size()>0) {
     auto ret = freeList.back();
     freeList.pop_back();
+    (void)sourceIdentityAllocator.assign(sourceIdentities[ret]);
     if(dynamic)
       animatedLights.insert(ret);
     markAsDurtyNoSync(ret);
@@ -257,6 +258,8 @@ size_t LightGroup::alloc(bool dynamic) {
     }
   lightSourceData.emplace_back();
   lightSourceDesc.emplace_back();
+  sourceIdentities.push_back(0);
+  (void)sourceIdentityAllocator.assign(sourceIdentities.back());
   duryBit.resize((lightSourceData.size()+32u-1u)/32u);
 
   auto ret = lightSourceData.size()-1;
@@ -270,9 +273,11 @@ void LightGroup::free(size_t id) {
   std::lock_guard<std::mutex> guard(sync);
   markAsDurtyNoSync(id);
   animatedLights.erase(id);
+  sourceIdentityAllocator.release(sourceIdentities[id]);
   if(id+1==lightSourceData.size()) {
     lightSourceData.pop_back();
     lightSourceDesc.pop_back();
+    sourceIdentities.pop_back();
     duryBit.resize((lightSourceData.size()+32u-1u)/32u);
     } else {
     lightSourceDesc[id].setRange(0);
@@ -320,6 +325,17 @@ void LightGroup::tick(uint64_t time) {
       continue;
     dst = ssbo;
     markAsDurtyNoSync(i);
+    }
+  }
+
+void LightGroup::visitIOSSceneLights(void* context, IOSSceneLightVisitor visitor) const {
+  for(size_t i=0; i<lightSourceData.size(); ++i) {
+    const auto& light = lightSourceData[i];
+    if(sourceIdentities[i]==0 || light.range<=0.f)
+      continue;
+    visitor(context,{sourceIdentities[i],
+        {light.pos.x,light.pos.y,light.pos.z},
+        {light.color.x,light.color.y,light.color.z},light.range});
     }
   }
 

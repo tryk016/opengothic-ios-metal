@@ -230,6 +230,7 @@ enum IOSSceneVisibility : uint64_t {
   };
 
 struct IOSCameraState final {
+  IOSMatrix4x4 inverseViewProjection;
   IOSMatrix4x4 view;
   IOSMatrix4x4 projection;
   IOSMatrix4x4 viewProjection;
@@ -332,10 +333,17 @@ struct IOSParticleSnapshot final {
   };
 
 struct IOSSkyState final {
+  std::array<IOSTextureHandle,6> textures;
+  IOSFloat4 cloudOffsets;
+  std::array<IOSMatrix4x4,2> viewShadow;
+  IOSFloat2 closeupShadowSlice;
+  float altitudeMeters = 0.f;
+  float sunIntensity = 128000.f;
+  bool shadowsEnabled = false;
   IOSFloat3 sunDirection = {0.f,-1.f,0.f};
   IOSFloat3 sunColor;
   IOSFloat3 ambientColor;
-  IOSFloat3 fogColor;
+  IOSFloat3 fogColor; // linear tint; illuminated alongside the scene
   float     fogNear       = 0.f;
   float     fogFar        = 0.f;
   float     cloudCoverage = 0.f;
@@ -370,6 +378,7 @@ struct IOSSceneFrameState final {
   };
 
 struct IOSSceneSnapshot final {
+  uint64_t sceneTimeMs = 0;
   IOSWorldGeneration              generation;
   IOSSceneSequence                sequence;
   IOSCameraState                  currentCamera;

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ioslandscapeshaderabi.h"
+
 #include <array>
 #include <cstdint>
 #include <memory>
@@ -14,7 +16,7 @@ class IOSShadingPrototypePipelineNativeAccess;
 namespace RendererIOSShadingPrototypePipeline {
 
 inline constexpr uint32_t ContractVersion = 1u;
-inline constexpr uint32_t OfflineMetallibAbi = 10u;
+inline constexpr uint32_t OfflineMetallibAbi = RendererIOSShader::AbiVersion;
 inline constexpr uint32_t MinimumAppleGPUFamily = 4u;
 inline constexpr uint32_t TileFunctionCount = 3u;
 inline constexpr uint32_t TilePipelineCount = 3u;

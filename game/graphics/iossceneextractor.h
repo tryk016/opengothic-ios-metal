@@ -96,6 +96,7 @@ struct IOSSceneExtractionStats final {
   std::size_t plannedAlphaTest = 0;
   std::size_t plannedAdditive = 0;
   std::size_t plannedMultiply2 = 0;
+  std::size_t plannedTransparent = 0;
   std::size_t plannedLandscape = 0;
   std::size_t plannedStatic = 0;
   std::size_t plannedMovable = 0;
@@ -121,7 +122,7 @@ struct IOSSceneExtractionStats final {
   constexpr bool hasConsistentPlannedCounts() const noexcept {
     std::size_t materials = 0, kinds = 0;
     for(const auto count:{plannedOpaque,plannedAlphaTest,plannedAdditive,
-                         plannedMultiply2})
+                         plannedMultiply2,plannedTransparent})
       if(!addIOSSceneCounter(materials,count))
         return false;
     for(const auto count:{plannedLandscape,plannedStatic,plannedMovable,
@@ -244,10 +245,11 @@ inline constexpr IOSSceneMaterialMapping iosSceneMaterialMapping(
       return {IOSMaterialCategory::Additive,true};
     case Material::Multiply2:
       return {IOSMaterialCategory::Multiply2,true};
+    case Material::Transparent:
+      return {IOSMaterialCategory::Transparent,true};
     case Material::Water:
     case Material::Ghost:
     case Material::Multiply:
-    case Material::Transparent:
       return {};
     }
   return {};
@@ -431,7 +433,8 @@ inline bool recordIOSScenePlanResult(
       if(plan.materialCategory!=IOSMaterialCategory::Opaque &&
          plan.materialCategory!=IOSMaterialCategory::AlphaTest &&
          plan.materialCategory!=IOSMaterialCategory::Additive &&
-         plan.materialCategory!=IOSMaterialCategory::Multiply2) {
+         plan.materialCategory!=IOSMaterialCategory::Multiply2 &&
+         plan.materialCategory!=IOSMaterialCategory::Transparent) {
         return recordIOSSceneInvalidSource(stats);
         }
       if(plan.kind!=IOSSceneMeshKind::Landscape &&
@@ -466,7 +469,9 @@ inline bool recordIOSScenePlanResult(
         return recordIOSSceneInvalidSource(stats);
       if(!isAdditive && !isMultiply2 &&
          (plan.materialFlags!=IOSMaterialFlagNone ||
-          plan.baseColorAlpha!=1.f))
+          (plan.materialCategory!=IOSMaterialCategory::Transparent &&
+           plan.materialCategory!=IOSMaterialCategory::AlphaTest && plan.baseColorAlpha!=1.f) ||
+          !std::isfinite(plan.baseColorAlpha) || plan.baseColorAlpha<0.f || plan.baseColorAlpha>1.f))
         return recordIOSSceneInvalidSource(stats);
       if(!incrementIOSSceneCounter(next.planned))
         return recordIOSSceneInvalidSource(stats);
@@ -483,6 +488,9 @@ inline bool recordIOSScenePlanResult(
         return recordIOSSceneInvalidSource(stats);
       else if(plan.materialCategory==IOSMaterialCategory::Multiply2 &&
               !incrementIOSSceneCounter(next.plannedMultiply2))
+        return recordIOSSceneInvalidSource(stats);
+      else if(plan.materialCategory==IOSMaterialCategory::Transparent &&
+              !incrementIOSSceneCounter(next.plannedTransparent))
         return recordIOSSceneInvalidSource(stats);
       switch(plan.kind) {
         case IOSSceneMeshKind::Landscape:
@@ -601,9 +609,8 @@ inline bool recordIOSScenePlanResult(
   return recordIOSSceneInvalidSource(stats);
   }
 
-// The caller stages only extraction-owned entities/materials. Failure leaves
-// the destination frame logically unchanged; success publishes both vectors
-// together without allocation.
+// Publish extraction-owned values together, without allocation. Failure
+// leaves the destination frame logically unchanged.
 inline bool publishIOSSceneExtraction(
     IOSSceneExtractionResult result,
     IOSSceneFrameState& staging,
@@ -614,6 +621,9 @@ inline bool publishIOSSceneExtraction(
   frame.materials.swap(staging.materials);
   frame.bones.swap(staging.bones);
   frame.morphLayers.swap(staging.morphLayers);
+  frame.lights.swap(staging.lights);
+  if(!frame.lights.empty())
+    frame.featureMask |= IOSSceneFeatureLights;
   return true;
   }
 

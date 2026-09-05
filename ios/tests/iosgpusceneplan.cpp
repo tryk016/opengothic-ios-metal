@@ -606,11 +606,11 @@ void testSceneMarkerGrammar(
   assertMarkerParts(
       iosGPUSceneMaterialPlannedMarker(counts),
       "RendererIOS native scene material-planned: mode=",modeName,
-      " total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+      " total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0");
   assertMarkerParts(
       iosGPUSceneMaterialDrawnMarker(counts),
       "RendererIOS native scene material-drawn: mode=",modeName,
-      " total=4 opaque=1 alpha=2 additive=1 multiply2=0 textured=4");
+      " total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0 textured=4");
   assertMarkerParts(
       iosGPUSceneKindPlannedMarker(counts),
       "RendererIOS native scene kind-planned: mode=",modeName,
@@ -1744,7 +1744,6 @@ int main() {
                  base,additive,multiply2)==(mask==7u));
       }
     for(const auto category:{
-          IOSMaterialCategory::Transparent,
           IOSMaterialCategory::Water,
           static_cast<IOSMaterialCategory>(255u)}) {
       assert(iosGPUScenePipelineSelector(category)==
@@ -2512,7 +2511,7 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=additive-a "
-        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0");
     assertMarker(
         iosGPUSceneAdditiveMarker(counts),
         "RendererIOS native scene additive: mode=additive-a "
@@ -2526,7 +2525,7 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=additive-b "
-        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0");
     assertMarker(
         iosGPUSceneAdditiveMarker(counts),
         "RendererIOS native scene additive: mode=additive-b "
@@ -2544,7 +2543,7 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=multiply2-a "
-        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0");
     assertMarker(
         iosGPUSceneFailContractMarker(failures),
         "RendererIOS native scene fail-contract: mode=multiply2-a "
@@ -2558,7 +2557,7 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=multiply2-b "
-        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0");
     assertMarker(
         iosGPUSceneFailContractMarker(failures),
         "RendererIOS native scene fail-contract: mode=multiply2-b "
@@ -2572,11 +2571,11 @@ int main() {
     assertMarker(
         iosGPUSceneMaterialPlannedMarker(counts),
         "RendererIOS native scene material-planned: mode=production "
-        "total=4 opaque=1 alpha=2 additive=1 multiply2=0");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0");
     assertMarker(
         iosGPUSceneMaterialDrawnMarker(counts),
         "RendererIOS native scene material-drawn: mode=production "
-        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 textured=4");
+        "total=4 opaque=1 alpha=2 additive=1 multiply2=0 trans=0 textured=4");
     assertMarker(
         iosGPUSceneKindPlannedMarker(counts),
         "RendererIOS native scene kind-planned: mode=production "
