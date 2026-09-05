@@ -330,7 +330,8 @@ def validate_document(document: Any) -> dict[str, Any]:
             "draw evidence schemaVersion is not integer 1")
     artifact = exact_keys(root["artifact"], (
         "constantsSha256", "indexByteOffset", "indexBufferBytes", "indexCount",
-        "inputArtifactSha256", "materialFlags", "multiply2PayloadSha256",
+        "inputArtifactSha256", "materialFlags", "materialId", "meshId",
+        "multiply2PayloadSha256",
         "recordBytes", "recordOffset", "sourceId", "textureId",
         "vertexBufferBytes"), "artifact binding")
     attachment = exact_keys(root["attachment"], (
@@ -497,12 +498,15 @@ def validate_document(document: Any) -> dict[str, Any]:
         f"mode={label} generation={snapshot['targetGeneration']} "
         f"sequence={snapshot['snapshotSequence']} source={draw['sourceId']}"),
         "draw signpost identity differs from snapshot/draw")
-    require(re.fullmatch(
+    require(all(type(artifact[name]) is int and artifact[name] > 0
+                for name in ("meshId", "materialId")),
+            "draw mesh/material identity is invalid")
+    require(signposts["bindText"] == (
         "RendererIOS multiply2 causal draw-bind: "
-        rf"src={draw['sourceId']} sel=multiply2 kind=static "
-        rf"tex={draw['textureId']} mesh=[1-9][0-9]* mat=[1-9][0-9]* "
-        rf"off={draw['indexBufferOffset']} count={draw['indexCount']} "
-        "pso=multiply2 depth=ro target=SceneHDR", signposts["bindText"]) is not None,
+        f"src={draw['sourceId']} sel=multiply2 kind=static "
+        f"tex={draw['textureId']} mesh={artifact['meshId']} mat={artifact['materialId']} "
+        f"off={draw['indexBufferOffset']} count={draw['indexCount']} "
+        "pso=multiply2 depth=ro target=SceneHDR"),
         "draw signpost bindings differ from draw")
     source = exact_keys(root["source"], (
         "captureManifestSha256", "collector", "drawTranscriptManifestSha256",
@@ -625,6 +629,7 @@ def build_document(gpu_root: dict[str, Any], gpu_raw: bytes,
         "indexCount": record["indexCount"],
         "inputArtifactSha256": sha256(artifact_raw),
         "materialFlags": record["materialFlags"],
+        "materialId": record["materialId"], "meshId": record["meshId"],
         "multiply2PayloadSha256": sha256(artifact["multiply2Payload"]),
         "recordBytes": 256, "recordOffset": record["recordOffset"],
         "sourceId": record["sourceId"], "textureId": record["textureId"],

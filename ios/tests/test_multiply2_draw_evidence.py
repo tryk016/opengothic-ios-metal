@@ -200,10 +200,11 @@ class DrawEvidenceTests(unittest.TestCase):
             changed["signposts"]["idText"] = changed["signposts"]["idText"].replace(
                 "generation=3", "generation=999")
             mutations.append(changed)
-            changed = copy.deepcopy(document)
-            changed["signposts"]["bindText"] = changed["signposts"]["bindText"].replace(
-                "tex=10", "tex=999")
-            mutations.append(changed)
+            for binding in ("tex=10", "mesh=8", "mat=9"):
+                changed = copy.deepcopy(document)
+                changed["signposts"]["bindText"] = changed["signposts"]["bindText"].replace(
+                    binding, binding.split("=")[0] + "=999")
+                mutations.append(changed)
             changed = copy.deepcopy(document)
             changed["coverage"]["blitOption"] = "None"
             mutations.append(changed)
