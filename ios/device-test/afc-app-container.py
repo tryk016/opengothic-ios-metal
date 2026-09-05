@@ -152,6 +152,8 @@ async def pull(service: AfcLike, source_arg: str, destination_arg: str) -> None:
             await service.pull(source, str(temporary), progress_bar=False)
             if not temporary.is_file() or temporary.is_symlink():
                 raise RuntimeError("AFC pull did not produce a regular file")
+            if temporary.stat().st_size != metadata.get("st_size"):
+                raise RuntimeError("AFC pull byte count does not match source stat")
             with temporary.open("rb") as copied:
                 os.fsync(copied.fileno())
             os.link(temporary, destination)
@@ -323,6 +325,17 @@ async def self_test() -> None:
         await pull(fake, "Documents/log.txt", str(pulled))
         if pulled.read_bytes() != b"test":
             raise RuntimeError("self-test pull content mismatch")
+        fake.sizes["Documents/log.txt"] = 5
+        short = root / "short-read"
+        try:
+            await pull(fake, "Documents/log.txt", str(short))
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("self-test short read was accepted")
+        if short.exists():
+            raise RuntimeError("self-test short read was published")
+        del fake.sizes["Documents/log.txt"]
         for collision in (root / "pull-collision", root / "json-collision"):
             collision.write_bytes(b"sentinel")
         try:

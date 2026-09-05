@@ -1622,7 +1622,8 @@ bool IOSGPUScene::Impl::continuationDepthStencilForSceneHDR(
 
       id<MTLTexture> target =
           (id<MTLTexture>)multiply2ContinuationDepthStencil;
-      if(target==nil) {
+      if(target==nil || target.width!=sceneHDR.width ||
+         target.height!=sceneHDR.height) {
         OwnedObjectiveC descriptor(
             [[MTLTextureDescriptor alloc] init]);
         if(descriptor.get()==nil)
@@ -1650,6 +1651,7 @@ bool IOSGPUScene::Impl::continuationDepthStencilForSceneHDR(
           return false;
         [target setLabel:
             @"RendererIOS.Multiply2.ContinuationDepthStencil.v1"];
+        [multiply2ContinuationDepthStencil release];
         multiply2ContinuationDepthStencil = allocated.relinquish();
         }
       else if(!validContinuationTarget(target)) {

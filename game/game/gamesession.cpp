@@ -29,6 +29,7 @@ void GameSession::HeroStorage::save(Npc& npc) {
   sr.setEntry("hero");
 
   npc.save(sr,0,"/npc/");
+  sr.finish();
   }
 
 void GameSession::HeroStorage::putToWorld(World& owner, std::string_view wayPoint) const {

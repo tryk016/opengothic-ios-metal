@@ -1,4 +1,5 @@
 #include "mainwindow.h"
+#include "utils/atomicsave.h"
 
 #include <Tempest/Except>
 #include <Tempest/Painter>
@@ -2158,9 +2159,11 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
     if(!game)
       return std::move(game);
 
-    Tempest::WFile f(slot);
-    Serialize      s(f);
-    game->save(s,name,*screen);
+    writeSaveAtomically(slot,[&](Tempest::ODevice& file) {
+      Serialize s(file);
+      game->save(s,name,*screen);
+      s.finish();
+      });
 
     // no print yet, because threading
     // gothic.print("Game saved");
@@ -2207,9 +2210,11 @@ void MainWindow::startPendingSave() {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       const uint64_t serializeStartedUs = rendererIOSSaveClockUs();
 #endif
-      Tempest::WFile f(slot);
-      Serialize      s(f);
-      game->save(s,name,*screen);
+      writeSaveAtomically(slot,[&](Tempest::ODevice& file) {
+        Serialize s(file);
+        game->save(s,name,*screen);
+        s.finish();
+        });
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       try {
         const uint64_t completedUs = rendererIOSSaveClockUs();

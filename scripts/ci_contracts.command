@@ -1680,6 +1680,7 @@ printf '\n### CI contract: Verify P2.6c host-neutral feature policy\n'
 set -euo pipefail
 
 scripts/verify_ios_feature_policy.command
+bash scripts/verify_savegame.command
 
 printf '\n### CI contract: Verify P2.6a host-neutral device facts contract\n'
 

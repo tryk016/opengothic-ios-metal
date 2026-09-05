@@ -62,7 +62,8 @@ Serialize::Serialize(Tempest::ODevice& fout) : fout(&fout) {
   impl.m_pWrite           = Serialize::writeFunc;
   impl.m_pIO_opaque       = this;
   impl.m_zip_type         = MZ_ZIP_TYPE_USER;
-  mz_zip_writer_init_v2(&impl, 0, 0);
+  if(!mz_zip_writer_init_v2(&impl, 0, 0))
+    throw std::runtime_error("unable to create game archive");
   }
 
 Serialize::Serialize(Tempest::IDevice& fin) : fin(&fin) {
@@ -72,16 +73,18 @@ Serialize::Serialize(Tempest::IDevice& fin) : fin(&fin) {
   impl.m_pRead            = Serialize::readFunc;
   impl.m_pIO_opaque       = this;
   impl.m_zip_type         = MZ_ZIP_TYPE_USER;
-  mz_zip_reader_init(&impl, fin.size(), 0);
+  if(!mz_zip_reader_init(&impl, fin.size(), 0))
+    throw std::runtime_error("unable to open game archive");
   }
 
-Serialize::~Serialize() {
+Serialize::~Serialize() noexcept {
+  mz_zip_end(&impl);
+  }
+
+void Serialize::finish() {
   closeEntry();
-  if(fout!=nullptr) {
-    mz_zip_writer_finalize_archive(&impl);
-    mz_zip_writer_end(&impl);
-    //Tempest::Log::d("save time = ", Tempest::Application::tickCount()-time0);
-    }
+  if(!mz_zip_writer_finalize_archive(&impl))
+    throw std::runtime_error("unable to finish game archive");
   }
 
 std::string_view Serialize::worldName() const {
@@ -135,9 +138,11 @@ bool Serialize::implSetEntry(std::string_view fname) {
     mz_uint32 id = mz_uint32(-1);
     if(mz_zip_reader_locate_file_v2(&impl, entryName.c_str(), nullptr, 0, &id)) {
       mz_zip_archive_file_stat stat = {};
-      mz_zip_reader_file_stat(&impl,id,&stat);
+      if(!mz_zip_reader_file_stat(&impl,id,&stat))
+        throw std::runtime_error("unable to locate entry in game archive");
       entryBuf.resize(size_t(stat.m_uncomp_size));
-      mz_zip_reader_extract_file_to_mem(&impl,entryName.c_str(),entryBuf.data(),entryBuf.size(),0);
+      if(!mz_zip_reader_extract_file_to_mem(&impl,entryName.c_str(),entryBuf.data(),entryBuf.size(),0))
+        throw std::runtime_error("unable to read entry in game archive");
       } else {
       entryBuf.clear();
       }

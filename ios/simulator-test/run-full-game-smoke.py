@@ -317,6 +317,18 @@ def verify_fixture_content(
     fixture: FixtureIdentity, evidence: pathlib.Path
 ) -> pathlib.Path:
     """Read and verify every fixture leaf for every Simulator attempt."""
+    entries = []
+    for line in (fixture.root / "Documents.sha256").read_text(encoding="utf-8").splitlines():
+        match = re.fullmatch(r"[0-9a-f]{64}  \./(.+)", line)
+        if match is None:
+            raise GateError("fixture inventory line is malformed")
+        entries.append(match.group(1))
+    actual = {
+        path.relative_to(fixture.documents).as_posix()
+        for path in fixture.documents.rglob("*") if path.is_file()
+    }
+    if len(entries) != len(set(entries)) or set(entries) != actual:
+        raise GateError("fixture inventory does not cover each file exactly once")
     started = time.monotonic()
     verification_log = evidence / "fixture-full-sha.log"
     result = run(

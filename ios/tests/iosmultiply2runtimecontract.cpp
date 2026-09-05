@@ -193,7 +193,8 @@ int main(int argc, char** argv) {
       "target.cpuCacheMode==MTLCPUCacheModeDefaultCache",
       "target.hazardTrackingMode==MTLHazardTrackingModeTracked",
       "target.usage==MTLTextureUsageRenderTarget",
-      "if(target==nil) {",
+      "if(target==nil || target.width!=sceneHDR.width ||",
+      "target.height!=sceneHDR.height) {",
       "textureDescriptor.pixelFormat =\n"
       "            MTLPixelFormatDepth32Float_Stencil8;",
       "textureDescriptor.width = sceneHDR.width;",
@@ -204,13 +205,14 @@ int main(int argc, char** argv) {
       "MTLResourceHazardTrackingModeTracked;",
       "textureDescriptor.usage = MTLTextureUsageRenderTarget;",
       "[device newTextureWithDescriptor:textureDescriptor]",
+      "[multiply2ContinuationDepthStencil release];",
       "multiply2ContinuationDepthStencil = allocated.relinquish();",
       "else if(!validContinuationTarget(target)) {",
       "return false;"}));
   assert(count(scene,
                "multiply2ContinuationDepthStencil = allocated.relinquish();")==
          1u);
-  assert(count(scene,"[multiply2ContinuationDepthStencil release];")==1u);
+  assert(count(scene,"[multiply2ContinuationDepthStencil release];")==2u);
   assert(scene.find(
       "depthStencil==\n"
       "                  (id<MTLTexture>)context.scene->\n"

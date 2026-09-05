@@ -112,6 +112,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 \
 
 echo "### P2.6c host-neutral feature policy"
 scripts/verify_ios_feature_policy.command
+bash scripts/verify_savegame.command
 
 RUNNER_TEMP="$TMP_GATE" scripts/verify_ios_linear_hdr.command
 RUNNER_TEMP="$TMP_GATE" scripts/verify_ios_additive_census.command

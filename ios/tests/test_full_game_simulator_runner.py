@@ -175,6 +175,25 @@ class FullGameSimulatorRunnerTests(unittest.TestCase):
             with self.assertRaises(RUNNER.GateError):
                 RUNNER.parse_launch_pid(value, "example.bundle")
 
+    def test_duplicate_inventory_entry_cannot_hide_an_omitted_save(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary) / "fixture"
+            root.mkdir()
+            self.fixture(root)
+            identity = RUNNER.validate_fixture(root)
+            inventory = root / "Documents.sha256"
+            lines = inventory.read_text().splitlines(keepends=True)
+            duplicate = next(line for line in lines if "./Data/game.vdf" in line)
+            os.chmod(inventory, 0o600)
+            inventory.write_text("".join(
+                duplicate if "./save_slot_4.sav" in line else line for line in lines
+            ))
+            os.chmod(inventory, 0o400)
+            evidence = pathlib.Path(temporary) / "evidence"
+            evidence.mkdir()
+            with self.assertRaisesRegex(RUNNER.GateError, "exactly once"):
+                RUNNER.verify_fixture_content(identity, evidence)
+
     def test_runtime_log_contract(self) -> None:
         valid = "\n".join(RUNNER.REQUIRED_LOG_MARKERS)
         RUNNER.validate_runtime_log(valid)

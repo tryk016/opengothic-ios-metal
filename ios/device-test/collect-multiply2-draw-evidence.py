@@ -491,6 +491,19 @@ def validate_document(document: Any) -> dict[str, Any]:
     require(all(type(snapshot[name]) is int and snapshot[name] > 0 for name in (
                 "snapshotSequence", "targetGeneration")),
             "draw snapshot identity is invalid")
+    label = "a" if draw["sourceRGBBlendFactor"] == "DestinationColor" else "b"
+    require(signposts["idText"] == (
+        "RendererIOS multiply2 causal draw-id: v=1 "
+        f"mode={label} generation={snapshot['targetGeneration']} "
+        f"sequence={snapshot['snapshotSequence']} source={draw['sourceId']}"),
+        "draw signpost identity differs from snapshot/draw")
+    require(re.fullmatch(
+        "RendererIOS multiply2 causal draw-bind: "
+        rf"src={draw['sourceId']} sel=multiply2 kind=static "
+        rf"tex={draw['textureId']} mesh=[1-9][0-9]* mat=[1-9][0-9]* "
+        rf"off={draw['indexBufferOffset']} count={draw['indexCount']} "
+        "pso=multiply2 depth=ro target=SceneHDR", signposts["bindText"]) is not None,
+        "draw signpost bindings differ from draw")
     source = exact_keys(root["source"], (
         "captureManifestSha256", "collector", "drawTranscriptManifestSha256",
         "gpudebugEvidenceSha256", "transcriptManifestSha256"), "source")
