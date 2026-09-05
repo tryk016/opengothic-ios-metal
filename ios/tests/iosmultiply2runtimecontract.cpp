@@ -498,7 +498,7 @@ int main(int argc, char** argv) {
       "context.scene->multiply2VisibilityPipelineState",
       "context.scene->multiply2VisibilityRasterDepthState",
       "context.scene->multiply2VisibilityStencilDepthState",
-      "draw.vertexBuffer","&draw.plan.constants","draw.baseColorTexture",
+      "bindGeometry(renderEncoder,draw);","draw.baseColorTexture",
       "draw.indexBuffer","draw.plan.indexBufferOffset",
       "IOSMultiply2VisibilityRasterOffset",
       "IOSMultiply2VisibilityStencilOffset"})

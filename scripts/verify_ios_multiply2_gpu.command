@@ -250,18 +250,10 @@ requirements = {
     "visibility-raster-query": ("scene", "IOSMultiply2VisibilityRasterOffset", 1),
     "visibility-stencil-query": ("scene", "IOSMultiply2VisibilityStencilOffset", 1),
     "visibility-helper": ("scene", "classifyIOSGPUSceneMultiply2ClipBounds(", 2),
-    "simulator-smoke-visibility-helper": (
-        "scene",
-        "#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)\n"
-        "      if(classifyIOSGPUSceneMultiply2ClipBounds(\n"
-        "             entity.bounds,plan.constants.model,\n"
-        "             plan.constants.viewProjection)==",
-        1,
-    ),
     "visibility-pass-attachments": ("scene", "visibilityPass.colorAttachments[0].texture = sceneHDR;\n        visibilityPass.colorAttachments[0].loadAction = MTLLoadActionLoad;\n        visibilityPass.colorAttachments[0].storeAction = MTLStoreActionStore;\n        visibilityPass.depthAttachment.texture = depthStencil;\n        visibilityPass.depthAttachment.loadAction = MTLLoadActionLoad;\n        visibilityPass.depthAttachment.storeAction = MTLStoreActionStore;\n        visibilityPass.stencilAttachment.texture = depthStencil;\n        visibilityPass.stencilAttachment.loadAction = MTLLoadActionLoad;\n        visibilityPass.stencilAttachment.storeAction = MTLStoreActionStore;", 1),
     "visibility-pass-raster-state": ("scene", "context.scene->multiply2VisibilityRasterDepthState", 1),
     "visibility-pass-stencil-state": ("scene", "context.scene->multiply2VisibilityStencilDepthState", 1),
-    "visibility-pass-bindings": ("scene", "const auto& draw = context.prepared->multiply2.front();\n        [renderEncoder setRenderPipelineState:\n            (id<MTLRenderPipelineState>)\n                context.scene->multiply2VisibilityPipelineState];\n        [renderEncoder setVertexBuffer:(id<MTLBuffer>)draw.vertexBuffer\n                                offset:0u atIndex:0u];\n        [renderEncoder setVertexBytes:&draw.plan.constants\n                               length:sizeof(draw.plan.constants) atIndex:1u];\n        [renderEncoder setFragmentTexture:\n            (id<MTLTexture>)draw.baseColorTexture atIndex:0u];", 1),
+    "visibility-pass-bindings": ("scene", "const auto& draw = context.prepared->multiply2.front();\n        [renderEncoder setRenderPipelineState:\n            (id<MTLRenderPipelineState>)\n                context.scene->multiply2VisibilityPipelineState];\n        bindGeometry(renderEncoder,draw);\n        [renderEncoder setFragmentTexture:\n            (id<MTLTexture>)draw.baseColorTexture atIndex:0u];", 1),
     "visibility-pass-fixed-state": ("scene", "[renderEncoder setViewport:viewport];\n        [renderEncoder setScissorRect:scissor];\n        [renderEncoder setFrontFacingWinding:MTLWindingClockwise];\n        [renderEncoder setCullMode:MTLCullModeFront];", 1),
     "visibility-pass-indexed-draws": ("scene", "[renderEncoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle", 3),
     "visibility-production-state": ("scene", "(id<MTLDepthStencilState>)context.scene->multiply2DepthState];", 1),
@@ -377,8 +369,7 @@ def accepts(candidate: dict[str, str]) -> bool:
         "context.scene->multiply2VisibilityPipelineState",
         "context.scene->multiply2VisibilityRasterDepthState",
         "context.scene->multiply2VisibilityStencilDepthState",
-        "draw.vertexBuffer",
-        "&draw.plan.constants",
+        "bindGeometry(renderEncoder,draw);",
         "draw.baseColorTexture",
         "draw.indexBuffer",
         "draw.plan.indexBufferOffset",
