@@ -81,7 +81,9 @@ IOSSceneAssetBindResult IOSSceneAssetRegistry::bindMesh(
     std::size_t vertexStride,
     std::size_t firstIndex,
     std::size_t indexCount,
-    IOSBounds bounds) {
+    IOSBounds bounds,
+    const Tempest::StorageBuffer* morphIndices,
+    const Tempest::StorageBuffer* morphSamples) {
   if(!isInitialized() || !matchesDevice(device))
     return IOSSceneAssetBindResult::InvalidDevice;
   if(registryState!=IOSSceneAssetRegistryState::Active)
@@ -107,20 +109,32 @@ IOSSceneAssetBindResult IOSSceneAssetRegistry::bindMesh(
 
   Tempest::BorrowedMetalBuffer nativeVertex;
   Tempest::BorrowedMetalBuffer nativeIndex;
+  Tempest::BorrowedMetalBuffer nativeMorphIndices, nativeMorphSamples;
 #if defined(__APPLE__)
   nativeVertex = Tempest::MetalApi::borrowBuffer(device,vertexBuffer);
   nativeIndex  = Tempest::MetalApi::borrowBuffer(device,indexBuffer);
+  if((morphIndices==nullptr)!=(morphSamples==nullptr))
+    return IOSSceneAssetBindResult::InvalidMetadata;
+  if(morphIndices!=nullptr) {
+    nativeMorphIndices = Tempest::MetalApi::borrowBuffer(device,*morphIndices);
+    nativeMorphSamples = Tempest::MetalApi::borrowBuffer(device,*morphSamples);
+    if(!nativeMorphIndices || !nativeMorphSamples)
+      return IOSSceneAssetBindResult::NativeHandleUnavailable;
+    }
   if(!nativeVertex || !nativeIndex)
     return IOSSceneAssetBindResult::NativeHandleUnavailable;
 #else
   return IOSSceneAssetBindResult::NativeHandleUnavailable;
 #endif
 
-  const IOSSceneMeshAsset asset = {nativeVertex,nativeIndex,metadata};
+  const IOSSceneMeshAsset asset = {nativeVertex,nativeIndex,metadata,
+                                   nativeMorphIndices,nativeMorphSamples};
   if(const auto found=meshes.find(handle.value); found!=meshes.end()) {
     const auto& current = found->second;
     if(sameBuffer(current.vertexBuffer,asset.vertexBuffer) &&
        sameBuffer(current.indexBuffer,asset.indexBuffer) &&
+       sameBuffer(current.morphIndices,asset.morphIndices) &&
+       sameBuffer(current.morphSamples,asset.morphSamples) &&
        current.metadata==asset.metadata)
       return IOSSceneAssetBindResult::AlreadyBound;
     return IOSSceneAssetBindResult::Conflict;

@@ -35,9 +35,12 @@ constexpr bool iosToneResolveConstantsReflectionLayoutMatches(
 
 namespace RendererIOSShader {
 
-inline constexpr uint32_t AbiVersion = 9u;
+inline constexpr uint32_t AbiVersion = 10u;
 inline constexpr std::string_view LibraryName = "RendererIOS";
 inline constexpr std::string_view VertexFunction = "riosLandscapeVertex";
+inline constexpr std::string_view SkinnedVertexFunction = "riosSkinnedVertex";
+inline constexpr std::string_view InstancedVertexFunction = "riosInstancedVertex";
+inline constexpr std::string_view MorphVertexFunction = "riosMorphVertex";
 inline constexpr std::string_view FragmentFunction = "riosLandscapeFragment";
 inline constexpr std::string_view AlphaTestFragmentFunction =
     "riosLandscapeAlphaTestFragment";

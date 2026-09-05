@@ -345,7 +345,7 @@ required = (
         "actual-alpha-func-mapping",
         """  const IOSSceneMaterialMapping materialMapping =
       source.material!=nullptr
-        ? iosSceneMaterialMapping(source.material->alpha)
+        ? iosSceneMaterialMapping(*rawMaterial)
         : IOSSceneMaterialMapping{};""",
         """  const IOSSceneMaterialMapping materialMapping = {};""",
     ),
@@ -702,7 +702,8 @@ required = (
      "RendererIOSShader::AdditiveFragmentFunction.data()"),
     ("explicit-nonblended-pso",
      "game/graphics/iosgpuscene.mm",
-     "pipelineDesc.colorAttachments[0].blendingEnabled = NO;"),
+     """pipelineDesc.colorAttachments[0].blendingEnabled = NO;
+      pipelineDesc.depthAttachmentPixelFormat      = depthFormat;"""),
     ("opaque-pso-state",
      "game/graphics/iosgpuscene.mm",
      "opaquePipelineState    = opaquePipelineOwner.relinquish();"),
@@ -799,7 +800,7 @@ required = (
               report.counts,dispatch)"""),
     ("production-material-count-equation",
      "game/graphics/iosgpusceneplan.h",
-     "counts.material.total==secondMaterialSum+counts.material.multiply2"),
+     "counts.material.total==materials && counts.kind.total==kinds"),
     ("production-frame-count-equations",
      "game/graphics/iosgpusceneplan.h",
      """return iosGPUSceneFrameDrawCountsAreConsistent(counts) &&
@@ -909,9 +910,9 @@ if missing:
         + ",".join(missing)
     )
 if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 5:
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 6:
     raise SystemExit(
-        "RendererIOS GPU path must declare four production PSOs and one macro-guarded visibility PSO")
+        "RendererIOS GPU path must declare four material PSOs, the geometry factory and one macro-guarded visibility PSO")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",
@@ -1310,8 +1311,7 @@ required_once = {
 
 expected_draw_operations = [
     "setRenderPipelineState",
-    "setVertexBuffer",
-    "setVertexBytes",
+    "bindGeometry",
     "setFragmentTexture",
     "insertDebugSignpost",
     "insertDebugSignpost",
@@ -1388,7 +1388,8 @@ def validate(candidate):
     loop_start = native_encode.index("for(const auto& draw:", phase_start)
     loop_end = native_encode.index("\n    };", loop_start)
     draw_loop = native_encode[loop_start:loop_end]
-    operations = re.findall(r"\[encoder ([A-Za-z]+)", draw_loop)
+    operations = [message or helper for message, helper in re.findall(
+        r"\[encoder ([A-Za-z]+)|\b(bindGeometry)\(encoder,draw\)", draw_loop)]
     if operations != expected_draw_operations:
         raise ValueError("frozen native draw operation order drifted")
     if draw_loop.index(
@@ -2013,7 +2014,7 @@ xcrun --sdk iphoneos metallib \
   "$TMP_GATE/ios-shading-prototypes.air" \
   -o "$TMP_GATE/RendererIOS.metallib"
 for function in \
-    riosLandscapeVertex riosLandscapeFragment \
+    riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment \
     riosLandscapeAlphaTestFragment \
     riosLandscapeAdditiveFragment \
     riosToneResolveVertex riosToneResolveFragment \
@@ -2033,7 +2034,7 @@ RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   "$TMP_GATE/RendererIOS.metallib" |
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
-  riosLandscapeVertex riosLandscapeFragment \
+  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
@@ -2047,9 +2048,9 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 19-export ABI9"
-[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 19 ] ||
-  fail "RendererIOS.metallib export count nie wynosi 19"
+  fail "RendererIOS.metallib nie ma exact 22-export ABI10"
+[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 22 ] ||
+  fail "RendererIOS.metallib export count nie wynosi 22"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   shasum -a 256 "$TMP_GATE/RendererIOS.metallib" | awk '{print $1}'
 )"
@@ -2404,7 +2405,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=10 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -2433,10 +2434,7 @@ markers = {
         "case=tile-prototype-v1 reason=apple4-required side-effects=0"
     ),
 }
-if tuple(len(value.encode()) for value in markers.values()) != (
-    143, 152, 245, 106, 180, 118
-):
-    raise SystemExit("P2.5b2a1 marker byte budget changed")
+module["validate_marker_budget"]()
 marker_scope = context.split(
     "constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[]", 1
 )[1].split("\n#endif", 1)[0]
@@ -3467,7 +3465,7 @@ PY
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=10 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
@@ -3978,7 +3976,7 @@ if wants_profile multiply2-a-hdr && wants_profile multiply2-b-hdr; then
   [ -n "$MULTIPLY2_A_METALLIB_SHA256" ] &&
     [ -n "$MULTIPLY2_B_METALLIB_SHA256" ] &&
     [ "$MULTIPLY2_A_METALLIB_SHA256" = "$MULTIPLY2_B_METALLIB_SHA256" ] ||
-    fail "Multiply2 A/B nie maja tego samego ABI9 metallib"
+    fail "Multiply2 A/B nie maja tego samego ABI10 metallib"
   [ -n "$MULTIPLY2_A_BINARY_SHA256" ] &&
     [ -n "$MULTIPLY2_B_BINARY_SHA256" ] &&
     [ "$MULTIPLY2_A_BINARY_SHA256" != "$MULTIPLY2_B_BINARY_SHA256" ] ||
@@ -3995,7 +3993,7 @@ if wants_profile additive-a-hdr && wants_profile additive-b-hdr; then
   [ -n "$ADDITIVE_A_METALLIB_SHA256" ] &&
     [ -n "$ADDITIVE_B_METALLIB_SHA256" ] &&
     [ "$ADDITIVE_A_METALLIB_SHA256" = "$ADDITIVE_B_METALLIB_SHA256" ] ||
-    fail "Additive A/B nie maja tego samego ABI9 metallib"
+    fail "Additive A/B nie maja tego samego ABI10 metallib"
   [ -n "$ADDITIVE_A_BINARY_SHA256" ] &&
     [ -n "$ADDITIVE_B_BINARY_SHA256" ] &&
     [ "$ADDITIVE_A_BINARY_SHA256" != "$ADDITIVE_B_BINARY_SHA256" ] ||

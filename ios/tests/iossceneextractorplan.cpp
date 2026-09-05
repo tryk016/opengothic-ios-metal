@@ -115,7 +115,7 @@ IOSSceneOpaqueMeshCandidate candidate(
   IOSSceneOpaqueMeshCandidate source;
   source.sourceId       = 41;
   source.kind           = kind;
-  source.hasStaticMesh  = true;
+  source.hasMesh  = true;
   source.hasMaterial    = true;
   source.hasMappedMaterialCategory = true;
   source.materialCategory = category;
@@ -185,7 +185,7 @@ bool sameFrame(const IOSSceneFrameState& lhs,
          lhs.materials==rhs.materials &&
          lhs.lights==rhs.lights &&
          lhs.bones==rhs.bones &&
-         lhs.morphWeights==rhs.morphWeights &&
+         lhs.morphLayers==rhs.morphLayers &&
          lhs.particles==rhs.particles &&
          lhs.effects==rhs.effects &&
          lhs.featureMask==rhs.featureMask &&
@@ -229,11 +229,11 @@ void validatePublicContract() {
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Movable)==
          IOSSceneMeshKind::Movable);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Animated)==
-         IOSSceneMeshKind::Unsupported);
+         IOSSceneMeshKind::Animated);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Particle)==
          IOSSceneMeshKind::Unsupported);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Morph)==
-         IOSSceneMeshKind::Unsupported);
+         IOSSceneMeshKind::Morph);
   assert(iosSceneOpaqueMeshKind(IOSSceneSourceKind::Unsupported)==
          IOSSceneMeshKind::Unsupported);
   assert(iosSceneOpaqueMeshKind(
@@ -1034,7 +1034,7 @@ void validateMalformedAcceptedKinds() {
            IOSSceneSourcePlanResult::InvalidSource);
 
     auto noMesh = candidate(kind);
-    noMesh.hasStaticMesh = false;
+    noMesh.hasMesh = false;
     assert(planIOSOpaqueMeshSource(noMesh,plan)==
            IOSSceneSourcePlanResult::InvalidSource);
 
@@ -1094,7 +1094,7 @@ void validateFallbackAndMixedCounters() {
   animationSkip.framePeriodMs = 10u;
   animationSkip.uvPeriodX = 4;
   auto malformed = candidate(IOSSceneMeshKind::Static);
-  malformed.hasStaticMesh = false;
+  malformed.hasMesh = false;
 
   const std::vector<IOSSceneOpaqueMeshCandidate> sources = {
     landscape,
@@ -1845,6 +1845,10 @@ void validateAtomicPublication() {
   IOSSceneFrameState staging;
   staging.entities.push_back(entity(30u));
   staging.materials.push_back(material(40u));
+  staging.bones.push_back(IOSMatrix4x4{});
+  staging.morphLayers.push_back({0u,1u,2u,0.5f,1.f});
+  const auto expectedBones = staging.bones;
+  const auto expectedMorph = staging.morphLayers;
   const auto expectedEntities = staging.entities;
   const auto expectedMaterials = staging.materials;
 
@@ -1858,8 +1862,10 @@ void validateAtomicPublication() {
   assert(destination.sceneTimeMs==destinationBefore.sceneTimeMs);
   assert(destination.sky==destinationBefore.sky);
   assert(destination.lights==destinationBefore.lights);
-  assert(destination.bones==destinationBefore.bones);
-  assert(destination.morphWeights==destinationBefore.morphWeights);
+  assert(destination.bones==expectedBones);
+  assert(staging.bones.empty());
+  assert(destination.morphLayers==expectedMorph);
+  assert(staging.morphLayers.empty());
   assert(destination.particles==destinationBefore.particles);
   assert(destination.effects==destinationBefore.effects);
   assert(destination.featureMask==destinationBefore.featureMask);

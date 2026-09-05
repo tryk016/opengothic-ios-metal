@@ -182,6 +182,18 @@ enum class IOSSceneMeshKind : uint8_t {
   Landscape,
   Static,
   Movable,
+  Animated,
+  Morph,
+  };
+
+struct IOSMorphLayer final {
+  uint32_t indexOffset = 0;
+  uint32_t sample0 = 0;
+  uint32_t sample1 = 0;
+  float alpha = 0.f;
+  float intensity = 0.f;
+
+  constexpr bool operator==(const IOSMorphLayer&) const noexcept = default;
   };
 
 enum class IOSLightType : uint8_t {
@@ -240,6 +252,7 @@ struct IOSRenderEntityState final {
   IOSIndexRange     boneRange;
   IOSIndexRange     morphRange;
   uint64_t          visibilityMask = IOSSceneVisibilityMain;
+  float             fatness = 0.f;
 
   constexpr bool operator==(const IOSRenderEntityState&) const noexcept = default;
   };
@@ -255,6 +268,7 @@ struct IOSRenderEntity final {
   IOSIndexRange     boneRange;
   IOSIndexRange     morphRange;
   uint64_t          visibilityMask = IOSSceneVisibilityMain;
+  float             fatness = 0.f;
 
   constexpr bool operator==(const IOSRenderEntity&) const noexcept = default;
   };
@@ -348,7 +362,7 @@ struct IOSSceneFrameState final {
   std::vector<IOSMaterial>          materials;
   std::vector<IOSLight>             lights;
   std::vector<IOSMatrix4x4>         bones;
-  std::vector<float>                morphWeights;
+  std::vector<IOSMorphLayer>        morphLayers;
   std::vector<IOSParticleState>     particles;
   std::vector<IOSEffectRequest>     effects;
   uint64_t                          featureMask = IOSSceneFeatureNone;
@@ -367,8 +381,8 @@ struct IOSSceneSnapshot final {
   std::vector<IOSLight>           lights;
   std::vector<IOSMatrix4x4>       currentBones;
   std::vector<IOSMatrix4x4>       previousBones;
-  std::vector<float>              currentMorphWeights;
-  std::vector<float>              previousMorphWeights;
+  std::vector<IOSMorphLayer>      currentMorphLayers;
+  std::vector<IOSMorphLayer>      previousMorphLayers;
   std::vector<IOSParticleSnapshot> particles;
   std::vector<IOSEffectRequest>   effects;
   uint64_t                        featureMask = IOSSceneFeatureNone;

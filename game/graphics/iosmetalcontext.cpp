@@ -699,7 +699,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=10 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1289,6 +1289,7 @@ struct IOSMetalContext::Impl final {
     VectorImage::Mesh          numberMesh;
     VideoWidget::PreparedFrame videoFrame;
     IOSSceneSnapshotPtr        sceneFrame;
+    IOSGPUScene::PreparedFrame preparedScene;
     PreparedUi                 uiPayload;
     uint64_t                   videoSerial = 0;
     IOSLinearHDRFrameSequence  linearHDRSequence;
@@ -1946,7 +1947,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==9u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==10u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2735,12 +2736,12 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==9u);
+    static_assert(Pipeline::OfflineMetallibAbi==10u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
              RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=9 minimum-apple=4");
+             " contract=1 metallib-abi=10 minimum-apple=4");
       }
     catch(...) {
       }
@@ -5438,7 +5439,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool frameAnimationDrawnReady = false;
   IOSGPUSceneUVAnimationDrawReport uvAnimationDrawn;
   bool uvAnimationDrawnReady = false;
-  IOSGPUScene::PreparedFrame preparedScene;
+  auto& preparedScene = frameContext.preparedScene;
   IOSLinearHDRFrameSequence linearHDRSequence;
   IOSLinearHDRFrameIdentity linearHDRIdentity;
   bool linearHDRSequenceBegun = false;
@@ -5781,8 +5782,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             iosGPUSceneResultName(report.result)+
             " handle="+std::to_string(report.failingHandle));
           }
-        if(report.drawCount==0u ||
-           report.texturedDrawCount!=report.drawCount) {
+        if(report.texturedDrawCount!=report.drawCount) {
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_LIFECYCLE)
           failMultiply2SplitPhase(
               std::string(

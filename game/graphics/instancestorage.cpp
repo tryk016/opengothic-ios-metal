@@ -54,6 +54,12 @@ InstanceStorage::Id::~Id() {
     owner->free(rgn);
   }
 
+std::span<const uint8_t> InstanceStorage::Id::data() const noexcept {
+  if(owner==nullptr)
+    return {};
+  return {owner->dataCpu.data()+rgn.begin,rgn.asize};
+  }
+
 void InstanceStorage::Id::set(const Tempest::Matrix4x4* mat) {
   if(owner==nullptr)
     return;

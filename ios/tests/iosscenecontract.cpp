@@ -37,7 +37,7 @@ IOSSceneOpaqueMeshCandidate movableCandidate(
   IOSSceneOpaqueMeshCandidate source;
   source.sourceId       = MovableSourceId;
   source.kind           = IOSSceneMeshKind::Movable;
-  source.hasStaticMesh  = true;
+  source.hasMesh  = true;
   source.hasMaterial    = true;
   source.hasMappedMaterialCategory = true;
   source.materialCategory = IOSMaterialCategory::Opaque;
@@ -122,7 +122,7 @@ void addDeformation(IOSSceneFrameState& frame,
   IOSMatrix4x4 bone;
   bone.set(0u,0u,boneValue);
   frame.bones.push_back(bone);
-  frame.morphWeights.push_back(morphValue);
+  frame.morphLayers.push_back({0u,0u,1u,morphValue,1.f});
   frame.entities[0].boneRange  = {0u,1u};
   frame.entities[0].morphRange = {0u,1u};
   }
@@ -460,7 +460,7 @@ int main() {
     populatedWorld.buildSnapshot(std::move(deformationB));
   assert(changedMesh->historyValid);
   assert(changedMesh->currentBones==changedMesh->previousBones);
-  assert(changedMesh->currentMorphWeights==changedMesh->previousMorphWeights);
+  assert(changedMesh->currentMorphLayers==changedMesh->previousMorphLayers);
   assert(populatedWorld.commitAccepted(changedMesh));
 
   auto deformationC = populatedFrame(changedMeshHandles,60.f,6.f);
@@ -469,7 +469,7 @@ int main() {
     populatedWorld.buildSnapshot(std::move(deformationC));
   assert(matchingMesh->historyValid);
   assert(matchingMesh->previousBones[0].at(0u,0u)==3.f);
-  assert(matchingMesh->previousMorphWeights[0]==0.5f);
+  assert(matchingMesh->previousMorphLayers[0].alpha==0.5f);
 
   IOSRenderWorld invalidWorld;
   const auto invalidHandles = resolveScene(invalidWorld,2000u);

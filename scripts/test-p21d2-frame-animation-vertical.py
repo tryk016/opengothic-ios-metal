@@ -346,6 +346,8 @@ def production_errors(extractor: str, header: str, plan: str) -> list[str]:
         return false;
       frame.entities.swap(staging.entities);
       frame.materials.swap(staging.materials);
+      frame.bones.swap(staging.bones);
+      frame.morphLayers.swap(staging.morphLayers);
       return true;
     """)
     if publisher is None or normalized(publisher) != expected_publisher:

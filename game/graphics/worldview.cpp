@@ -78,6 +78,11 @@ void WorldView::prepareGlobals(Tempest::Encoder<Tempest::CommandBuffer>& cmd, ui
   visuals.prepareGlobals(cmd, fId);
   }
 
+void WorldView::prepareIOSSceneSources(uint64_t tickCount) {
+  sGlobal.setTime(tickCount);
+  visuals.prepareIOSSceneSources();
+  }
+
 void WorldView::setGbuffer(const Texture2d& diffuse, const Texture2d& norm) {
   sGlobal.gbufDiffuse = &diffuse;
   sGlobal.gbufNormals = &norm;

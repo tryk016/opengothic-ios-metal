@@ -2591,8 +2591,10 @@ void MainWindow::render(){
 #endif
     const auto loadState = Gothic::inst().checkLoading();
     const bool publishWorld = rendererIOSPublishesWorldDuringLoad(loadState);
-    if(auto* world = publishWorld ? Gothic::inst().world() : nullptr)
+    if(auto* world = publishWorld ? Gothic::inst().world() : nullptr) {
       world->refreshAnimationPose();
+      Gothic::inst().worldView()->prepareIOSSceneSources(world->tickCount());
+      }
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     perfWindow.poseRefreshUs.push_back(perfSample(perfNowUs()-poseRefreshStart));
 #endif

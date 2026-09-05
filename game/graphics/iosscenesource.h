@@ -5,9 +5,13 @@
 
 #include <cstdint>
 #include <stdexcept>
+#include <span>
+
+#include "iosscenesnapshot.h"
 
 class Material;
 class StaticMesh;
+class AnimMesh;
 
 enum class IOSSceneSourceKind : uint8_t {
   Landscape,
@@ -26,7 +30,11 @@ struct IOSSceneSource final {
   uint64_t           sourceId = 0;
 
   const StaticMesh*  mesh = nullptr;
+  const AnimMesh*    animatedMesh = nullptr;
   const Material*    material = nullptr;
+  std::span<const uint8_t> boneBytes;
+  std::array<IOSMorphLayer,4> morphLayers;
+  float             fatness = 0.f;
 
   Tempest::Matrix4x4 transform;
   Tempest::Vec3      localBoundsMin;

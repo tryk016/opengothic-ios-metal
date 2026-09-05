@@ -287,8 +287,7 @@ required_once = {
 
 expected_draw_operations = [
     "setRenderPipelineState",
-    "setVertexBuffer",
-    "setVertexBytes",
+    "bindGeometry",
     "setFragmentTexture",
     "insertDebugSignpost",
     "insertDebugSignpost",
@@ -365,7 +364,8 @@ def validate(candidate):
     loop_start = native_encode.index("for(const auto& draw:", phase_start)
     loop_end = native_encode.index("\n    };", loop_start)
     draw_loop = native_encode[loop_start:loop_end]
-    operations = re.findall(r"\[encoder ([A-Za-z]+)", draw_loop)
+    operations = [message or helper for message, helper in re.findall(
+        r"\[encoder ([A-Za-z]+)|\b(bindGeometry)\(encoder,draw\)", draw_loop)]
     if operations != expected_draw_operations:
         raise ValueError("frozen native draw operation order drifted")
     if draw_loop.index(
@@ -4622,7 +4622,7 @@ grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
 grep -Fq 'opengothic-ios-patch-stack-v17' \
   ios/patches/apply-patches.sh
 
-grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-9.binaryarchive' \
+grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-10.binaryarchive' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'PreviousArchiveFileName' \
   game/graphics/iospipelinearchivepolicy.h
@@ -4832,7 +4832,7 @@ required = (
         "actual-alpha-func-mapping",
         """  const IOSSceneMaterialMapping materialMapping =
       source.material!=nullptr
-        ? iosSceneMaterialMapping(source.material->alpha)
+        ? iosSceneMaterialMapping(*rawMaterial)
         : IOSSceneMaterialMapping{};""",
         """  const IOSSceneMaterialMapping materialMapping = {};""",
     ),
@@ -5189,7 +5189,8 @@ required = (
      "RendererIOSShader::AdditiveFragmentFunction.data()"),
     ("explicit-nonblended-pso",
      "game/graphics/iosgpuscene.mm",
-     "pipelineDesc.colorAttachments[0].blendingEnabled = NO;"),
+     """pipelineDesc.colorAttachments[0].blendingEnabled = NO;
+      pipelineDesc.depthAttachmentPixelFormat      = depthFormat;"""),
     ("opaque-pso-state",
      "game/graphics/iosgpuscene.mm",
      "opaquePipelineState    = opaquePipelineOwner.relinquish();"),
@@ -5286,7 +5287,7 @@ required = (
               report.counts,dispatch)"""),
     ("production-material-count-equation",
      "game/graphics/iosgpusceneplan.h",
-     "counts.material.total==secondMaterialSum+counts.material.multiply2"),
+     "counts.material.total==materials && counts.kind.total==kinds"),
     ("production-frame-count-equations",
      "game/graphics/iosgpusceneplan.h",
      """return iosGPUSceneFrameDrawCountsAreConsistent(counts) &&
@@ -5396,9 +5397,9 @@ if missing:
         + ",".join(missing)
     )
 if paths["game/graphics/iosgpuscene.mm"].count(
-        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 5:
+        "[device newRenderPipelineStateWithDescriptor:pipelineDesc") != 6:
     raise SystemExit(
-        "RendererIOS GPU path must declare four production PSOs and one macro-guarded visibility PSO")
+        "RendererIOS GPU path must declare four material PSOs, the geometry factory and one macro-guarded visibility PSO")
 for forbidden in (
     "newLibraryWithSource",
     "newCommandQueue",
@@ -5963,7 +5964,7 @@ link_rendererios_metallib \
   "$P25C1A_CANDIDATE_AIR" "$P25C1A_CANDIDATE_METALLIB"
 
 EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
-  riosLandscapeVertex riosLandscapeFragment \
+  riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
   riosToneResolveVertex riosToneResolveFragment \
@@ -5981,7 +5982,7 @@ require_exact_rendererios_exports() {
   local exports
   local function
   for function in \
-      riosLandscapeVertex riosLandscapeFragment \
+      riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment \
       riosLandscapeAlphaTestFragment \
       riosLandscapeAdditiveFragment \
       riosToneResolveVertex riosToneResolveFragment \
@@ -5999,7 +6000,7 @@ require_exact_rendererios_exports() {
   exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
     awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
   test "$exports" = "$EXPECTED_RIOS_EXPORTS"
-  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 19
+  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 22
 }
 require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
 require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
@@ -6029,7 +6030,7 @@ int main(int argc, char** argv) {
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==9u);
+  static_assert(Archive::MetallibAbiVersion==10u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
   static_assert(
     Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
@@ -6037,7 +6038,7 @@ int main(int argc, char** argv) {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-9.binaryarchive");
+    "RendererIOS-abi-10.binaryarchive");
   if(argc!=3)
     return 1;
   const std::string_view candidate = argv[1];
@@ -6056,9 +6057,9 @@ int main(int argc, char** argv) {
     "provenance-schema=1\n"
     "cache-schema=1\n"
     "pipeline-key-abi=1\n"
-    "metallib-abi=9\n"
+    "metallib-abi=10\n"
     "metallib-sha256="+std::string(candidate)+"\n"
-    "archive-file=RendererIOS-abi-9.binaryarchive\n";
+    "archive-file=RendererIOS-abi-10.binaryarchive\n";
   return record==expected ? 0 : 4;
 }
 CPP
@@ -6857,7 +6858,7 @@ profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
-    "case=tile-prototype-v1 contract=1 metallib-abi=9 "
+    "case=tile-prototype-v1 contract=1 metallib-abi=10 "
     "minimum-apple=4 output=4x4 rgba8-private=1",
     "RendererIOS shading prototype tile self-test: FACTORY READY "
     "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
@@ -6876,10 +6877,7 @@ markers = (
     "RendererIOS shading prototype tile self-test: UNSUPPORTED "
     "case=tile-prototype-v1 reason=apple4-required side-effects=0",
 )
-if tuple(len(marker.encode("utf-8")) for marker in markers) != (
-    143, 152, 245, 106, 180, 118,
-):
-    raise SystemExit("shading prototype Tile marker byte budget changed")
+validator_module["validate_marker_budget"]()
 marker_scope = context.split(
     "constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[]", 1
 )[1].split("\n#endif", 1)[0]
@@ -7060,7 +7058,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
 TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
 strings "$TILE_BINARY" >"$TILE_STRINGS"
 for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=9 minimum-apple=4 output=4x4 rgba8-private=1' \
+    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=10 minimum-apple=4 output=4x4 rgba8-private=1' \
     'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
     'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \

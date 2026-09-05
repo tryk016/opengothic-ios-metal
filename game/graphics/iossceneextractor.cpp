@@ -4,11 +4,13 @@
 #include "iossceneconversion.h"
 #include "material.h"
 #include "mesh/submesh/staticmesh.h"
+#include "mesh/submesh/animmesh.h"
 #include "resources.h"
 
 #include <Tempest/Device>
 
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -48,7 +50,8 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
 
   const std::optional<Material::AlphaFunc> rawMaterial =
       source.material!=nullptr
-        ? std::optional<Material::AlphaFunc>{source.material->alpha}
+        ? std::optional<Material::AlphaFunc>{source.material->isGhost
+            ? Material::Ghost : source.material->alpha}
         : std::nullopt;
   const bool hasFrameAnimation =
       source.material!=nullptr && !source.material->frames.empty();
@@ -86,11 +89,11 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   IOSSceneOpaqueMeshCandidate candidate;
   candidate.sourceId       = source.sourceId;
   candidate.kind           = iosSceneOpaqueMeshKind(source.kind);
-  candidate.hasStaticMesh  = source.mesh!=nullptr;
+  candidate.hasMesh        = source.mesh!=nullptr || source.animatedMesh!=nullptr;
   candidate.hasMaterial    = source.material!=nullptr;
   const IOSSceneMaterialMapping materialMapping =
       source.material!=nullptr
-        ? iosSceneMaterialMapping(source.material->alpha)
+        ? iosSceneMaterialMapping(*rawMaterial)
         : IOSSceneMaterialMapping{};
   candidate.hasMappedMaterialCategory = materialMapping.mapped;
   candidate.materialCategory = materialMapping.category;
@@ -173,12 +176,19 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   const auto bound = context.assets->bindMesh(
       *context.device,
       mesh,
-      source.mesh->vbo,
-      source.mesh->ibo,
-      sizeof(Resources::Vertex),
+      source.animatedMesh!=nullptr
+        ? static_cast<const Tempest::StorageBuffer&>(source.animatedMesh->vbo)
+        : static_cast<const Tempest::StorageBuffer&>(source.mesh->vbo),
+      source.animatedMesh!=nullptr
+        ? static_cast<const Tempest::StorageBuffer&>(source.animatedMesh->ibo)
+        : static_cast<const Tempest::StorageBuffer&>(source.mesh->ibo),
+      source.animatedMesh!=nullptr
+        ? sizeof(Resources::VertexA) : sizeof(Resources::Vertex),
       std::size_t(plan.indices.offset),
       std::size_t(plan.indices.count),
-      plan.localBounds);
+      plan.localBounds,
+      source.mesh!=nullptr ? source.mesh->morph.index : nullptr,
+      source.mesh!=nullptr ? source.mesh->morph.samples : nullptr);
   if(!isIOSSceneAssetBindSuccess(bound)) {
     context.report.result = IOSSceneExtractionResult::AssetBindFailed;
     context.report.bindFailure = bound;
@@ -226,6 +236,28 @@ void visitSource(void* opaque, const IOSSceneSource& source) {
   entityRecord.transform      = plan.transform;
   entityRecord.bounds         = plan.localBounds;
   entityRecord.visibilityMask = plan.visibilityMask;
+  entityRecord.fatness = source.fatness;
+  if(plan.kind==IOSSceneMeshKind::Animated) {
+    const auto count = source.boneBytes.size()/sizeof(Tempest::Matrix4x4);
+    if(source.animatedMesh==nullptr || count<source.animatedMesh->bonesCount ||
+       source.boneBytes.size()%sizeof(Tempest::Matrix4x4)!=0 ||
+       count==0 || count>UINT32_MAX-context.staging.bones.size()) {
+      context.report.result = IOSSceneExtractionResult::InvalidSource;
+      return;
+      }
+    entityRecord.boneRange = {uint32_t(context.staging.bones.size()),uint32_t(count)};
+    for(size_t i=0;i<count;++i) {
+      Tempest::Matrix4x4 bone;
+      std::memcpy(&bone,source.boneBytes.data()+i*sizeof(bone),sizeof(bone));
+      context.staging.bones.push_back(IOSSceneConversion::matrix(bone));
+      }
+    }
+  if(plan.kind==IOSSceneMeshKind::Morph) {
+    entityRecord.morphRange = {uint32_t(context.staging.morphLayers.size()),
+                              uint32_t(source.morphLayers.size())};
+    context.staging.morphLayers.insert(context.staging.morphLayers.end(),
+                                      source.morphLayers.begin(),source.morphLayers.end());
+    }
   context.staging.entities.push_back(entityRecord);
   if(!recordIOSScenePlanResult(
        IOSSceneSourcePlanResult::Planned,plan,context.report.stats,
@@ -242,7 +274,8 @@ IOSSceneExtractionReport IOSSceneExtractor::extractOpaqueMeshes(
     IOSSceneAssetRegistry& assets,
     IOSSceneFrameState& frame) const {
   IOSSceneExtractionReport report;
-  if(!frame.entities.empty() || !frame.materials.empty()) {
+  if(!frame.entities.empty() || !frame.materials.empty() ||
+     !frame.bones.empty() || !frame.morphLayers.empty()) {
     report.result = IOSSceneExtractionResult::FrameAlreadyPopulated;
     return report;
     }

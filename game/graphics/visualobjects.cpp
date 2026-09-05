@@ -99,6 +99,8 @@ void VisualObjects::Item::setWind(zenkit::AnimationType m, float intensity) {
     owner->objectsWind.erase(id);
   if(m!=zenkit::AnimationType::NONE)
     owner->objectsWind.insert(id);
+  else
+    owner->updateInstance(id);
   }
 
 void VisualObjects::Item::startMMAnim(std::string_view anim, float intensity, uint64_t timeUntil) {
@@ -111,8 +113,7 @@ const Material& VisualObjects::Item::material() const {
     static Material m;
     return m;
     }
-  auto& bx = *owner->objects[id].bucketId;
-  return bx.mat;
+  return owner->objects[id].sourceMaterial;
   }
 
 const Bounds& VisualObjects::Item::bounds() const {
@@ -221,6 +222,7 @@ VisualObjects::Item VisualObjects::get(const StaticMesh& mesh, const Material& m
   obj.iboOff    = uint32_t(iboOff);
   obj.iboLen    = uint32_t(iboLen);
   obj.bucketId  = bucketsMem.alloc(mat, mesh);
+  obj.sourceMaterial = mat;
   obj.cmdId     = drawCmd.commandId(mat, obj.type, obj.bucketId.toInt());
   obj.clusterId = clusterId(*obj.bucketId, iboOff/PackedMesh::MaxInd, iboLen/PackedMesh::MaxInd, obj.bucketId.toInt(), obj.cmdId);
   obj.alpha     = mat.alpha;
@@ -264,10 +266,13 @@ VisualObjects::Item VisualObjects::get(const AnimMesh& mesh, const Material& mat
   Object& obj = objects[id];
 
   obj.sourceBounds = &mesh.bbox;
+  obj.sourceAnimatedMesh = &mesh;
+  obj.sourceBones = &anim;
   obj.type      = DrawCommands::Type::Animated;
   obj.iboOff    = uint32_t(iboOff);
   obj.iboLen    = uint32_t(iboLen);
   obj.bucketId  = bucketsMem.alloc(mat, mesh);
+  obj.sourceMaterial = mat;
   obj.cmdId     = drawCmd.commandId(mat, obj.type, obj.bucketId.toInt());
   obj.clusterId = clusterId(*obj.bucketId, iboOff/PackedMesh::MaxInd, iboLen/PackedMesh::MaxInd, obj.bucketId.toInt(), obj.cmdId);
   obj.alpha     = mat.alpha;
@@ -304,6 +309,7 @@ VisualObjects::Item VisualObjects::get(const StaticMesh& mesh, const Material& m
   obj.iboOff    = uint32_t(iboOff);
   obj.iboLen    = uint32_t(iboLen);
   obj.bucketId  = bucketsMem.alloc(mat, mesh);
+  obj.sourceMaterial = mat;
   obj.cmdId     = drawCmd.commandId(mat, type, obj.bucketId.toInt());
   obj.clusterId = clusterId(cluster, iboOff/PackedMesh::MaxInd, iboLen/PackedMesh::MaxInd, obj.bucketId.toInt(), obj.cmdId);
   obj.alpha     = mat.alpha;
@@ -356,8 +362,7 @@ void VisualObjects::free(size_t id) {
   drawCmd.addClusters(obj.cmdId, -meshletCount);
   clustersMem.free(obj.clusterId, numCluster);
 
-  if(obj.wind==zenkit::AnimationType::NONE)
-    objectsWind.erase(id);
+  objectsWind.erase(id);
   if(obj.type==DrawCommands::Morph)
     objectsMorph.erase(id);
 
@@ -369,16 +374,28 @@ void VisualObjects::visitIOSSceneSources(void* context, IOSSceneSourceVisitor vi
     return;
 
   for(const auto& object:objects) {
-    if(object.isEmpty() || object.sourceId==0)
+    if(object.sourceId==0)
       continue;
 
-    const auto& bucket = *object.bucketId;
     IOSSceneSource source;
     source.kind           = iosSceneSourceKind(object.type);
     source.sourceId       = object.sourceId;
     source.mesh           = object.sourceMesh;
-    source.material       = &bucket.mat;
-    source.transform      = object.pos;
+    source.animatedMesh   = object.sourceAnimatedMesh;
+    source.material       = &object.sourceMaterial;
+    source.transform      = renderTransform(object);
+    source.fatness        = object.fatness*0.5f;
+    if(object.sourceBones!=nullptr)
+      source.boneBytes = object.sourceBones->data();
+    if(object.type==DrawCommands::Morph) {
+      MorphData data;
+      std::memcpy(&data,object.objMorphAnim.data().data(),sizeof(data));
+      for(size_t i=0;i<Resources::MAX_MORPH_LAYERS;++i) {
+        const auto& layer = data.morph[i];
+        source.morphLayers[i] = {layer.indexOffset,layer.sample0,layer.sample1,
+                                float(layer.alpha)/65535.f,float(layer.intensity)/65535.f};
+        }
+      }
     source.hasLocalBounds = object.sourceBounds!=nullptr;
     if(source.hasLocalBounds) {
       source.localBoundsMin = object.sourceBounds->bbox[0];
@@ -489,7 +506,7 @@ void VisualObjects::setAsGhost(size_t id, bool g) {
 
   auto& bx  = *obj.bucketId;
   auto& cx  = drawCmd[obj.cmdId];
-  auto  mat = bx.mat;
+  auto  mat = obj.sourceMaterial;
 
   const uint32_t meshletCount = (obj.iboLen/PackedMesh::MaxInd);
   drawCmd.addClusters(obj.cmdId, -meshletCount);
@@ -500,6 +517,7 @@ void VisualObjects::setAsGhost(size_t id, bool g) {
   if(bx.staticMesh!=nullptr)
     obj.bucketId = bucketsMem.alloc(mat, *bx.staticMesh); else
     obj.bucketId = bucketsMem.alloc(mat, *bx.animMesh);
+  obj.sourceMaterial = mat;
 
   obj.cmdId = drawCmd.commandId(mat, cx.type, obj.bucketId.toInt());
   drawCmd.addClusters(obj.cmdId, +meshletCount);
@@ -524,46 +542,32 @@ void VisualObjects::preFrameUpdate() {
   preFrameUpdateMorph();
   }
 
+void VisualObjects::prepareIOSSceneSources() {
+  preFrameUpdateMorph();
+  }
+
+Matrix4x4 VisualObjects::renderTransform(const Object& object) const {
+  auto transform = object.pos;
+  if(!scene.zWindEnabled || object.wind==zenkit::AnimationType::NONE)
+    return transform;
+  float intensity = 0.f;
+  if(object.wind==zenkit::AnimationType::WIND && object.windIntensity>0.f)
+    intensity = 0.03f;
+  else if(object.wind==zenkit::AnimationType::WIND_ALT &&
+          object.windIntensity>0.f && object.windIntensity<=1.f)
+    intensity = object.windIntensity*0.1f;
+  const float phase = 2.f*float(scene.tickCount%scene.windPeriod)/float(scene.windPeriod)-1.f;
+  const float shift = object.pos[3][0]*scene.windDir.x + object.pos[3][2]*scene.windDir.y;
+  const float shear = intensity*std::cos(float(phase*M_PI)+shift*0.0001f);
+  transform[1][0] += scene.windDir.x*shear;
+  transform[1][2] += scene.windDir.y*shear;
+  return transform;
+  }
+
 void VisualObjects::preFrameUpdateWind() {
-  if(!scene.zWindEnabled)
-    return;
-
-  const uint64_t period = scene.windPeriod;
-  float ax = float(scene.tickCount%period)/float(period);
-  ax = ax*2.f-1.f;
-
   for(auto id:objectsWind) {
-    auto& i = objects[id];
-    float m = 0;
-
-    switch(i.wind) {
-      case zenkit::AnimationType::WIND:
-        // tree. note: mods tent to bump Intensity to insane values
-        if(i.windIntensity>0.f)
-          m = 0.03f; else
-          m = 0;
-        break;
-      case zenkit::AnimationType::WIND_ALT:
-        // grass
-        if(i.windIntensity>0.f && i.windIntensity<=1.0)
-          m = i.windIntensity * 0.1f; else
-          m = 0;
-        break;
-      case zenkit::AnimationType::NONE:
-      default:
-        // error
-        m = 0.f;
-        break;
-      }
-
-    auto  pos   = i.pos;
-    float shift = i.pos[3][0]*scene.windDir.x + i.pos[3][2]*scene.windDir.y;
-    const float a = m * std::cos(float(ax*M_PI) + shift*0.0001f);
-
-    pos[1][0] += scene.windDir.x*a;
-    pos[1][2] += scene.windDir.y*a;
-
-    updateInstance(id, &pos);
+    auto transform = renderTransform(objects[id]);
+    updateInstance(id,&transform);
     }
   }
 

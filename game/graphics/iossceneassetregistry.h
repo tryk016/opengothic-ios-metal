@@ -96,6 +96,8 @@ struct IOSSceneMeshAsset final {
   Tempest::BorrowedMetalBuffer vertexBuffer;
   Tempest::BorrowedMetalBuffer indexBuffer;
   IOSSceneMeshMetadata         metadata;
+  Tempest::BorrowedMetalBuffer morphIndices;
+  Tempest::BorrowedMetalBuffer morphSamples;
   };
 
 struct IOSSceneTextureAsset final {
@@ -139,7 +141,9 @@ class IOSSceneAssetRegistry final {
                                      std::size_t vertexStride,
                                      std::size_t firstIndex,
                                      std::size_t indexCount,
-                                     IOSBounds bounds);
+                                     IOSBounds bounds,
+                                     const Tempest::StorageBuffer* morphIndices = nullptr,
+                                     const Tempest::StorageBuffer* morphSamples = nullptr);
 
     [[nodiscard]]
     IOSSceneAssetBindResult bindTexture(const Tempest::Device& device,

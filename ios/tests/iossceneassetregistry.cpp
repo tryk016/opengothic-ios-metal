@@ -41,7 +41,7 @@ void validatePublicContract() {
   using BindMesh = IOSSceneAssetBindResult (IOSSceneAssetRegistry::*)(
     const Tempest::Device&,IOSMeshHandle,const Tempest::StorageBuffer&,
     const Tempest::StorageBuffer&,std::size_t,std::size_t,std::size_t,
-    IOSBounds);
+    IOSBounds,const Tempest::StorageBuffer*,const Tempest::StorageBuffer*);
   using BindTexture = IOSSceneAssetBindResult (IOSSceneAssetRegistry::*)(
     const Tempest::Device&,IOSTextureHandle,const Tempest::Texture2d&);
   using LookupMesh = const IOSSceneMeshAsset* (IOSSceneAssetRegistry::*)(

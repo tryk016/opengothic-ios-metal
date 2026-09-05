@@ -89,6 +89,7 @@ class VisualObjects final {
     void resetRendering();
 
     void preFrameUpdate ();
+    void prepareIOSSceneSources();
     void prepareGlobals (Tempest::Encoder<Tempest::CommandBuffer>& cmd, uint8_t fId);
     void postFrameupdate();
 
@@ -123,6 +124,9 @@ class VisualObjects final {
 
       uint64_t            sourceId    = 0;
       const StaticMesh*   sourceMesh  = nullptr;
+      const AnimMesh*     sourceAnimatedMesh = nullptr;
+      Material            sourceMaterial;
+      const InstanceStorage::Id* sourceBones = nullptr;
       const Bounds*       sourceBounds = nullptr;
       Tempest::Matrix4x4  pos;
       InstanceStorage::Id objInstance;
@@ -145,6 +149,7 @@ class VisualObjects final {
       bool                isGhost       = false;
       };
 
+    Tempest::Matrix4x4 renderTransform(const Object& object) const;
     void     preFrameUpdateWind();
     void     preFrameUpdateMorph();
 

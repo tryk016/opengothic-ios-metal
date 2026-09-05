@@ -763,6 +763,8 @@ struct IOSGPUSceneKindCounts final {
   uint64_t landscape = 0;
   uint64_t staticMeshes = 0;
   uint64_t movable = 0;
+  uint64_t animated = 0;
+  uint64_t morph = 0;
 
   constexpr bool operator==(const IOSGPUSceneKindCounts&) const noexcept =
       default;
@@ -937,36 +939,23 @@ inline constexpr bool iosGPUSceneCheckedIncrement(uint64_t& value) noexcept {
 
 inline constexpr bool iosGPUSceneCountsAreConsistent(
     const IOSGPUSceneDrawCounts& counts) noexcept {
-  const bool firstMaterialSumValid =
-      counts.material.opaque<=
-        std::numeric_limits<uint64_t>::max()-counts.material.alphaTest;
-  const uint64_t firstMaterialSum = firstMaterialSumValid
-      ? counts.material.opaque+counts.material.alphaTest
-      : 0u;
-  const bool secondMaterialSumValid =
-      firstMaterialSumValid &&
-      firstMaterialSum<=
-        std::numeric_limits<uint64_t>::max()-counts.material.additive;
-  const uint64_t secondMaterialSum = secondMaterialSumValid
-      ? firstMaterialSum+counts.material.additive : 0u;
-  const bool materialSumValid = secondMaterialSumValid &&
-      secondMaterialSum<=
-        std::numeric_limits<uint64_t>::max()-counts.material.multiply2;
-  const bool firstKindSumValid =
-      counts.kind.landscape<=
-        std::numeric_limits<uint64_t>::max()-counts.kind.staticMeshes;
-  const uint64_t firstKindSum =
-      firstKindSumValid
-        ? counts.kind.landscape+counts.kind.staticMeshes
-        : 0u;
-  const bool kindSumValid =
-      firstKindSumValid &&
-      firstKindSum<=std::numeric_limits<uint64_t>::max()-counts.kind.movable;
-  return materialSumValid && kindSumValid &&
-      counts.material.total==secondMaterialSum+counts.material.multiply2 &&
-      counts.kind.total==firstKindSum+counts.kind.movable &&
-      counts.material.total==counts.kind.total &&
-      counts.texturedDraws<=counts.material.total &&
+  uint64_t materials = 0, kinds = 0;
+  const auto add = [](uint64_t& total,uint64_t value) constexpr {
+    if(value>std::numeric_limits<uint64_t>::max()-total)
+      return false;
+    total += value;
+    return true;
+    };
+  for(const auto count:{counts.material.opaque,counts.material.alphaTest,
+                       counts.material.additive,counts.material.multiply2})
+    if(!add(materials,count))
+      return false;
+  for(const auto count:{counts.kind.landscape,counts.kind.staticMeshes,
+                       counts.kind.movable,counts.kind.animated,counts.kind.morph})
+    if(!add(kinds,count))
+      return false;
+  return counts.material.total==materials && counts.kind.total==kinds &&
+      materials==kinds && counts.texturedDraws<=materials &&
       counts.alphaFallback<=counts.material.alphaTest;
   }
 
@@ -1462,24 +1451,28 @@ inline IOSGPUSceneMarker iosGPUSceneKindPlannedMarker(
     const IOSGPUSceneFrameCounts& counts) noexcept {
   return iosGPUSceneFormatMarker(
       "RendererIOS native scene kind-planned: mode=%s "
-      "total=%llu landscape=%llu static=%llu movable=%llu",
+      "total=%llu landscape=%llu static=%llu movable=%llu animated=%llu morph=%llu",
       iosGPUSceneMarkerModeName(),
       static_cast<unsigned long long>(counts.planned.kind.total),
       static_cast<unsigned long long>(counts.planned.kind.landscape),
       static_cast<unsigned long long>(counts.planned.kind.staticMeshes),
-      static_cast<unsigned long long>(counts.planned.kind.movable));
+      static_cast<unsigned long long>(counts.planned.kind.movable),
+      static_cast<unsigned long long>(counts.planned.kind.animated),
+      static_cast<unsigned long long>(counts.planned.kind.morph));
   }
 
 inline IOSGPUSceneMarker iosGPUSceneKindDrawnMarker(
     const IOSGPUSceneFrameCounts& counts) noexcept {
   return iosGPUSceneFormatMarker(
       "RendererIOS native scene kind-drawn: mode=%s "
-      "total=%llu landscape=%llu static=%llu movable=%llu",
+      "total=%llu landscape=%llu static=%llu movable=%llu animated=%llu morph=%llu",
       iosGPUSceneMarkerModeName(),
       static_cast<unsigned long long>(counts.drawn.kind.total),
       static_cast<unsigned long long>(counts.drawn.kind.landscape),
       static_cast<unsigned long long>(counts.drawn.kind.staticMeshes),
-      static_cast<unsigned long long>(counts.drawn.kind.movable));
+      static_cast<unsigned long long>(counts.drawn.kind.movable),
+      static_cast<unsigned long long>(counts.drawn.kind.animated),
+      static_cast<unsigned long long>(counts.drawn.kind.morph));
   }
 
 inline IOSGPUSceneMarker iosGPUSceneAlphaMarker(
@@ -1555,13 +1548,17 @@ inline constexpr IOSGPUSceneCountResult recordIOSGPUSceneDrawCount(
     case IOSSceneMeshKind::Landscape:
     case IOSSceneMeshKind::Static:
     case IOSSceneMeshKind::Movable:
+    case IOSSceneMeshKind::Animated:
+    case IOSSceneMeshKind::Morph:
       break;
     case IOSSceneMeshKind::Unsupported:
       return IOSGPUSceneCountResult::UnknownKind;
     }
   if(kind!=IOSSceneMeshKind::Landscape &&
      kind!=IOSSceneMeshKind::Static &&
-     kind!=IOSSceneMeshKind::Movable)
+     kind!=IOSSceneMeshKind::Movable &&
+     kind!=IOSSceneMeshKind::Animated &&
+     kind!=IOSSceneMeshKind::Morph)
     return IOSGPUSceneCountResult::UnknownKind;
   if((selector==IOSGPUScenePipelineSelector::Additive ||
       selector==IOSGPUScenePipelineSelector::Multiply2) &&
@@ -1604,6 +1601,14 @@ inline constexpr IOSGPUSceneCountResult recordIOSGPUSceneDrawCount(
       break;
     case IOSSceneMeshKind::Movable:
       if(!iosGPUSceneCheckedIncrement(next.kind.movable))
+        return IOSGPUSceneCountResult::Overflow;
+      break;
+    case IOSSceneMeshKind::Animated:
+      if(!iosGPUSceneCheckedIncrement(next.kind.animated))
+        return IOSGPUSceneCountResult::Overflow;
+      break;
+    case IOSSceneMeshKind::Morph:
+      if(!iosGPUSceneCheckedIncrement(next.kind.morph))
         return IOSGPUSceneCountResult::Overflow;
       break;
     case IOSSceneMeshKind::Unsupported:
@@ -1979,7 +1984,9 @@ inline constexpr bool makeIOSGPUSceneMultiply2DrawIdentity(
       selector!=IOSGPUScenePipelineSelector::Multiply2) ||
      (kind!=IOSSceneMeshKind::Landscape &&
       kind!=IOSSceneMeshKind::Static &&
-      kind!=IOSSceneMeshKind::Movable))
+      kind!=IOSSceneMeshKind::Movable &&
+     kind!=IOSSceneMeshKind::Animated &&
+     kind!=IOSSceneMeshKind::Morph))
     return false;
   output = {Mode,generation,sequence,source,mesh,material,texture,
             indexOffset,indexCount,selector,kind};
@@ -2004,6 +2011,8 @@ inline constexpr const char* iosGPUSceneMultiply2KindName(
     case IOSSceneMeshKind::Landscape: return "landscape";
     case IOSSceneMeshKind::Static: return "static";
     case IOSSceneMeshKind::Movable: return "movable";
+    case IOSSceneMeshKind::Animated: return "animated";
+    case IOSSceneMeshKind::Morph: return "morph";
     case IOSSceneMeshKind::Unsupported: break;
     }
   return nullptr;
@@ -2127,6 +2136,10 @@ inline constexpr const char* iosGPUSceneMeshKindName(
       return "static";
     case IOSSceneMeshKind::Movable:
       return "movable";
+    case IOSSceneMeshKind::Animated:
+      return "animated";
+    case IOSSceneMeshKind::Morph:
+      return "morph";
     case IOSSceneMeshKind::Unsupported:
       break;
     }
@@ -2756,13 +2769,17 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
     case IOSSceneMeshKind::Landscape:
     case IOSSceneMeshKind::Static:
     case IOSSceneMeshKind::Movable:
+    case IOSSceneMeshKind::Animated:
+    case IOSSceneMeshKind::Morph:
       break;
     case IOSSceneMeshKind::Unsupported:
       return IOSGPUSceneDrawPlanResult::InvalidMesh;
     }
   if(source.entity.kind!=IOSSceneMeshKind::Landscape &&
      source.entity.kind!=IOSSceneMeshKind::Static &&
-     source.entity.kind!=IOSSceneMeshKind::Movable)
+     source.entity.kind!=IOSSceneMeshKind::Movable &&
+     source.entity.kind!=IOSSceneMeshKind::Animated &&
+     source.entity.kind!=IOSSceneMeshKind::Morph)
     return IOSGPUSceneDrawPlanResult::InvalidMesh;
   if(pipeline==IOSGPUScenePipelineSelector::Additive) {
     if(source.entity.kind!=IOSSceneMeshKind::Static ||
@@ -2828,7 +2845,8 @@ inline IOSGPUSceneDrawPlanResult planIOSGPUSceneDraw(
 
   const bool validVertexBuffer =
       source.hasNativeVertexBuffer &&
-      source.vertexStride==IOSLandscapeVertexStride &&
+      source.vertexStride==(source.entity.kind==IOSSceneMeshKind::Animated
+                              ? 92u : IOSLandscapeVertexStride) &&
       source.vertexBufferByteSize>=source.vertexStride &&
       source.vertexBufferByteSize%source.vertexStride==0;
   const bool validIndexBuffer =

@@ -168,8 +168,8 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
   snapshot->lights              = std::move(frame.lights);
   snapshot->currentBones        = std::move(frame.bones);
   snapshot->previousBones       = snapshot->currentBones;
-  snapshot->currentMorphWeights = std::move(frame.morphWeights);
-  snapshot->previousMorphWeights = snapshot->currentMorphWeights;
+  snapshot->currentMorphLayers = std::move(frame.morphLayers);
+  snapshot->previousMorphLayers = snapshot->currentMorphLayers;
   snapshot->effects             = std::move(frame.effects);
   snapshot->featureMask         = frame.featureMask;
 
@@ -186,6 +186,7 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       entity.boneRange,
       entity.morphRange,
       entity.visibilityMask,
+      entity.fatness,
       });
     }
 
@@ -246,11 +247,11 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
         }
       if(meshHistoryCompatible &&
          compatibleRange(entity.morphRange,previous.morphRange,
-                         snapshot->previousMorphWeights.size(),
-                         committedSnapshot->currentMorphWeights.size())) {
-        const auto src = committedSnapshot->currentMorphWeights.begin()+
+                         snapshot->previousMorphLayers.size(),
+                         committedSnapshot->currentMorphLayers.size())) {
+        const auto src = committedSnapshot->currentMorphLayers.begin()+
                          std::ptrdiff_t(previous.morphRange.offset);
-        const auto dst = snapshot->previousMorphWeights.begin()+
+        const auto dst = snapshot->previousMorphLayers.begin()+
                          std::ptrdiff_t(entity.morphRange.offset);
         std::copy_n(src,entity.morphRange.count,dst);
         }

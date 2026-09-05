@@ -614,11 +614,11 @@ void testSceneMarkerGrammar(
   assertMarkerParts(
       iosGPUSceneKindPlannedMarker(counts),
       "RendererIOS native scene kind-planned: mode=",modeName,
-      " total=4 landscape=1 static=2 movable=1");
+      " total=4 landscape=1 static=2 movable=1 animated=0 morph=0");
   assertMarkerParts(
       iosGPUSceneKindDrawnMarker(counts),
       "RendererIOS native scene kind-drawn: mode=",modeName,
-      " total=4 landscape=1 static=2 movable=1");
+      " total=4 landscape=1 static=2 movable=1 animated=0 morph=0");
   assertMarkerParts(
       iosGPUSceneAlphaMarker(counts),
       "RendererIOS native scene alpha: mode=",modeName,
@@ -1586,6 +1586,22 @@ int main() {
            identity.texture==before.texture);
   }
 #endif
+
+  {
+    auto source = validCandidate();
+    IOSGPUSceneDrawPlan plan;
+    source.entity.kind = IOSSceneMeshKind::Animated;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==IOSGPUSceneDrawPlanResult::InvalidMesh);
+    source.vertexStride = 92u;
+    source.vertexBufferByteSize = 6u*92u;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==IOSGPUSceneDrawPlanResult::Draw);
+    assert(plan.kind==IOSSceneMeshKind::Animated);
+    source.entity.kind = IOSSceneMeshKind::Morph;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==IOSGPUSceneDrawPlanResult::InvalidMesh);
+    source.vertexStride = IOSLandscapeVertexStride;
+    source.vertexBufferByteSize = 6u*IOSLandscapeVertexStride;
+    assert(planIOSGPUSceneDraw(camera,source,plan)==IOSGPUSceneDrawPlanResult::Draw);
+  }
 
   {
     auto source = validCandidate();
@@ -2564,11 +2580,11 @@ int main() {
     assertMarker(
         iosGPUSceneKindPlannedMarker(counts),
         "RendererIOS native scene kind-planned: mode=production "
-        "total=4 landscape=1 static=2 movable=1");
+        "total=4 landscape=1 static=2 movable=1 animated=0 morph=0");
     assertMarker(
         iosGPUSceneKindDrawnMarker(counts),
         "RendererIOS native scene kind-drawn: mode=production "
-        "total=4 landscape=1 static=2 movable=1");
+        "total=4 landscape=1 static=2 movable=1 animated=0 morph=0");
     assertMarker(
         iosGPUSceneAlphaMarker(counts),
         "RendererIOS native scene alpha: mode=production "

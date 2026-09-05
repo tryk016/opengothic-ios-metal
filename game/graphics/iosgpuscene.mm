@@ -44,6 +44,7 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -443,7 +444,9 @@ IOSGPUScene::Report makeReport(IOSGPUScene::Result result,
 bool validSceneKind(IOSSceneMeshKind kind) noexcept {
   return kind==IOSSceneMeshKind::Landscape ||
          kind==IOSSceneMeshKind::Static ||
-         kind==IOSSceneMeshKind::Movable;
+         kind==IOSSceneMeshKind::Movable ||
+         kind==IOSSceneMeshKind::Animated ||
+         kind==IOSSceneMeshKind::Morph;
   }
 
 void recordFailure(uint64_t& counter,
@@ -519,8 +522,34 @@ void recordPlannedDrawnFailure(IOSGPUScene::Report& report) noexcept {
     recordFailure(report.failures.plannedDrawn,report);
   }
 
+struct IOSDeformationConstants final {
+  uint32_t boneOffset = 0;
+  uint32_t morphOffset = 0;
+  uint32_t morphCount = 0;
+  float fatness = 0.f;
+  };
+static_assert(sizeof(IOSDeformationConstants)==16);
+static_assert(sizeof(IOSMorphLayer)==20);
+static_assert(sizeof(Resources::VertexA)==92);
+
+struct alignas(16) IOSGPUInstance final {
+  IOSMatrix4x4 model;
+  IOSFloat4 baseColor;
+  IOSFloat2 uvOffset;
+  float fatness = 0.f;
+  uint32_t padding = 0;
+  };
+static_assert(sizeof(IOSGPUInstance)==96);
+
 struct IOSGPUSceneNativePreparedDraw final {
   IOSGPUSceneDrawPlan plan;
+  IOSDeformationConstants deformation;
+  id deformationBuffer = nil;
+  id morphIndices = nil;
+  id morphSamples = nil;
+  id instanceBuffer = nil;
+  size_t instanceOffset = 0;
+  size_t instanceCount = 1;
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
   IOSMultiply2VisibilityClipClass visibilityClipClass =
       IOSMultiply2VisibilityClipClass::Indeterminate;
@@ -546,6 +575,22 @@ struct IOSGPUSceneNativePreparedDraw final {
   IOSGPUSceneNativePreparedDraw& operator=(
       IOSGPUSceneNativePreparedDraw&&) noexcept = default;
   };
+
+void bindGeometry(id<MTLRenderCommandEncoder> encoder,
+                  const IOSGPUSceneNativePreparedDraw& draw) {
+  [encoder setVertexBuffer:(id<MTLBuffer>)draw.vertexBuffer offset:0 atIndex:0];
+  [encoder setVertexBytes:&draw.plan.constants length:sizeof(draw.plan.constants) atIndex:1];
+  [encoder setVertexBytes:&draw.deformation length:sizeof(draw.deformation) atIndex:2];
+  if(draw.instanceCount>1)
+    [encoder setVertexBuffer:(id<MTLBuffer>)draw.instanceBuffer offset:draw.instanceOffset atIndex:6];
+  if(draw.plan.kind==IOSSceneMeshKind::Animated || draw.plan.kind==IOSSceneMeshKind::Morph)
+    [encoder setVertexBuffer:(id<MTLBuffer>)draw.deformationBuffer offset:0 atIndex:3];
+  if(draw.plan.kind==IOSSceneMeshKind::Morph) {
+    [encoder setVertexBuffer:(id<MTLBuffer>)draw.morphIndices offset:0 atIndex:4];
+    [encoder setVertexBuffer:(id<MTLBuffer>)draw.morphSamples offset:0 atIndex:5];
+    }
+  }
+
 
 bool materializeReportMarkers(
     uint64_t generation, uint64_t sequence,
@@ -651,6 +696,8 @@ bool additiveArtifactKind(
     case IOSSceneMeshKind::Movable:
       output = IOSAdditiveInputKind::Movable;
       return true;
+    case IOSSceneMeshKind::Animated:
+    case IOSSceneMeshKind::Morph:
     case IOSSceneMeshKind::Unsupported:
       return false;
     }
@@ -774,6 +821,8 @@ bool makeMultiply2ArtifactRecord(
     case IOSSceneMeshKind::Movable:
       record.kind = IOSMultiply2InputKind::Movable;
       break;
+    case IOSSceneMeshKind::Animated:
+    case IOSSceneMeshKind::Morph:
     case IOSSceneMeshKind::Unsupported:
       return false;
     }
@@ -808,6 +857,27 @@ bool makeMultiply2ArtifactRecord(
 #endif
 
 }
+
+struct IOSGPUScene::PreparedFrame::Uploads final {
+  OwnedObjectiveC bones;
+  OwnedObjectiveC morphLayers;
+  OwnedObjectiveC instances;
+
+  static void write(id<MTLDevice> device, OwnedObjectiveC& storage,
+                    const void* bytes, size_t size) {
+    if(size==0)
+      return;
+    auto buffer = (id<MTLBuffer>)storage.get();
+    if(buffer==nil || buffer.length<size) {
+      OwnedObjectiveC next([device newBufferWithLength:size options:MTLResourceStorageModeShared]);
+      if(next.get()==nil)
+        throw std::bad_alloc();
+      storage = std::move(next);
+      buffer = (id<MTLBuffer>)storage.get();
+      }
+    std::memcpy(buffer.contents,bytes,size);
+    }
+  };
 
 struct IOSGPUScene::PreparedFrame::Impl final {
   const void* owner = nullptr;
@@ -1479,6 +1549,26 @@ struct IOSGPUScene::Impl final {
 #endif
         }
 
+      // Skinning fetches the packed 92-byte VertexA directly; morph uses the
+      // static vertex descriptor. Both share the existing material fragments.
+      for(size_t geometry=0;geometry<3;++geometry) {
+        OwnedObjectiveC function([nativeLibrary newFunctionWithName:
+            geometry==0 ? @"riosSkinnedVertex" :
+            geometry==1 ? @"riosMorphVertex" : @"riosInstancedVertex"]);
+        pipelineDesc.vertexFunction = (id<MTLFunction>)function.get();
+        pipelineDesc.vertexDescriptor = geometry==0 ? nil : descriptor;
+        pipelineDesc.colorAttachments[0].blendingEnabled = NO;
+        for(size_t alpha=0;alpha<2;++alpha) {
+          pipelineDesc.fragmentFunction = (id<MTLFunction>)(alpha==0
+              ? fragmentFunction.get() : alphaTestFragmentFunction.get());
+          NSError* error = nil;
+          OwnedObjectiveC pipeline([device newRenderPipelineStateWithDescriptor:pipelineDesc error:&error]);
+          if(pipeline.get()==nil)
+            throw std::runtime_error(metalFailure("RendererIOS deformation pipeline",error));
+          geometryPipelines[geometry*2+alpha] = std::move(pipeline);
+          }
+        }
+
       opaquePipelineState    = opaquePipelineOwner.relinquish();
       alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
       additivePipelineState  = additivePipelineOwner.relinquish();
@@ -1532,6 +1622,8 @@ struct IOSGPUScene::Impl final {
 
   Tempest::Device&                  owner;
   Tempest::BorrowedMetalDevice      nativeDevice;
+  bool                            geometryReported = false;
+  std::array<OwnedObjectiveC,6>     geometryPipelines;
   id                               opaquePipelineState = nil;
   id                               alphaTestPipelineState = nil;
   id                               additivePipelineState = nil;
@@ -1819,10 +1911,7 @@ void IOSGPUScene::Impl::encodeMultiply2(
         for(const auto& draw:draws) {
           [encoder setRenderPipelineState:
               (id<MTLRenderPipelineState>)draw.pipelineState];
-          [encoder setVertexBuffer:(id<MTLBuffer>)draw.vertexBuffer
-                            offset:0u atIndex:0u];
-          [encoder setVertexBytes:&draw.plan.constants
-                           length:sizeof(draw.plan.constants) atIndex:1u];
+          bindGeometry(encoder,draw);
           [encoder setFragmentTexture:
               (id<MTLTexture>)draw.baseColorTexture atIndex:0u];
           if(draw.drawId.get()!=nil && draw.drawBind.get()!=nil) {
@@ -1894,11 +1983,7 @@ void IOSGPUScene::Impl::encodeMultiply2(
       const auto& productionDraw = context.prepared->multiply2.front();
       [renderEncoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)productionDraw.pipelineState];
-      [renderEncoder setVertexBuffer:(id<MTLBuffer>)productionDraw.vertexBuffer
-                              offset:0u atIndex:0u];
-      [renderEncoder setVertexBytes:&productionDraw.plan.constants
-                             length:sizeof(productionDraw.plan.constants)
-                            atIndex:1u];
+      bindGeometry(renderEncoder,productionDraw);
       [renderEncoder setFragmentTexture:
           (id<MTLTexture>)productionDraw.baseColorTexture atIndex:0u];
       if(productionDraw.drawId.get()!=nil &&
@@ -2015,10 +2100,7 @@ void IOSGPUScene::Impl::encodeMultiply2(
         [renderEncoder setRenderPipelineState:
             (id<MTLRenderPipelineState>)
                 context.scene->multiply2VisibilityPipelineState];
-        [renderEncoder setVertexBuffer:(id<MTLBuffer>)draw.vertexBuffer
-                                offset:0u atIndex:0u];
-        [renderEncoder setVertexBytes:&draw.plan.constants
-                               length:sizeof(draw.plan.constants) atIndex:1u];
+        bindGeometry(renderEncoder,draw);
         [renderEncoder setFragmentTexture:
             (id<MTLTexture>)draw.baseColorTexture atIndex:0u];
 
@@ -2185,12 +2267,7 @@ void IOSGPUScene::Impl::encodeLandscape(
     for(const auto& draw:draws) {
       [encoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)draw.pipelineState];
-      [encoder setVertexBuffer:(id<MTLBuffer>)draw.vertexBuffer
-                        offset:0u
-                       atIndex:0u];
-      [encoder setVertexBytes:&draw.plan.constants
-                       length:sizeof(draw.plan.constants)
-                      atIndex:1u];
+      bindGeometry(encoder,draw);
       [encoder setFragmentTexture:(id<MTLTexture>)draw.baseColorTexture
                            atIndex:0u];
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
@@ -2217,12 +2294,12 @@ void IOSGPUScene::Impl::encodeLandscape(
                            indexType:MTLIndexTypeUInt32
                          indexBuffer:(id<MTLBuffer>)draw.indexBuffer
                    indexBufferOffset:draw.plan.indexBufferOffset
-                       instanceCount:1u
+                       instanceCount:draw.instanceCount
                           baseVertex:0
                         baseInstance:0u];
-      ++context.report.encodedPhaseDrawCount;
+      context.report.encodedPhaseDrawCount += draw.instanceCount;
       if(draw.baseColorTexture!=nil)
-        ++context.report.encodedPhaseTexturedDrawCount;
+        context.report.encodedPhaseTexturedDrawCount += draw.instanceCount;
       }
     };
 
@@ -2416,6 +2493,13 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     return makeReport(Result::AnimationEvidenceMismatch);
 
   try {
+    if(prepared.uploads==nullptr)
+      prepared.uploads = std::make_unique<PreparedFrame::Uploads>();
+    auto nativeDevice = (id<MTLDevice>)(void*)assets.nativeDevice().get();
+    PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->bones,
+        snapshot.currentBones.data(),snapshot.currentBones.size()*sizeof(IOSMatrix4x4));
+    PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->morphLayers,
+        snapshot.currentMorphLayers.data(),snapshot.currentMorphLayers.size()*sizeof(IOSMorphLayer));
     auto candidateFrame = std::make_unique<PreparedFrame::Impl>();
     candidateFrame->owner = impl.get();
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
@@ -2464,15 +2548,37 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         recordPlanFailure(report,planned,source);
         return report;
         }
-#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
-      if(classifyIOSGPUSceneMultiply2ClipBounds(
+      const auto selectedTexture = [&](const auto& selection) {
+        return selection.selectedHandle==plan.baseColorTexture;
+        };
+      const bool requiresAnimationEvidence =
+          (frameAnimation!=nullptr && std::any_of(frameAnimation->selections.begin(),
+              frameAnimation->selections.end(),selectedTexture)) ||
+          (uvAnimation!=nullptr && std::any_of(uvAnimation->selections.begin(),
+              uvAnimation->selections.end(),selectedTexture));
+      (void)requiresAnimationEvidence;
+#if !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+      // Bind-pose bounds cannot reject skin/morph or expanded vertices.
+      if(entity.kind!=IOSSceneMeshKind::Animated &&
+         entity.kind!=IOSSceneMeshKind::Morph && entity.fatness==0.f &&
+         !requiresAnimationEvidence &&
+         classifyIOSGPUSceneMultiply2ClipBounds(
              entity.bounds,plan.constants.model,
              plan.constants.viewProjection)==
            IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside) {
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
         ++simulatorCulledDraws;
+#endif
         continue;
         }
-      if(!iosGPUSceneSimulatorSmokeDrawBudgetAccepts(
+#endif
+#if defined(OPENGOTHIC_RENDERER_IOS_SIMULATOR_SMOKE)
+      if(!requiresAnimationEvidence && !iosGPUSceneSimulatorSmokeDrawBudgetAccepts(
            simulatorSelectedDraws)) {
         ++simulatorBudgetSkippedDraws;
         continue;
@@ -2574,6 +2680,11 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         case IOSGPUScenePipelineSelector::Unsupported:
           break;
         }
+      if(plan.kind==IOSSceneMeshKind::Animated || plan.kind==IOSSceneMeshKind::Morph) {
+        const size_t geometry = plan.kind==IOSSceneMeshKind::Animated ? 0u : 1u;
+        const size_t alpha = dispatch.effective==IOSGPUScenePipelineSelector::AlphaTest ? 1u : 0u;
+        pipelineState = (id<MTLRenderPipelineState>)impl->geometryPipelines[geometry*2+alpha].get();
+        }
       id<MTLBuffer> vertexBuffer =
           (id<MTLBuffer>)(void*)mesh->vertexBuffer.get();
       id<MTLBuffer> indexBuffer =
@@ -2621,6 +2732,12 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
 
       IOSGPUSceneNativePreparedDraw draw;
       draw.plan = plan;
+      draw.deformation = {entity.boneRange.offset,entity.morphRange.offset,
+                          entity.morphRange.count,entity.fatness};
+      draw.deformationBuffer = plan.kind==IOSSceneMeshKind::Animated
+          ? prepared.uploads->bones.get() : prepared.uploads->morphLayers.get();
+      draw.morphIndices = (id)(void*)mesh->morphIndices.get();
+      draw.morphSamples = (id)(void*)mesh->morphSamples.get();
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
       if(plan.pipeline==IOSGPUScenePipelineSelector::Multiply2) {
         switch(classifyIOSGPUSceneMultiply2ClipBounds(
@@ -2797,6 +2914,59 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       }
 #endif
 
+#if !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
+    !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+    // Entity IDs retain history; only resolved resources determine batches.
+    const auto canInstance = [](const auto& draw) {
+      return draw.plan.kind!=IOSSceneMeshKind::Animated && draw.plan.kind!=IOSSceneMeshKind::Morph;
+      };
+    const auto key = [&](const auto& draw) {
+      return std::tuple{!canInstance(draw),uintptr_t(draw.pipelineState),
+          uintptr_t(draw.vertexBuffer),uintptr_t(draw.indexBuffer),
+          uintptr_t(draw.baseColorTexture),draw.plan.indexBufferOffset,draw.plan.indexCount};
+      };
+    auto& draws = candidateFrame->base;
+    std::stable_sort(draws.begin(),draws.end(),[&](const auto& a,const auto& b) { return key(a)<key(b); });
+    std::vector<IOSGPUInstance> instances;
+    std::vector<IOSGPUSceneNativePreparedDraw> batches;
+    batches.reserve(draws.size());
+    for(size_t first=0;first<draws.size();) {
+      size_t end = first+1;
+      if(canInstance(draws[first]))
+        while(end<draws.size() && key(draws[first])==key(draws[end]))
+          ++end;
+      if(end-first>1) {
+        draws[first].instanceOffset = instances.size()*sizeof(IOSGPUInstance);
+        draws[first].instanceCount = end-first;
+        const size_t alpha = draws[first].plan.pipeline==IOSGPUScenePipelineSelector::AlphaTest ? 1u : 0u;
+        draws[first].pipelineState = impl->geometryPipelines[4u+alpha].get();
+        for(size_t i=first;i<end;++i) {
+          const auto& draw = draws[i];
+          instances.push_back({draw.plan.constants.model,draw.plan.constants.baseColor,
+                               draw.plan.constants.uvOffset,draw.deformation.fatness,0u});
+          }
+        }
+      batches.push_back(std::move(draws[first]));
+      first = end;
+      }
+    PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->instances,
+        instances.data(),instances.size()*sizeof(IOSGPUInstance));
+    for(auto& draw:batches)
+      if(draw.instanceCount>1)
+        draw.instanceBuffer = prepared.uploads->instances.get();
+    draws = std::move(batches);
+#endif
+    if(!impl->geometryReported && !candidateFrame->base.empty()) {
+      Tempest::Log::i("RendererIOS native geometry: entities=",report.counts.drawn.material.total,
+          " draw-calls=",candidateFrame->base.size()+candidateFrame->multiply2.size()+candidateFrame->additive.size(),
+          " animated=",report.counts.drawn.kind.animated," morph=",report.counts.drawn.kind.morph);
+      impl->geometryReported = true;
+      }
+
     report.drawCount = report.counts.drawn.material.total;
     report.texturedDrawCount = report.counts.drawn.texturedDraws;
     if(trackFrameAnimation &&
@@ -2860,7 +3030,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       }
 #endif
 
-    report.result = report.drawCount!=0u ? Result::Success : Result::Empty;
+    // An all-culled frame still clears/resolves HDR and must not latch failure.
+    report.result = Result::Success;
     if(!materializeReportMarkers(
            snapshot.generation.value,snapshot.sequence.value,report)) {
 #if defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \

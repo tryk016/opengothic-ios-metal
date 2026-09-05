@@ -99,6 +99,8 @@ struct IOSSceneExtractionStats final {
   std::size_t plannedLandscape = 0;
   std::size_t plannedStatic = 0;
   std::size_t plannedMovable = 0;
+  std::size_t plannedAnimated = 0;
+  std::size_t plannedMorph = 0;
   std::size_t skippedKind = 0;
   std::size_t skippedMaterial = 0;
   std::size_t skippedTextureAnimation = 0;
@@ -117,34 +119,17 @@ struct IOSSceneExtractionStats final {
       default;
 
   constexpr bool hasConsistentPlannedCounts() const noexcept {
-    const bool firstMaterialSumValid =
-        plannedOpaque<=
-          std::numeric_limits<std::size_t>::max()-plannedAlphaTest;
-    const std::size_t firstMaterialSum = firstMaterialSumValid
-        ? plannedOpaque+plannedAlphaTest
-        : 0u;
-    const bool secondMaterialSumValid =
-        firstMaterialSumValid &&
-        firstMaterialSum<=
-          std::numeric_limits<std::size_t>::max()-plannedAdditive;
-    const std::size_t secondMaterialSum = secondMaterialSumValid
-        ? firstMaterialSum+plannedAdditive : 0u;
-    const bool materialSumValid = secondMaterialSumValid &&
-        secondMaterialSum<=
-          std::numeric_limits<std::size_t>::max()-plannedMultiply2;
-    const bool firstKindSumValid =
-        plannedLandscape<=
-          std::numeric_limits<std::size_t>::max()-plannedStatic;
-    const std::size_t firstKindSum =
-        firstKindSumValid ? plannedLandscape+plannedStatic : 0u;
-    const bool kindSumValid =
-        firstKindSumValid &&
-        firstKindSum<=
-          std::numeric_limits<std::size_t>::max()-plannedMovable;
-    return materialSumValid && kindSumValid &&
-        planned==secondMaterialSum+plannedMultiply2 &&
-        planned==firstKindSum+plannedMovable &&
-        alphaFallback<=plannedAlphaTest;
+    std::size_t materials = 0, kinds = 0;
+    for(const auto count:{plannedOpaque,plannedAlphaTest,plannedAdditive,
+                         plannedMultiply2})
+      if(!addIOSSceneCounter(materials,count))
+        return false;
+    for(const auto count:{plannedLandscape,plannedStatic,plannedMovable,
+                         plannedAnimated,plannedMorph})
+      if(!addIOSSceneCounter(kinds,count))
+        return false;
+    return planned==materials && planned==kinds &&
+           alphaFallback<=plannedAlphaTest;
     }
 
   constexpr bool hasConsistentTextureAnimationCounts() const noexcept {
@@ -292,8 +277,10 @@ inline constexpr IOSSceneMeshKind iosSceneOpaqueMeshKind(
     case IOSSceneSourceKind::Movable:
       return IOSSceneMeshKind::Movable;
     case IOSSceneSourceKind::Animated:
-    case IOSSceneSourceKind::Particle:
+      return IOSSceneMeshKind::Animated;
     case IOSSceneSourceKind::Morph:
+      return IOSSceneMeshKind::Morph;
+    case IOSSceneSourceKind::Particle:
     case IOSSceneSourceKind::Unsupported:
       return IOSSceneMeshKind::Unsupported;
     }
@@ -449,7 +436,9 @@ inline bool recordIOSScenePlanResult(
         }
       if(plan.kind!=IOSSceneMeshKind::Landscape &&
          plan.kind!=IOSSceneMeshKind::Static &&
-         plan.kind!=IOSSceneMeshKind::Movable) {
+         plan.kind!=IOSSceneMeshKind::Movable &&
+         plan.kind!=IOSSceneMeshKind::Animated &&
+         plan.kind!=IOSSceneMeshKind::Morph) {
         return recordIOSSceneInvalidSource(stats);
         }
       IOSSceneExtractionStats next = stats;
@@ -506,6 +495,14 @@ inline bool recordIOSScenePlanResult(
           break;
         case IOSSceneMeshKind::Movable:
           if(!incrementIOSSceneCounter(next.plannedMovable))
+            return recordIOSSceneInvalidSource(stats);
+          break;
+        case IOSSceneMeshKind::Animated:
+          if(!incrementIOSSceneCounter(next.plannedAnimated))
+            return recordIOSSceneInvalidSource(stats);
+          break;
+        case IOSSceneMeshKind::Morph:
+          if(!incrementIOSSceneCounter(next.plannedMorph))
             return recordIOSSceneInvalidSource(stats);
           break;
         case IOSSceneMeshKind::Unsupported:
@@ -615,6 +612,8 @@ inline bool publishIOSSceneExtraction(
     return false;
   frame.entities.swap(staging.entities);
   frame.materials.swap(staging.materials);
+  frame.bones.swap(staging.bones);
+  frame.morphLayers.swap(staging.morphLayers);
   return true;
   }
 

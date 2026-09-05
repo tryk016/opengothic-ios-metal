@@ -50,6 +50,11 @@ bool isFinite(const IOSMatrix4x4& value) noexcept {
                        });
   }
 
+bool validMorphLayer(const IOSMorphLayer& layer) noexcept {
+  return isFinite(layer.alpha) && layer.alpha>=0.f && layer.alpha<=1.f &&
+         isFinite(layer.intensity) && layer.intensity>=0.f && layer.intensity<=1.f;
+  }
+
 bool validBounds(const IOSBounds& bounds) noexcept {
   return isFinite(bounds.minimum) && isFinite(bounds.maximum) &&
          bounds.minimum.x<=bounds.maximum.x &&
@@ -127,6 +132,8 @@ bool validSceneMeshKind(IOSSceneMeshKind kind) noexcept {
     case IOSSceneMeshKind::Landscape:
     case IOSSceneMeshKind::Static:
     case IOSSceneMeshKind::Movable:
+    case IOSSceneMeshKind::Animated:
+    case IOSSceneMeshKind::Morph:
       return true;
     case IOSSceneMeshKind::Unsupported:
       return false;
@@ -237,7 +244,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
      !validSky(currentSky) || !validSky(previousSky))
     return false;
   if(currentBones.size()!=previousBones.size() ||
-     currentMorphWeights.size()!=previousMorphWeights.size())
+     currentMorphLayers.size()!=previousMorphLayers.size())
     return false;
 
   for(const auto& material:materials) {
@@ -270,9 +277,10 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !validSceneMeshKind(entity.kind) ||
        !isFinite(entity.currentTransform) ||
        !isFinite(entity.previousTransform) ||
+       !isFinite(entity.fatness) ||
        !validBounds(entity.bounds) ||
        !validRange(entity.boneRange,currentBones.size()) ||
-       !validRange(entity.morphRange,currentMorphWeights.size()) ||
+       !validRange(entity.morphRange,currentMorphLayers.size()) ||
        !validVisibility(entity.visibilityMask))
       return false;
     if((material->category==IOSMaterialCategory::Additive ||
@@ -331,14 +339,10 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
                   [](const IOSMatrix4x4& bone) {
                     return isFinite(bone);
                     }) ||
-     !std::all_of(currentMorphWeights.begin(),currentMorphWeights.end(),
-                  [](float weight) {
-                    return isFinite(weight);
-                    }) ||
-     !std::all_of(previousMorphWeights.begin(),previousMorphWeights.end(),
-                  [](float weight) {
-                    return isFinite(weight);
-                    }))
+     !std::all_of(currentMorphLayers.begin(),currentMorphLayers.end(),
+                  validMorphLayer) ||
+     !std::all_of(previousMorphLayers.begin(),previousMorphLayers.end(),
+                  validMorphLayer))
     return false;
 
   for(const auto& effect:effects) {
@@ -358,7 +362,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
   if(!historyValid) {
     if(currentCamera!=previousCamera || currentSky!=previousSky ||
        currentBones!=previousBones ||
-       currentMorphWeights!=previousMorphWeights)
+       currentMorphLayers!=previousMorphLayers)
       return false;
     }
   return true;

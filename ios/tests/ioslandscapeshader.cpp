@@ -183,7 +183,7 @@ std::string expectedAdditiveFunction() {
 bool validLandscapeSource(std::string_view rawSource) {
   const std::string source = stripComments(rawSource);
   if(source.empty() ||
-     countWord(source,"vertex")!=2u ||
+     countWord(source,"vertex")!=5u ||
      countWord(source,"fragment")!=4u ||
      countWord(source,"kernel")!=0u ||
      countOccurrences(source,RendererIOSShader::VertexFunction)!=1u ||
@@ -265,9 +265,10 @@ static float riosInterleavedGradientNoise(float2 pixel) {
   constexpr std::string_view ExpectedVertex = R"(
 vertex IOSLandscapeVertexOut riosLandscapeVertex(
     IOSLandscapeVertexIn in [[stage_in]],
-    constant IOSLandscapeDrawConstants& draw [[buffer(1)]]) {
+    constant IOSLandscapeDrawConstants& draw [[buffer(1)]],
+    constant IOSDeformationConstants& deformation [[buffer(2)]]) {
   IOSLandscapeVertexOut out;
-  const float4 world = draw.model*float4(in.position,1.0);
+  const float4 world = draw.model*float4(in.position + in.normal*deformation.fatness,1.0);
   float4 clip = draw.viewProjection*world;
   clip.y = -clip.y;
   out.position = clip;
@@ -471,8 +472,8 @@ bool mutationsAreRejected(const std::string& source) {
     replaceOnce(source,"  float contrast;","  float exposure;"),
     replaceOnce(source,"alignof(IOSToneResolveConstants)==16",
                        "alignof(IOSToneResolveConstants)==4"),
-    replaceOnce(source,"uint vertexId [[vertex_id]]",
-                       "uint vertexId [[instance_id]]"),
+    replaceOnce(source,"uint vertexId [[vertex_id]])",
+                       "uint vertexId [[instance_id]])"),
     replaceOnce(source,"uint vertexId [[vertex_id]]) {",
                        "uint vertexId [[vertex_id]], "
                        "constant uint& forbidden [[buffer(0)]]) {"),
@@ -502,7 +503,7 @@ bool mutationsAreRejected(const std::string& source) {
                        "color = pow(color,float3(1.0));"),
     replaceOnce(source,"52.9829189","52.9829180"),
     replaceOnce(source,"0.00583715*pixel.y","0.00583715*pixel.x"),
-    replaceOnce(source,"/255.0;","/256.0;"),
+    replaceOnce(source,"((noise*2.0)-1.0)/255.0;","((noise*2.0)-1.0)/256.0;"),
     replaceLastOnce(source,"return float4(color,1.0);",
                            "return float4(color,0.0);"),
   };
@@ -873,7 +874,7 @@ bool runtimeUVAnimationEvidenceContractMatches(
 
 int main(int argc, char** argv) {
   if(argc!=3 ||
-     RendererIOSShader::AbiVersion!=9u ||
+     RendererIOSShader::AbiVersion!=10u ||
      RendererIOSShader::AlphaTestFragmentFunction!=AlphaTestFunctionName ||
      RendererIOSShader::AdditiveFragmentFunction!=AdditiveFunctionName ||
      RendererIOSShader::ToneResolveVertexFunction!=

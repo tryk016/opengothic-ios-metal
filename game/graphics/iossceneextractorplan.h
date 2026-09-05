@@ -99,7 +99,7 @@ inline IOSSceneUVOffsetResult evaluateIOSSceneUVOffset(
 struct IOSSceneOpaqueMeshCandidate final {
   uint64_t       sourceId = 0;
   IOSSceneMeshKind kind = IOSSceneMeshKind::Unsupported;
-  bool           hasStaticMesh = false;
+  bool           hasMesh = false;
   bool           hasMaterial = false;
   bool           hasMappedMaterialCategory = false;
   IOSMaterialCategory materialCategory = IOSMaterialCategory::Opaque;
@@ -158,12 +158,22 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
     case IOSSceneMeshKind::Landscape:
     case IOSSceneMeshKind::Static:
     case IOSSceneMeshKind::Movable:
+    case IOSSceneMeshKind::Animated:
+    case IOSSceneMeshKind::Morph:
       break;
     case IOSSceneMeshKind::Unsupported:
       return IOSSceneSourcePlanResult::SkippedKind;
     default:
       return IOSSceneSourcePlanResult::InvalidSource;
   }
+#if defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  // These fixed-input material probes predate deformation in the scene ABI.
+  if(source.kind==IOSSceneMeshKind::Animated || source.kind==IOSSceneMeshKind::Morph)
+    return IOSSceneSourcePlanResult::SkippedKind;
+#endif
   if(!source.hasMaterial)
     return IOSSceneSourcePlanResult::InvalidSource;
   switch(source.materialCategory) {
@@ -232,7 +242,7 @@ inline IOSSceneSourcePlanResult planIOSOpaqueMeshSource(
   if(source.materialCategory==IOSMaterialCategory::Opaque &&
      hasEffectiveBaseColorTexture==source.usesFallbackTexture)
     return IOSSceneSourcePlanResult::InvalidSource;
-  if(source.sourceId==0 || !source.hasStaticMesh || !source.hasLocalBounds ||
+  if(source.sourceId==0 || !source.hasMesh || !source.hasLocalBounds ||
      source.indices.count==0 ||
      source.indices.count%uint32_t(3)!=0 ||
      source.indices.count>

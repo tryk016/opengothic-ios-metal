@@ -38,6 +38,7 @@ class WorldView {
     void preFrameUpdate(const Camera& camera, uint64_t tickCount, uint8_t fId,
                         const Tempest::Matrix4x4* projectionOverride = nullptr);
     void postFrameupdate();
+    void prepareIOSSceneSources(uint64_t tickCount);
 
     void prepareGlobals(Tempest::Encoder<Tempest::CommandBuffer> &cmd, uint8_t fId);
 

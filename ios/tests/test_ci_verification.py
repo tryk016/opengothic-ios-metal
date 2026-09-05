@@ -347,7 +347,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
-        ')" -eq 19',
+        ')" -eq 22',
         "RendererIOS.candidate.sha256",
     ):
         if candidate.count(literal) != 1:
@@ -2946,25 +2946,28 @@ def test_bash32_candidate_arguments() -> None:
         ("contracts", CONTRACTS.read_text(encoding="utf-8"), 2),
         ("local", LOCAL_VERIFY.read_text(encoding="utf-8"), 2),
     )
-    abi9_exports = (
+    abi10_exports = (
         "riosToneResolveVertex",
         "riosToneResolveFragment",
         "riosLandscapeAdditiveFragment",
     )
     cross_script_mutations_killed = 0
     for label, source, expected_count in export_oracle_sources:
-        for function in abi9_exports:
+        for function in abi10_exports:
             assert source.count(function) == expected_count, (
-                f"{label} exact ABI9 export oracle drifted: {function}"
+                f"{label} exact ABI10 export oracle drifted: {function}"
             )
             mutant = source.replace(function, "riosToneResolveMutant", 1)
             assert mutant.count(function) != expected_count, (
-                f"{label} ABI9 export mutation survived: {function}"
+                f"{label} ABI10 export mutation survived: {function}"
             )
             cross_script_mutations_killed += 1
     assert cross_script_mutations_killed == 9
     exports = (
         "riosLandscapeVertex",
+        "riosSkinnedVertex",
+        "riosMorphVertex",
+        "riosInstancedVertex",
         "riosLandscapeFragment",
         "riosLandscapeAlphaTestFragment",
         "riosLandscapeAdditiveFragment",
@@ -2984,7 +2987,7 @@ def test_bash32_candidate_arguments() -> None:
         "riosForwardPlusBuildLightList",
         "riosForwardPlusFragment",
     )
-    assert len(exports) == 19
+    assert len(exports) == 22
     metal_nm_output = "".join(f"00000000 T {name}\\n" for name in exports)
     harness = f"""\
 set -Eeuo pipefail
@@ -3107,7 +3110,7 @@ xcrun() {{
                 check=False,
             )
         assert result.returncode != 0, (
-            "RendererIOS ABI9 export mutation survived: " + label
+            "RendererIOS ABI10 export mutation survived: " + label
         )
         mutations_killed += 1
     assert mutations_killed == 5
@@ -3384,7 +3387,7 @@ def main() -> None:
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
         "17 UI selector mutations, 6 UI harness mutations, "
-        "14 ABI9 export mutations"
+        "14 ABI10 export mutations"
     )
 
 

@@ -109,6 +109,7 @@ class IOSGPUScene final {
     class PreparedFrame final {
       public:
         struct Impl;
+        struct Uploads;
 
         PreparedFrame() noexcept;
         ~PreparedFrame();
@@ -124,6 +125,7 @@ class IOSGPUScene final {
       private:
         friend class IOSGPUScene;
         std::unique_ptr<Impl> impl;
+        std::unique_ptr<Uploads> uploads;
       };
 
     IOSGPUScene(Tempest::Device& device, TargetLayout target);

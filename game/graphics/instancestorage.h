@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <vector>
 #include <thread>
+#include <span>
 
 #include "resources.h"
 
@@ -39,6 +40,7 @@ class InstanceStorage {
         uint32_t       offsetId() const { return uint32_t(rgn.begin/sizeof(T)); }
 
         bool           isEmpty() const { return rgn.asize==0; }
+        std::span<const uint8_t> data() const noexcept;
 
       private:
         InstanceStorage* owner = nullptr;
