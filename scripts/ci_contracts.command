@@ -6531,6 +6531,8 @@ import re
 
 native = "\n".join(Path(path).read_text() for path in (
     "game/graphics/iosgpuscene.mm", "game/graphics/iosgpubink.mm"))
+# Publishing a Metal 4 residency set does not submit a command buffer.
+native = native.replace("[residency commit]", "")
 if re.search(r"newCommandQueue|newCommandBuffer|commandBufferWith|commandBuffer\]|"
              r"presentDrawable|commit\]|enqueue\]|waitUntilCompleted", native):
     raise SystemExit("native RendererIOS must use the owning Tempest command buffer")
