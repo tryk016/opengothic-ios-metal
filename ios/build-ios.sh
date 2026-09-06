@@ -3,7 +3,7 @@ set -euo pipefail
 
 # --- OpenGothic iOS configure script (run on macOS, e.g. a rented cloud Mac) ---
 # Requires: Xcode + command line tools, Homebrew.
-# For the no-Mac path use the GitHub Actions workflow (.github/workflows/ios.yml).
+# Additional arguments are passed to CMake, e.g. -DOPENGOTHIC_RENDERER_IOS_METAL4=ON.
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD="$ROOT/build-ios"
@@ -13,14 +13,16 @@ command -v cmake            >/dev/null || { echo "Installing cmake";   brew inst
 command -v glslangValidator >/dev/null || { echo "Installing glslang"; brew install glslang; }
 xcode-select -p             >/dev/null || { echo "Install Xcode + run 'xcode-select --install' first"; exit 1; }
 
-echo "==> Applying submodule patches"
+echo "==> Verifying pinned Tempest"
 bash "$ROOT/ios/patches/apply-patches.sh"
 
 echo "==> Configuring (Xcode generator, iOS arm64, deployment 16.4)"
 cmake -S "$ROOT" -B "$BUILD" -G Xcode \
   -DCMAKE_SYSTEM_NAME=iOS \
   -DCMAKE_OSX_ARCHITECTURES=arm64 \
-  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4
+  -DCMAKE_OSX_DEPLOYMENT_TARGET=16.4 \
+  -DOPENGOTHIC_IOS_THREE_FRAMES_IN_FLIGHT=ON \
+  "$@"
 
 echo "==> Done. Next:"
 echo "    open \"$BUILD/Gothic2Notr.xcodeproj\""

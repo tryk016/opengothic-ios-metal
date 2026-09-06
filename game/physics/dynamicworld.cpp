@@ -691,8 +691,6 @@ DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const T
     using ClosestRayResultCallback::ClosestRayResultCallback;
     zenkit::MaterialGroup matId  = zenkit::MaterialGroup::UNDEFINED;
     const char*           sector = nullptr;
-    Category              colCat = C_Null;
-    Interactive*          vob    = nullptr;
 
     bool needsCollision(btBroadphaseProxy* proxy0) const override {
       auto obj=reinterpret_cast<btCollisionObject*>(proxy0->m_clientObject);
@@ -711,10 +709,6 @@ DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const T
         matId  = mt->materialId(id);
         sector = mt->sectorName(id);
         }
-      colCat = Category(rayResult.m_collisionObject->getUserIndex());
-      if(colCat==C_Object) {
-        vob = reinterpret_cast<Interactive*>(rayResult.m_collisionObject->getUserPointer());
-        }
       return ClosestRayResultCallback::addSingleResult(rayResult,normalInWorldSpace);
       }
     };
@@ -727,13 +721,10 @@ DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const T
   Tempest::Vec3 hitPos = to, hitNorm;
   if(callback.hasHit()){
     hitPos = CollisionWorld::toCentimeters(callback.m_hitPointWorld);
-    if(callback.colCat==DynamicWorld::C_Landscape) {
+    if(callback.m_collisionObject->getUserIndex()==C_Landscape) {
       hitNorm.x = callback.m_hitNormalWorld.x();
       hitNorm.y = callback.m_hitNormalWorld.y();
       hitNorm.z = callback.m_hitNormalWorld.z();
-      }
-    if(callback.colCat==DynamicWorld::C_Object) {
-      // ignore normal, for sake of sliding
       }
     } else {
     hitPos.y = -std::numeric_limits<float>::infinity();
@@ -746,7 +737,8 @@ DynamicWorld::RayLandResult DynamicWorld::ray(const Tempest::Vec3& from, const T
   ret.hasCol      = callback.hasHit();
   ret.hitFraction = callback.m_closestHitFraction;
   ret.sector      = callback.sector;
-  ret.vob         = callback.vob;
+  ret.vob         = callback.hasHit() && callback.m_collisionObject->getUserIndex()==C_Object
+                      ? reinterpret_cast<Interactive*>(callback.m_collisionObject->getUserPointer()) : nullptr;
   return ret;
   }
 

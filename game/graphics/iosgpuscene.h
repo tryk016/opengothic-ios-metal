@@ -81,6 +81,7 @@ class IOSGPUScene final {
       bool                         metal4Unavailable = false;
       bool                         metal4Failed = false;
       bool                         rayTracingFailed = false;
+      uint8_t                      rayTracingEncodedMode = 0; // Off, RTAO, debug, SSAO.
       IOSGPUSceneFrameCounts       counts;
       IOSGPUSceneFailureCounts     failures;
       IOSGPUSceneFrameAnimationDrawReport frameAnimation;

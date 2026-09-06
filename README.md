@@ -10,12 +10,10 @@ An **unofficial iOS port** of [OpenGothic](https://github.com/Try/OpenGothic) �
 re-implementation of *Gothic II: Night of the Raven*. This fork adds the plumbing to build, sideload,
 and play OpenGothic on iPhone/iPad with a Bluetooth controller **or** a full on-screen virtual gamepad.
 
-> ### ⚠️ Work in progress
-> This fork is under **active development**. The core loop — gameplay, the on-screen virtual gamepad,
-> save/load with slot previews, haptics and the stable iOS performance profile — has been **tested and
-> confirmed on a device**. The hard 30 fps cap is lifted (ProMotion), with optional Off/30/60 FPS
-> pacing. The physical-controller movement response and jump landing are also device-confirmed. It is
-> still rough in places and being tuned, so expect bugs.
+> ### Work in progress
+> The native RendererIOS candidate is under active development. Earlier iOS
+> gameplay and controller results belong to the previous renderer. This
+> candidate requires its own final device, performance and visual acceptance.
 
 > ### Credit
 > **The entire engine is the work of [Try](https://github.com/Try) and the OpenGothic contributors.**
@@ -38,31 +36,21 @@ legally own the game and supply its data yourself.
 
 Target: iPhone/iPad on **iOS 16.4+**, arm64. Best on modern GPUs (A-series / M-series). Locked to landscape.
 
-### Install — download & play (no Mac, no build)
+### Current RendererIOS candidate
 
-No fork, no compiling — two prebuilt **unsigned `.ipa`** variants are maintained. Detailed guide:
-**[ios/README-ios.md](ios/README-ios.md)**.
+This branch contains the native Metal renderer and is preparing a stable release
+candidate. Final physical-device, performance and visual acceptance are pending.
+See the [candidate validation plan](ios/RELEASE-CANDIDATE.md) and
+[iOS build and installation guide](ios/README-ios.md).
 
-1. **Install MetalFX Temporal (recommended).** In SideStore: **Sources → +**, paste
-   `https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/apps.json`, then
-   install OpenGothic MetalFX Temporal. It uses Apple's temporal upscaler for the best reconstruction
-   quality available in this port and automatically falls back to MetalFX Spatial and then Lanczos if
-   required.
-2. **Use the Lanczos compatibility build only if Temporal causes a crash or graphics problem.** Add
-   `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json`, or download the IPA
-   from the [Lanczos compatibility release](https://github.com/tryk016/opengothic-ios/releases/latest).
-3. **Add your game data.** Copy the `Data/`, `_work/`, and `system/` folders from your own Gothic II
-   install into the app's **Documents** folder (Files app on iOS). This is needed only for the first
-   install; normal SideStore updates preserve Documents, saves and settings. Launch and play.
+The previous Temporal and Lanczos downloads use the earlier renderer. Their
+results do not validate this branch. The current renderer offers Auto, Temporal,
+Spatial, FSR 1 and Native in one runtime graphics menu. Temporal has geometry
+motion vectors, depth and reactive masks; its final device ghosting and cost
+checks remain part of candidate validation.
 
-Both variants use the same bundle identifier. Updates and installs over the existing app preserve its
-Documents container, but **do not uninstall the app when switching variants**: uninstalling removes
-the copied game data and saves unless they are backed up. See the detailed guide if SideStore does not
-offer the lower-version Lanczos build as an automatic update.
-
-<sub>Maintainers: trigger the [`MetalFX Temporal`](.github/workflows/ios-metalfx-temporal.yml)
-or [`Lanczos compatibility`](.github/workflows/ios.yml) workflow, or use
-[`ios/build-ios.sh`](ios/build-ios.sh) + Xcode on a Mac — see the guide.</sub>
+Supply your own game data in the app's Documents folder. Preserve that container
+when updating: uninstalling the app removes its game data, settings and saves.
 
 ### Controls
 
@@ -141,34 +129,28 @@ B cancels; drag anywhere else and release to use the selected sector.
 
 ### iOS configuration
 
-The copied `Documents/system/Gothic.ini` is never overwritten. On the first
-successful launch after valid game data is installed, OpenGothic creates a
-separate `Documents/Gothic.ini` override if it is absent, with the complete iOS
-profile: half-resolution 3D rendering, SSAO off, 1024 px shadow maps, a 30 FPS
-default, quick-save support and all stable `[GAMEPAD]` defaults (including
-`crossAxisGuard=0.12`). Existing explicit FPS choices remain unchanged; the
-legacy generated 512 px shadow setting is upgraded once to 1024 px.
+The copied `Documents/system/Gothic.ini` stays unchanged. A fresh install creates
+`Documents/Gothic.ini` as a writable overlay with full scene resolution, a 60 FPS
+cap, quick-save support and controller defaults. Existing explicit settings are
+preserved, including older reduced-resolution overrides; inspect both files
+before image-quality tests.
 
-The generated profile, upgrade note, override priority, optional FPS cap and
-diagnostic settings are documented in the
-[iOS configuration reference](ios/README-ios.md#ios-configuration).
-
-Options → Video → **Drawing distance** is live on iOS: 100% corresponds to an
-approximately 1 km world far plane, while 80%/60%/40% correspond to roughly
-800/600/400 m. Options → Game → **FPS limit** provides Off, 30 and 60 FPS;
-30 FPS is the iOS default.
+Options → Video contains upscaling, scene resolution, drawing distance, FPS and
+Adaptive FPS. Drawing distance spans 20–300%; 100% is approximately 1 km and 300%
+approximately 3 km. FPS supports Off, 30 or 60. See the
+[iOS configuration reference](ios/README-ios.md#ios-configuration) and the
+[Native 100% visual baseline](ios/RELEASE-CANDIDATE.md#image-quality-baseline).
 
 ### Known limitations
 
-- **Still a work in progress** — the core game loop is device-tested, but expect rough edges and
-  ongoing tuning.
+- The native candidate still requires final physical-device gameplay, GPU and thermal validation.
 - Mesh shaders are disabled on iOS for GPU compatibility.
 - On-screen virtual-pad button layout is a first pass and still needs on-device tuning.
 
 ### What this fork adds on top of upstream
 
 - **Build/distribution:** cloud build of an unsigned `.ipa` (`.github/workflows/ios.yml`); `ios/` build
-  script, sideload/data guide, and submodule patches (`ios/patches/apply-patches.sh`).
+  script, sideload/data guide, and pinned-Tempest verifier (`ios/patches/apply-patches.sh`).
 - **Controller:** event-driven GameController snapshots (`game/utils/gamepad.*`), a release-safe,
   context-aware dispatcher with left-stick hysteresis and proportional turning that also drives
   menus/dialogues (`game/ui/gamepadinput.*`), native target lock-on, two concentric-row radial panels
@@ -181,12 +163,11 @@ approximately 1 km world far plane, while 80%/60%/40% correspond to roughly
   (`game/utils/systemmsg.*`), audio-session setup (`game/utils/audiosession.*`), landscape lock, keep
   the screen awake, Game Mode keys, fence-safe save-slot previews with immediate save feedback, and
   dialogue voice-over on ≥4 GB devices.
-- **Performance & display:** ProMotion with native Off/30/60 display-link pacing, triple buffering,
-  direct Metal drawable rendering, on-demand SSAO buffers, reduced offscreen/distant NPC pose work,
-  live menu-controlled drawing distance, safe-area-aware HUD, configurable shadow resolution, and
-  the upscale-based render-scale guide. The recommended build adds Apple MetalFX Temporal upscaling
-  with automatic MetalFX Spatial and Lanczos fallbacks; a separate Lanczos-only compatibility build
-  remains available.
+- **Performance & display:** native Off/30/60 display-link pacing, three frame slots,
+  linear HDR composition with native-resolution UI, live drawing distance and
+  Auto/Temporal/Spatial/FSR 1/Native scaling. Optional Adaptive FPS preserves image
+  settings. Metal 4 and static ray-traced ambient occlusion are conditional
+  candidates with Metal 3 and SSAO fallbacks; mobile adoption remains pending.
 ---
 
 *For the engine itself — Windows/Linux/macOS builds, features, mods, command-line arguments, graphics

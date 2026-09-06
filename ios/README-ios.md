@@ -29,8 +29,9 @@ validate its current code.
 This branch uses one build with a runtime graphics selector described below.
 Its stable candidate is still under implementation and has not completed the
 final physical-device campaign. Build it locally for development; do not treat
-an older download as that candidate. The publishing workflows remain release
-operations and are not part of the intermediate RendererIOS CI gate.
+an older download as that candidate. The [candidate plan](RELEASE-CANDIDATE.md) records the remaining acceptance work.
+The publishing workflows remain release operations and are not part of the
+intermediate RendererIOS CI gate.
 
 All downloads are unsigned and need signing before installation.
 
@@ -358,9 +359,10 @@ and brightness/contrast/gamma. Drawing distance applies immediately on iOS:
 `PERFORMANCE/sightValue=4` is 100% (approximately 1 km), while `14` is 300%
 (approximately 3 km). It does not replace object-specific fading.
 
-For image-quality comparisons, set `vidResIndex=0` and `ENGINE/zUpscaler=4`
-(Native). For uncapped performance measurements also use `zMaxFpsMode=0` and
-`zMaxFPS=0`. Older generated overrides may still contain `vidResIndex=2` and
+For image-quality comparisons, set `INTERNAL/vidResIndex=0`,
+`ENGINE/zUpscaler=4` (Native), `PERFORMANCE/sightValue=14` (maximum) and
+`ENGINE/zAdaptiveFps=0`. For uncapped performance measurements also use
+`ENGINE/zMaxFpsMode=0` and `ENGINE/zMaxFPS=0`. Older generated overrides may still contain `vidResIndex=2` and
 `zMaxFpsMode=1`, so inspect the root override as well as the base INI. The native
 renderer does not read the legacy `zCloudShadowScale`, `shadowResolution`,
 `zTexAnisotropicFiltering` or `texDetailIndex` switches: its current shadow maps
@@ -394,11 +396,19 @@ The iOS limiter changes the native `CADisplayLink` cadence; it does not sleep
 the render/UI thread. Off requests the adaptive 30–120 Hz ProMotion range, while
 30 and 60 request fixed display-link rates.
 
-The production iOS profile also uses three frames in flight, renders directly
-to the Metal drawable, allocates SSAO targets only when SSAO is enabled, and
-avoids unnecessary full skeletal-pose work for distant/offscreen NPCs while
-preserving their animation events. These are build-level optimizations and do
-not require additional `Gothic.ini` entries.
+The native renderer uses three frame slots and allocates optional scene-copy,
+upscaling and AO textures when needed. Retired world resources are released only
+after their GPU work completes. Adaptive FPS is opt-in (`ENGINE/zAdaptiveFps=1`):
+it lowers cadence under sustained load and recovers more slowly, without changing
+scene resolution or drawing distance.
+
+Optional Metal 4 and ray tracing require their build flags plus
+`ENGINE/zMetal4=1` and `ENGINE/zRayTracing=1` respectively. They default off.
+Metal 4 uses a compatible static opaque segment and falls back to Metal 3.
+Ray tracing supplies static opaque ambient occlusion; unsupported hardware,
+scene warmup and serious heat use SSAO. An encoding failure disables the optional
+route. Dynamic objects still receive AO but do not enter its static occluder set.
+These features require final device acceptance; see [candidate settings](RELEASE-CANDIDATE.md).
 
 Saving now shows its banner immediately. The slot preview is captured through a
 small render attachment and read back only after the frame fence, avoiding the

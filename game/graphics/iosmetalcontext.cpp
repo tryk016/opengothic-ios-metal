@@ -4891,7 +4891,8 @@ struct IOSMetalContext::Impl final {
   IOSUpscalerSettings pendingUpscaler, activeUpscaler;
   bool metal4Requested = false, metal4Unavailable = false;
   int metal4LastActive = -1;
-  int rayTracingMode = 0;
+  int rayTracingMode = 0, rayTracingLastEncodedMode = -1;
+  bool rayTracingLastThermalLimited = false;
   bool rayTracingUnavailable = false, rayTracingThermalLimited = false;
   uint64_t rayTracingCoolSince = 0;
   bool recreateUpscaler=false;
@@ -5865,6 +5866,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
           impl->metal4LastActive = metal4Active;
           }
         impl->rayTracingUnavailable |= report.rayTracingFailed;
+        const int rayMode=report.rayTracingEncodedMode;
+        if(report.result==IOSGPUScene::Result::Success &&
+           (impl->rayTracingMode!=0 || impl->rayTracingLastEncodedMode>0) &&
+           (rayMode!=impl->rayTracingLastEncodedMode ||
+            impl->rayTracingThermalLimited!=impl->rayTracingLastThermalLimited)) {
+          Log::i("RendererIOS RT: requested=",impl->rayTracingMode,
+              " encoded=",rayMode==1 ? "rtao" : rayMode==2 ? "debug" : rayMode==3 ? "ssao" : "off",
+              " thermal=",MemoryInfo::thermalStateName(MemoryInfo::thermalState()),
+              " reason=",impl->rayTracingThermalLimited ? "thermal-limited" :
+                  impl->rayTracingLastThermalLimited ? "recovered" :
+                  impl->rayTracingUnavailable ? "encode-failed" : rayMode==3 ? "unsupported-or-warming" : "selected",
+              " generation=",input.snapshot->generation.value," sequence=",input.snapshot->sequence.value);
+          impl->rayTracingLastEncodedMode=rayMode;
+          impl->rayTracingLastThermalLimited=impl->rayTracingThermalLimited;
+          }
+
         if(report.metal4Failed || report.rayTracingFailed) {
           retryNative = true;
           throw std::runtime_error("RendererIOS optional GPU path requires fallback");

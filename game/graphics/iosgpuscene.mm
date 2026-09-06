@@ -3176,6 +3176,11 @@ void IOSGPUScene::Impl::encodeScene(void* opaque, MTL::CommandBuffer* nativeComm
                     (MTL::Texture*)(void*)scene.reactiveTexture.get()};
       if(!output.upscaler.encodeNative(nativeCommand,(MTL::Texture*)(void*)color,temporal,output.snapshot,output.tone))
         context.report.result=Result::NativeEncodingFailed;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+      if(context.report.result==Result::Success && prepared.rays!=nullptr)
+        context.report.rayTracingEncodedMode=ao ? (prepared.rays->ready() ? 1 : 3)
+            : prepared.rayTracingMode==2 && prepared.rays->ready() ? 2 : 0;
+#endif
       }
     }
   @catch(NSException*) {

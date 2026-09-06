@@ -1175,8 +1175,8 @@ required_once = {
         "const auto encodePhase = [&](",
         """[encoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)draw.pipelineState];""",
-        "if(context.phase==0u || context.phase==1u || context.phase==3u) {",
-        "encodePhase(context.prepared->base,context.scene->baseDepthState);",
+        "if(context.phase==0u || context.phase==1u || context.phase==3u",
+        "encodePhase(context.prepared->base,context.scene->baseDepthState,",
         """encodePhase(context.prepared->multiply2,
                   context.scene->multiply2DepthState);""",
         "context.prepared->nativeBaseMultiplyCompleted = true;",
@@ -1282,7 +1282,7 @@ def validate(candidate):
     native_end = native.index("IOSGPUScene::IOSGPUScene(", native_start)
     native_encode = native[native_start:native_end]
     phase_start = native_encode.index("const auto encodePhase = [&](")
-    loop_start = native_encode.index("for(const auto& draw:", phase_start)
+    loop_start = native_encode.index("for(size_t i=begin;", phase_start)
     loop_end = native_encode.index("\n    };", loop_start)
     draw_loop = native_encode[loop_start:loop_end]
     operations = [message or helper for message, helper in re.findall(
@@ -1297,7 +1297,7 @@ def validate(candidate):
         raise ValueError("target draw-id/draw-bind order drifted")
     phase_order = (
         native_encode.index(
-            "encodePhase(context.prepared->base,context.scene->baseDepthState);"
+            "encodePhase(context.prepared->base,context.scene->baseDepthState,"
         ),
         native_encode.index("encodePhase(context.prepared->multiply2,"),
         native_encode.index(
@@ -2512,6 +2512,8 @@ import re
 
 native = "\n".join(Path(path).read_text() for path in (
     "game/graphics/iosgpuscene.mm", "game/graphics/iosgpubink.mm"))
+# Publishing a Metal 4 residency set does not submit a command buffer.
+native = native.replace("[residency commit]", "")
 if re.search(r"newCommandQueue|newCommandBuffer|commandBufferWith|commandBuffer\]|"
              r"presentDrawable|commit\]|enqueue\]|waitUntilCompleted", native):
     raise SystemExit("native RendererIOS must use the owning Tempest command buffer")
