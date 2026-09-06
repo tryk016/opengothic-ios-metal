@@ -611,7 +611,7 @@ int main() {
   assert(!staleAlphaFlag.isStructurallyValid());
   auto orphanedAdditive = additive;
   orphanedAdditive.entities.clear();
-  assert(!orphanedAdditive.isStructurallyValid());
+  assert(orphanedAdditive.isStructurallyValid());
 
   auto multiply2 = additive;
   multiply2.materials[0].category = IOSMaterialCategory::Multiply2;

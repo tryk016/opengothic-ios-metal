@@ -112,6 +112,7 @@ MemoryInfo::Snapshot MemoryInfo::snapshot() {
     case NSProcessInfoThermalStateCritical: ret.thermal = ThermalState::Critical; break;
     }
 
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   // SecTask is available at runtime on iOS but its header is not part of the
   // public iPhoneOS SDK. Resolve it lazily so newer SDKs can still compile the
   // diagnostics build, and degrade to "unchecked" if the symbols disappear.
@@ -139,6 +140,7 @@ MemoryInfo::Snapshot MemoryInfo::snapshot() {
     }
   if(task!=nullptr)
     CFRelease(task);
+#endif
 
   return ret;
   }

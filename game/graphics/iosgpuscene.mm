@@ -4543,3 +4543,8 @@ const char* iosGPUSceneResultName(IOSGPUScene::Result result) noexcept {
 bool IOSGPUScene::motionPipelinesReady() const noexcept {
   return impl!=nullptr && impl->motionReady;
   }
+
+void IOSGPUScene::trimMemory() noexcept {
+  impl->sceneColorCopy = OwnedObjectiveC();
+  impl->sceneDepthCopy = OwnedObjectiveC();
+  }

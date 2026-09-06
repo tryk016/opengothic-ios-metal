@@ -927,6 +927,18 @@ bool RendererIOS::ssaoBuffersAllocated() const noexcept {
   return impl->context.ssaoBuffersAllocated();
   }
 
+IOSFrameStats RendererIOS::frameStats() const noexcept {
+  return impl->context.frameStats();
+  }
+
+uint64_t RendererIOS::resourceBytes() const noexcept {
+  return impl->context.resourceBytes();
+  }
+
+bool RendererIOS::trimMemory() noexcept {
+  return impl->context.trimMemory();
+  }
+
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 IOSFunctionalEvidenceSnapshot
 RendererIOS::functionalEvidenceSnapshot() const noexcept {

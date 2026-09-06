@@ -720,7 +720,7 @@ require_once(context_code,
              compact('"RendererIOS HDR capture profile: v=1 mode=one-shot"'))
 settle = compact(scope(context, "bool settleGpu(SettleReason reason, const char* operation,"))
 ordered(settle, (
-    "device.waitIdle()",
+    "if(!MetalApi::waitIdle(device,timeoutMs))throwDeviceHangException()",
     "materializeLinearHDRProofAfterTerminal(frames[index],true)",
     "settleLinearHDRCapturesAfterConfirmedIdle()",
     "neutralizeFences()",
@@ -2476,7 +2476,7 @@ def validate(renderer: str, context: str, native: str) -> None:
         "bool materializeLinearHDREvidenceAfterTerminal("))
     diagnostic_wait = require_once(
         materialize,
-        "if(!deviceAlreadyIdle){try{device.waitIdle();}",
+        "if(!deviceAlreadyIdle){try{if(!MetalApi::waitIdle(device,5000))throwDeviceHangException();}",
         "diagnostic terminal waitIdle",
     )
     diagnostic_mailbox = require_once(

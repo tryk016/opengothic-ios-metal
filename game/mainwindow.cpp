@@ -27,7 +27,7 @@
 #include "utils/gamepad.h"
 #include "utils/haptics.h"
 #include "utils/exceptiondump.h"
-#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+#if defined(__IOS__) || defined(OPENGOTHIC_PERF_DIAGNOSTICS)
 #include "utils/memoryinfo.h"
 #endif
 #include "utils/systemmsg.h"
@@ -42,8 +42,7 @@
 #include <array>
 #include <cstring>
 #include <memory>
-#if defined(OPENGOTHIC_PERF_DIAGNOSTICS) || \
-    (defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS))
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS) || defined(__IOS__)
 #include <chrono>
 #endif
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
@@ -200,6 +199,11 @@ uint64_t perfNowUs() {
 uint32_t perfSample(uint64_t value) {
   const uint64_t max = uint64_t(std::numeric_limits<uint32_t>::max());
   return uint32_t(value>max ? max : value);
+  }
+
+void perfPush(std::vector<uint32_t>& samples, uint64_t value) {
+  if(samples.size()<2048)
+    samples.push_back(perfSample(value));
   }
 
 double percentileMs(const std::vector<uint32_t>& samples, size_t percentile) {
@@ -496,8 +500,10 @@ MainWindow::MainWindow(Device& device)
     gamepad(*this,player),
 #endif
     runtimeMode(R_Normal) {
-#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+#if defined(__IOS__) || defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   MemoryInfo::initialize();
+#endif
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   resetPerfWindow(perfNowUs());
 #endif
 
@@ -1038,6 +1044,12 @@ void MainWindow::onSettings() {
   constexpr int fpsLimits[] = {0,30,60};
   const int fpsMode = std::clamp(Gothic::inst().settingsGetI("ENGINE", "zMaxFpsMode"),0,2);
   zMaxFps = fpsLimits[fpsMode];
+  const bool adaptive = Gothic::inst().settingsGetI("ENGINE","zAdaptiveFps")!=0;
+  if(adaptive!=iosAdaptiveFps || uint32_t(zMaxFps)!=maxFpsTarget) {
+    iosFrameBudget = {};
+    iosBudgetSampleMs = 0;
+    iosAdaptiveFps = adaptive;
+    }
 #else
   zMaxFps = Gothic::options().fpsLimit;
   if(zMaxFps<=0)
@@ -1619,12 +1631,27 @@ void MainWindow::logMemorySnapshot(const char* event) {
                        " entitlement_present=",entitlementPresent);
   Log::i(line.c_str());
   }
+#endif
 
+#if defined(__IOS__) || defined(OPENGOTHIC_PERF_DIAGNOSTICS)
 void MainWindow::processMemoryEvents() {
   const uint32_t events = MemoryInfo::consumeEvents();
   if(events==MemoryInfo::NoEvent)
     return;
 
+#if defined(__IOS__)
+  if((events & MemoryInfo::DidBecomeActive)!=0u)
+    iosBudgetSampleMs = 0;
+  if((events & MemoryInfo::MemoryWarning)!=0u) {
+    const auto before = renderer.resourceBytes();
+    if(renderer.trimMemory()) {
+      const auto after = renderer.resourceBytes();
+      Log::i("RendererIOS memory trim: before=",before==0 ? int64_t(-1) : int64_t(before),
+             " after=",after==0 ? int64_t(-1) : int64_t(after));
+      }
+    }
+#endif
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   flushPerfWindow(perfNowUs(),true);
   if((events & MemoryInfo::MemoryWarning)!=0u)
     logMemorySnapshot("memory_warning");
@@ -1634,8 +1661,11 @@ void MainWindow::processMemoryEvents() {
     logMemorySnapshot("will_enter_foreground");
   if((events & MemoryInfo::DidBecomeActive)!=0u)
     logMemorySnapshot("did_become_active");
+#endif
   }
+#endif
 
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
 const char* MainWindow::perfScene() const {
   if(Gothic::inst().checkLoading()!=Gothic::LoadState::Idle)
     return "loading";
@@ -1651,10 +1681,14 @@ void MainWindow::resetPerfWindow(uint64_t nowUs) {
   perfWindow.tickUs.clear();
   perfWindow.animationUs.clear();
   perfWindow.poseRefreshUs.clear();
+  perfWindow.renderUs.clear();
+  perfWindow.gpuUs.clear();
   perfWindow.frameUs.reserve(2048);
   perfWindow.tickUs.reserve(2048);
   perfWindow.animationUs.reserve(2048);
   perfWindow.poseRefreshUs.reserve(2048);
+  perfWindow.renderUs.reserve(2048);
+  perfWindow.gpuUs.reserve(2048);
   perfWindow.startedUs       = nowUs;
   perfWindow.lastSubmittedUs = 0;
   perfWindow.framesStarted   = 0;
@@ -1671,7 +1705,7 @@ void MainWindow::beginPerfFrame(uint64_t nowUs) {
 
 void MainWindow::submitPerfFrame(uint64_t nowUs) {
   if(perfWindow.lastSubmittedUs!=0 && nowUs>=perfWindow.lastSubmittedUs)
-    perfWindow.frameUs.push_back(perfSample(nowUs-perfWindow.lastSubmittedUs));
+    perfPush(perfWindow.frameUs,nowUs-perfWindow.lastSubmittedUs);
   perfWindow.lastSubmittedUs = nowUs;
   perfWindow.framesSubmitted++;
   }
@@ -1760,6 +1794,17 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
                         " entitlement_requested=",mem.increasedMemoryLimitRequested ? 1 : 0,
                         " entitlement_present=",entitlementPresent);
   Log::i(line.c_str());
+#if defined(__IOS__)
+  const uint64_t gpuBytes = renderer.resourceBytes();
+  perfWindow.peakResourceBytes = std::max(perfWindow.peakResourceBytes,gpuBytes);
+  Log::i("GPU v=1 samples=",perfWindow.gpuUs.size(),
+         " gpu_p50_ms=",perfWindow.gpuUs.empty() ? -1. : percentileMs(perfWindow.gpuUs,50u),
+         " gpu_p95_ms=",perfWindow.gpuUs.empty() ? -1. : percentileMs(perfWindow.gpuUs,95u),
+         " cpu_render_p95_ms=",percentileMs(perfWindow.renderUs,95u),
+         " resource_bytes=",gpuBytes==0 ? int64_t(-1) : int64_t(gpuBytes),
+         " sampled_peak_bytes=",perfWindow.peakResourceBytes==0 ? int64_t(-1) : int64_t(perfWindow.peakResourceBytes),
+         " adaptive_fps=",iosAdaptiveFps ? 1 : 0," effective_fps=",iosFrameRateTarget);
+#endif
   resetPerfWindow(nowUs);
   }
 #endif
@@ -2154,11 +2199,8 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   (void)renderer.pollDeviceFailure();
   if(!renderer.failureReason().empty()) {
     if(!rendererFailureSettled) {
-      rendererFailureSettled = renderer.waitIdle();
-      if(!rendererFailureSettled) {
-        update();
-        return;
-        }
+      renderer.prepareForOwnerRelease();
+      rendererFailureSettled = true;
       }
     startPendingSave(iosSavePreviewPlaceholder(),true);
     try {
@@ -2362,6 +2404,9 @@ void MainWindow::onStartLoading() {
   // This signal is synchronous and precedes Gothic::clearGame(). Establish the
   // owner-release barrier before the active session can move to the loader.
   renderer.prepareForOwnerRelease();
+#if defined(__IOS__)
+  iosBudgetSampleMs = 0;
+#endif
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   flushPerfWindow(perfNowUs(),true);
   logMemorySnapshot("loadsave_begin");
@@ -2503,11 +2548,9 @@ bool MainWindow::rendererOperational() {
     // A fatal fence is terminal, but older slots may still reference world,
     // inventory, or video resources. Settle them before save/load callbacks
     // can release those owners.
-    rendererFailureSettled = renderer.waitIdle();
+    renderer.prepareForOwnerRelease();
+    rendererFailureSettled = true;
     }
-
-  if(!rendererFailureSettled)
-    return false;
 
 #if defined(__IOS__)
   if(pendingSave.stage==PendingSave::Stage::CaptureRequested) {
@@ -2545,6 +2588,9 @@ void MainWindow::render(){
   try {
     if(appLifecycleState!=AppLifecycleState::Active)
       return;
+#if defined(__IOS__)
+    const auto cpuStarted = std::chrono::steady_clock::now();
+#endif
     if(lastFrameTick==0)
       lastFrameTick = Application::tickCount();
 
@@ -2563,8 +2609,10 @@ void MainWindow::render(){
     processIOSSemanticScript();
 #endif
 
-#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+#if defined(__IOS__) || defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     processMemoryEvents();
+#endif
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     const uint64_t perfFrameStart = perfNowUs();
     beginPerfFrame(perfFrameStart);
 #endif
@@ -2593,13 +2641,13 @@ void MainWindow::render(){
 #endif
     const uint64_t dt = tick();
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
-    perfWindow.tickUs.push_back(perfSample(perfNowUs()-tickStart));
+    perfPush(perfWindow.tickUs,perfNowUs()-tickStart);
 
     const uint64_t animationStart = perfNowUs();
 #endif
     updateAnimation(dt);
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
-    perfWindow.animationUs.push_back(perfSample(perfNowUs()-animationStart));
+    perfPush(perfWindow.animationUs,perfNowUs()-animationStart);
 #endif
     tickCamera(dt);
 
@@ -2617,6 +2665,13 @@ void MainWindow::render(){
       }
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     const uint64_t poseRefreshStart = perfNowUs();
+#if defined(__IOS__)
+    const auto gpu = renderer.frameStats();
+    if(gpu.gpuFrames!=perfWindow.lastGpuFrame) {
+      perfWindow.lastGpuFrame = gpu.gpuFrames;
+      perfPush(perfWindow.gpuUs,uint64_t(gpu.gpuTimeMs*1000.));
+      }
+#endif
 #endif
     const auto loadState = Gothic::inst().checkLoading();
     const bool publishWorld = rendererIOSPublishesWorldDuringLoad(loadState);
@@ -2625,7 +2680,7 @@ void MainWindow::render(){
       Gothic::inst().worldView()->prepareIOSSceneSources(world->tickCount());
       }
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
-    perfWindow.poseRefreshUs.push_back(perfSample(perfNowUs()-poseRefreshStart));
+    perfPush(perfWindow.poseRefreshUs,perfNowUs()-poseRefreshStart);
 #endif
 
     auto scene = renderer.buildSceneSnapshot(
@@ -2703,12 +2758,48 @@ void MainWindow::render(){
     // native display link schedule Off/30/60 directly instead. Preserve the old
     // default 60 FPS menu policy, while an explicit user cap wins everywhere.
     uint32_t displayFps = maxFpsTarget;
+    const auto nowMs = Application::tickCount();
+    const bool playing = Gothic::inst().isInGame() && !Gothic::inst().isPause() &&
+                         !video.isActive() && Gothic::inst().checkLoading()==Gothic::LoadState::Idle;
+    const auto stats = renderer.frameStats();
+    if(!playing || !iosAdaptiveFps || iosBudgetSampleMs==0 || nowMs-iosBudgetSampleMs>2000u) {
+      iosFrameBudget = {};
+      iosBudgetSampleMs = nowMs;
+      iosCpuAverageMs = iosGpuAverageMs = 0;
+      // Ignore the old epoch's frames that were already in flight.
+      iosBudgetGpuFrame = stats.gpuFrames+Resources::MaxFramesInFlight;
+      }
+    if(playing && iosAdaptiveFps && stats.gpuFrames>iosBudgetGpuFrame) {
+      iosBudgetGpuFrame = stats.gpuFrames;
+      iosGpuAverageMs = iosGpuAverageMs==0 ? stats.gpuTimeMs :
+                       iosGpuAverageMs+(stats.gpuTimeMs-iosGpuAverageMs)*0.1;
+      }
+    if(playing && iosAdaptiveFps && nowMs-iosBudgetSampleMs>=1000u) {
+      iosBudgetSampleMs = nowMs;
+      const auto thermal = MemoryInfo::snapshot().thermal;
+      const auto previous = iosFrameBudget.fpsLimit;
+      iosFrameBudget.update(iosCpuAverageMs,iosGpuAverageMs,maxFpsTarget,
+          thermal==MemoryInfo::ThermalState::Serious || thermal==MemoryInfo::ThermalState::Critical);
+      if(previous!=iosFrameBudget.fpsLimit)
+        Log::i("RendererIOS adaptive FPS: limit=",iosFrameBudget.effectiveFps(maxFpsTarget),
+               " cpu-ms=",iosCpuAverageMs," gpu-ms=",iosGpuAverageMs,
+               " thermal=",MemoryInfo::thermalStateName(thermal));
+      }
+    displayFps = iosFrameBudget.effectiveFps(displayFps);
     if(displayFps==0 && !Gothic::inst().isInGame() && !video.isActive())
       displayFps = 60u;
     if(iosFrameRateTarget!=displayFps) {
       tempestIosSetPreferredFrameRate(int(displayFps));
       iosFrameRateTarget = displayFps;
       }
+
+    const double cpuMs = std::chrono::duration<double,std::milli>(
+        std::chrono::steady_clock::now()-cpuStarted).count();
+    if(playing && iosAdaptiveFps)
+      iosCpuAverageMs = iosCpuAverageMs==0 ? cpuMs : iosCpuAverageMs+(cpuMs-iosCpuAverageMs)*0.1;
+#if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+    perfPush(perfWindow.renderUs,uint64_t(cpuMs*1000.));
+#endif
 
     auto t = Application::tickCount();
 #else

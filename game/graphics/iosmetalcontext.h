@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "iosframeinput.h"
+#include "iosframestats.h"
 #include "iosupscaler.h"
 #include "iosfunctionalevidence.h"
 
@@ -79,6 +80,7 @@ class IOSMetalContext final {
     bool             suspend() noexcept;
     bool             resume() noexcept;
     bool             waitIdle() noexcept;
+    bool             trimMemory() noexcept;
     void             updateLinearHDRSettings(float brightness,
                                              float contrast,
                                              float gamma) noexcept;
@@ -98,6 +100,8 @@ class IOSMetalContext final {
 
     void             dbgDraw(Tempest::Painter& painter);
     bool             ssaoBuffersAllocated() const noexcept;
+    IOSFrameStats    frameStats() const noexcept;
+    uint64_t         resourceBytes() const noexcept;
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     IOSFunctionalEvidenceSnapshot functionalEvidenceSnapshot() const noexcept;
 #endif

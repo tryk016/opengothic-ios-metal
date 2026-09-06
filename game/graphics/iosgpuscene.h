@@ -139,6 +139,8 @@ class IOSGPUScene final {
 
     bool pipelinesReady() const noexcept;
     bool motionPipelinesReady() const noexcept;
+    // Caller has completed all frames that use these transient targets.
+    void trimMemory() noexcept;
     bool additiveTerminalFailureReported() const noexcept;
 
     // Preparation is synchronous and must complete before the SceneHDR render

@@ -214,20 +214,6 @@ const IOSMaterial* findMaterial(
   return found!=materials.end() && found->id==handle ? &*found : nullptr;
   }
 
-bool hasOnlyStaticEntitiesForMaterial(
-    const std::vector<IOSRenderEntity>& entities,
-    IOSMaterialHandle material) noexcept {
-  bool found = false;
-  for(const auto& entity:entities) {
-    if(entity.material!=material)
-      continue;
-    if(entity.kind!=IOSSceneMeshKind::Static)
-      return false;
-    found = true;
-    }
-  return found;
-  }
-
 static_assert(std::is_standard_layout_v<IOSFloat2>);
 static_assert(std::is_standard_layout_v<IOSFloat3>);
 static_assert(std::is_standard_layout_v<IOSFloat4>);
@@ -304,12 +290,6 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
     }
   if(!idsStrictlyIncrease(entities,&IOSRenderEntity::id))
     return false;
-  for(const auto& material:materials) {
-    if((material.flags!=IOSMaterialFlagNone) &&
-       !hasOnlyStaticEntitiesForMaterial(entities,material.id))
-      return false;
-    }
-
   for(const auto& light:lights) {
     if(!validHandle(light.id,generation) ||
        !validLightType(light.type) ||

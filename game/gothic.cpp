@@ -173,6 +173,7 @@ Gothic::Gothic() {
   defaults->set("ENGINE",       "zCloudShadowScale", gpu.type==Tempest::DeviceType::Discrete); // ssao
   defaults->set("INTERNAL",     "vidResIndex", 0); // full-res
   defaults->set("ENGINE",       "zUpscaler", 0); // Auto, Temporal, Spatial, FSR 1, Native
+  defaults->set("ENGINE",       "zAdaptiveFps", 0);
 #if defined(__IOS__)
   // 0 = uncapped, 1 = 30 FPS, 2 = 60 FPS. The iOS game-options menu maps the
   // requested replacement choice to this runtime setting.

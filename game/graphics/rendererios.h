@@ -10,6 +10,7 @@
 #include <string_view>
 
 #include "iosframeinput.h"
+#include "iosframestats.h"
 #include "iosfunctionalevidence.h"
 
 namespace Tempest {
@@ -78,6 +79,7 @@ class RendererIOS final {
     bool            suspend() noexcept;
     bool            resume() noexcept;
     bool            waitIdle() noexcept;
+    bool            trimMemory() noexcept;
     void            shutdown() noexcept;
     void            prepareForOwnerRelease() noexcept;
     bool            restoreAfterOwnerRelease() noexcept;
@@ -90,6 +92,8 @@ class RendererIOS final {
 
     void dbgDraw(Tempest::Painter& painter);
     bool ssaoBuffersAllocated() const noexcept;
+    IOSFrameStats frameStats() const noexcept;
+    uint64_t resourceBytes() const noexcept;
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
     IOSFunctionalEvidenceSnapshot functionalEvidenceSnapshot() const noexcept;
 #endif

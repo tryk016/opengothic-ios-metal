@@ -184,6 +184,10 @@ xcrun clang++ -std=c++20 \
   -o "$TMP_GATE/iosscenecontract"
 codesign -f -s - "$TMP_GATE/iosscenecontract"
 "$TMP_GATE/iosscenecontract"
+xcrun clang++ -std=c++20 -Wall -Wextra -Werror -Igame \
+  ios/tests/iosframebudget.cpp -o "$TMP_GATE/iosframebudget"
+codesign -f -s - "$TMP_GATE/iosframebudget"
+"$TMP_GATE/iosframebudget"
 [ -f game/graphics/iossceneconversion.h ]
 [ -f game/graphics/iossceneconversion.cpp ]
 [ -f ios/tests/iossceneconversion.cpp ]

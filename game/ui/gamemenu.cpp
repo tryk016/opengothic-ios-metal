@@ -456,6 +456,11 @@ void GameMenu::initIosVideoOptions() {
   option(text("FPS limit","Limit FPS","FPS-Limit"),"ENGINE","zMaxFpsMode",
       text("#Off|30|60","#Wylaczony|30|60","#Aus|30|60"),
       text("Limits rendered frames per second.","Ogranicza liczbe klatek na sekunde.","Begrenzt die Bilder pro Sekunde."));
+  option(text("Adaptive FPS","Automatyczny FPS","Adaptive FPS"),"ENGINE","zAdaptiveFps",
+      text("#Off|On","#Wylaczony|Wlaczony","#Aus|An"),
+      text("Reduces FPS under sustained load or heat. Image quality stays unchanged.",
+           "Ogranicza FPS przy dlugim obciazeniu lub grzaniu. Zachowuje jakosc obrazu.",
+           "Senkt FPS bei anhaltender Last oder Hitze. Die Bildqualitaet bleibt erhalten."));
   option(text("Brightness","Jasnosc","Helligkeit"),"VIDEO","zVidBrightness","","");
   option(text("Contrast","Kontrast","Kontrast"),"VIDEO","zVidContrast","","");
   option(text("Gamma","Gamma","Gamma"),"VIDEO","zVidGamma","","");

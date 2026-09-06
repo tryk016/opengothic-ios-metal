@@ -24,6 +24,7 @@
 #include "world/focus.h"
 #include "game/playercontrol.h"
 #include "graphics/rendererios.h"
+#include "graphics/iosframebudget.h"
 #include "ui/dialogmenu.h"
 #include "ui/inventorymenu.h"
 #include "ui/chapterscreen.h"
@@ -178,9 +179,11 @@ class MainWindow : public Tempest::Window {
     void     tickCamera(uint64_t dt);
     void     isDialogClosed(bool& ret);
 
+#if defined(__IOS__) || defined(OPENGOTHIC_PERF_DIAGNOSTICS)
+    void        processMemoryEvents();
+#endif
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
     void        logMemorySnapshot(const char* event);
-    void        processMemoryEvents();
     const char* perfScene() const;
     void        resetPerfWindow(uint64_t nowUs);
     void        beginPerfFrame(uint64_t nowUs);
@@ -291,6 +294,9 @@ class MainWindow : public Tempest::Window {
       std::vector<uint32_t> tickUs;
       std::vector<uint32_t> animationUs;
       std::vector<uint32_t> poseRefreshUs;
+      std::vector<uint32_t> renderUs, gpuUs;
+      uint64_t              lastGpuFrame = 0;
+      uint64_t              peakResourceBytes = 0;
       uint64_t              startedUs       = 0;
       uint64_t              lastSubmittedUs = 0;
       size_t                framesStarted   = 0;
@@ -321,5 +327,11 @@ class MainWindow : public Tempest::Window {
     uint64_t      maxFpsInv = 0;
 #if defined(__IOS__)
     uint32_t      iosFrameRateTarget = uint32_t(-1);
+    IOSFrameBudget iosFrameBudget;
+    uint64_t      iosBudgetSampleMs = 0;
+    double        iosCpuAverageMs = 0;
+    double        iosGpuAverageMs = 0;
+    uint64_t      iosBudgetGpuFrame = 0;
+    bool          iosAdaptiveFps = false;
 #endif
   };

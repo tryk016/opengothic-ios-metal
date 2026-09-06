@@ -2702,7 +2702,10 @@ def validate(
         raise ValueError("stored facts gained later assignment")
 
     weak_literal = '"-weak_frameworkMetalFX"'
-    compact_cmake = compact(candidate_cmake)
+    ios_link = candidate_cmake.split(
+        'if(IOS)\n  file(GLOB_RECURSE ObjCSOURCES', 1
+    )[1].split('elseif(APPLE)', 1)[0]
+    compact_cmake = compact(ios_link)
     if compact_cmake.count(weak_literal) != 1:
         raise ValueError(
             "final iOS target does not weak-link MetalFX exactly once"
@@ -3097,8 +3100,8 @@ mutations = (
         context,
         replace_once(
             cmake,
-            '"-weak_framework MetalFX"',
-            '"-framework MetalFX"',
+            'target_link_libraries(${PROJECT_NAME} "-weak_framework MetalFX")',
+            'target_link_libraries(${PROJECT_NAME} "-framework MetalFX")',
         ),
     ),
 ) + tuple(format_mutations)
@@ -4564,7 +4567,7 @@ grep -Fq 'new-game pipeline archive mode has no non-empty scene snapshot' \
   ios/device-test/run-smoke-test.sh
 grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
   ios/patches/apply-patches.sh
-grep -Fq 'opengothic-ios-patch-stack-v17' \
+grep -Fq 'opengothic-ios-stable-c5' \
   ios/patches/apply-patches.sh
 
 grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-13.binaryarchive' \

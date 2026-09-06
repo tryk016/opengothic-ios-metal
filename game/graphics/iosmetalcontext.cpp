@@ -33,9 +33,7 @@
     defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
 #include <atomic>
 #endif
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 #include <chrono>
-#endif
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
@@ -378,14 +376,12 @@ constexpr auto ConfiguredFaultMode =
 #endif
 
 
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 uint64_t rendererIOSClockUs() noexcept {
   using Clock = std::chrono::steady_clock;
   return static_cast<uint64_t>(
     std::chrono::duration_cast<std::chrono::microseconds>(
       Clock::now().time_since_epoch()).count());
   }
-#endif
 
 struct FaultInjection final {
   const char* name() const noexcept {
@@ -1305,6 +1301,7 @@ struct IOSMetalContext::Impl final {
     bool                       emissiveTerminalReported = false;
 #endif
     bool                       submitted = false;
+    uint64_t                   submittedAtUs = 0;
     bool                       discardCommandAfterIdle = false;
     bool                       rebuildCommand = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -4371,7 +4368,8 @@ struct IOSMetalContext::Impl final {
          IOSLinearHDRProofProducerState::Submitted &&
        !deviceAlreadyIdle) {
       try {
-        device.waitIdle();
+        if(!MetalApi::waitIdle(device,5000))
+          throw DeviceHangException();
         if(idleConfirmed!=nullptr)
           *idleConfirmed = true;
         }
@@ -4566,7 +4564,8 @@ struct IOSMetalContext::Impl final {
 #else
     if(!deviceAlreadyIdle) {
       try {
-        device.waitIdle();
+        if(!MetalApi::waitIdle(device,5000))
+          throw DeviceHangException();
         }
       catch(const std::exception& e) {
         (void)iosAdvanceLinearHDRFrameSequence(
@@ -4672,7 +4671,7 @@ struct IOSMetalContext::Impl final {
     }
 
   bool settleGpu(SettleReason reason, const char* operation,
-                  bool* idleConfirmed = nullptr) noexcept {
+                  bool* idleConfirmed = nullptr, uint64_t timeoutMs = 5000) noexcept {
     if(idleConfirmed!=nullptr)
       *idleConfirmed = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_FORWARD_SELF_TEST)
@@ -4705,7 +4704,8 @@ struct IOSMetalContext::Impl final {
     const uint64_t waitStartedUs = rendererIOSClockUs();
 #endif
     try {
-      device.waitIdle();
+      if(!MetalApi::waitIdle(device,timeoutMs))
+        throw DeviceHangException();
       }
     catch(const std::exception& e) {
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -4862,9 +4862,14 @@ struct IOSMetalContext::Impl final {
     if(cleanResult!=nullptr)
       *cleanResult = false;
     constexpr uint32_t MaxIdleAttempts = 3u;
+    const auto deadline = std::chrono::steady_clock::now()+std::chrono::seconds(5);
     for(uint32_t attempt=0; attempt<MaxIdleAttempts; ++attempt) {
+      const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline-std::chrono::steady_clock::now()).count();
+      if(remaining<0)
+        break;
       bool idleConfirmed = false;
-      const bool clean = settleGpu(reason,operation,&idleConfirmed);
+      const bool clean = settleGpu(reason,operation,&idleConfirmed,uint64_t(remaining));
       if(!idleConfirmed) {
 #if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE)
         if(hasLinearHDRCaptureOwners())
@@ -5019,6 +5024,7 @@ struct IOSMetalContext::Impl final {
                                                multiply2Coverage;
 #endif
   std::array<FrameContext,Resources::MaxFramesInFlight> frames;
+  IOSFrameStats                                frameStats;
   uint64_t                                      sceneRetainCount  = 0;
   uint64_t                                      sceneReleaseCount = 0;
   FaultInjection                               fault;
@@ -5133,8 +5139,11 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     }
   bool previewFenceFault = false;
   try {
-    if(!frameContext.fence.wait(0))
+    if(!frameContext.fence.wait(0)) {
+      if(frameContext.submitted && rendererIOSClockUs()-frameContext.submittedAtUs>5000000u)
+        impl->fail("RendererIOS GPU frame completion timed out");
       return std::nullopt;
+      }
     if(frameContext.submitted &&
        impl->previewState==Impl::PreviewState::AwaitingGpu &&
        impl->previewSlot==slot &&
@@ -5232,6 +5241,14 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     return std::nullopt;
     }
 #endif
+  if(frameContext.submitted) {
+    const double ms = MetalApi::completedGpuTime(impl->device,frameContext.fence)*1000.;
+    if(ms>0) {
+      auto& stats = impl->frameStats;
+      stats.gpuTimeMs = ms;
+      ++stats.gpuFrames;
+      }
+    }
   frameContext.fence = Fence();
   impl->retireSlotAfterTerminal(frameContext);
   if(impl->failed)
@@ -6020,6 +6037,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #endif
     frameContext.fence = std::move(submittedFence);
     frameContext.submitted = true;
+    frameContext.submittedAtUs = rendererIOSClockUs();
     ++impl->counters.submitAccepted;
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
     if(frameContext.emissiveInput) {
@@ -6449,9 +6467,12 @@ void IOSMetalContext::onWorldChanged() {
   try {
     for(auto& frame:impl->frames) {
       frame.command = impl->device.commandBuffer();
+      frame.preparedScene = {};
       frame.discardCommandAfterIdle = false;
       frame.rebuildCommand = false;
       }
+    if(impl->gpuScene!=nullptr)
+      impl->gpuScene->trimMemory();
     }
   catch(const std::exception& e) {
     impl->forcePreviewPlaceholder();
@@ -6541,6 +6562,24 @@ void IOSMetalContext::dbgDraw(Painter& painter) {
 
 bool IOSMetalContext::ssaoBuffersAllocated() const noexcept {
   return false;
+  }
+
+IOSFrameStats IOSMetalContext::frameStats() const noexcept {
+  return impl->frameStats;
+  }
+
+uint64_t IOSMetalContext::resourceBytes() const noexcept {
+  return MetalApi::allocatedResourceBytes(impl->device);
+  }
+
+bool IOSMetalContext::trimMemory() noexcept {
+  if(!waitIdle())
+    return false;
+  for(auto& frame:impl->frames)
+    frame.preparedScene = {};
+  if(impl->gpuScene!=nullptr)
+    impl->gpuScene->trimMemory();
+  return true;
   }
 
 #if defined(__IOS__) && defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
