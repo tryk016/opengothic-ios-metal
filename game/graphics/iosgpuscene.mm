@@ -3614,7 +3614,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     lights.reserve(std::max(size_t(1),snapshot.lights.size()));
     for(const auto& light:snapshot.lights) {
       if(light.type!=IOSLightType::Point || light.range<=0.f ||
-         (light.visibilityMask&IOSSceneVisibilityMain)==0)
+         (light.visibilityMask&IOSSceneVisibilityMain)==0 ||
+         !iosGPUScenePointLightVisible(light,snapshot.currentCamera.viewProjection))
         continue;
       const float scale = light.intensity*candidateFrame->lighting.ambientColor.w;
       lights.push_back({{light.position.x,light.position.y,light.position.z,light.range},
@@ -4256,7 +4257,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       Tempest::Log::i("RendererIOS native geometry: entities=",report.counts.drawn.material.total,
           " draw-calls=",candidateFrame->base.size()+candidateFrame->multiply2.size()+candidateFrame->additive.size()+candidateFrame->transparent.size()+candidateFrame->water.size()+candidateFrame->ghost.size()+candidateFrame->multiply.size(),
           " animated=",report.counts.drawn.kind.animated," morph=",report.counts.drawn.kind.morph,
-          " lights=",snapshot.lights.size()," transparent=",candidateFrame->transparent.size(),
+          " lights=",snapshot.lights.size()," visible-lights=",candidateFrame->lighting.lightInfo[0],
+          " transparent=",candidateFrame->transparent.size(),
           " water=",candidateFrame->water.size()," particles=",snapshot.particles.size()," particle-batches=",snapshot.particleBatches.size(),
           " sun-y=",snapshot.currentSky.sunDirection.y," rain=",snapshot.currentSky.rainIntensity);
       impl->geometryReported = true;

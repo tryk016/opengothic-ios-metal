@@ -2636,10 +2636,9 @@ struct IOSGPUSceneMeshCandidate final {
   std::size_t         indexCount = 0;
   };
 
-// This is a diagnostics-only conservative visibility result.  A bounds box
-// which is not proven to be outside one homogeneous clip plane remains
-// drawable; invalid and projectively ambiguous inputs are kept distinct so a
-// caller can log them without turning the diagnostic into an acceptance gate.
+// Conservative visibility shared by scene and light culling. Only bounds
+// proven outside a homogeneous clip plane may be discarded; invalid and
+// projectively ambiguous inputs remain visible.
 enum class IOSGPUSceneMultiply2ClipBoundsResult : uint8_t {
   Intersects,
   DefinitelyOutside,
@@ -2781,6 +2780,21 @@ inline IOSGPUSceneMultiply2ClipBoundsResult
      outsideNear || outsideFar)
     return IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside;
   return IOSGPUSceneMultiply2ClipBoundsResult::Intersects;
+  }
+
+inline bool iosGPUScenePointLightVisible(const IOSLight& light,
+                                         const IOSMatrix4x4& viewProjection) noexcept {
+  // The shader contributes only inside position +/- range. Keep boundary and
+  // uncertain volumes, including camera/near-plane crossings. Expanding by
+  // several world-coordinate ULPs covers float transform/interpolation error.
+  const auto p = light.position;
+  const float margin = 32.f*std::numeric_limits<float>::epsilon()*
+      std::max({1.f,std::abs(p.x),std::abs(p.y),std::abs(p.z),light.range});
+  const float radius = light.range+margin;
+  const IOSBounds influence = {{p.x-radius,p.y-radius,p.z-radius},
+                               {p.x+radius,p.y+radius,p.z+radius}};
+  return classifyIOSGPUSceneMultiply2ClipBounds(influence,{},viewProjection)!=
+      IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside;
   }
 
 inline uint64_t iosGPUSceneFailingHandle(

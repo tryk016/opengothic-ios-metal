@@ -1378,7 +1378,35 @@ void testMultiply2ClipBoundsDiagnostic() {
 
 }
 
+void testPointLightFrustumCulling() {
+  IOSLight light;
+  light.range = 0.1f;
+  light.position = {0.f,0.f,0.5f};
+  assert(iosGPUScenePointLightVisible(light,{}));
+  for(const auto outside:std::array<IOSFloat3,6>{{
+      {-2.f,0.f,0.5f},{2.f,0.f,0.5f},{0.f,-2.f,0.5f},
+      {0.f,2.f,0.5f},{0.f,0.f,-1.f},{0.f,0.f,2.f}}}) {
+    light.position = outside;
+    assert(!iosGPUScenePointLightVisible(light,{}));
+    }
+  // Off-screen centers can still illuminate visible pixels.
+  light.position = {1.05f,0.f,0.5f};
+  assert(iosGPUScenePointLightVisible(light,{}));
+  light.position = {1.1f,0.f,0.5f};
+  assert(iosGPUScenePointLightVisible(light,{}));
+  light.position = {0.f,0.f,-0.05f};
+  assert(iosGPUScenePointLightVisible(light,{}));
+  IOSMatrix4x4 crossing;
+  crossing.set(3,2,1.f);
+  crossing.set(3,3,0.f);
+  light.position = {0.f,0.f,0.f};
+  assert(iosGPUScenePointLightVisible(light,crossing));
+  crossing.set(0,0,std::numeric_limits<float>::quiet_NaN());
+  assert(iosGPUScenePointLightVisible(light,crossing));
+  }
+
 int main() {
+  testPointLightFrustumCulling();
   testFrameAnimationDownstreamEvidence();
   testUVAnimationDownstreamEvidence();
   testMultiply2ClipBoundsDiagnostic();
