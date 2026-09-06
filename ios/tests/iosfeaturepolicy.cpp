@@ -819,7 +819,7 @@ int main() {
       IOSFeatureDefaultClass::Count)==4u);
 
   using EvaluateSignature = IOSFeaturePolicyState (*)(
-      const IOSDeviceFacts&,IOSFeaturePolicyInput) noexcept;
+      const IOSDeviceFacts&,IOSFeaturePolicyInput,bool) noexcept;
   using ResolveSignature = IOSFeatureDefaultRequest (*)(
       IOSFeatureId,IOSFeatureDefaultClass) noexcept;
   using EvaluateDefaultsSignature = IOSFeaturePolicyState (*)(
@@ -865,6 +865,17 @@ int main() {
   static_assert(!std::is_constructible_v<
       IOSFeaturePolicyProvenance,
       IOSFeaturePolicyProvenanceStorage>);
+
+  const auto thermalFacts = factsWithAllProbes(
+      Availability | DeviceSupport,Availability | DeviceSupport);
+  for(auto feature:Features) {
+    const bool limited = feature==IOSFeatureId::RayTracing || feature==IOSFeatureId::MeshShading;
+    expectState(iosEvaluateFeaturePolicy(thermalFacts,{feature,true,true},true),
+                true,true,!limited,limited ? IOSFeatureFallbackReason::ThermalLimited
+                                           : IOSFeatureFallbackReason::None);
+    expectState(iosEvaluateFeaturePolicy(thermalFacts,{feature,true,true},false),
+                true,true,true,IOSFeatureFallbackReason::None);
+    }
 
   testExactDefaultMatrix();
   testCapabilityFallbacksForEveryFeature();

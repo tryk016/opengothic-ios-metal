@@ -25,6 +25,7 @@ enum class IOSFeatureFallbackReason : uint8_t {
   DeviceSupportUnsupported = 6u,
   ActivationFailed = 7u,
   InvalidDefaultClass = 8u,
+  ThermalLimited = 9u,
   };
 
 enum class IOSFeatureDefaultClass : uint8_t {
@@ -61,7 +62,8 @@ struct IOSFeatureDefaultRequest final {
 
 IOSFeaturePolicyState iosEvaluateFeaturePolicy(
     const IOSDeviceFacts& facts,
-    IOSFeaturePolicyInput input) noexcept;
+    IOSFeaturePolicyInput input,
+    bool thermalLimited = false) noexcept;
 
 IOSFeatureDefaultRequest iosResolveFeatureDefaultRequest(
     IOSFeatureId feature,

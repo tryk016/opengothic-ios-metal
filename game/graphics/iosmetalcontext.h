@@ -85,6 +85,8 @@ class IOSMetalContext final {
                                              float contrast,
                                              float gamma) noexcept;
     void             updateUpscalerSettings(IOSUpscalerSettings settings) noexcept;
+    void             updateMetal4Request(bool requested) noexcept;
+    void             updateRayTracingMode(int mode) noexcept;
     void             prepareSceneCamera(IOSSceneFrameState& scene) const noexcept;
     void             shutdown() noexcept;
     void             prepareForOwnerRelease() noexcept;

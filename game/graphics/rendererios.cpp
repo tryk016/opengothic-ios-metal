@@ -218,6 +218,8 @@ struct RendererIOS::Impl final {
       const int mode=std::clamp(Gothic::settingsGetI("ENGINE","zUpscaler"),0,4);
       const int scale=Gothic::settingsGetI("INTERNAL","vidResIndex");
       context.updateUpscalerSettings({static_cast<IOSUpscalerMode>(mode),scale==0 ? 1.f : scale==1 ? 0.75f : 0.5f});
+      context.updateMetal4Request(Gothic::settingsGetI("ENGINE","zMetal4")!=0);
+      context.updateRayTracingMode(Gothic::settingsGetI("ENGINE","zRayTracing"));
       }
     catch(...) {
       const float invalid = std::numeric_limits<float>::quiet_NaN();

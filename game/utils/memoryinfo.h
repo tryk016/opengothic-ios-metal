@@ -35,6 +35,7 @@ struct Snapshot final {
 // Registers cheap lifecycle observers on iOS. Notification callbacks only set
 // atomic flags; snapshots and logging stay on the game loop.
 void     initialize();
+ThermalState thermalState();
 Snapshot snapshot();
 uint32_t consumeEvents();
 

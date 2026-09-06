@@ -98,7 +98,8 @@ fragment IOSMotionOutput riosMotionFragment(IOSMotionVertexOut in [[stage_in]],
   if(material==1u && texture.sample(textureSampler,in.uv).a*in.alpha<0.5)
     discard_fragment();
   const float2 currentUV=(in.position.xy-motion.jitter.xy)/motion.extent.xy;
-  return {riosPreviousMotion(in.previousClip,currentUV,motion),globalReactive};
+  return {riosPreviousMotion(in.previousClip,currentUV,motion),
+          in.previousClip.w<=0.00001f ? 1.f : globalReactive};
 }
 
 struct IOSReactiveOutput { float mask [[color(1)]]; };
@@ -119,5 +120,6 @@ fragment IOSMotionOutput riosSkyMotionFragment(IOSSkyVertexOut in [[stage_in]],
   const float4 world=scene.inverseViewProjection*float4(uv*2.0-1.0,0.5,1.0);
   const float3 direction=world.xyz/world.w-scene.cameraPosition.xyz;
   const float4 previous=motion.previousViewProjection*float4(direction,0.0);
-  return {riosPreviousMotion(previous,uv-motion.jitter.xy/motion.extent.xy,motion),max(globalReactive,0.25)};
+  return {riosPreviousMotion(previous,uv-motion.jitter.xy/motion.extent.xy,motion),
+          previous.w<=0.00001 ? 1.0 : max(globalReactive,0.25)};
 }

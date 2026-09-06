@@ -233,6 +233,16 @@ elseif(IOS)
          "Use MetalFX Spatial for reduced-resolution HDR scene upscaling on supported iOS devices" OFF)
   option(OPENGOTHIC_METALFX_TEMPORAL
          "Use MetalFX Temporal AA upscaling with Spatial/Lanczos fallback on supported iOS devices" OFF)
+  option(OPENGOTHIC_RENDERER_IOS_METAL4
+         "Build the experimental Metal 4 static-scene transport" OFF)
+  if(OPENGOTHIC_RENDERER_IOS_METAL4)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE OPENGOTHIC_RENDERER_IOS_METAL4=1)
+  endif()
+  option(OPENGOTHIC_RENDERER_IOS_RAYTRACING
+         "Build the experimental native static-scene ray tracing" OFF)
+  if(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE OPENGOTHIC_RENDERER_IOS_RAYTRACING=1)
+  endif()
   # App version. CI passes -DOPENGOTHIC_IOS_VERSION=1.0.<run> so the bundle's
   # CFBundleShortVersionString matches the "version" field in apps.json —
   # otherwise SideStore/AltStore rejects the download as a version mismatch.
@@ -653,6 +663,22 @@ elseif(IOS)
       MACOSX_PACKAGE_LOCATION Resources)
   target_sources(${PROJECT_NAME} PRIVATE
     "${OPENGOTHIC_RENDERER_IOS_METALLIB}")
+  if(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    set(OPENGOTHIC_RT_SOURCE "${CMAKE_SOURCE_DIR}/shader/ios-metal/raytracing.metal")
+    set(OPENGOTHIC_RT_AIR "${CMAKE_CURRENT_BINARY_DIR}/RendererIOSRayTracing.air")
+    set(OPENGOTHIC_RT_METALLIB "${CMAKE_CURRENT_BINARY_DIR}/RendererIOSRayTracing.metallib")
+    add_custom_command(OUTPUT "${OPENGOTHIC_RT_METALLIB}"
+      COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
+              -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET} -c "${OPENGOTHIC_RT_SOURCE}" -o "${OPENGOTHIC_RT_AIR}"
+      COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metallib
+              "${OPENGOTHIC_RT_AIR}" -o "${OPENGOTHIC_RT_METALLIB}"
+      DEPENDS "${OPENGOTHIC_RT_SOURCE}"
+      COMMENT "Compiling RendererIOS ray tracing Metal library" VERBATIM)
+    add_custom_target(RendererIOSRayTracingMetallib DEPENDS "${OPENGOTHIC_RT_METALLIB}")
+    add_dependencies(${PROJECT_NAME} RendererIOSRayTracingMetallib)
+    set_source_files_properties("${OPENGOTHIC_RT_METALLIB}" PROPERTIES GENERATED TRUE MACOSX_PACKAGE_LOCATION Resources)
+    target_sources(${PROJECT_NAME} PRIVATE "${OPENGOTHIC_RT_METALLIB}")
+  endif()
 elseif(APPLE)
   enable_language(OBJCXX)
 endif()

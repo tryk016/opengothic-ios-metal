@@ -174,6 +174,8 @@ Gothic::Gothic() {
   defaults->set("INTERNAL",     "vidResIndex", 0); // full-res
   defaults->set("ENGINE",       "zUpscaler", 0); // Auto, Temporal, Spatial, FSR 1, Native
   defaults->set("ENGINE",       "zAdaptiveFps", 0);
+  defaults->set("ENGINE",       "zMetal4", 0);
+  defaults->set("ENGINE",       "zRayTracing", 0);
 #if defined(__IOS__)
   // 0 = uncapped, 1 = 30 FPS, 2 = 60 FPS. The iOS game-options menu maps the
   // requested replacement choice to this runtime setting.

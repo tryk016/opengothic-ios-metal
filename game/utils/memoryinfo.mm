@@ -85,8 +85,19 @@ void MemoryInfo::initialize() {
     });
   }
 
+MemoryInfo::ThermalState MemoryInfo::thermalState() {
+  switch([[NSProcessInfo processInfo] thermalState]) {
+    case NSProcessInfoThermalStateNominal:  return ThermalState::Nominal;
+    case NSProcessInfoThermalStateFair:     return ThermalState::Fair;
+    case NSProcessInfoThermalStateSerious:  return ThermalState::Serious;
+    case NSProcessInfoThermalStateCritical: return ThermalState::Critical;
+    }
+  return ThermalState::Unknown;
+  }
+
 MemoryInfo::Snapshot MemoryInfo::snapshot() {
   Snapshot ret;
+  ret.thermal = thermalState();
 
 #if defined(OPENGOTHIC_IOS_INCREASED_MEMORY_REQUESTED)
   ret.increasedMemoryLimitRequested = true;
@@ -104,13 +115,6 @@ MemoryInfo::Snapshot MemoryInfo::snapshot() {
 
   ret.availableBytes = uint64_t(os_proc_available_memory());
   ret.availableValid = true;
-
-  switch([[NSProcessInfo processInfo] thermalState]) {
-    case NSProcessInfoThermalStateNominal:  ret.thermal = ThermalState::Nominal;  break;
-    case NSProcessInfoThermalStateFair:     ret.thermal = ThermalState::Fair;     break;
-    case NSProcessInfoThermalStateSerious:  ret.thermal = ThermalState::Serious;  break;
-    case NSProcessInfoThermalStateCritical: ret.thermal = ThermalState::Critical; break;
-    }
 
 #if defined(OPENGOTHIC_PERF_DIAGNOSTICS)
   // SecTask is available at runtime on iOS but its header is not part of the

@@ -77,6 +77,10 @@ class IOSGPUScene final {
       uint64_t                     encodedPhaseDrawCount = 0;
       uint64_t                     encodedPhaseTexturedDrawCount = 0;
       uint64_t                     failingHandle = 0;
+      uint64_t                     metal4DrawCount = 0;
+      bool                         metal4Unavailable = false;
+      bool                         metal4Failed = false;
+      bool                         rayTracingFailed = false;
       IOSGPUSceneFrameCounts       counts;
       IOSGPUSceneFailureCounts     failures;
       IOSGPUSceneFrameAnimationDrawReport frameAnimation;
@@ -122,6 +126,8 @@ class IOSGPUScene final {
         PreparedFrame& operator=(PreparedFrame&&) noexcept;
 
         bool ready() const noexcept;
+        void markSubmitted() noexcept;
+        void completeConfirmed() noexcept;
         AdditiveInputArtifact takeAdditiveInputArtifact() noexcept;
         Multiply2InputArtifact takeMultiply2InputArtifact() noexcept;
 
@@ -152,7 +158,8 @@ class IOSGPUScene final {
                         const IOSSceneAssetRegistry& assets,
                         const IOSFrameAnimationEvidence* frameAnimation,
                         const IOSUVAnimationEvidence* uvAnimation = nullptr,
-                        bool temporal = false) noexcept;
+                        bool temporal = false,
+                        int rayTracingMode = 0) noexcept;
 
     // Must precede all other recording on this command buffer.
     bool encodePreparedEnvironment(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
@@ -162,6 +169,7 @@ class IOSGPUScene final {
       IOSUpscaler& upscaler;
       const IOSSceneSnapshot& snapshot;
       const IOSToneResolveConstants& tone;
+      bool metal4Requested = false;
       };
 
     Report encodePreparedScene(Tempest::Encoder<Tempest::CommandBuffer>& encoder,

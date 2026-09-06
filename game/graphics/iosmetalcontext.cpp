@@ -1,4 +1,5 @@
 #include "iosmetalcontext.h"
+#include "utils/memoryinfo.h"
 
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
     defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
@@ -4888,6 +4889,11 @@ struct IOSMetalContext::Impl final {
   Device&                                      device;
   std::unique_ptr<IOSUpscaler> upscaler;
   IOSUpscalerSettings pendingUpscaler, activeUpscaler;
+  bool metal4Requested = false, metal4Unavailable = false;
+  int metal4LastActive = -1;
+  int rayTracingMode = 0;
+  bool rayTracingUnavailable = false, rayTracingThermalLimited = false;
+  uint64_t rayTracingCoolSince = 0;
   bool recreateUpscaler=false;
   const IOSDeviceFactsCreateResult             deviceFacts;
   std::optional<IOSFeaturePolicyProvenance>     featurePolicyProvenance;
@@ -5249,6 +5255,7 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
       ++stats.gpuFrames;
       }
     }
+  frameContext.preparedScene.completeConfirmed();
   frameContext.fence = Fence();
   impl->retireSlotAfterTerminal(frameContext);
   if(impl->failed)
@@ -5457,6 +5464,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
   bool previewAccepted = false;
   bool previewFallback = false;
   bool submissionAttempted = false;
+  bool retryNative = false;
   bool nativeSceneEncoded = false;
   uint64_t nativeSceneGeneration = 0u;
   uint64_t nativeSceneSequence = 0u;
@@ -5541,11 +5549,33 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       impl->gpuScene!=nullptr && impl->linearHDRMetal!=nullptr;
     IOSGPUScene::Report preparedSceneReport;
     if(linearHDRSceneActive) {
+      int rayTracingMode=0;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+      if(impl->rayTracingMode!=0 && !impl->rayTracingUnavailable) {
+        // The same modest AO style remains available without ray queries.
+        rayTracingMode=impl->rayTracingMode==1 ? 3 : 0;
+        const auto thermal=MemoryInfo::thermalState();
+        const auto now=rendererIOSClockUs();
+        if(thermal==MemoryInfo::ThermalState::Serious || thermal==MemoryInfo::ThermalState::Critical) {
+          impl->rayTracingThermalLimited=true;
+          impl->rayTracingCoolSince=0;
+          }
+        else if(impl->rayTracingThermalLimited &&
+                (thermal==MemoryInfo::ThermalState::Nominal || thermal==MemoryInfo::ThermalState::Fair)) {
+          if(impl->rayTracingCoolSince==0) impl->rayTracingCoolSince=now;
+          if(now-impl->rayTracingCoolSince>=30000000u) impl->rayTracingThermalLimited=false;
+          }
+        if(iosEvaluateFeaturePolicy(*impl->deviceFacts.value,{IOSFeatureId::RayTracing,true,true},
+             impl->rayTracingThermalLimited).active)
+          rayTracingMode=impl->rayTracingMode;
+        }
+#endif
       preparedSceneReport = impl->gpuScene->prepareFrame(
           preparedScene,impl->linearHDRTargets.generation,
           *input.snapshot,assets,
           frameAnimation,uvAnimation,
-          impl->upscaler!=nullptr && impl->upscaler->activeMode()==IOSUpscalerMode::Temporal);
+          impl->upscaler!=nullptr && impl->upscaler->activeMode()==IOSUpscalerMode::Temporal,
+          rayTracingMode);
       if(preparedSceneReport.result!=IOSGPUScene::Result::Success ||
          !preparedScene.ready()) {
         if(impl->nativeScenePrepareFailureGeneration!=
@@ -5788,7 +5818,9 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         const auto sceneTone=impl->linearHDRSettings.committed;
         const IOSToneResolveConstants sceneConstants={sceneTone.brightness,sceneTone.contrast,sceneTone.gamma,sceneTone.exposure};
         const std::optional<IOSGPUScene::SceneOutput> output = impl->upscaler!=nullptr
-            ? std::optional<IOSGPUScene::SceneOutput>{{*impl->upscaler,*input.snapshot,sceneConstants}}
+            ? std::optional<IOSGPUScene::SceneOutput>{{*impl->upscaler,*input.snapshot,sceneConstants,
+                impl->metal4Requested && !impl->metal4Unavailable &&
+                iosEvaluateFeaturePolicy(*impl->deviceFacts.value,{IOSFeatureId::Metal4Transport,true,false}).eligible}}
             : std::nullopt;
         const auto report = impl->gpuScene->encodePreparedScene(
             encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker,output ? &*output : nullptr);
@@ -5822,6 +5854,21 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             }
         }
 #endif
+        impl->metal4Unavailable |= report.metal4Unavailable || report.metal4Failed;
+        const int metal4Active = report.metal4DrawCount!=0 ? 1 : 0;
+        if(impl->metal4Requested && (metal4Active!=impl->metal4LastActive || input.snapshot->sequence.value%300u==0)) {
+          Log::i("RendererIOS Metal4: requested=1 active=",metal4Active,
+              " draw-calls=",report.metal4DrawCount," command-buffers=",metal4Active ? 3 : 1,
+              " event-hops=",metal4Active ? 2 : 0," fallback=",
+              report.metal4Failed ? "encode-failed" : impl->metal4Unavailable ? "activation-failed" :
+              metal4Active ? "none" : "unsupported-or-no-eligible-draws");
+          impl->metal4LastActive = metal4Active;
+          }
+        impl->rayTracingUnavailable |= report.rayTracingFailed;
+        if(report.metal4Failed || report.rayTracingFailed) {
+          retryNative = true;
+          throw std::runtime_error("RendererIOS optional GPU path requires fallback");
+          }
         if(report.result!=IOSGPUScene::Result::Success && impl->upscaler!=nullptr &&
            impl->upscaler->encodingFailed()) {
           impl->recreateUpscaler=true;
@@ -6037,6 +6084,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #endif
     frameContext.fence = std::move(submittedFence);
     frameContext.submitted = true;
+    frameContext.preparedScene.markSubmitted();
     frameContext.submittedAtUs = rendererIOSClockUs();
     ++impl->counters.submitAccepted;
 #if defined(OPENGOTHIC_RENDERER_IOS_EMISSIVE_CAUSAL)
@@ -6238,7 +6286,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       }
     // The encoder has unwound and the unsubmitted command/scene owners have
     // been retired above. Recreate the next scaler at the next idle boundary.
-    if(impl->recreateUpscaler && !submissionAttempted)
+    if((impl->recreateUpscaler || retryNative) && !submissionAttempted)
       return {};
     impl->forcePreviewPlaceholder();
     if(impl->takePresentFailureAndLatchProof("RendererIOS asynchronous Metal present failed"))
@@ -6620,6 +6668,32 @@ void IOSMetalContext::updateUpscalerSettings(IOSUpscalerSettings settings) noexc
   settings={IOSUpscalerMode::Native,1.f};
 #endif
   impl->pendingUpscaler=settings;
+  }
+
+void IOSMetalContext::updateMetal4Request(bool requested) noexcept {
+#if !defined(OPENGOTHIC_RENDERER_IOS_METAL4) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  requested = false;
+#endif
+  if(impl->metal4Requested!=requested) {
+    impl->metal4Unavailable = false;
+    impl->metal4LastActive = -1;
+    }
+  impl->metal4Requested = requested;
+  }
+
+void IOSMetalContext::updateRayTracingMode(int mode) noexcept {
+#if !defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING) || \
+    defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B)
+  mode=0;
+#endif
+  mode=std::clamp(mode,0,2);
+  if(impl->rayTracingMode!=mode) impl->rayTracingUnavailable=false;
+  impl->rayTracingMode=mode;
   }
 
 void IOSMetalContext::prepareSceneCamera(IOSSceneFrameState& scene) const noexcept {

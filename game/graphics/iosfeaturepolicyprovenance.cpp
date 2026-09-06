@@ -41,6 +41,8 @@ const char* fallbackName(IOSFeatureFallbackReason fallback) noexcept {
       return "activation-failed";
     case IOSFeatureFallbackReason::InvalidDefaultClass:
       return "invalid-default-class";
+    case IOSFeatureFallbackReason::ThermalLimited:
+      return "thermal-limited";
     }
   return "invalid-feature";
   }

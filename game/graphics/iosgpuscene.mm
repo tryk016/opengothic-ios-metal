@@ -1,5 +1,8 @@
 #include "iosgpuscene.h"
 #include "iosupscaler.h"
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+#include "iosraytracing.h"
+#endif
 
 #include "ioslinearhdrproofproducer.h"
 #include "iosmultiply2coverageproof.h"
@@ -583,6 +586,7 @@ struct IOSGPUSceneNativePreparedDraw final {
   size_t instanceCount = 1;
   float cameraDepth = 0.f;
   uint64_t sourceId = 0;
+  bool metal4Eligible = false;
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_GPU_VISIBILITY_DIAGNOSTIC)
   IOSMultiply2VisibilityClipClass visibilityClipClass =
       IOSMultiply2VisibilityClipClass::Indeterminate;
@@ -896,6 +900,9 @@ bool makeMultiply2ArtifactRecord(
 }
 
 struct IOSGPUScene::PreparedFrame::Uploads final {
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  IOSRayTracing::Frame rays;
+#endif
   OwnedObjectiveC bones;
   OwnedObjectiveC morphLayers;
   OwnedObjectiveC instances;
@@ -903,6 +910,9 @@ struct IOSGPUScene::PreparedFrame::Uploads final {
   OwnedObjectiveC lights;
   OwnedObjectiveC tessellationFactors;
   OwnedObjectiveC particles;
+#if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
+  OwnedObjectiveC metal4Uniforms;
+#endif
 
   static id<MTLBuffer> reserve(id<MTLDevice> device, OwnedObjectiveC& storage, size_t size) {
     auto buffer = (id<MTLBuffer>)storage.get();
@@ -923,6 +933,10 @@ struct IOSGPUScene::PreparedFrame::Uploads final {
   };
 
 struct IOSGPUScene::PreparedFrame::Impl final {
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  IOSRayTracing::Frame* rays = nullptr;
+  int rayTracingMode = 0;
+#endif
   const void* owner = nullptr;
   std::vector<IOSGPUSceneNativePreparedDraw> base;
   std::vector<IOSGPUSceneNativePreparedDraw> multiply2;
@@ -943,6 +957,10 @@ struct IOSGPUScene::PreparedFrame::Impl final {
   IOSFloat4 cloudOffsets;
   IOSMatrix4x4 viewProjection;
   bool skyReady = false;
+#if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
+  OwnedObjectiveC metal4VertexTable, metal4FragmentTable, metal4Residency;
+  id metal4Uniforms = nil;
+#endif
   IOSGPUScene::Report report;
   IOSGPUScene::AdditiveInputArtifact additiveInput;
   IOSGPUScene::Multiply2InputArtifact multiply2Input;
@@ -987,6 +1005,9 @@ struct IOSGPUScene::Impl final {
     id sceneHDR = nil;
     std::string_view sceneMarker;
     const SceneOutput* output = nullptr;
+    // Prefix and suffix preserve the base draw order around one Metal 4 run.
+    uint8_t segment = 0;
+    size_t metal4Begin = 0, metal4End = 0;
     };
 
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
@@ -1035,6 +1056,10 @@ struct IOSGPUScene::Impl final {
   static void encodeLandscape(void* opaque,
                               MTL::RenderCommandEncoder* nativeEncoder);
   static void encodeScene(void* opaque, MTL::CommandBuffer* command);
+#if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
+  bool prepareMetal4(NativeEncodeContext& context, PreparedFrame::Uploads& uploads);
+  static bool encodeMetal4(void* opaque, MTL::CommandBuffer* prefix, void* body, MTL::CommandBuffer* suffix);
+#endif
   bool initializeMotion(id<MTLDevice> device, id<MTLLibrary> library, MTLVertexDescriptor* vertices);
   bool encodeMotion(id<MTLCommandBuffer> command, const PreparedFrame::Impl& prepared,
                     const IOSSceneSnapshot& snapshot);
@@ -1607,7 +1632,11 @@ struct IOSGPUScene::Impl final {
       samplerDesc.normalizedCoordinates = YES;
       samplerDesc.borderColor           = MTLSamplerBorderColorOpaqueWhite;
       samplerDesc.lodAverage            = NO;
+#if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
+      samplerDesc.supportArgumentBuffers = YES;
+#else
       samplerDesc.supportArgumentBuffers = NO;
+#endif
       OwnedObjectiveC samplerOwner(
           [device newSamplerStateWithDescriptor:samplerDesc]);
       if(samplerOwner.get()==nil) {
@@ -1900,6 +1929,10 @@ struct IOSGPUScene::Impl final {
 
   Tempest::Device&                  owner;
   Tempest::BorrowedMetalDevice      nativeDevice;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  std::unique_ptr<IOSRayTracing> rayTracing;
+  bool rayTracingUnavailable = false;
+#endif
   bool                            geometryReported = false;
   std::array<OwnedObjectiveC,6>     geometryPipelines;
   std::array<OwnedObjectiveC,6>     shadowPipelines;
@@ -2874,14 +2907,154 @@ bool IOSGPUScene::Impl::encodeWaterFactors(id<MTLCommandBuffer> command,
   return true;
   }
 
+#if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
+namespace {
+struct alignas(16) IOSMetal4DrawUniforms {
+  IOSGPUSceneDrawConstants draw;
+  IOSDeformationConstants deformation;
+  };
+constexpr size_t Metal4DrawStride = (sizeof(IOSMetal4DrawUniforms)+255u)&~size_t(255u);
+constexpr size_t Metal4DrawOffset = (sizeof(IOSSceneLightingConstants)+255u)&~size_t(255u);
+}
+
+bool IOSGPUScene::Impl::prepareMetal4(NativeEncodeContext& context, PreparedFrame::Uploads& uploads) {
+  if(@available(iOS 26.0,macOS 26.0,*)) {
+    try {
+      @try {
+        auto& prepared = *context.prepared;
+        auto device = (id<MTLDevice>)(void*)Tempest::MetalApi::borrowDevice(owner).get();
+        const size_t count = context.metal4End-context.metal4Begin;
+        const auto uniforms = PreparedFrame::Uploads::reserve(device,uploads.metal4Uniforms,
+            Metal4DrawOffset+count*Metal4DrawStride);
+        prepared.metal4Uniforms = uniforms;
+        auto bytes = static_cast<std::byte*>(uniforms.contents);
+        std::memcpy(bytes,&prepared.lighting,sizeof(prepared.lighting));
+        for(size_t i=0;i<count;++i) {
+          const auto& draw = prepared.base[context.metal4Begin+i];
+          const IOSMetal4DrawUniforms value{draw.plan.constants,draw.deformation};
+          std::memcpy(bytes+Metal4DrawOffset+i*Metal4DrawStride,&value,sizeof(value));
+          }
+        OwnedObjectiveC tableDescriptor([MTL4ArgumentTableDescriptor new]);
+        auto tableDesc = (MTL4ArgumentTableDescriptor*)tableDescriptor.get();
+        tableDesc.maxBufferBindCount = 7;
+        prepared.metal4VertexTable = OwnedObjectiveC([device newArgumentTableWithDescriptor:tableDesc error:nil]);
+        tableDesc.maxBufferBindCount = 2;
+        tableDesc.maxTextureBindCount = 3;
+        tableDesc.maxSamplerStateBindCount = 1;
+        prepared.metal4FragmentTable = OwnedObjectiveC([device newArgumentTableWithDescriptor:tableDesc error:nil]);
+        OwnedObjectiveC residencyDescriptor([MTLResidencySetDescriptor new]);
+        prepared.metal4Residency = OwnedObjectiveC([device newResidencySetWithDescriptor:
+            (MTLResidencySetDescriptor*)residencyDescriptor.get() error:nil]);
+        if(prepared.metal4VertexTable.get()==nil || prepared.metal4FragmentTable.get()==nil ||
+           prepared.metal4Residency.get()==nil)
+          return false;
+        auto residency = (id<MTLResidencySet>)prepared.metal4Residency.get();
+        const auto add = [&](id resource) { if(resource!=nil) [residency addAllocation:resource]; };
+        add(uniforms); add(context.sceneHDR); add(sceneDepth.get()); add(prepared.lightBuffer);
+        for(const auto& map:shadowMaps) add(map.get());
+        for(size_t i=context.metal4Begin;i<context.metal4End;++i) {
+          const auto& draw = prepared.base[i];
+          add(draw.vertexBuffer); add(draw.indexBuffer); add(draw.baseColorTexture); add(draw.instanceBuffer);
+          }
+        [residency commit];
+        auto fragment = (id<MTL4ArgumentTable>)prepared.metal4FragmentTable.get();
+        [fragment setAddress:uniforms.gpuAddress atIndex:0];
+        [fragment setAddress:((id<MTLBuffer>)prepared.lightBuffer).gpuAddress atIndex:1];
+        for(size_t i=0;i<shadowMaps.size();++i)
+          [fragment setTexture:((id<MTLTexture>)shadowMaps[i].get()).gpuResourceID atIndex:i+1];
+        [fragment setSamplerState:((id<MTLSamplerState>)samplerState).gpuResourceID atIndex:0];
+        return true;
+        }
+      @catch(NSException*) { return false; }
+      }
+    catch(...) { return false; }
+    }
+  return false;
+  }
+
+bool IOSGPUScene::Impl::encodeMetal4(void* opaque, MTL::CommandBuffer* prefix,
+                                    void* body, MTL::CommandBuffer* suffix) {
+  if(@available(iOS 26.0,macOS 26.0,*)) {
+    auto& context = *static_cast<NativeEncodeContext*>(opaque);
+    auto& prepared = *context.prepared;
+    auto& scene = *context.scene;
+    context.segment = 1;
+    encodeScene(&context,prefix);
+    if(context.report.result!=Result::Success)
+      return false;
+    uint64_t firstDraws = context.report.encodedPhaseDrawCount;
+    uint64_t firstTextures = context.report.encodedPhaseTexturedDrawCount;
+    auto command = (id<MTL4CommandBuffer>)body;
+    [command useResidencySet:(id<MTLResidencySet>)prepared.metal4Residency.get()];
+    OwnedObjectiveC descriptor([MTL4RenderPassDescriptor new]);
+    auto pass = (MTL4RenderPassDescriptor*)descriptor.get();
+    auto color = (id<MTLTexture>)context.sceneHDR;
+    pass.colorAttachments[0].texture = color;
+    pass.colorAttachments[0].loadAction = MTLLoadActionLoad;
+    pass.colorAttachments[0].storeAction = MTLStoreActionStore;
+    pass.depthAttachment.texture = (id<MTLTexture>)scene.sceneDepth.get();
+    pass.depthAttachment.loadAction = MTLLoadActionLoad;
+    pass.depthAttachment.storeAction = MTLStoreActionStore;
+    auto encoder = [command renderCommandEncoderWithDescriptor:pass];
+    if(encoder==nil)
+      return false;
+    @try {
+      encoder.label = @"RendererIOS Metal4 opaque";
+      [encoder setViewport:MTLViewport{0,0,double(color.width),double(color.height),0,1}];
+      [encoder setFrontFacingWinding:MTLWindingClockwise];
+      [encoder setCullMode:MTLCullModeFront];
+      [encoder setDepthStencilState:(id<MTLDepthStencilState>)scene.baseDepthState];
+      auto vertex = (id<MTL4ArgumentTable>)prepared.metal4VertexTable.get();
+      auto fragment = (id<MTL4ArgumentTable>)prepared.metal4FragmentTable.get();
+      [encoder setArgumentTable:vertex atStages:MTLRenderStageVertex];
+      [encoder setArgumentTable:fragment atStages:MTLRenderStageFragment];
+      for(size_t i=context.metal4Begin;i<context.metal4End;++i) {
+        const auto& draw = prepared.base[i];
+        const uint64_t uniforms = ((id<MTLBuffer>)prepared.metal4Uniforms).gpuAddress+
+            Metal4DrawOffset+(i-context.metal4Begin)*Metal4DrawStride;
+        [vertex setAddress:((id<MTLBuffer>)draw.vertexBuffer).gpuAddress atIndex:0];
+        [vertex setAddress:uniforms atIndex:1];
+        [vertex setAddress:uniforms+offsetof(IOSMetal4DrawUniforms,deformation) atIndex:2];
+        if(draw.instanceCount>1)
+          [vertex setAddress:((id<MTLBuffer>)draw.instanceBuffer).gpuAddress+draw.instanceOffset atIndex:6];
+        [fragment setTexture:((id<MTLTexture>)draw.baseColorTexture).gpuResourceID atIndex:0];
+        [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)draw.pipelineState];
+        [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:draw.plan.indexCount
+             indexType:MTLIndexTypeUInt32
+             indexBuffer:((id<MTLBuffer>)draw.indexBuffer).gpuAddress+draw.plan.indexBufferOffset
+             indexBufferLength:draw.plan.indexCount*sizeof(uint32_t) instanceCount:draw.instanceCount
+             baseVertex:0 baseInstance:0];
+        firstDraws += draw.instanceCount;
+        firstTextures += draw.instanceCount;
+        }
+      }
+    @finally { [encoder endEncoding]; }
+    context.segment = 2;
+    encodeScene(&context,suffix);
+    context.report.encodedPhaseDrawCount += firstDraws;
+    context.report.encodedPhaseTexturedDrawCount += firstTextures;
+    return context.report.result==Result::Success;
+    }
+  return false;
+  }
+#endif
+
 void IOSGPUScene::Impl::encodeScene(void* opaque, MTL::CommandBuffer* nativeCommand) {
   auto& context = *static_cast<NativeEncodeContext*>(opaque);
   auto& scene = *context.scene;
   auto& prepared = *context.prepared;
   id<MTLCommandBuffer> command = (id<MTLCommandBuffer>)(void*)nativeCommand;
   @try {
-    if(!scene.encodeShadows(command,prepared) || !scene.encodeSkyLut(command,prepared) ||
-       !scene.encodeWaterFactors(command,prepared)) {
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    if(context.segment!=2 && prepared.rays!=nullptr &&
+       !scene.rayTracing->encodeBuilds(*prepared.rays,nativeCommand)) {
+      context.report.rayTracingFailed=true;
+      context.report.result=Result::NativeEncodingFailed;
+      return;
+      }
+#endif
+    if(context.segment!=2 && (!scene.encodeShadows(command,prepared) || !scene.encodeSkyLut(command,prepared) ||
+       !scene.encodeWaterFactors(command,prepared))) {
       context.report.result = Result::NativeEncodingFailed;
       return;
       }
@@ -2947,13 +3120,37 @@ void IOSGPUScene::Impl::encodeScene(void* opaque, MTL::CommandBuffer* nativeComm
         }
       };
     const bool copies = prepared.needsSceneCopy();
-    render(copies ? 3u : 0u,true,false);
+    bool ao=false;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    ao=prepared.rays!=nullptr && (prepared.rayTracingMode==1 || prepared.rayTracingMode==3) && context.output!=nullptr;
+#endif
+    render(ao ? 5u : copies || context.segment==1 ? 3u : 0u,context.segment!=2,false);
+    if(context.segment==1)
+      return;
     if(context.report.result!=Result::Success)
       return;
-    if(copies) {
+    bool motionEncoded=false;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    if(ao) {
+      motionEncoded=scene.encodeMotion(command,prepared,context.output->snapshot);
+      if(!scene.rayTracing->encodeAmbientOcclusion(*prepared.rays,nativeCommand,(MTL::Texture*)(void*)color,
+          (MTL::Texture*)(void*)depth,motionEncoded ? (MTL::Texture*)(void*)scene.motionTexture.get() : nullptr,
+          motionEncoded ? (MTL::Texture*)(void*)scene.reactiveTexture.get() : nullptr,context.output->snapshot)) {
+        context.report.rayTracingFailed=true;
+        context.report.result=Result::NativeEncodingFailed;
+        return;
+        }
+      const auto baseDraws=context.report.encodedPhaseDrawCount;
+      const auto baseTextures=context.report.encodedPhaseTexturedDrawCount;
+      render(6u,false,false);
+      context.report.encodedPhaseDrawCount+=baseDraws;
+      context.report.encodedPhaseTexturedDrawCount+=baseTextures;
+      }
+#endif
+    if(copies || ao) {
       const auto baseDraws = context.report.encodedPhaseDrawCount;
       const auto baseTextures = context.report.encodedPhaseTexturedDrawCount;
-      copyScene(!prepared.water.empty());
+      if(copies) copyScene(!prepared.water.empty());
       render(4u,false,false);
       context.report.encodedPhaseDrawCount += baseDraws;
       context.report.encodedPhaseTexturedDrawCount += baseTextures;
@@ -2964,9 +3161,17 @@ void IOSGPUScene::Impl::encodeScene(void* opaque, MTL::CommandBuffer* nativeComm
       }
     if(context.report.result==Result::Success && context.output!=nullptr) {
       const auto& output=*context.output;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+      if(prepared.rays!=nullptr && prepared.rayTracingMode==2 &&
+         !scene.rayTracing->encodeDebug(*prepared.rays,nativeCommand,(MTL::Texture*)(void*)color,output.snapshot.currentCamera)) {
+        context.report.rayTracingFailed=true;
+        context.report.result=Result::NativeEncodingFailed;
+        return;
+        }
+#endif
       IOSUpscalerTemporalInputs temporal;
       if(output.upscaler.activeMode()==IOSUpscalerMode::Temporal &&
-         scene.encodeMotion(command,prepared,output.snapshot))
+         (ao ? motionEncoded : scene.encodeMotion(command,prepared,output.snapshot)))
         temporal = {(MTL::Texture*)(void*)depth,(MTL::Texture*)(void*)scene.motionTexture.get(),
                     (MTL::Texture*)(void*)scene.reactiveTexture.get()};
       if(!output.upscaler.encodeNative(nativeCommand,(MTL::Texture*)(void*)color,temporal,output.snapshot,output.tone))
@@ -2974,6 +3179,9 @@ void IOSGPUScene::Impl::encodeScene(void* opaque, MTL::CommandBuffer* nativeComm
       }
     }
   @catch(NSException*) {
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    context.report.rayTracingFailed=prepared.rays!=nullptr;
+#endif
     prepared.nativeException = true;
     context.report.result = Result::NativeEncodingFailed;
     }
@@ -3015,9 +3223,37 @@ IOSGPUScene::Report IOSGPUScene::encodePreparedScene(
     context.sceneMarker = marker;
     context.output = output;
     impl->ensureSceneTargets((id<MTLTexture>)context.sceneHDR,*prepared.impl);
-    const bool encoded = Tempest::MetalApi::withActiveCommandBuffer(
-        impl->owner,encoder,&context,&Impl::encodeScene);
+    bool encoded = false;
+    bool metal4Unavailable = false, metal4Failed = false;
+    uint64_t metal4DrawCount = 0;
+#if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
+    if(output!=nullptr && output->metal4Requested) {
+      const auto& draws = prepared.impl->base;
+      while(context.metal4Begin<draws.size() && !draws[context.metal4Begin].metal4Eligible)
+        ++context.metal4Begin;
+      context.metal4End = context.metal4Begin;
+      while(context.metal4End<draws.size() && draws[context.metal4End].metal4Eligible)
+        ++context.metal4End;
+      if(context.metal4Begin!=context.metal4End) {
+        if(impl->prepareMetal4(context,*prepared.uploads)) {
+          auto result = Tempest::Metal4InteropResult::Failed;
+          try { result = Tempest::MetalApi::stageMetal4Interop(impl->owner,encoder,&context,&Impl::encodeMetal4); }
+          catch(...) {}
+          encoded = result==Tempest::Metal4InteropResult::Encoded;
+          metal4Failed = result==Tempest::Metal4InteropResult::Failed;
+          metal4Unavailable = result==Tempest::Metal4InteropResult::Unsupported;
+          if(encoded) metal4DrawCount = context.metal4End-context.metal4Begin;
+          }
+        else { metal4Unavailable = true; }
+        }
+      }
+#endif
+    if(!encoded && !metal4Failed)
+      encoded = Tempest::MetalApi::withActiveCommandBuffer(impl->owner,encoder,&context,&Impl::encodeScene);
     prepared.impl->ready = false;
+    context.report.metal4Unavailable = metal4Unavailable;
+    context.report.metal4Failed = metal4Failed;
+    context.report.metal4DrawCount = metal4DrawCount;
     if(!encoded || !prepared.impl->nativeCompleted || prepared.impl->nativeException)
       context.report.result = Result::NativeEncodingFailed;
     return context.report;
@@ -3056,9 +3292,10 @@ void IOSGPUScene::Impl::encodeLandscape(
     };
   const auto encodePhase = [&](
       const std::vector<IOSGPUSceneNativePreparedDraw>& draws,
-      id depthState) {
+      id depthState, size_t begin = 0, size_t end = std::numeric_limits<size_t>::max()) {
     [encoder setDepthStencilState:(id<MTLDepthStencilState>)depthState];
-    for(const auto& draw:draws) {
+    for(size_t i=begin;i<std::min(end,draws.size());++i) {
+      const auto& draw = draws[i];
       [encoder setRenderPipelineState:
           (id<MTLRenderPipelineState>)draw.pipelineState];
       bindGeometry(encoder,draw);
@@ -3121,9 +3358,14 @@ void IOSGPUScene::Impl::encodeLandscape(
     [encoder setFragmentSamplerState:
         (id<MTLSamplerState>)context.scene->samplerState
                             atIndex:0u];
-    if(context.phase==0u || context.phase==1u || context.phase==3u) {
-      context.scene->encodeSky(encoder,*context.prepared);
-      encodePhase(context.prepared->base,context.scene->baseDepthState);
+    if(context.phase==0u || context.phase==1u || context.phase==3u || context.phase==5u) {
+      if(context.segment!=2)
+        context.scene->encodeSky(encoder,*context.prepared);
+      encodePhase(context.prepared->base,context.scene->baseDepthState,
+                  context.segment==2 ? context.metal4End : 0,
+                  context.segment==1 ? context.metal4Begin : context.prepared->base.size());
+      }
+    if(context.segment!=1 && (context.phase==0u || context.phase==1u || context.phase==3u || context.phase==6u)) {
       context.scene->encodeParticles(encoder,*context.prepared,IOSMaterialCategory::Opaque);
       context.scene->encodeParticles(encoder,*context.prepared,IOSMaterialCategory::AlphaTest);
       }
@@ -3192,6 +3434,18 @@ IOSGPUScene::PreparedFrame::PreparedFrame(PreparedFrame&&) noexcept = default;
 IOSGPUScene::PreparedFrame& IOSGPUScene::PreparedFrame::operator=(
     PreparedFrame&&) noexcept = default;
 
+void IOSGPUScene::PreparedFrame::markSubmitted() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  if(impl!=nullptr && impl->rays!=nullptr) impl->rays->markSubmitted();
+#endif
+  }
+
+void IOSGPUScene::PreparedFrame::completeConfirmed() noexcept {
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  if(uploads!=nullptr) uploads->rays.completeConfirmed();
+#endif
+  }
+
 bool IOSGPUScene::PreparedFrame::ready() const noexcept {
   return impl!=nullptr && impl->ready;
   }
@@ -3224,7 +3478,12 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     const IOSSceneSnapshot& snapshot,
     const IOSSceneAssetRegistry& assets,
     const IOSFrameAnimationEvidence* frameAnimation,
-    const IOSUVAnimationEvidence* uvAnimation, bool temporal) noexcept {
+    const IOSUVAnimationEvidence* uvAnimation, bool temporal, int rayTracingMode) noexcept {
+#if !defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  (void)rayTracingMode;
+#else
+  temporal |= rayTracingMode==1 || rayTracingMode==3;
+#endif
   prepared.impl.reset();
   (void)targetGeneration;
   Report report = makeReport(Result::NativeEncodingFailed);
@@ -3337,6 +3596,9 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
           snapshot.previousMorphLayers.data(),snapshot.previousMorphLayers.size()*sizeof(IOSMorphLayer));
       }
     auto candidateFrame = std::make_unique<PreparedFrame::Impl>();
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    std::vector<IOSRayTracing::Geometry> rayGeometry;
+#endif
     candidateFrame->owner = impl.get();
     candidateFrame->lighting = iosSceneLighting(snapshot.currentSky,snapshot.currentCamera);
     candidateFrame->lighting.fogParameters.z = float(snapshot.sceneTimeMs%60000u)/1000.f;
@@ -3473,6 +3735,15 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         }
       const auto* mesh = assets.lookupMesh(entity.mesh);
       const auto* texture = assets.lookupTexture(plan.baseColorTexture);
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+      if((rayTracingMode==1 || rayTracingMode==2) && !impl->rayTracingUnavailable && mesh!=nullptr &&
+         (entity.kind==IOSSceneMeshKind::Landscape || entity.kind==IOSSceneMeshKind::Static) &&
+         plan.pipeline==IOSGPUScenePipelineSelector::Opaque && entity.fatness==0.f &&
+         plan.constants.waveMaxAmplitude==0.f) {
+        rayGeometry.push_back({entity.mesh.value,mesh->vertexBuffer.get(),mesh->indexBuffer.get(),
+            mesh->metadata.vertexStride,mesh->metadata.firstIndex,mesh->metadata.indexCount,entity.currentTransform});
+        }
+#endif
       const auto nativeDraw = [&]() {
         IOSGPUSceneNativePreparedDraw draw;
         draw.plan = plan;
@@ -3488,6 +3759,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         draw.vertexBuffer = (id)(void*)mesh->vertexBuffer.get();
         draw.indexBuffer = (id)(void*)mesh->indexBuffer.get();
         draw.baseColorTexture = (id)(void*)texture->texture.get();
+        draw.metal4Eligible = (plan.kind==IOSSceneMeshKind::Landscape || plan.kind==IOSSceneMeshKind::Static) &&
+                             plan.pipeline==IOSGPUScenePipelineSelector::Opaque && draw.baseColorTexture!=nil;
         return draw;
         };
       if(snapshot.currentSky.shadowsEnabled && (entity.visibilityMask&IOSSceneVisibilityShadow)!=0 &&
@@ -3934,6 +4207,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         draws[first].pipelineState = impl->geometryPipelines[4u+alpha].get();
         for(size_t i=first;i<end;++i) {
           const auto& draw = draws[i];
+          draws[first].metal4Eligible &= draw.metal4Eligible;
           if(temporal) previousInstances.push_back(draw.previousTransform);
           instances.push_back({draw.plan.constants.model,draw.plan.constants.baseColor,
                                draw.plan.constants.uvOffset,draw.deformation.fatness,draw.plan.constants.landscape});
@@ -3984,6 +4258,30 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       }
 
     report.drawCount = report.counts.drawn.material.total;
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+    if(rayTracingMode!=0) {
+      try {
+        @try {
+          if(impl->rayTracing==nullptr)
+            impl->rayTracing=std::make_unique<IOSRayTracing>(impl->nativeDevice.get());
+          if(impl->rayTracingUnavailable || !impl->rayTracing->supported()) {
+            rayGeometry.clear();
+            rayTracingMode=rayTracingMode==2 ? 0 : 3;
+            }
+          if(rayTracingMode!=0) {
+            impl->rayTracing->prepare(prepared.uploads->rays,snapshot.generation.value,rayGeometry);
+            candidateFrame->rays=&prepared.uploads->rays;
+            candidateFrame->rayTracingMode=rayTracingMode;
+            }
+          }
+        @catch(NSException*) { throw std::runtime_error("RendererIOS RT preparation failed"); }
+        }
+      catch(...) {
+        impl->rayTracingUnavailable=true;
+        Tempest::Log::e("RendererIOS RT unavailable; raster fallback");
+        }
+      }
+#endif
     report.texturedDrawCount = report.counts.drawn.texturedDraws;
     if(trackFrameAnimation &&
        !finalizeIOSGPUSceneFrameAnimationDrawReport(
@@ -4547,4 +4845,8 @@ bool IOSGPUScene::motionPipelinesReady() const noexcept {
 void IOSGPUScene::trimMemory() noexcept {
   impl->sceneColorCopy = OwnedObjectiveC();
   impl->sceneDepthCopy = OwnedObjectiveC();
+#if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
+  if(impl->rayTracing!=nullptr) impl->rayTracing->clearAfterConfirmedIdle();
+  impl->rayTracingUnavailable=false;
+#endif
   }

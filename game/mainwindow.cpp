@@ -2776,7 +2776,7 @@ void MainWindow::render(){
       }
     if(playing && iosAdaptiveFps && nowMs-iosBudgetSampleMs>=1000u) {
       iosBudgetSampleMs = nowMs;
-      const auto thermal = MemoryInfo::snapshot().thermal;
+      const auto thermal = MemoryInfo::thermalState();
       const auto previous = iosFrameBudget.fpsLimit;
       iosFrameBudget.update(iosCpuAverageMs,iosGpuAverageMs,maxFpsTarget,
           thermal==MemoryInfo::ThermalState::Serious || thermal==MemoryInfo::ThermalState::Critical);

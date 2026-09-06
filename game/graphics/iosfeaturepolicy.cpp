@@ -44,7 +44,8 @@ bool validDefaultClass(IOSFeatureDefaultClass defaults) noexcept {
 
 IOSFeaturePolicyState iosEvaluateFeaturePolicy(
     const IOSDeviceFacts& facts,
-    IOSFeaturePolicyInput input) noexcept {
+    IOSFeaturePolicyInput input,
+    bool thermalLimited) noexcept {
   IOSFeaturePolicyState state{
     input.requested,
     false,
@@ -92,6 +93,11 @@ IOSFeaturePolicyState iosEvaluateFeaturePolicy(
   if(!deviceSupportPassed) {
     state.fallbackReason =
         IOSFeatureFallbackReason::DeviceSupportUnsupported;
+    return state;
+    }
+  if(thermalLimited && (input.feature==IOSFeatureId::RayTracing ||
+                        input.feature==IOSFeatureId::MeshShading)) {
+    state.fallbackReason = IOSFeatureFallbackReason::ThermalLimited;
     return state;
     }
   if(!input.activationSucceeded) {

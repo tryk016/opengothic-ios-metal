@@ -7,6 +7,10 @@
 void MemoryInfo::initialize() {
   }
 
+MemoryInfo::ThermalState MemoryInfo::thermalState() {
+  return ThermalState::Unknown;
+  }
+
 MemoryInfo::Snapshot MemoryInfo::snapshot() {
   return Snapshot();
   }
