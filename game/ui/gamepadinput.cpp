@@ -7,14 +7,15 @@
 // desktop builds compile this TU empty.
 #if defined(__MOBILE_PLATFORM__)
 
-#include <Tempest/Application>
 #include <Tempest/Event>
+#include <Tempest/Application>
 #include <cmath>
 #include <algorithm>
 #include <initializer_list>
 #include <string>
 
 #include "game/playercontrol.h"
+#include "ui/gamepadstick.h"
 #include "game/inventory.h"
 #include "world/world.h"
 #include "world/waypoint.h"
@@ -44,12 +45,25 @@ constexpr float slopedAxisThreshold(float deadZone, float crossAxis,
 static_assert(slopedAxisThreshold(0.25f, 0.960f, 0.12f)>0.269f);
 static_assert(slopedAxisThreshold(0.25f,-0.948f, 0.12f)>0.304f);
 static_assert(slopedAxisThreshold(0.25f, 0.269f, 0.12f)<0.960f);
+
+bool hasButtonEvent(const std::vector<GamepadButtonEvent>& events,
+                    GamepadButton button, bool pressed) {
+  return std::any_of(events.begin(),events.end(),[button,pressed](const auto& event) {
+    return event.button==button && event.pressed==pressed;
+    });
+  }
 }
 
 GamepadInput::GamepadInput(MainWindow& owner, PlayerControl& ctrl)
   : owner(owner), ctrl(ctrl) {
+  Gamepad::initialize();
   loadConfig();
+  Gothic::inst().onSettingsChanged.bind(this,&GamepadInput::reloadConfig);
   observedInputGen = ctrl.inputGeneration();
+  }
+
+GamepadInput::~GamepadInput() {
+  Gothic::inst().onSettingsChanged.ubind(this,&GamepadInput::reloadConfig);
   }
 
 void GamepadInput::loadConfig() {
@@ -58,14 +72,22 @@ void GamepadInput::loadConfig() {
     return v>0.f ? v : d;
     };
   deadZone   = std::clamp(f("deadZone", 0.25f), 0.05f, 0.95f);
+  analogDeadZone = std::clamp(f("analogDeadZone", 0.10f),0.01f,0.50f);
+  analogEngageZone = std::clamp(f("analogEngageZone",0.18f),
+                                analogDeadZone+0.01f,0.75f);
   releaseZone= std::clamp(f("releaseZone", 0.15f), 0.01f,
                           std::max(0.01f, deadZone-0.01f));
   crossAxisGuard = std::clamp(Gothic::settingsGetF("GAMEPAD","crossAxisGuard"),
                               0.f,0.50f);
   trigThresh = f("triggerThreshold", 0.50f);
-  lookSens   = f("lookSensitivity",  0.20f);
+  lookSens   = std::clamp(f("lookSensitivity",0.20f),0.01f,1.f);
   invertY    = Gothic::settingsGetI("GAMEPAD","invertY")!=0;
   stuckProtect = (Gothic::settingsGetI("GAMEPAD","noStuckProtect")==0); // opt-out
+  }
+
+void GamepadInput::reloadConfig() {
+  releaseAllWorld();
+  loadConfig();
   }
 
 void GamepadInput::openMap() {
@@ -178,12 +200,7 @@ void GamepadInput::tickRing(
   r.updateSelection(s.rx, s.ry);
   owner.update();
 
-  auto pressed = [&](GamepadButton button) {
-    return std::any_of(events.begin(),events.end(),[&](const auto& event) {
-      return event.button==button && event.pressed;
-      });
-    };
-  if(pressed(GamepadButton::B) || (s.b && !prev.b)) {
+  if(hasButtonEvent(events,GamepadButton::B,true) || (s.b && !prev.b)) {
     ringCancel();
     return;
     }
@@ -203,15 +220,17 @@ void GamepadInput::tickRing(
       }
     return;
     }
-  if(pressed(GamepadButton::DpadUp) || (s.dup && !prev.dup)) {
+  if(hasButtonEvent(events,GamepadButton::DpadUp,true) ||
+     (s.dup && !prev.dup)) {
     openRing(ringItems);
     return;
     }
-  if(pressed(GamepadButton::DpadDown) || (s.ddown && !prev.ddown)) {
+  if(hasButtonEvent(events,GamepadButton::DpadDown,true) ||
+     (s.ddown && !prev.ddown)) {
     openRing(ringWeapons);
     return;
     }
-  if(pressed(GamepadButton::A) || (s.a && !prev.a) ||
+  if(hasButtonEvent(events,GamepadButton::A,true) || (s.a && !prev.a) ||
      (s.rt>trigThresh && prev.rt<=trigThresh)) {
     activateRingSelection(r);
     return;
@@ -315,9 +334,7 @@ void GamepadInput::key(bool now, bool before, Event::KeyType k) {
     }
   }
 
-void GamepadInput::keyTap(Event::KeyType k, PadCtx,
-                          const GamepadButtonEvent&,
-                          const GamepadState&) {
+void GamepadInput::keyTap(Event::KeyType k) {
   Tempest::KeyEvent ev(k);
   owner.dispatchKey(ev);
   }
@@ -368,8 +385,9 @@ void GamepadInput::tickWorldSystemButtons(
   }
 
 void GamepadInput::suppressCarriedWorldInput() {
-  suppressMoveUntilNeutral = true;
-  suppressTurnUntilNeutral = true;
+  suppressLeftUntilNeutral = true;
+  suppressLookUntilNeutral = true;
+  leftStickActive          = false;
   suppressAUntilRelease    = true;
   suppressBUntilRelease    = true;
   suppressXUntilRelease    = true;
@@ -393,7 +411,8 @@ void GamepadInput::releaseAllWorld() {
     ctrl.setGamepadWalk(false);
     gamepadWalkHeld = false;
     }
-  ctrl.setGamepadTurn(0.f);
+  ctrl.setPadAxes({});
+  discreteStickMode = false;
   suppressCarriedWorldInput();
   }
 
@@ -428,11 +447,12 @@ void GamepadInput::tick(uint64_t dt) {
     moveAxis.reset();
     turnAxis.reset();
     gamepadWalkHeld = false;
-    ctrl.setGamepadTurn(0.f);
+    discreteStickMode = false;
+    ctrl.setPadAxes({});
     suppressCarriedWorldInput();
     observedInputGen = inputGen;
     }
-  if(!s.connected) {                 // pad vanished mid-hold -> release everything (B5)
+  if(!s.connected) {                 // pad vanished mid-hold -> release everything
     if(prev.connected) {
       releaseAllWorld();
       ringCancel();
@@ -477,13 +497,13 @@ void GamepadInput::tick(uint64_t dt) {
     const bool carriedMenu = prev.connected && prev.menu;
     moveAxis.reset();
     turnAxis.reset();
-    ctrl.setGamepadTurn(0.f);
+    ctrl.setPadAxes({});
     if(prev.connected) {
       // Gate only controls which were already held in the previous context.
       // A new press/deflection that arrived between UI and this World tick is
       // fresh input and must not be discarded as if it had leaked from UI.
-      suppressMoveUntilNeutral = std::abs(prev.ly)>deadZone;
-      suppressTurnUntilNeutral = std::abs(prev.lx)>deadZone;
+      suppressLeftUntilNeutral = std::hypot(prev.lx,prev.ly)>analogDeadZone;
+      suppressLookUntilNeutral = std::hypot(prev.rx,prev.ry)>analogDeadZone;
       suppressAUntilRelease    = prev.a;
       suppressBUntilRelease    = prev.b;
       suppressXUntilRelease    = prev.x;
@@ -502,7 +522,7 @@ void GamepadInput::tick(uint64_t dt) {
   switch(ctx) {
     case PadCtx::World:     tickWorld(dt, s, input.events);  break;
     case PadCtx::Dialog:    tickDialog(s, input.events);     break;
-    case PadCtx::Inventory: tickInvent(dt, s, input.events); break;
+    case PadCtx::Inventory: tickInvent(s, input.events);     break;
     case PadCtx::Menu:      tickMenu(s, input.events);       break;
     case PadCtx::Loading:                      break;
     }
@@ -513,13 +533,8 @@ void GamepadInput::tick(uint64_t dt) {
 
 void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
                              const std::vector<GamepadButtonEvent>& events) {
-  auto pressed = [&](GamepadButton button) {
-    return std::any_of(events.begin(),events.end(),[&](const auto& event) {
-      return event.button==button && event.pressed;
-      });
-    };
   auto pressedOrEdge = [&](GamepadButton button, bool now, bool before) {
-    return pressed(button) || (now && !before);
+    return hasButtonEvent(events,button,true) || (now && !before);
     };
 
   // Two independent modal quick-rings. Once opened, tickRing captures every
@@ -535,31 +550,15 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
 
   // Each carried control rearms independently. A slightly noisy stick must
   // never block A/B/RT, and one axis must not disable the other.
-  if(suppressMoveUntilNeutral && std::abs(s.ly)<=releaseZone)
-    suppressMoveUntilNeutral = false;
-  if(suppressTurnUntilNeutral && std::abs(s.lx)<=releaseZone)
-    suppressTurnUntilNeutral = false;
-  const bool aReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::A && !event.pressed;
-    });
-  const bool bReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::B && !event.pressed;
-    });
-  const bool xReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::X && !event.pressed;
-    });
-  const bool lbReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::LB && !event.pressed;
-    });
-  const bool rbReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::RB && !event.pressed;
-    });
-  const bool ltReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::LT && !event.pressed;
-    });
-  const bool rtReleased = std::any_of(events.begin(),events.end(),[](const auto& event) {
-    return event.button==GamepadButton::RT && !event.pressed;
-    });
+  if(suppressLookUntilNeutral && std::hypot(s.rx,s.ry)<=analogDeadZone)
+    suppressLookUntilNeutral = false;
+  const bool aReleased  = hasButtonEvent(events,GamepadButton::A, false);
+  const bool bReleased  = hasButtonEvent(events,GamepadButton::B, false);
+  const bool xReleased  = hasButtonEvent(events,GamepadButton::X, false);
+  const bool lbReleased = hasButtonEvent(events,GamepadButton::LB,false);
+  const bool rbReleased = hasButtonEvent(events,GamepadButton::RB,false);
+  const bool ltReleased = hasButtonEvent(events,GamepadButton::LT,false);
+  const bool rtReleased = hasButtonEvent(events,GamepadButton::RT,false);
   if(suppressAUntilRelease && (!s.a || aReleased))
     suppressAUntilRelease = false;
   if(suppressBUntilRelease && (!s.b || bReleased))
@@ -575,36 +574,78 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
   if(suppressRtUntilRelease && (s.rt<=trigThresh || rtReleased))
     suppressRtUntilRelease = false;
 
-  const float moveThreshold = slopedAxisThreshold(deadZone, s.lx,
-                                                  crossAxisGuard);
-  const float turnThreshold = slopedAxisThreshold(deadZone, s.ly,
-                                                  crossAxisGuard);
+  const GamepadStick leftStick  = gamepadRadialDeadZone(s.lx,s.ly,analogDeadZone);
+  const GamepadStick rightStick = gamepadRadialDeadZone(s.rx,s.ry,analogDeadZone);
+  auto* pl = worldPlayer();
+  const bool discreteStick = pl!=nullptr && pl->interactive()!=nullptr;
 
-  if(!suppressMoveUntilNeutral) {
-    // Y keeps Gothic's animation-driven start/stop movement. The guarded
-    // threshold starts a direction; the fixed deadZone releases it, while
-    // releaseZone only rearms after threshold chatter.
-    moveAxis.update(s.ly, moveThreshold, deadZone, releaseZone);
+  if(discreteStick!=discreteStickMode) {
+    // Changing between locomotion and MOBSI/lockpick semantics must not carry
+    // a held direction into the other model. Both modes re-arm at radial zero.
+    setWorldAxis(A::Back,    false,A::Forward,false);
+    setWorldAxis(A::RotateL, false,A::RotateR,false);
+    ctrl.setPadAxes({});
+    moveAxis.reset();
+    turnAxis.reset();
+    suppressLeftUntilNeutral = true;
+    leftStickActive = false;
+    discreteStickMode = discreteStick;
+    }
+  if(suppressLeftUntilNeutral &&
+     std::hypot(s.lx,s.ly)<=analogDeadZone)
+    suppressLeftUntilNeutral = false;
+
+  PadAxes axes;
+  if(discreteStick) {
+    // MOBSI, ladders and lockpicks still expose discrete semantic commands in
+    // the original engine. Keep that adapter isolated from normal locomotion.
+    const float moveThreshold = slopedAxisThreshold(deadZone,s.lx,crossAxisGuard);
+    const float turnThreshold = slopedAxisThreshold(deadZone,s.ly,crossAxisGuard);
+    if(!suppressLeftUntilNeutral)
+      moveAxis.update(s.ly,moveThreshold,deadZone,releaseZone);
+    else
+      moveAxis.reset();
+    if(!suppressLeftUntilNeutral)
+      turnAxis.update(s.lx,turnThreshold,deadZone,releaseZone);
+    else
+      turnAxis.reset();
     setWorldAxis(A::Back,    moveAxis.negative(),
                  A::Forward, moveAxis.positive());
-    }
-
-  if(!suppressTurnUntilNeutral) {
-    // X is genuinely analog: guard only activation, then remove the fixed
-    // inner dead-zone and scale the classic turn rate by the remaining -1..1.
-    turnAxis.update(s.lx, turnThreshold, deadZone, releaseZone);
-    const float turn = turnAxis.scaled(s.lx, deadZone);
-    ctrl.setGamepadTurn(turn);
-    // Keep RotateL/RotateR edge semantics for lockpicking, classic combat and
-    // rotate+jump side-steps. PlayerControl prefers gamepadTurn for speed.
     setWorldAxis(A::RotateL, turnAxis.negative(),
                  A::RotateR, turnAxis.positive());
     }
   else {
-    ctrl.setGamepadTurn(0.f);
+    // Normal gameplay consumes a fresh continuous snapshot every tick. There
+    // is no pressed/released state which could remain latched after a missed
+    // edge or an internal PlayerControl reset.
+    setWorldAxis(A::Back,    false,A::Forward,false);
+    setWorldAxis(A::RotateL, false,A::RotateR,false);
+    moveAxis.reset();
+    turnAxis.reset();
+    const float magnitude = std::hypot(s.lx,s.ly);
+    if(suppressLeftUntilNeutral) {
+      leftStickActive = false;
+      }
+    else if(leftStickActive) {
+      if(magnitude<=analogDeadZone)
+        leftStickActive = false;
+      }
+    else if(magnitude>=analogEngageZone) {
+      leftStickActive = true;
+      }
+    if(leftStickActive) {
+      axes.move = leftStick.y;
+      axes.turn = leftStick.x;
+      }
     }
 
-  auto* pl = worldPlayer();
+  if(!suppressLookUntilNeutral) {
+    const float yDir = invertY ? -1.f : 1.f;
+    axes.lookYawRate   = -rightStick.x*lookSens;
+    axes.lookPitchRate =  rightStick.y*lookSens*yDir;
+    }
+  ctrl.setPadAxes(axes);
+
   const WeaponState ws = pl!=nullptr ? pl->weaponState() : WeaponState::NoWeapon;
   const bool melee  = ws==WeaponState::Fist || ws==WeaponState::W1H || ws==WeaponState::W2H;
   const bool ranged = ws==WeaponState::Bow || ws==WeaponState::CBow;
@@ -754,28 +795,6 @@ void GamepadInput::tickWorld(uint64_t dt, const GamepadState& s,
     setWorldHeld(A::LookBack,false);
     }
 
-  // Right stick -> analog camera look. PlayerControl consumes yaw, but normal
-  // gameplay deliberately ignores Npc::setDirectionY; feed Camera as well so
-  // pitch works outside swimming/climbing. Apply the dead-zone per axis to
-  // avoid turning an X-only look into vertical drift.
-  const float rx = std::abs(s.rx)>deadZone ? s.rx : 0.f;
-  const float ry = std::abs(s.ry)>deadZone ? s.ry : 0.f;
-  if(rx!=0.f || ry!=0.f) {
-    const float scale = float(std::min<uint64_t>(dt,50)) * lookSens;
-    const float yDir  = invertY ? -1.f : 1.f;
-    const float yaw   = -rx * scale;
-    const float pitch =  ry * scale * yDir;
-
-    // Match MainWindow::tickMouse: camera receives {-pitch,yaw}, while the
-    // player receives {yaw,pitch}. gamepad.tick runs before the global dt
-    // clamp, hence the local 50 ms cap above.
-    if(auto* camera = Gothic::inst().camera();
-       camera!=nullptr && !camera->isCutscene() && !Gothic::inst().isPause()) {
-      camera->onRotateMouse(Tempest::PointF(-pitch,yaw));
-      ctrl.onRotateMouse(yaw,pitch);
-      }
-    }
-
   // L3 toggles sneak; R3 toggles target lock.
   if(pressedOrEdge(GamepadButton::L3,s.l3,prev.l3))
     pulseWorldAction(A::Sneak);
@@ -832,10 +851,10 @@ void GamepadInput::tickDialog(const GamepadState& s,
     if(!event.pressed)
       continue;
     switch(event.button) {
-      case GamepadButton::DpadUp:   keyTap(Event::K_Up,     PadCtx::Dialog, event, s); break;
-      case GamepadButton::DpadDown: keyTap(Event::K_Down,   PadCtx::Dialog, event, s); break;
-      case GamepadButton::A:        keyTap(Event::K_Return, PadCtx::Dialog, event, s); break;
-      case GamepadButton::B:        keyTap(Event::K_ESCAPE, PadCtx::Dialog, event, s); break;
+      case GamepadButton::DpadUp:   keyTap(Event::K_Up);     break;
+      case GamepadButton::DpadDown: keyTap(Event::K_Down);   break;
+      case GamepadButton::A:        keyTap(Event::K_Return); break;
+      case GamepadButton::B:        keyTap(Event::K_ESCAPE); break;
       default: break;
       }
     }
@@ -865,25 +884,22 @@ void GamepadInput::tickMenu(const GamepadState& s,
         }
       }
     switch(event.button) {
-      case GamepadButton::DpadUp:    keyTap(Event::K_Up,     PadCtx::Menu, event, s); break;
-      case GamepadButton::DpadDown:  keyTap(Event::K_Down,   PadCtx::Menu, event, s); break;
-      case GamepadButton::DpadLeft:  keyTap(Event::K_Left,   PadCtx::Menu, event, s); break;
-      case GamepadButton::DpadRight: keyTap(Event::K_Right,  PadCtx::Menu, event, s); break;
-      case GamepadButton::A:         keyTap(Event::K_Return, PadCtx::Menu, event, s); break;
+      case GamepadButton::DpadUp:    keyTap(Event::K_Up);     break;
+      case GamepadButton::DpadDown:  keyTap(Event::K_Down);   break;
+      case GamepadButton::DpadLeft:  keyTap(Event::K_Left);   break;
+      case GamepadButton::DpadRight: keyTap(Event::K_Right);  break;
+      case GamepadButton::A:         keyTap(Event::K_Return); break;
       case GamepadButton::B:
-      case GamepadButton::Menu:      keyTap(Event::K_ESCAPE, PadCtx::Menu, event, s); break;
+      case GamepadButton::Menu:      keyTap(Event::K_ESCAPE); break;
       default: break;
       }
     }
   }
 
-void GamepadInput::tickInvent(uint64_t dt, const GamepadState& s,
+void GamepadInput::tickInvent(const GamepadState& s,
                               const std::vector<GamepadButtonEvent>& events) {
-  (void)dt;
   const bool openAssignment = (s.r3 && !prev.r3) ||
-    std::any_of(events.begin(),events.end(),[](const auto& event) {
-      return event.button==GamepadButton::R3 && event.pressed;
-      });
+                              hasButtonEvent(events,GamepadButton::R3,true);
   if(openAssignment) {
     openItemAssignmentRing();
     return;
@@ -911,14 +927,14 @@ void GamepadInput::tickInvent(uint64_t dt, const GamepadState& s,
     if(!event.pressed)
       continue;
     switch(event.button) {
-      case GamepadButton::DpadUp:   keyTap(Event::K_Up,     PadCtx::Inventory, event, s); break;
-      case GamepadButton::DpadDown: keyTap(Event::K_Down,   PadCtx::Inventory, event, s); break;
-      case GamepadButton::DpadLeft: keyTap(Event::K_Left,   PadCtx::Inventory, event, s); break;
-      case GamepadButton::DpadRight:keyTap(Event::K_Right,  PadCtx::Inventory, event, s); break;
-      case GamepadButton::A:       keyTap(Event::K_Return, PadCtx::Inventory, event, s); break;
+      case GamepadButton::DpadUp:   keyTap(Event::K_Up);     break;
+      case GamepadButton::DpadDown: keyTap(Event::K_Down);   break;
+      case GamepadButton::DpadLeft: keyTap(Event::K_Left);   break;
+      case GamepadButton::DpadRight:keyTap(Event::K_Right);  break;
+      case GamepadButton::A:        keyTap(Event::K_Return); break;
       case GamepadButton::B:
       case GamepadButton::Menu:
-      case GamepadButton::Options: keyTap(Event::K_ESCAPE, PadCtx::Inventory, event, s); break;
+      case GamepadButton::Options:  keyTap(Event::K_ESCAPE); break;
       default: break;
       }
     }

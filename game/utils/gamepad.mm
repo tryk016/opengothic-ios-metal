@@ -3,6 +3,7 @@
 #include <Tempest/Platform>
 
 #include <cstddef>
+#include <cassert>
 #include <deque>
 #include <mutex>
 
@@ -257,7 +258,17 @@ void activateFirstController(GCController* ignored = nil) {
   publish(GamepadState{},true);
   }
 
-void initialize() {
+void setApplicationActive(bool active) {
+  if(applicationActive==active)
+    return;
+  applicationActive = active;
+  if(active)
+    activateFirstController();
+  else
+    deactivateController();
+  }
+
+void initializeBackend() {
   dispatch_queue_attr_t attributes =
     dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL,
                                             QOS_CLASS_USER_INTERACTIVE, 0);
@@ -302,8 +313,7 @@ void initialize() {
     // UIKit posts this notification on the main queue. Synchronizing here
     // guarantees that no stale pressed state survives application suspension.
     synchronizeHandlerQueue(^{
-      applicationActive = false;
-      deactivateController();
+      setApplicationActive(false);
       });
     }];
 
@@ -313,39 +323,57 @@ void initialize() {
                          usingBlock:^(NSNotification* note) {
     (void)note;
     dispatch_async(handlerQueue, ^{
-      applicationActive = true;
-      activateFirstController();
+      setApplicationActive(true);
+      });
+    }];
+
+  // The application uses UIScene lifecycle. Keep the older application
+  // notifications as a fallback, while this idempotent pair closes the window
+  // in which a scene can deactivate without the process resigning active.
+  [notifications addObserverForName:UISceneWillDeactivateNotification
+                             object:nil
+                              queue:mainQueue
+                         usingBlock:^(NSNotification* note) {
+    (void)note;
+    synchronizeHandlerQueue(^{
+      setApplicationActive(false);
+      });
+    }];
+
+  [notifications addObserverForName:UISceneDidActivateNotification
+                             object:nil
+                              queue:mainQueue
+                         usingBlock:^(NSNotification* note) {
+    (void)note;
+    dispatch_async(handlerQueue, ^{
+      setApplicationActive(true);
       });
     }];
 
   UIApplicationState state = [UIApplication sharedApplication].applicationState;
   synchronizeHandlerQueue(^{
-    applicationActive = (state==UIApplicationStateActive);
-    activateFirstController();
-    });
-  }
-
-void refreshControllerState() {
-  synchronizeHandlerQueue(^{
-    if(!applicationActive || activeController==nil)
-      return;
-    GCExtendedGamepad* gamepad = activeController.extendedGamepad;
-    if(gamepad!=nil)
-      publish(readState(gamepad));
+    setApplicationActive(state==UIApplicationStateActive);
     });
   }
 
 }
 
+void initialize() {
+  if(![NSThread isMainThread]) {
+    assert(false && "Gamepad::initialize must run on the main thread");
+    return;
+    }
+  std::call_once(initializeOnce, initializeBackend);
+  }
+
 GamepadState poll() {
-  std::call_once(initializeOnce, initialize);
+  initialize();
   std::lock_guard<std::mutex> guard(snapshotSync);
   return snapshot;
   }
 
 GamepadInputFrame consume() {
-  std::call_once(initializeOnce, initialize);
-  refreshControllerState();
+  initialize();
 
   GamepadInputFrame frame;
   std::lock_guard<std::mutex> guard(snapshotSync);

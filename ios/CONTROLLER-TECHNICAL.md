@@ -4,15 +4,18 @@ This is the maintainer reference for the iOS controller implementation. User-fac
 controls remain in [`README-ios.md`](README-ios.md); device verification details are
 recorded here alongside the relevant implementation notes.
 
-The current implementation was introduced by commit `60ce08a2` and compiled,
-packaged and published successfully by GitHub Actions run `29211433774`.
+The original implementation was introduced by commit `60ce08a2` and validated
+by GitHub Actions run `29211433774`. The RendererIOS candidate also includes
+the reference port's safe-area overlay and continuous stick axes; its own
+physical-device and visual acceptance are tracked in `RELEASE-CANDIDATE.md`.
 
 ## Input pipeline
 
-1. `game/utils/gamepad.mm` reads `GCExtendedGamepad` on its private handler queue.
+1. The main thread initializes `Gamepad` before polling. `game/utils/gamepad.mm` reads `GCExtendedGamepad` on its private handler queue.
    It publishes the newest analog snapshot and queues lossless digital button edges.
 2. `Gamepad::consume()` returns one `GamepadInputFrame`: the newest state, ordered
-   digital transitions, controller generation and overflow count.
+   digital transitions, controller generation and overflow count, without a synchronous
+   refresh on the handler queue. UIApplication and UIScene events release or reconnect the pad.
 3. `game/ui/gamepadinput.cpp` selects exactly one `PadCtx` (`World`, `Dialog`,
    `Menu`, `Inventory` or `Loading`) and routes the frame only to that context.
    A normal ring captures `World`; an assignment ring captures the still-open
@@ -182,6 +185,8 @@ The stable `[GAMEPAD]` settings are:
 
 ```ini
 [GAMEPAD]
+analogDeadZone=0.10
+analogEngageZone=0.18
 deadZone=0.25
 releaseZone=0.15
 crossAxisGuard=0.12
@@ -200,9 +205,14 @@ noStuckProtect=1
 The temporary `debugInput` transition trace was retired after device validation;
 controller faults now use normal error reporting instead of per-input logging.
 
-Keep `releaseZone < deadZone`. `crossAxisGuard` raises the activation threshold of
-the perpendicular left-stick axis and prevents imperfect cardinal motion from
-starting an unintended turn or step.
+Normal movement and camera use radial `analogDeadZone`; the left stick engages at
+`analogEngageZone` and releases at the lower dead zone. `PlayerControl` consumes the
+continuous axes once per simulation tick. Settings changes release held inputs before
+loading the new values.
+
+Keep `releaseZone < deadZone` for discrete interactions (MOBSI, ladders and lockpicking).
+Only that adapter uses `crossAxisGuard` to raise the perpendicular activation threshold.
+The touch camera and physical right stick share the same camera/player rotation path.
 
 ## Main implementation files
 

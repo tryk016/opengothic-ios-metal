@@ -111,17 +111,18 @@ Two input modes; the on-screen overlay hides automatically when a controller is 
 - **System buttons:** View opens the inventory and Menu opens the game menu. Quick save/load remains
   available to the engine through its keyboard commands, but is not
   assigned to the controller.
-- **Left-stick response:** the vertical axis keeps Gothic's animation-driven movement with
-  press/release hysteresis; the horizontal axis turns proportionally to the deflection. A sloped axial
-  guard rejects accidental movement while the
-  stick is held mostly sideways (and accidental turning while held mostly forward/back). Returning to
-  neutral, opening a ring/UI, disconnecting or resuming the app releases controller-owned actions before
-  input can re-arm.
-- Config lives in `Documents/Gothic.ini` under `[GAMEPAD]` — `deadZone`, `releaseZone`,
-  `crossAxisGuard`, `lookSensitivity`, `invertY`, `triggerThreshold` and `noStuckProtect`.
+- **Stick response:** movement and camera use circular dead zones and continuous axes. The left
+  stick has a higher activation threshold than its release threshold to avoid drift near the center;
+  turning follows its deflection. Gothic's character movement remains animation-driven. Interactions,
+  ladders and lockpicking retain discrete direction commands. Opening a ring/UI, disconnecting or
+  resuming releases controller-owned actions before neutral input can re-arm them.
+- Config lives in `Documents/Gothic.ini` under `[GAMEPAD]` — `analogDeadZone` (0.10),
+  `analogEngageZone` (0.18), `deadZone`, `releaseZone`, `crossAxisGuard`, `lookSensitivity`,
+  `invertY`, `triggerThreshold` and `noStuckProtect`.
 
-**On-screen virtual gamepad (no controller):** a full pad is drawn during play — move pad + camera area,
-A/B/X/Y, shoulders/triggers, sticks, D-pad, View/Menu — using the Xelu glyphs. It mirrors the physical
+**On-screen virtual gamepad (no controller):** translucent outlined buttons and separate movement
+and camera pads respect the screen's safe area. A/B/X/Y, shoulders/triggers, stick clicks, D-pad
+and View/Menu share the physical pad's layout. Drag the right pad to look horizontally or vertically. It mirrors the physical
 pad's contextual mapping and two D-pad quick-rings. Menus and dialogues get on-screen D-pad +
 OK/Back/Skip; the Journal and Statistics pages additionally show LB/RB page controls. While a ring is
 open, only corner controls remain: D-pad ↑/↓ switches the two panels and
