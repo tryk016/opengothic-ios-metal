@@ -106,6 +106,12 @@ verdict for each requirement.
 | Visual and release | User gameplay/image acceptance, zero unresolved S0/S1 issues, S2 issues fixed or explicitly disabled; measured Metal 4 and one RT1 adoption, reviewed release notes and rollout/rollback. |
 
 Terminate the app after every unattended scenario, on success and failure.
+Ordinary smoke accepts up to 3660 seconds; allow about 4500 seconds in the
+device guard for installation, validation and cleanup. A long smoke alone
+does not prove an uninterrupted soak: retain the original live PID, ordered
+engine performance windows and raw trace segments. Report window percentiles
+as windows, not as whole-run percentiles. The older Additive trace adapter's
+FPS/slot arguments are metadata; verify the actual settings separately.
 Preserve failing logs and label superseding results explicitly. Mobile Metal 4
 or RT rejection requires an explicit scope decision before declaring the full
 roadmap complete. Publishing remains a separate approval after the candidate

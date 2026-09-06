@@ -2297,8 +2297,8 @@ while [[ $# -gt 0 ]]; do
     *) [[ -z "$APP_INPUT" ]] || fail "only one app path may be supplied"; APP_INPUT="$1"; shift ;;
   esac
 done
-[[ "$DURATION" =~ ^[0-9]+$ ]] && ((DURATION >= 10 && DURATION <= 600)) ||
-  fail "duration must be 10..600 seconds"
+[[ "$DURATION" =~ ^[0-9]+$ ]] && ((DURATION >= 10 && DURATION <= 3660)) ||
+  fail "duration must be 10..3660 seconds"
 [[ "$SAVE_SLOT" =~ ^[0-9]+$ ]] || fail "save slot must be a non-negative integer"
 ((NEW_GAME == 0 || SAVE_SLOT_EXPLICIT == 0)) ||
   fail "--new-game and --save-slot are mutually exclusive"
@@ -2376,7 +2376,7 @@ fi
 ((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0)) ||
   [[ -z "$PIPELINE_ARCHIVE_TEST_MODE" ]] ||
   fail "shading prototype Forward self-test requires an empty pipeline archive profile"
-((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 || DURATION >= 35)) ||
+((REQUIRE_SHADING_PROTOTYPE_FORWARD_SELF_TEST == 0 || (DURATION >= 35 && DURATION <= 600))) ||
   fail "shading prototype Forward self-test duration must be 35..600 seconds"
 ((REQUIRE_DEVICE_FACTS_REFERENCE_A17 == 0)) || [[ "$EXPECTED_FAULT" == none ]] ||
   fail "device-facts A17 reference gate requires expected fault none"
