@@ -714,7 +714,7 @@ def validate_ui_automation_host_contract(
         "def select_product_bundle(",
         'r"^opengothic\\.gothic2\\.[A-Z0-9]{10}$"',
         "if product_pattern.fullmatch(bundle):",
-        "elif runner_pattern.fullmatch(bundle):",
+        "if len(products) != 1:",
     )
     for literal in selector_contract:
         if selector.count(literal) != 1:
@@ -2836,10 +2836,8 @@ def test_ui_automation_host_contract() -> None:
             "runner-accepted",
             (
                 (
-                    "        elif runner_pattern.fullmatch(bundle):\n"
-                    "            continue\n",
-                    "        elif runner_pattern.fullmatch(bundle):\n"
-                    "            products.append(bundle)\n",
+                    "        if product_pattern.fullmatch(bundle):\n",
+                    "        if product_pattern.fullmatch(bundle) or bundle.endswith(\".xctrunner\"):\n",
                 ),
             ),
         ),
