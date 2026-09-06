@@ -342,7 +342,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
     )
     for literal in (
         "for shader in landscape bink ui inventory shading-prototypes; do",
-        '"$@"',
+        '\n    "$@" ',
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
