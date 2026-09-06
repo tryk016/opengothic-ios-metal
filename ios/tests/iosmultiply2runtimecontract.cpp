@@ -320,7 +320,7 @@ int main(int argc, char** argv) {
       "return !color.isEmpty() && !depth.isEmpty() &&")!=
          std::string::npos);
   assert(context.find(
-      "next.depth = device.zbuffer(depthFormat,w,h);")!=
+      "next.depth = device.zbuffer(depthFormat,swapchain.w(),swapchain.h());")!=
          std::string::npos);
   assert(ordered(context,{
       "const bool currentInventoryDepth =",
