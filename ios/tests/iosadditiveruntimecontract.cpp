@@ -158,7 +158,7 @@ bool validateSources(const Sources& sources,
       "IOSGPUScene::IOSGPUScene(");
   expect(!encode.empty(),"native frozen encode source body is missing");
   expect(ordered(encode,{
-      "encodePhase(context.prepared->base,context.scene->baseDepthState);",
+      "encodePhase(context.prepared->base,context.scene->baseDepthState,",
       "encodePhase(context.prepared->multiply2,",
       "context.scene->multiply2DepthState);",
       "encodePhase(context.prepared->additive,",
@@ -456,7 +456,7 @@ void testSourceMutations(const Sources& original) {
       "if(report.result!=IOSGPUScene::Result::Success) {\n"
       "          throw std::runtime_error(");
   rejected("additive-before-base",original,&Sources::scene,
-      "encodePhase(context.prepared->base,context.scene->baseDepthState);",
+      "encodePhase(context.prepared->base,context.scene->baseDepthState,",
       "encodePhase(context.prepared->additive,context.scene->baseDepthState);");
   rejected("additive-after-resolve",original,&Sources::context,
       "impl->gpuScene->encodePrepared(encoder,preparedScene)",
