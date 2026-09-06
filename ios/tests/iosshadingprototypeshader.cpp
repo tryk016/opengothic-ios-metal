@@ -1,4 +1,3 @@
-#include "graphics/ioslandscapeshaderabi.h"
 #include "graphics/iosshadingprototypeshaderabi.h"
 
 #include <array>
@@ -491,9 +490,7 @@ void runMutationTests(const std::string& source) {
 }
 
 int main(int argc, char** argv) {
-  if(argc!=2 ||
-     RendererIOSShader::AbiVersion!=12u ||
-     Prototype::ManifestVersion!=1u)
+  if(argc!=2 || Prototype::ManifestVersion!=1u)
     return 1;
   std::ifstream input(argv[1],std::ios::binary);
   const std::string source((std::istreambuf_iterator<char>(input)),
