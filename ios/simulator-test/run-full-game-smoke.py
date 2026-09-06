@@ -512,8 +512,8 @@ def main(argv: list[str]) -> int:
     if not arguments.skip_build:
         build_app(evidence)
     bundle_id, executable, metallib = validate_app(arguments.app)
-    executable_sha256 = sha256_file(executable)
-    metallib_sha256 = sha256_file(metallib)
+    executable_sha256 = None
+    metallib_sha256 = None
 
     simulator_udid = ""
     simulator_state = "Unknown"
@@ -570,6 +570,12 @@ def main(argv: list[str]) -> int:
         )
         timings["installSeconds"] = time.monotonic() - install_started
         installed = True
+        installed_app = pathlib.Path(run(
+            ["/usr/bin/xcrun", "simctl", "get_app_container", simulator_udid, bundle_id, "app"],
+            timeout=30,
+        ).stdout.decode("utf-8").strip())
+        executable_sha256 = sha256_file(installed_app / executable.name)
+        metallib_sha256 = sha256_file(installed_app / metallib.name)
         raw_container = run(
             [
                 "/usr/bin/xcrun",

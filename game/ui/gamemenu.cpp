@@ -589,7 +589,8 @@ void GameMenu::mouseDownEvent(MouseEvent& e) {
     if(!it.visible || !isSelectable(it.handle) || !isEnabled(it.handle))
       continue;
     auto rect=itemRect(it);
-    if(iosVideoPage) {
+    if(iosVideoPage && (it.handle->type==zenkit::MenuItemType::SLIDER ||
+                        it.handle->type==zenkit::MenuItemType::CHOICEBOX)) {
       rect.x=int(float(w())*800.f/scriptDiv);
       rect.w=int(float(w())*6600.f/scriptDiv);
       }
