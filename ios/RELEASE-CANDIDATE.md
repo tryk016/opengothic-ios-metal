@@ -50,7 +50,9 @@ zMetal4=0
 zRayTracing=0
 ```
 
-This is Native 100%, maximum 300% drawing distance and uncapped FPS. Native
+This is Native 100%, maximum 300% drawing distance and no fixed FPS cap. On
+iOS, mode 0 uses display pacing with a requested ProMotion range of 30–120 Hz;
+it is not unrestricted rendering, and `zMaxFPS` does not control this cadence. Native
 ignores a reduced scene-scale selection. Keep these settings fixed when comparing
 Metal 3 with Metal 4 or raster with ray tracing, changing only the feature under
 test. Verify the effective route: a requested feature may fall back.
@@ -72,7 +74,7 @@ acceptable ghosting or a performance benefit.
 
 These are named test configurations using existing video-menu controls, not
 hardware recommendations or automatic quality changes. Keep native shadow maps and image controls fixed, Adaptive FPS off and the
-30 FPS cap on for pacing comparisons. Use uncapped runs separately for timing;
+30 FPS cap on for pacing comparisons. Use mode 0 separately for timing;
 Adaptive FPS on is a separate thermal/soak case.
 
 | Scenario | Upscaling | Scene scale | Drawing distance |
