@@ -623,6 +623,9 @@ for shader in landscape bink ui inventory shading-prototypes; do
   if [ "$shader" = landscape ] || [ "$shader" = shading-prototypes ]; then
     set -- -Wall -Wextra -Werror
   fi
+  if [ "$shader" = landscape ]; then
+    set -- "$@" -fpreserve-invariance
+  fi
   xcrun --sdk iphoneos metal \
     -target air64-apple-ios16.4 \
     "$@" \
