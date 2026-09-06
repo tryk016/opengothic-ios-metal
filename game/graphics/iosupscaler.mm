@@ -230,7 +230,8 @@ bool IOSUpscaler::encodeNative(MTL::CommandBuffer* command, MTL::Texture* source
           temporal.colorTexture=c.source; temporal.outputTexture=s.texture(s.result);
           temporal.depthTexture=(id<MTLTexture>)(void*)c.inputs.depth;
           temporal.motionTexture=(id<MTLTexture>)(void*)c.inputs.motion;
-          temporal.reactiveMaskTexture=(id<MTLTexture>)(void*)c.inputs.reactive;
+          if(@available(iOS 17.4,macOS 14.4,*))
+            temporal.reactiveMaskTexture=(id<MTLTexture>)(void*)c.inputs.reactive;
           temporal.inputContentWidth=NSUInteger(s.input.w); temporal.inputContentHeight=NSUInteger(s.input.h);
           temporal.motionVectorScaleX=float(s.input.w); temporal.motionVectorScaleY=float(s.input.h);
           temporal.jitterOffsetX=c.snapshot.currentCamera.jitter.x; temporal.jitterOffsetY=c.snapshot.currentCamera.jitter.y;
