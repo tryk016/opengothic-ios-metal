@@ -512,6 +512,8 @@ def main(argv: list[str]) -> int:
     if not arguments.skip_build:
         build_app(evidence)
     bundle_id, executable, metallib = validate_app(arguments.app)
+    executable_sha256 = sha256_file(executable)
+    metallib_sha256 = sha256_file(metallib)
 
     simulator_udid = ""
     simulator_state = "Unknown"
@@ -756,8 +758,8 @@ def main(argv: list[str]) -> int:
         },
         "app": {
             "bundleId": bundle_id,
-            "executableSha256": sha256_file(executable),
-            "metallibSha256": sha256_file(metallib),
+            "executableSha256": executable_sha256,
+            "metallibSha256": metallib_sha256,
         },
         "fixture": {
             "inventorySha256": fixture.inventory_sha256,

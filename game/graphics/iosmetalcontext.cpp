@@ -25,6 +25,7 @@
 #include <Tempest/ZBuffer>
 
 #include <algorithm>
+#include <cmath>
 #include <array>
 #if defined(OPENGOTHIC_RENDERER_IOS_RESOURCE_ALLOCATOR_SELF_TEST) || \
     defined(OPENGOTHIC_RENDERER_IOS_CLEAR_ONLY_PASS_SELF_TEST) || \
@@ -376,15 +377,6 @@ constexpr auto ConfiguredFaultMode =
   static_cast<RendererIOSFaultMode>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID);
 #endif
 
-constexpr bool configuredSavePreviewNeedsGpuCapture() noexcept {
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-  return iosSavePreviewNeedsGpuCapture(
-    true,static_cast<uint32_t>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID));
-#else
-  return iosSavePreviewNeedsGpuCapture(
-    false,static_cast<uint32_t>(OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID));
-#endif
-  }
 
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
 uint64_t rendererIOSClockUs() noexcept {
@@ -699,7 +691,7 @@ const char* rendererIOSClearOnlyPassMarkerText(const char* storage) noexcept {
 
 #if defined(OPENGOTHIC_RENDERER_IOS_SHADING_PROTOTYPE_TILE_SELF_TEST)
 constexpr char RendererIOSShadingPrototypeTileSelfTestArmed[] =
-  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1";
+  "\x01RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=13 minimum-apple=4 output=4x4 rgba8-private=1";
 constexpr char RendererIOSShadingPrototypeTileSelfTestFactoryReady[] =
   "\x01RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0";
 constexpr char RendererIOSShadingPrototypeTileSelfTestEncoded[] =
@@ -1186,11 +1178,12 @@ struct IOSMetalContext::Impl final {
     Attachment color;
     ZBuffer depth;
     IOSLinearHDRExtent extent;
+    IOSLinearHDRExtent drawableExtent;
     uint64_t generation = 0u;
 
     bool current(uint32_t width, uint32_t height) const noexcept {
       return !color.isEmpty() && !depth.isEmpty() &&
-             extent.width==width && extent.height==height;
+             drawableExtent.width==width && drawableExtent.height==height;
       }
     };
 
@@ -1448,14 +1441,11 @@ struct IOSMetalContext::Impl final {
     const auto platform = rendererIOSPlatformInfo();
     try {
       Log::i(RendererIOSConfiguredFaultModeEvidence);
-      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui,inventory,save-placeholder,save-cpu-fastpath build=",
+      Log::i("RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui,inventory,save-preview build=",
              OPENGOTHIC_RENDERER_IOS_BUILD_SHA," gpu=",device.properties().name,
              " deviceFamily=",platform.deviceFamily.data()," iOS=",platform.osVersion.data(),
              " faultMode=",fault.name(),
-             " savePreviewRoute=",
-             configuredSavePreviewNeedsGpuCapture()
-               ? "gpu-diagnostic"
-               : "cpu-placeholder");
+             " savePreviewRoute=gpu-preview");
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       Log::i("RendererIOS diagnostics: ON frames-in-flight=",Resources::MaxFramesInFlight,
              " context=IOSMetalContext transport=Tempest");
@@ -1945,7 +1935,7 @@ struct IOSMetalContext::Impl final {
     shadingPrototypeTileStarted = true;
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
     static_assert(
-        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==12u);
+        RendererIOSShadingPrototypePipeline::OfflineMetallibAbi==13u);
     try {
       Log::i(rendererIOSShadingPrototypeTileMarkerText(
           RendererIOSShadingPrototypeTileSelfTestArmed));
@@ -2734,12 +2724,12 @@ struct IOSMetalContext::Impl final {
       }
 
     static_assert(IOSShadingPrototypePlanABIVersion==1u);
-    static_assert(Pipeline::OfflineMetallibAbi==12u);
+    static_assert(Pipeline::OfflineMetallibAbi==13u);
     try {
       Log::i(rendererIOSShadingPrototypeForwardMarkerText(
              RendererIOSShadingPrototypeForwardSelfTestArmed),
              shadingPrototypeForwardNonce.data(),
-             " contract=1 metallib-abi=12 minimum-apple=4");
+             " contract=1 metallib-abi=13 minimum-apple=4");
       }
     catch(...) {
       }
@@ -3383,8 +3373,19 @@ struct IOSMetalContext::Impl final {
     }
 
   void resetTargets(IOSLinearHDRActivationAttempt attempt) noexcept {
-    const uint32_t w = swapchain.w();
-    const uint32_t h = swapchain.h();
+    const auto drawable = Size(int(swapchain.w()),int(swapchain.h()));
+    try {
+      if(upscaler==nullptr) upscaler=std::make_unique<IOSUpscaler>(device);
+      upscaler->configure(pendingUpscaler,drawable,*deviceFacts.value,
+          gpuScene!=nullptr && gpuScene->motionPipelinesReady());
+      activeUpscaler=pendingUpscaler;
+      recreateUpscaler=false;
+      }
+    catch(...) {
+      upscaler.reset();
+      }
+    const auto sceneSize=upscaler!=nullptr ? upscaler->inputSize() : drawable;
+    const uint32_t w=uint32_t(sceneSize.w), h=uint32_t(sceneSize.h);
     bool targetReady = false;
     uint64_t targetBytes = 0u;
     if(depthSupported && linearHDRMetal!=nullptr &&
@@ -3393,10 +3394,11 @@ struct IOSMetalContext::Impl final {
       try {
         LinearHDRTargets next;
         next.color = device.attachment(TextureFormat::R11G11B10UF,w,h);
-        next.depth = device.zbuffer(depthFormat,w,h);
+        next.depth = device.zbuffer(depthFormat,swapchain.w(),swapchain.h());
         next.extent = {w,h};
+        next.drawableExtent = {swapchain.w(),swapchain.h()};
         next.generation = linearHDRTargets.generation+1u;
-        targetReady = next.current(w,h) &&
+        targetReady = next.current(swapchain.w(),swapchain.h()) &&
                       linearHDRMetal->exactTarget(next.color,w,h);
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
         if(targetReady && linearHDRProof!=nullptr &&
@@ -4879,6 +4881,9 @@ struct IOSMetalContext::Impl final {
     }
 
   Device&                                      device;
+  std::unique_ptr<IOSUpscaler> upscaler;
+  IOSUpscalerSettings pendingUpscaler, activeUpscaler;
+  bool recreateUpscaler=false;
   const IOSDeviceFactsCreateResult             deviceFacts;
   std::optional<IOSFeaturePolicyProvenance>     featurePolicyProvenance;
   IOSFeatureTelemetryGate                      featurePolicyTelemetryGate;
@@ -5250,6 +5255,14 @@ std::optional<IOSMetalContext::FrameLease> IOSMetalContext::beginFrame() {
     return std::nullopt;
     }
 
+  if(impl->recreateUpscaler || impl->pendingUpscaler!=impl->activeUpscaler) {
+    if(!impl->settleGpu(SettleReason::Resize,"RendererIOS upscaler change GPU settle failed"))
+      return std::nullopt;
+    impl->materializePreviewSafely("RendererIOS upscaler change preview finalization failed");
+    if(impl->failed) return std::nullopt;
+    impl->resetTargets(IOSLinearHDRActivationAttempt::Recreate);
+    }
+
   const IOSLinearHDRSettingsCommitResult settingsCommit =
       iosLinearHDRCommitSettingsAtFrameBoundary(
         impl->linearHDRSettings);
@@ -5418,6 +5431,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     throw;
     }
   InventoryMenu& inventory = *inventoryOwner;
+  if(videoActive && impl->upscaler!=nullptr) impl->upscaler->resetHistory();
 
   // Retain before encoding so the post-submit commit contains no allocation.
   // Pre-submit failures release this slot in the catch paths below.
@@ -5446,8 +5460,7 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
     if(input.capture.kind==IOSCaptureRequest::Kind::SavePreview &&
        impl->previewState==Impl::PreviewState::Idle) {
       previewAccepted = true;
-      if(!configuredSavePreviewNeedsGpuCapture() ||
-         impl->fault.previewAttachmentMissing()) {
+      if(impl->fault.previewAttachmentMissing()) {
         previewFallback = true;
         impl->savePreview = Attachment();
         impl->previewTargetAllocated = false;
@@ -5514,7 +5527,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
       preparedSceneReport = impl->gpuScene->prepareFrame(
           preparedScene,impl->linearHDRTargets.generation,
           *input.snapshot,assets,
-          frameAnimation,uvAnimation);
+          frameAnimation,uvAnimation,
+          impl->upscaler!=nullptr && impl->upscaler->activeMode()==IOSUpscalerMode::Temporal);
       if(preparedSceneReport.result!=IOSGPUScene::Result::Success ||
          !preparedScene.ready()) {
         if(impl->nativeScenePrepareFailureGeneration!=
@@ -5754,8 +5768,13 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         const auto report =
           impl->gpuScene->encodePrepared(encoder,preparedScene);
 #else
+        const auto sceneTone=impl->linearHDRSettings.committed;
+        const IOSToneResolveConstants sceneConstants={sceneTone.brightness,sceneTone.contrast,sceneTone.gamma,sceneTone.exposure};
+        const std::optional<IOSGPUScene::SceneOutput> output = impl->upscaler!=nullptr
+            ? std::optional<IOSGPUScene::SceneOutput>{{*impl->upscaler,*input.snapshot,sceneConstants}}
+            : std::nullopt;
         const auto report = impl->gpuScene->encodePreparedScene(
-            encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker);
+            encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker,output ? &*output : nullptr);
 #endif
 #endif
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
@@ -5786,6 +5805,11 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
             }
         }
 #endif
+        if(report.result!=IOSGPUScene::Result::Success && impl->upscaler!=nullptr &&
+           impl->upscaler->encodingFailed()) {
+          impl->recreateUpscaler=true;
+          throw std::runtime_error("RendererIOS upscaler requires fallback");
+          }
         if(report.result!=IOSGPUScene::Result::Success) {
           impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
           throw std::runtime_error(
@@ -5872,11 +5896,22 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #endif
         encoder.setFramebuffer(
           {{drawable,Tempest::Discard,Tempest::Preserve}});
-        const IOSLinearHDRMetalEncodeResult resolve =
-            impl->linearHDRMetal->encodeToneResolve(
-              encoder,impl->linearHDRTargets.color,constants);
+        IOSLinearHDRMetalEncodeResult resolve;
+        if(impl->upscaler!=nullptr && impl->upscaler->outputIsLdr()) {
+          resolve=impl->upscaler->encodeLdrOutput(encoder) ? IOSLinearHDRMetalEncodeResult::Success
+                                                        : IOSLinearHDRMetalEncodeResult::NativeEncodingFailed;
+          }
+        else {
+          const auto& source = impl->upscaler!=nullptr && impl->upscaler->activeMode()!=IOSUpscalerMode::Native
+                             ? impl->upscaler->output()
+                             : Tempest::textureCast<const Tempest::Texture2d&>(impl->linearHDRTargets.color);
+          resolve=impl->linearHDRMetal->encodeToneResolve(encoder,source,constants);
+          }
         if(resolve!=IOSLinearHDRMetalEncodeResult::Success) {
-          impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
+          if(impl->upscaler!=nullptr && impl->upscaler->encodingFailed())
+            impl->recreateUpscaler=true;
+          else
+            impl->linearHDRSafety.mode = IOSLinearHDRSafetyMode::SafeNoScene;
           throw std::runtime_error(
             std::string("RendererIOS tone resolve failed: ")+
             iosLinearHDRMetalEncodeResultName(resolve));
@@ -5941,8 +5976,19 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
 #endif
 
       if(previewAccepted && !previewFallback) {
-        encoder.setDebugMarker("RendererIOS save preview diagnostic capture");
-        encoder.setFramebuffer({{impl->savePreview,OpaqueBlack,Tempest::Preserve}});
+        if(nativeSceneEncoded) {
+          encoder.setDebugMarker("RendererIOS save preview");
+          encoder.setFramebuffer({{impl->savePreview,OpaqueBlack,Tempest::Preserve}});
+          const auto tone = impl->linearHDRSettings.committed;
+          const auto result = impl->linearHDRMetal->encodeSavePreview(
+              encoder,impl->linearHDRTargets.color,
+              {tone.brightness,tone.contrast,tone.gamma,tone.exposure},
+              {impl->savePreview.w(),impl->savePreview.h()});
+          previewFallback = result!=IOSLinearHDRMetalEncodeResult::Success;
+          }
+        else {
+          previewFallback = true;
+          }
         }
 #if defined(OPENGOTHIC_RENDERER_IOS_BINK_SELF_TEST)
       (void)impl->encodeBinkSelfTest(encoder,slot,frame.serial);
@@ -6172,6 +6218,10 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
         abandonFrame();
         }
       }
+    // The encoder has unwound and the unsubmitted command/scene owners have
+    // been retired above. Recreate the next scaler at the next idle boundary.
+    if(impl->recreateUpscaler && !submissionAttempted)
+      return {};
     impl->forcePreviewPlaceholder();
     if(impl->takePresentFailureAndLatchProof("RendererIOS asynchronous Metal present failed"))
       impl->fail("RendererIOS frame submission failed",e.what());
@@ -6390,6 +6440,7 @@ void IOSMetalContext::prepareForOwnerRelease() noexcept {
 
 void IOSMetalContext::onWorldChanged() {
   prepareForOwnerRelease();
+  if(impl->upscaler!=nullptr) impl->upscaler->resetHistory();
   if(impl->failed || impl->lifecycleState==Impl::LifecycleState::Stopped)
     return;
   impl->frameActive  = false;
@@ -6458,9 +6509,7 @@ bool IOSMetalContext::savePreviewReady() {
     }
   }
 
-bool IOSMetalContext::requiresGpuSavePreviewCapture() const noexcept {
-  return configuredSavePreviewNeedsGpuCapture();
-  }
+
 
 bool IOSMetalContext::savePreviewIsPlaceholder() const noexcept {
   return impl->previewState==Impl::PreviewState::ReadyPlaceholder;
@@ -6517,4 +6566,23 @@ std::size_t IOSMetalContext::retainedSceneCount() const noexcept {
 const IOSFeaturePolicyProvenance&
 IOSMetalContext::featurePolicyProvenance() const noexcept {
   return *impl->featurePolicyProvenance;
+  }
+
+void IOSMetalContext::updateUpscalerSettings(IOSUpscalerSettings settings) noexcept {
+  if(uint8_t(settings.mode)>uint8_t(IOSUpscalerMode::Native)) settings.mode=IOSUpscalerMode::Auto;
+  settings.scale=std::isfinite(settings.scale) ? std::clamp(settings.scale,0.5f,1.f) : 1.f;
+#if defined(OPENGOTHIC_RENDERER_IOS_LINEAR_HDR_GPU_TRIPLE_CAPTURE) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_NATIVE_ALPHA_TEST_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
+    defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
+  settings={IOSUpscalerMode::Native,1.f};
+#endif
+  impl->pendingUpscaler=settings;
+  }
+
+void IOSMetalContext::prepareSceneCamera(IOSSceneFrameState& scene) const noexcept {
+  if(impl->upscaler!=nullptr) impl->upscaler->prepareCamera(scene);
   }

@@ -146,7 +146,9 @@ void MenuRoot::mouseDownEvent(MouseEvent& event) {
     if(event.button==Event::ButtonRight) {
       popMenu();
       } else {
+#if !defined(__IOS__)
       current->onKeyboard(KeyCodec::ActionGeneric);
+#endif
       }
     } else {
     event.ignore();

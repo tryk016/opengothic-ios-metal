@@ -5,11 +5,13 @@
 
 #include <cstdint>
 #include <memory>
+#include <Tempest/Size>
 
 namespace Tempest {
 class Attachment;
 class CommandBuffer;
 class Device;
+class Texture2d;
 template<class T>
 class Encoder;
 }
@@ -38,6 +40,15 @@ class IOSLinearHDRMetal final {
         Tempest::Encoder<Tempest::CommandBuffer>& encoder,
         const Tempest::Attachment& source,
         const IOSToneResolveConstants& constants) noexcept;
+    IOSLinearHDRMetalEncodeResult encodeToneResolve(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        const Tempest::Texture2d& source,
+        const IOSToneResolveConstants& constants) noexcept;
+    IOSLinearHDRMetalEncodeResult encodeSavePreview(
+        Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+        const Tempest::Attachment& source,
+        const IOSToneResolveConstants& constants,
+        Tempest::Size outputSize) noexcept;
 
   private:
     struct Impl;

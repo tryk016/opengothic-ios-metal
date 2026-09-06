@@ -1047,7 +1047,7 @@ void MainWindow::onSettings() {
   if(zMaxFps>0)
     maxFpsInv = 1000u/uint64_t(zMaxFps); else
     maxFpsInv = 0;
-#if defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
+#if defined(__IOS__) || defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
   // settingsSetI() emits onSettingsChanged immediately, so rebuilding the
   // projection here makes the stock Draw distance choice live in-game.
   if(auto* camera = Gothic::inst().camera()) {
@@ -1709,21 +1709,15 @@ void MainWindow::flushPerfWindow(uint64_t nowUs, bool force) {
 #endif
 #if defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
   constexpr const char* gpuExperiment = "dynamic_draw_distance";
-  const uint32_t worldFarPlane = Camera::configuredFarPlane();
-  const uint32_t drawDistancePercent = worldFarPlane/1000u;
 #elif defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
   constexpr const char* gpuExperiment = "world_far_plane_60000";
-  constexpr uint32_t worldFarPlane = 60000u;
-  constexpr uint32_t drawDistancePercent = 60u;
 #elif defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
   constexpr const char* gpuExperiment = "direct_drawable_v2_lazy_ssao";
-  constexpr uint32_t worldFarPlane = 100000u;
-  constexpr uint32_t drawDistancePercent = 100u;
 #else
   constexpr const char* gpuExperiment = "control";
-  constexpr uint32_t worldFarPlane = 100000u;
-  constexpr uint32_t drawDistancePercent = 100u;
 #endif
+  const uint32_t worldFarPlane = Camera::configuredFarPlane();
+  const uint32_t drawDistancePercent = worldFarPlane/1000u;
 #if defined(OPENGOTHIC_GPU_EXPERIMENT_DIRECT_DRAWABLE_LAZY_SSAO)
   constexpr int directDrawable = 1;
 #else
@@ -1926,9 +1920,7 @@ uint64_t MainWindow::tick() {
     }
 
 #if defined(__IOS__)
-  // A save request owns the next render boundary. Product builds start their
-  // queued CPU placeholder before beginFrame; preview fault builds keep
-  // rendering the immediate saving feedback until the diagnostic GPU fence.
+  // Keep the world unchanged while its preview and save are being captured.
   if(pendingSave.active())
     return 0;
 #endif
@@ -2152,10 +2144,6 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
   if(pendingSave.active() || Gothic::inst().checkLoading()!=Gothic::LoadState::Idle)
     return;
 
-  // The native renderer does not compose a real thumbnail yet. Product builds
-  // start from a tiny CPU placeholder and avoid allocating/clearing/reading
-  // back a black GPU attachment. Preview-specific fault builds keep the queued
-  // GPU path so ID1-ID3 remain executable until real preview composition lands.
   pendingSave.slot        = std::string(slot);
   pendingSave.name        = std::string(name);
   pendingSave.previewPlaceholder = false;
@@ -2180,30 +2168,12 @@ void MainWindow::saveGame(std::string_view slot, std::string_view name) {
       }
     return;
     }
-  if(!renderer.requiresGpuSavePreviewCapture()) {
-#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
-    try {
-      Log::i("[save] RendererIOS request: request=",
-             pendingSave.requestSerial,
-             " route=cpu-placeholder reason=native-preview-unimplemented");
-      }
-    catch(...) {
-      }
-#endif
-    // Keep owner release at the established render-boundary gate. Starting
-    // Gothic::startSave directly from an input callback could cancel an active
-    // frame and let its outer render invocation continue with a stale ticket.
-    pendingSave.preview = iosSavePreviewPlaceholder();
-    pendingSave.previewPlaceholder = true;
-    pendingSave.stage = PendingSave::Stage::ReadyCpu;
-    update();
-    return;
-    }
+
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
   try {
     Log::i("[save] RendererIOS request: request=",
            pendingSave.requestSerial,
-           " route=gpu-diagnostic");
+           " route=gpu-preview");
     }
   catch(...) {
     }
@@ -2711,7 +2681,7 @@ void MainWindow::render(){
       pendingSave.stage   = PendingSave::Stage::AwaitingGpu;
 #if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
       try {
-        Log::i("[save] RendererIOS preview queued: source=gpu-diagnostic",
+        Log::i("[save] RendererIOS preview queued: source=gpu-preview",
                " slot=",pendingSave.slot,
                " request=",pendingSave.requestSerial);
         }

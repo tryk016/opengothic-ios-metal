@@ -165,12 +165,12 @@ float Camera::zFar() const {
   }
 
 uint32_t Camera::configuredFarPlane() {
-#if defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
+#if defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
+  return 60000u;
+#elif defined(__IOS__) || defined(OPENGOTHIC_GPU_EXPERIMENT_DYNAMIC_DRAW_DISTANCE)
   // MENUITEM_GRA_SIGHT_CHOICE stores an index: 0=20%, 1=40%, ...,
   // 4=100%, ... 14=300%. Treat 100% as the historical 100000-unit plane.
   return drawDistanceFarPlane(Gothic::settingsGetI("PERFORMANCE","sightValue"));
-#elif defined(OPENGOTHIC_GPU_EXPERIMENT_WORLD_FAR_PLANE_60000)
-  return 60000u;
 #else
   return 100000u;
 #endif

@@ -41,6 +41,10 @@ class GameMenu : public Tempest::Widget {
   protected:
     void paintEvent (Tempest::PaintEvent& event) override;
     void resizeEvent(Tempest::SizeEvent&  event) override;
+#if defined(__IOS__)
+    void mouseDownEvent(Tempest::MouseEvent& event) override;
+    void mouseDragEvent(Tempest::MouseEvent& event) override;
+#endif
 
   private:
     enum class QuestStat : uint8_t {
@@ -91,10 +95,15 @@ class GameMenu : public Tempest::Widget {
     // Controls page shows the gamepad-layout picture instead of the keyboard
     // bindings list when the bundled pad art is available (see paddiagram.h).
     bool                                  padDiagramPage=false;
+    bool                                  iosVideoPage=false;
 
     KeyCodec::Action                      kClose = KeyCodec::Escape;
 
     void                                  drawItem(Tempest::Painter& p, Item& it);
+    Tempest::Rect                         itemRect(const Item& it) const;
+#if defined(__IOS__)
+    void                                  setSliderValue(Item& it, int x);
+#endif
     void                                  drawSlider(Tempest::Painter& p, Item& it, int x, int y, int w, int h);
     void                                  drawQuestList(Tempest::Painter& p, Item& it, int x, int y, int w, int h,
                                                         const QuestLog& log, QuestStat st);
@@ -133,7 +142,7 @@ class GameMenu : public Tempest::Widget {
 
     void                                  updateValues();
     void                                  updateItem    (Item &item);
-    void                                  setupIosFpsLimitOption();
+    void                                  initIosVideoOptions();
     void                                  updateSavTitle(Item& sel);
     void                                  updateSavThumb(Item& sel);
     void                                  updateVideo();

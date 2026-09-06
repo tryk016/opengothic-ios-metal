@@ -225,7 +225,6 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "Verify P2.5a shading prototype plan contract",
         "Verify P2.3b resource allocator contract",
         "Verify P2.3c clear-only pass contract",
-        "Verify RendererIOS save-preview routing policy",
         "Verify RendererIOS legacy shader compilation policy",
         "Verify RendererIOS pipeline archive policy",
         "Verify P2.1 native asset registry contract",
@@ -347,7 +346,7 @@ def validate_extracted_oracles(contracts: str, profile: str) -> None:
         "xcrun --sdk iphoneos metallib",
         "xcrun --sdk iphoneos metal-nm",
         'test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"',
-        ')" -eq 35',
+        ')" -eq 47',
         "RendererIOS.candidate.sha256",
     ):
         if candidate.count(literal) != 1:
@@ -2955,11 +2954,11 @@ def test_bash32_candidate_arguments() -> None:
     for label, source, expected_count in export_oracle_sources:
         for function in abi10_exports:
             assert source.count(function) == expected_count, (
-                f"{label} exact ABI12 export oracle drifted: {function}"
+                f"{label} exact ABI13 export oracle drifted: {function}"
             )
             mutant = source.replace(function, "riosToneResolveMutant", 1)
             assert mutant.count(function) != expected_count, (
-                f"{label} ABI12 export mutation survived: {function}"
+                f"{label} ABI13 export mutation survived: {function}"
             )
             cross_script_mutations_killed += 1
     assert cross_script_mutations_killed == 9
@@ -2999,8 +2998,20 @@ def test_bash32_candidate_arguments() -> None:
         "riosTileDeferredLighting",
         "riosForwardPlusBuildLightList",
         "riosForwardPlusFragment",
+        "riosSavePreviewFragment",
+        "riosFsrPrepare",
+        "riosFsrEasu",
+        "riosFsrRcas",
+        "riosSceneCopyFragment",
+        "riosMotionVertex",
+        "riosMotionSkinnedVertex",
+        "riosMotionMorphVertex",
+        "riosMotionInstancedVertex",
+        "riosMotionFragment",
+        "riosReactiveFragment",
+        "riosSkyMotionFragment",
     )
-    assert len(exports) == 35
+    assert len(exports) == 47
     metal_nm_output = "".join(f"00000000 T {name}\\n" for name in exports)
     harness = f"""\
 set -Eeuo pipefail
@@ -3073,7 +3084,7 @@ xcrun() {{
     )
     old_abi8_exports = tuple(
         name for name in missing_additive_exports
-        if name not in ("riosSkinnedVertex", "riosMorphVertex", "riosInstancedVertex", "riosLandscapeTransparentFragment", "riosShadowAlphaTestFragment", "riosSkyLut", "riosSkyVertex", "riosSkyFragment", "riosRainVertex", "riosRainFragment", "riosWaterFactors", "riosWaterPatchVertex", "riosWaterFragment", "riosGhostFragment", "riosUnderwaterFragment", "riosParticleVertex")
+        if name not in ("riosSkinnedVertex", "riosMorphVertex", "riosInstancedVertex", "riosLandscapeTransparentFragment", "riosShadowAlphaTestFragment", "riosSkyLut", "riosSkyVertex", "riosSkyFragment", "riosRainVertex", "riosRainFragment", "riosWaterFactors", "riosWaterPatchVertex", "riosWaterFragment", "riosGhostFragment", "riosUnderwaterFragment", "riosParticleVertex", "riosSavePreviewFragment", "riosFsrPrepare", "riosFsrEasu", "riosFsrRcas", "riosSceneCopyFragment", "riosMotionVertex", "riosMotionSkinnedVertex", "riosMotionMorphVertex", "riosMotionInstancedVertex", "riosMotionFragment", "riosReactiveFragment", "riosSkyMotionFragment")
     )
     assert len(old_abi8_exports) == 18
     export_mutations = (
@@ -3127,7 +3138,7 @@ xcrun() {{
                 check=False,
             )
         assert result.returncode != 0, (
-            "RendererIOS ABI12 export mutation survived: " + label
+            "RendererIOS ABI13 export mutation survived: " + label
         )
         mutations_killed += 1
     assert mutations_killed == 5
@@ -3404,7 +3415,7 @@ def main() -> None:
         "20 CMake presets mutations, 14 causal source mutations, "
         "25 causal device harness mutations, "
         "17 UI selector mutations, 6 UI harness mutations, "
-        "14 ABI12 export mutations"
+        "14 ABI13 export mutations"
     )
 
 

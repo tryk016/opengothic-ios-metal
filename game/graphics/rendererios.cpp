@@ -215,6 +215,9 @@ struct RendererIOS::Impl final {
         Gothic::settingsGetF("VIDEO","zVidBrightness"),
         Gothic::settingsGetF("VIDEO","zVidContrast"),
         Gothic::settingsGetF("VIDEO","zVidGamma"));
+      const int mode=std::clamp(Gothic::settingsGetI("ENGINE","zUpscaler"),0,4);
+      const int scale=Gothic::settingsGetI("INTERNAL","vidResIndex");
+      context.updateUpscalerSettings({static_cast<IOSUpscalerMode>(mode),scale==0 ? 1.f : scale==1 ? 0.75f : 0.5f});
       }
     catch(...) {
       const float invalid = std::numeric_limits<float>::quiet_NaN();
@@ -485,6 +488,8 @@ IOSSceneSnapshotPtr RendererIOS::buildSceneSnapshot(FrameTicket& frame,
   std::array<uint64_t,IOSRemainingMaterialCount> remainingMaterialRawTotals{};
   bool hasRemainingMaterialCensus = false;
 #endif
+
+  impl->context.prepareSceneCamera(scene);
 
   if(bool(source)) {
     auto extraction = impl->extractor.extractOpaqueMeshes(
@@ -896,9 +901,7 @@ void RendererIOS::onWorldChanged() {
 #endif
   }
 
-bool RendererIOS::requiresGpuSavePreviewCapture() const noexcept {
-  return impl->context.requiresGpuSavePreviewCapture();
-  }
+
 
 bool RendererIOS::savePreviewReady() {
   return impl->context.savePreviewReady();

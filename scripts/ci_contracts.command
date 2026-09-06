@@ -4322,32 +4322,14 @@ if not clear_branch < id3_branch < healthy_parser:
     )
 PY
 
-printf '\n### CI contract: Verify RendererIOS save-preview routing policy\n'
-set -euo pipefail
 
-test -f game/graphics/iossavepreviewpolicy.h
-test -f ios/tests/iossavepreviewpolicy.cpp
-xcrun clang++ -std=c++20 \
-  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-  -Igame \
-  ios/tests/iossavepreviewpolicy.cpp \
-  -o "$RUNNER_TEMP/iossavepreviewpolicy"
-"$RUNNER_TEMP/iossavepreviewpolicy"
-
-grep -Fq 'requiresGpuSavePreviewCapture()' game/graphics/iosmetalcontext.cpp
-grep -Fq 'if(!renderer.requiresGpuSavePreviewCapture())' game/mainwindow.cpp
-grep -Fq 'save-cpu-fastpath' game/graphics/iosmetalcontext.cpp
-grep -Fq 'savePreviewRoute=' game/graphics/iosmetalcontext.cpp
-grep -Fq 'route=cpu-placeholder' game/mainwindow.cpp
-grep -Fq 'route=gpu-diagnostic' game/mainwindow.cpp
 grep -Fq 'pixels[i*4u+3u] = 255u;' game/mainwindow.cpp
 grep -Fq 'request-to-accepted-us=' game/mainwindow.cpp
 grep -Fq 'serialize-us=' game/mainwindow.cpp
 grep -Fq 'request-to-complete-us=' game/mainwindow.cpp
 grep -Fq 'wait-idle-us=' game/graphics/iosmetalcontext.cpp
-grep -Fq 'RendererIOS save preview diagnostic capture' game/graphics/iosmetalcontext.cpp
+grep -Fq 'RendererIOS save preview' game/graphics/iosmetalcontext.cpp
 ! grep -Fq 'RendererIOS save preview placeholder' game/graphics/iosmetalcontext.cpp
-test "$(grep -Fc '!configuredSavePreviewNeedsGpuCapture() ||' game/graphics/iosmetalcontext.cpp)" -eq 1
 test "$(grep -Fc 'impl->device.attachment(TextureFormat::RGBA8,dstW,dstH)' game/graphics/iosmetalcontext.cpp)" -eq 1
 test "$(grep -Fc 'device.readPixels(savePreview)' game/graphics/iosmetalcontext.cpp)" -eq 1
 grep -Fq 'previewFenceErrorAfterTerminal()' game/graphics/iosmetalcontext.cpp
@@ -4585,7 +4567,7 @@ grep -Fq 'MetalBuiltinRenderRole::ColorTrianglesAlpha' \
 grep -Fq 'opengothic-ios-patch-stack-v17' \
   ios/patches/apply-patches.sh
 
-grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-12.binaryarchive' \
+grep -Fq 'RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-13.binaryarchive' \
   game/graphics/iospipelinearchivepolicy.h
 grep -Fq 'PreviousArchiveFileName' \
   game/graphics/iospipelinearchivepolicy.h
@@ -5831,7 +5813,7 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
-  riosToneResolveVertex riosToneResolveFragment \
+  riosToneResolveVertex riosToneResolveFragment riosSavePreviewFragment riosFsrPrepare riosFsrEasu riosFsrRcas riosSceneCopyFragment riosMotionVertex riosMotionSkinnedVertex riosMotionMorphVertex riosMotionInstancedVertex riosMotionFragment riosReactiveFragment riosSkyMotionFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -5849,7 +5831,7 @@ require_exact_rendererios_exports() {
       riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
       riosLandscapeAlphaTestFragment \
       riosLandscapeAdditiveFragment \
-      riosToneResolveVertex riosToneResolveFragment \
+      riosToneResolveVertex riosToneResolveFragment riosSavePreviewFragment riosFsrPrepare riosFsrEasu riosFsrRcas riosSceneCopyFragment riosMotionVertex riosMotionSkinnedVertex riosMotionMorphVertex riosMotionInstancedVertex riosMotionFragment riosReactiveFragment riosSkyMotionFragment \
       riosBinkVertex riosBinkFragment \
       riosUiColorVertex riosUiColorFragment \
       riosUiTextureVertex riosUiTextureFragment \
@@ -5864,7 +5846,7 @@ require_exact_rendererios_exports() {
   exports="$(xcrun --sdk iphoneos metal-nm "$metallib" |
     awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
   test "$exports" = "$EXPECTED_RIOS_EXPORTS"
-  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 35
+  test "$(printf '%s\n' "$exports" | wc -l | tr -d ' ')" -eq 47
 }
 require_exact_rendererios_exports "$P25C1A_BASELINE_METALLIB"
 require_exact_rendererios_exports "$P25C1A_CANDIDATE_METALLIB"
@@ -5894,7 +5876,7 @@ int main(int argc, char** argv) {
   static_assert(Archive::ProvenanceSchemaVersion==1u);
   static_assert(Archive::CacheSchemaVersion==1u);
   static_assert(Archive::PipelineKeyAbiVersion==1u);
-  static_assert(Archive::MetallibAbiVersion==12u);
+  static_assert(Archive::MetallibAbiVersion==13u);
   static_assert(Archive::TestModeDirectoryComponents[0]=="RendererIOS");
   static_assert(
     Archive::TestModeDirectoryComponents[1]=="PipelineArchives");
@@ -5902,7 +5884,7 @@ int main(int argc, char** argv) {
   static_assert(
     Archive::RelativeArchivePath==
     "RendererIOS/PipelineArchives/schema-1/"
-    "RendererIOS-abi-12.binaryarchive");
+    "RendererIOS-abi-13.binaryarchive");
   if(argc!=3)
     return 1;
   const std::string_view candidate = argv[1];
@@ -5921,9 +5903,9 @@ int main(int argc, char** argv) {
     "provenance-schema=1\n"
     "cache-schema=1\n"
     "pipeline-key-abi=1\n"
-    "metallib-abi=12\n"
+    "metallib-abi=13\n"
     "metallib-sha256="+std::string(candidate)+"\n"
-    "archive-file=RendererIOS-abi-12.binaryarchive\n";
+    "archive-file=RendererIOS-abi-13.binaryarchive\n";
   return record==expected ? 0 : 4;
 }
 CPP
@@ -6692,7 +6674,7 @@ profile = Path("scripts/ci_build_profile.command").read_text()
 cmake = Path("CMakeLists.txt").read_text()
 markers = (
     "RendererIOS shading prototype tile self-test: ARMED "
-    "case=tile-prototype-v1 contract=1 metallib-abi=12 "
+    "case=tile-prototype-v1 contract=1 metallib-abi=13 "
     "minimum-apple=4 output=4x4 rgba8-private=1",
     "RendererIOS shading prototype tile self-test: FACTORY READY "
     "case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 "
@@ -6892,7 +6874,7 @@ test "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' \
 TILE_STRINGS="$RUNNER_TEMP/Gothic2Notr-shading-prototype-tile.strings"
 strings "$TILE_BINARY" >"$TILE_STRINGS"
 for marker in \
-    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1' \
+    'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=13 minimum-apple=4 output=4x4 rgba8-private=1' \
     'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
     'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
@@ -7518,7 +7500,7 @@ test "$(grep -Fxc \
 grep -Fq 'preview-fence-save-v1' game/commandline.cpp
 grep -Fq 'OPENGOTHIC_RENDERER_IOS_FAULT_MODE_ID != 3' game/commandline.cpp
 grep -Fq 'RendererIOS preview fence save script: REQUESTED' game/mainwindow.cpp
-grep -Fq '[save] RendererIOS preview queued: source=gpu-diagnostic' \
+grep -Fq '[save] RendererIOS preview queued: source=gpu-preview' \
   game/mainwindow.cpp
 grep -Fq 'ID3_COMPLETION_OBSERVED=1' ios/device-test/run-smoke-test.sh
 grep -Fq 'ID3_POST_COMPLETION_STABLE_SECONDS=10' \

@@ -242,7 +242,7 @@ elseif(IOS)
   set_directory_properties("${CMAKE_SOURCE_DIR}" PROPERTIES
     PROPERTY XCODE_STARTUP_PROJECT "${PROJECT_NAME}")
   set_target_properties(${PROJECT_NAME} PROPERTIES
-    MACOSX_BUNDLE_INFO_PLIST "Info.plist.in"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
     MACOSX_BUNDLE_GUI_IDENTIFIER "opengothic.gothic2"
     MACOSX_BUNDLE_BUNDLE_NAME "OpenGothic"
     MACOSX_BUNDLE_BUNDLE_VERSION "${OPENGOTHIC_IOS_VERSION}"
@@ -608,7 +608,7 @@ elseif(IOS)
       "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
     COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
             -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
-            -c "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_METAL_SOURCE}"
+            -fpreserve-invariance -c "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_METAL_SOURCE}"
             -o "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_AIR}"
     COMMAND "${OPENGOTHIC_XCRUN_EXECUTABLE}" --sdk ${OPENGOTHIC_RENDERER_IOS_METAL_SDK} metal
             -target ${OPENGOTHIC_RENDERER_IOS_METAL_TARGET}
@@ -635,6 +635,8 @@ elseif(IOS)
             -o "${OPENGOTHIC_RENDERER_IOS_METALLIB}"
     DEPENDS
       "${OPENGOTHIC_RENDERER_IOS_LANDSCAPE_METAL_SOURCE}"
+      "${CMAKE_SOURCE_DIR}/shader/ios-metal/fsr1.metal"
+      "${CMAKE_SOURCE_DIR}/shader/ios-metal/motion.metal"
       "${OPENGOTHIC_RENDERER_IOS_BINK_METAL_SOURCE}"
       "${OPENGOTHIC_RENDERER_IOS_UI_METAL_SOURCE}"
       "${OPENGOTHIC_RENDERER_IOS_INVENTORY_METAL_SOURCE}"
@@ -669,7 +671,7 @@ if(IOS)
     target_link_libraries(${PROJECT_NAME} "-framework CoreFoundation")
   endif()
 elseif(APPLE)
-  target_link_libraries(${PROJECT_NAME} "-framework AppKit")
+  target_link_libraries(${PROJECT_NAME} "-framework AppKit" "-weak_framework MetalFX")
   file(GLOB_RECURSE ObjCSOURCES "game/*.mm")
 endif()
 

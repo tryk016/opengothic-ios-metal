@@ -17,38 +17,22 @@ controller or the complete on-screen virtual gamepad. Two routes are documented:
 
 ### 1. Choose and get the unsigned .ipa
 
-You do **not** need to fork or build anything. Two maintained variants use the
-same game code, controls, saves and iOS performance profile:
+The links below are historical builds of the previous renderer. They are not
+release candidates of this RendererIOS branch, and their device results do not
+validate its current code.
 
-| Variant | When to use it | SideStore source | Direct IPA |
-|---|---|---|---|
-| **MetalFX Temporal — recommended** | First choice on supported iPhones/iPads; best reconstruction quality available in this port | `https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/apps.json` | [OpenGothic-MetalFX-Temporal.ipa](https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/OpenGothic-MetalFX-Temporal.ipa) |
-| **Lanczos compatibility** | Use if the Temporal build crashes or shows a device-specific graphics problem | `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json` | [OpenGothic-unsigned.ipa](https://github.com/tryk016/opengothic-ios/releases/download/latest/OpenGothic-unsigned.ipa) |
+| Previous build | Source | Direct IPA |
+|---|---|---|
+| MetalFX Temporal | `https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/apps.json` | [Previous Temporal IPA](https://github.com/tryk016/opengothic-ios/releases/download/metalfx-temporal/OpenGothic-MetalFX-Temporal.ipa) |
+| Lanczos | `https://github.com/tryk016/opengothic-ios/releases/download/latest/apps.json` | [Previous compatibility IPA](https://github.com/tryk016/opengothic-ios/releases/download/latest/OpenGothic-unsigned.ipa) |
 
-In SideStore open **Sources → +**, paste the selected source URL, then install
-OpenGothic. New builds from that source appear as updates.
+This branch uses one build with a runtime graphics selector described below.
+Its stable candidate is still under implementation and has not completed the
+final physical-device campaign. Build it locally for development; do not treat
+an older download as that candidate. The publishing workflows remain release
+operations and are not part of the intermediate RendererIOS CI gate.
 
-The recommended build uses Apple's MetalFX Temporal upscaler, which combines
-the current image with depth, motion information and frame history. At the same
-50% or 75% internal render scale it should provide the best image reconstruction
-of the available variants. If Temporal is unavailable at runtime, the build
-automatically tries MetalFX Spatial and then the existing Lanczos path. This is
-an image-quality recommendation, not a guarantee of higher FPS on every device.
-The path has been device-tested on Apple A17 Pro at half resolution with water
-reflections, sky effects and additional shadows enabled, without observed
-artifacts.
-
-The compatibility build always uses the established single-frame Lanczos
-upscaler for reduced-resolution rendering and has no MetalFX dependency.
-
-An unsigned IPA cannot be launched by tapping it in Files; SideStore, AltStore
-or Sideloadly must sign and install it first.
-
-> Maintainers only: `.github/workflows/ios-metalfx-temporal.yml` publishes the
-> recommended MetalFX build, while `.github/workflows/ios.yml` publishes the
-> Lanczos compatibility build to the `latest` release. Both use a macOS runner,
-> `cmake` + `glslang`, `iphoneos` arm64, deployment target 16.4 and disabled
-> code signing.
+All downloads are unsigned and need signing before installation.
 
 ### 2. Sign & install with your own free Apple ID
 - **SideStore (recommended, refreshes on-device over Wi‑Fi):** after adding the
@@ -338,26 +322,19 @@ copied with the game data:
 1. `Documents/system/Gothic.ini` — read-only base from the PC install.
 2. `Documents/Gothic.ini` — writable iOS override, with higher priority.
 
-On the first successful launch after valid game data is installed, OpenGothic
-creates the second file with this complete iOS profile when it does not exist.
-Existing explicit menu choices are preserved. Profile version 2 performs one
-targeted migration: the old generated 512 px shadow setting becomes 1024 px and
-a missing FPS choice becomes the new 30 FPS default. Other existing values are
-not auto-populated or replaced. A launch that stops at the missing-data alert
-happens before profile creation and will try again after the game data is copied.
+On a fresh install the writable override starts with the scene at full resolution
+and a 60 FPS limit. Existing user choices are preserved; upgrading does not
+silently rewrite the image-quality settings. The generated input settings are:
 
 ```ini
 [GAME]
 useQuickSaveKeys=1
 
 [INTERNAL]
-vidResIndex=2
-iosProfileVersion=2
+vidResIndex=0
 
 [ENGINE]
-zCloudShadowScale=0
-shadowResolution=1024
-zMaxFpsMode=1
+zMaxFpsMode=2
 
 [GAMEPAD]
 deadZone=0.25
@@ -368,23 +345,33 @@ lookSensitivity=0.20
 invertY=0
 ```
 
-When upgrading from an older build, a root override may already exist with only
-the settings saved previously. Keep it: the targeted version-2 migration above
-runs once, while all unrelated values and explicit FPS selections stay intact.
-You can still rename/delete the override once to regenerate the complete profile.
-The copied `system/Gothic.ini` is unaffected.
+Options → Video contains the engine-owned graphics page. Upscaling selects
+Auto, MetalFX Temporal, MetalFX Spatial, FSR 1 or Native at runtime. Auto tries
+Temporal → Spatial → FSR 1 → Native according to actual support. Native always
+uses full resolution; the other modes use the selected 100%, 75% or 50% scene
+scale (`INTERNAL/vidResIndex=0`, `1` or `2`). Text, menus, inventory and video
+remain at drawable resolution. Temporal uses scene depth, previous/current
+camera and geometry motion, and a reactive mask for transient effects.
 
-`vidResIndex=2` renders only the 3D scene at half resolution and upscales it;
-HUD, menus and subtitles remain native and sharp. `zCloudShadowScale=0` disables
-the expensive SSAO option labelled “Cloud shadows”. Both can still be changed
-in Options → Video. Keep `releaseZone < deadZone`; `crossAxisGuard` rejects the
-small perpendicular component of imperfect cardinal stick motion (`0` disables
-the guard).
+The same page offers FPS Off/30/60 (`ENGINE/zMaxFpsMode=0/1/2`), drawing distance
+and brightness/contrast/gamma. Drawing distance applies immediately on iOS:
+`PERFORMANCE/sightValue=4` is 100% (approximately 1 km), while `14` is 300%
+(approximately 3 km). It does not replace object-specific fading.
 
-Options → Video → **Drawing distance** now changes the world far plane immediately
-and persists through the existing `PERFORMANCE/sightValue` setting. 100% is
-approximately 1 km; 80%, 60% and 40% are approximately 800, 600 and 400 m. This
-controls the world view distance and is separate from object-specific fading.
+For image-quality comparisons, set `vidResIndex=0` and `ENGINE/zUpscaler=4`
+(Native). For uncapped performance measurements also use `zMaxFpsMode=0` and
+`zMaxFPS=0`. Older generated overrides may still contain `vidResIndex=2` and
+`zMaxFpsMode=1`, so inspect the root override as well as the base INI. The native
+renderer does not read the legacy `zCloudShadowScale`, `shadowResolution`,
+`zTexAnisotropicFiltering` or `texDetailIndex` switches: its current shadow maps
+are 2048/1024 and its scene sampler uses 16× anisotropic filtering.
+
+The Simulator smoke preset bounds scene submissions for integration checks.
+Even with a full-quality INI, that preset is not final image-quality or mobile
+performance evidence. Final image-quality checks use the unrestricted candidate.
+
+Keep `releaseZone < deadZone`; `crossAxisGuard` rejects the small perpendicular
+component of imperfect cardinal stick motion (`0` disables the guard).
 
 Optional overrides can be added to the same root file:
 
@@ -400,12 +387,9 @@ noStuckProtect=1        ; disable the L3+R3 unstuck warp
 The controller does not reserve any shortcut for quick save/load. The
 `useQuickSaveKeys` engine option above remains available for keyboard F5/F9.
 
-The build defaults to 30 FPS to reduce sustained iPhone load. On iOS,
-Options → Game repurposes the existing “Gothic 1 controls” choice as
-“FPS limit”, with Off, 30 and 60 FPS values. The selection is applied
-immediately and persisted in the root `Documents/Gothic.ini` as
-`ENGINE/zMaxFpsMode` (`0`, `1` or `2`). The original `GAME/useGothic1Controls`
-value remains unchanged, so the selected combat-control scheme is preserved.
+The fresh-install default is 60 FPS. Options → Video applies Off, 30 or 60
+immediately and persists the choice as `ENGINE/zMaxFpsMode` (`0`, `1`, `2`).
+The original Gothic 1 controls option retains its gameplay meaning.
 The iOS limiter changes the native `CADisplayLink` cadence; it does not sleep
 the render/UI thread. Off requests the adaptive 30–120 Hz ProMotion range, while
 30 and 60 request fixed display-link rates.
@@ -419,7 +403,8 @@ not require additional `Gothic.ini` entries.
 Saving now shows its banner immediately. The slot preview is captured through a
 small render attachment and read back only after the frame fence, avoiding the
 old synchronous Metal-driver abort. If preview capture fails, saving still
-continues with a placeholder. This path has been confirmed on a physical device.
+continues with a placeholder. Physical-device validation of this new preview
+path is pending the final candidate campaign.
 
 ## Increased memory limit and free signing
 

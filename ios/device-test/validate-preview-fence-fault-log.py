@@ -41,7 +41,7 @@ SCRIPT_ARMED_RE = re.compile(
     re.MULTILINE,
 )
 REQUEST_RE = re.compile(
-    r"^\[save\] RendererIOS request: request=(\d+) route=gpu-diagnostic$",
+    r"^\[save\] RendererIOS request: request=(\d+) route=gpu-preview$",
     re.MULTILINE,
 )
 SCRIPT_REQUESTED_RE = re.compile(
@@ -55,7 +55,7 @@ PRESENT_RE = re.compile(
     re.MULTILINE,
 )
 QUEUED_RE = re.compile(
-    rf"^\[save\] RendererIOS preview queued: source=gpu-diagnostic "
+    rf"^\[save\] RendererIOS preview queued: source=gpu-preview "
     rf"slot={re.escape(SAVE_SLOT)} request=(\d+)$",
     re.MULTILINE,
 )
@@ -212,7 +212,7 @@ def validate(
     exact_prefix(log, "RendererIOS preview fence save script: SCRIPT FAIL", 0)
     exact_prefix(log, "[save] RendererIOS startSave deferred:", 0)
     require(
-        log.count("savePreviewRoute=gpu-diagnostic") == 1,
+        log.count("savePreviewRoute=gpu-preview") == 1,
         "shell does not prove exactly one GPU diagnostic preview route",
     )
 
@@ -468,7 +468,7 @@ def fixture(build: str, nonce: str, n: int = 2, k: int = 3) -> str:
         f"RendererIOS configured fault mode={FAULT_MODE}",
         "RendererIOS shell: version=1 profile=Safe features=native-landscape-textured,ui "
         f"build={build} gpu=Apple deviceFamily=iPhone16,2 iOS=26.6 "
-        f"faultMode={FAULT_MODE} savePreviewRoute=gpu-diagnostic",
+        f"faultMode={FAULT_MODE} savePreviewRoute=gpu-preview",
         f"RendererIOS diagnostics: ON frames-in-flight={n} context=IOSMetalContext transport=Tempest",
         f"RendererIOS fault injection armed: mode={FAULT_MODE} build={build}",
         f"RendererIOS preview fence save script: ARMED mode={SCRIPT_MODE} nonce={nonce} slot={SAVE_SLOT}",
@@ -480,10 +480,10 @@ def fixture(build: str, nonce: str, n: int = 2, k: int = 3) -> str:
         )
     lines.extend(
         [
-            "[save] RendererIOS request: request=1 route=gpu-diagnostic",
+            "[save] RendererIOS request: request=1 route=gpu-preview",
             f"RendererIOS preview fence save script: REQUESTED mode={SCRIPT_MODE} nonce={nonce} slot={SAVE_SLOT} request=1",
             f"RendererIOS runtime compilation: point=frame presents={k + 1} available=1 source=0 compute=0 render=3",
-            f"[save] RendererIOS preview queued: source=gpu-diagnostic slot={SAVE_SLOT} request=1",
+            f"[save] RendererIOS preview queued: source=gpu-preview slot={SAVE_SLOT} request=1",
         ]
     )
     for present in range(k + 2, m + 1):
@@ -565,17 +565,17 @@ def self_test() -> None:
     )
     validate(base, mirrored, build, nonce)
 
-    request = "[save] RendererIOS request: request=1 route=gpu-diagnostic"
+    request = "[save] RendererIOS request: request=1 route=gpu-preview"
     script_armed = f"RendererIOS preview fence save script: ARMED mode={SCRIPT_MODE} nonce={nonce} slot={SAVE_SLOT}"
     script_requested = f"RendererIOS preview fence save script: REQUESTED mode={SCRIPT_MODE} nonce={nonce} slot={SAVE_SLOT} request=1"
-    queued = f"[save] RendererIOS preview queued: source=gpu-diagnostic slot={SAVE_SLOT} request=1"
+    queued = f"[save] RendererIOS preview queued: source=gpu-preview slot={SAVE_SLOT} request=1"
     fired = f"RendererIOS fault injection fired: mode={FAULT_MODE} point={FAULT_POINT} build={build}"
     snapshot = "RendererIOS fatal snapshot: submit-attempts=5 submit-accepted=5 present-attempts=5 present-accepted=5"
     delta = "RendererIOS fatal post-delta: submit-attempts=0 submit-accepted=0 present-attempts=0 present-accepted=0"
     mutations = {
         "missing-configured": base.replace(f"RendererIOS configured fault mode={FAULT_MODE}\n", "", 1),
         "wrong-build": base.replace(f"build={build}", f"build={'f' * 40}", 1),
-        "wrong-route": base.replace("savePreviewRoute=gpu-diagnostic", "savePreviewRoute=cpu-placeholder", 1),
+        "wrong-route": base.replace("savePreviewRoute=gpu-preview", "savePreviewRoute=cpu-placeholder", 1),
         "wrong-nonce": base.replace(f"nonce={nonce}", f"nonce={'f' * 32}", 1),
         "wrong-requested-nonce-only": replace_once(base, script_requested, script_requested.replace(nonce, "f" * 32)),
         "duplicate-script-armed": replace_once(base, script_armed + "\n", (script_armed + "\n") * 2),
@@ -587,7 +587,7 @@ def self_test() -> None:
         "missing-queued": replace_once(base, queued + "\n", ""),
         "duplicate-queued": replace_once(base, queued + "\n", (queued + "\n") * 2),
         "malformed-queued": replace_once(base, queued, queued.replace("request=1", "request=x")),
-        "queued-wrong-slot": base.replace(f"queued: source=gpu-diagnostic slot={SAVE_SLOT}", "queued: source=gpu-diagnostic slot=save_slot_19.sav", 1),
+        "queued-wrong-slot": base.replace(f"queued: source=gpu-preview slot={SAVE_SLOT}", "queued: source=gpu-preview slot=save_slot_19.sav", 1),
         "wrong-fired-point": base.replace(f"point={FAULT_POINT}", "point=preview-before-terminal", 1),
         "duplicate-fired": replace_once(base, fired + "\n", fired + "\n" + fired + "\n"),
         "missing-fatal": replace_once(

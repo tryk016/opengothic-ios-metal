@@ -28,7 +28,7 @@ struct IOSLandscapeVertexOut {
   uint landscape [[flat]]; // Bits: terrain, water, particle.
   float3 world;
   float3 normal;
-  float4 position [[position]];
+  float4 position [[position, invariant]];
   float4 color;
   float2 uv;
 };
@@ -42,6 +42,7 @@ struct alignas(16) IOSToneResolveConstants {
 
 struct IOSToneResolveVertexOut {
   float4 position [[position]];
+  float2 uv;
 };
 
 static_assert(sizeof(IOSToneResolveConstants)==16,
@@ -261,6 +262,7 @@ vertex IOSToneResolveVertexOut riosToneResolveVertex(
   };
   IOSToneResolveVertexOut out;
   out.position = float4(positions[vertexId],0.0,1.0);
+  out.uv = positions[vertexId]*float2(0.5,-0.5)+0.5;
   return out;
 }
 
@@ -278,6 +280,16 @@ fragment float4 riosToneResolveFragment(
   const float dither = ((noise*2.0)-1.0)/255.0;
   color += float3(dither);
   return float4(color,1.0);
+}
+
+fragment float4 riosSavePreviewFragment(
+    IOSToneResolveVertexOut in [[stage_in]],
+    texture2d<float> hdr [[texture(0)]],
+    constant IOSToneResolveConstants& constants [[buffer(0)]]) {
+  constexpr sampler linear(coord::normalized,address::clamp_to_edge,filter::linear);
+  float3 color = hdr.sample(linear,in.uv).rgb*constants.exposure;
+  color = max(float3(0.0),color+constants.brightness)*constants.contrast;
+  return float4(pow(riosAcesToneMap(color),float3(constants.gamma)),1.0);
 }
 
 
@@ -322,6 +334,30 @@ static IOSLandscapeVertexOut riosDeformedOutput(
   return out;
 }
 
+static float3 riosSkinPosition(const IOSSkinnedVertex in,
+    const device float4x4* bones, uint offset) {
+  float3 world = float3(0.0);
+  for(uint i=0;i<4;++i)
+    world += (bones[offset+in.boneId[i]]*float4(float3(in.position[i]),1.0)).xyz*in.weight[i];
+  return world;
+}
+
+static float3 riosMorphPosition(float3 local, uint vertexId,
+    constant IOSDeformationConstants& deformation,
+    const device IOSMorphLayer* layers, const device int* indices,
+    const device float4* samples) {
+  for(uint i=0;i<deformation.morphCount;++i) {
+    const IOSMorphLayer layer = layers[deformation.morphOffset+i];
+    if(layer.intensity<=0.0)
+      continue;
+    const int index = indices[layer.indexOffset+vertexId];
+    if(index>=0)
+      local += mix(samples[layer.sample0+uint(index)].xyz,
+                   samples[layer.sample1+uint(index)].xyz,layer.alpha)*layer.intensity;
+  }
+  return local;
+}
+
 vertex IOSLandscapeVertexOut riosSkinnedVertex(
     uint vertexId [[vertex_id]],
     const device IOSSkinnedVertex* vertices [[buffer(0)]],
@@ -329,14 +365,9 @@ vertex IOSLandscapeVertexOut riosSkinnedVertex(
     constant IOSDeformationConstants& deformation [[buffer(2)]],
     const device float4x4* bones [[buffer(3)]]) {
   const IOSSkinnedVertex in = vertices[vertexId];
-  float3 world = float3(0.0);
-  for(uint i=0;i<4;++i)
-    world += (bones[deformation.boneOffset+in.boneId[i]]*
-              float4(float3(in.position[i]),1.0)).xyz*in.weight[i];
   const float3 normal = (draw.model*float4(float3(in.normal),0.0)).xyz;
-  world += normal*deformation.fatness;
-  const uint4 colorBits = uint4(in.color) >> uint4(0,8,16,24);
-  const float4 color = float4(colorBits & 255u)/255.0;
+  const float3 world = riosSkinPosition(in,bones,deformation.boneOffset)+normal*deformation.fatness;
+  const float4 color = float4((uint4(in.color)>>uint4(0,8,16,24))&255u)/255.0;
   return riosDeformedOutput(world,normal,float2(in.uv),color,draw);
 }
 
@@ -348,19 +379,9 @@ vertex IOSLandscapeVertexOut riosMorphVertex(
     const device IOSMorphLayer* layers [[buffer(3)]],
     const device int* indices [[buffer(4)]],
     const device float4* samples [[buffer(5)]]) {
-  float3 local = in.position;
-  for(uint i=0;i<deformation.morphCount;++i) {
-    const IOSMorphLayer layer = layers[deformation.morphOffset+i];
-    if(layer.intensity<=0.0)
-      continue;
-    const int index = indices[layer.indexOffset+vertexId];
-    if(index<0)
-      continue;
-    local += mix(samples[layer.sample0+uint(index)].xyz,
-                 samples[layer.sample1+uint(index)].xyz,layer.alpha)*layer.intensity;
-  }
+  const float3 local = riosMorphPosition(in.position,vertexId,deformation,layers,indices,samples);
   const float3 normal = (draw.model*float4(in.normal,0.0)).xyz;
-  const float3 world = (draw.model*float4(local,1.0)).xyz + normal*deformation.fatness;
+  const float3 world = (draw.model*float4(local,1.0)).xyz+normal*deformation.fatness;
   return riosDeformedOutput(world,normal,in.uv,in.color,draw);
 }
 
@@ -840,3 +861,7 @@ vertex IOSLandscapeVertexOut riosParticleVertex(
   out.color = float4((uint4(packedColor)>>uint4(0,8,16,24))&255u)/255.0;
   return out;
 }
+
+#include "fsr1.metal"
+
+#include "motion.metal"

@@ -401,7 +401,8 @@ void TouchInput::mouseDownEvent(MouseEvent& e) {
         }
     }
   if(ctx==PadCtx::Menu || ctx==PadCtx::Inventory) {
-    tap(menuLayout());
+    if(!tap(menuLayout()) && ctx==PadCtx::Menu)
+      e.ignore();
     return;
     }
   e.ignore();

@@ -309,6 +309,9 @@ GameMenu::GameMenu(MenuRoot &owner, KeyCodec& keyCodec, zenkit::DaedalusVm& vm, 
   padDiagramPage = sec.find("CONTROLS")!=std::string::npos;
   }
 
+#if defined(__IOS__)
+  iosVideoPage=asciiEqualNoCase(menuSection,"MENU_OPT_VIDEO");
+#endif
   initItems();
   float infoX = 1000.0f/scriptDiv;
   float infoY = 7500.0f/scriptDiv;
@@ -402,88 +405,63 @@ void GameMenu::initItems() {
       }
     updateItem(hItems[i]);
     }
-  setupIosFpsLimitOption();
+  if(iosVideoPage)
+    initIosVideoOptions();
   }
 
-void GameMenu::setupIosFpsLimitOption() {
-#if defined(__IOS__)
-  Item* fpsChoice = nullptr;
-  size_t fpsChoiceIndex = zenkit::IMenu::item_count;
-  for(size_t i=0; i<zenkit::IMenu::item_count; ++i) {
-    auto& item = hItems[i];
-    if(item.handle==nullptr)
-      continue;
-    if(asciiEqualNoCase(item.handle->on_chg_set_option_section,"GAME") &&
-       asciiEqualNoCase(item.handle->on_chg_set_option,"useGothic1Controls")) {
-      fpsChoice      = &item;
-      fpsChoiceIndex = i;
-      break;
-      }
-    }
-  if(fpsChoice==nullptr)
-    return;
-
-  const char* label = "FPS limit";
-  const char* off   = "Off";
-  const char* help  = "Limits rendered frames per second";
-  switch(padDiagramLanguage()) {
-    case ScriptLang::PL:
-      label = "Limit FPS";
-      off   = "Wylaczony";
-      help  = "Ogranicza liczbe klatek na sekunde";
-      break;
-    case ScriptLang::DE:
-      label = "FPS-Limit";
-      off   = "Aus";
-      help  = "Begrenzt die Bilder pro Sekunde";
-      break;
-    default:
-      break;
-    }
-
-  auto& choice = *fpsChoice->handle;
-  choice.on_chg_set_option_section = "ENGINE";
-  choice.on_chg_set_option         = "zMaxFpsMode";
-  choice.text[0] = label;
-  choice.text[0] += "#";
-  choice.text[0] += off;
-  choice.text[0] += "|30|60";
-  choice.text[1] = help;
-  fpsChoice->value = std::clamp(Gothic::settingsGetI("ENGINE","zMaxFpsMode"),0,2);
-
-  // Stock MENU.DAT stores a row as two consecutive items, for example
-  // MENUITEM_GAME_OLDCONTROLS and MENUITEM_GAME_OLDCONTROLS_CHOICE. Their
-  // vertical positions differ by MENU_CHOICE_YPLUS, so matching pos_y misses
-  // the visible label. Prefer the paired instance name and retain the adjacent
-  // TEXT item as a fallback for localized or modified menu scripts.
-  Item* fpsLabel = nullptr;
-  constexpr std::string_view choiceSuffix = "_CHOICE";
-  if(fpsChoice->name.size()>choiceSuffix.size() &&
-     asciiEqualNoCase(std::string_view(fpsChoice->name).substr(fpsChoice->name.size()-choiceSuffix.size()),choiceSuffix)) {
-    const std::string_view labelName(fpsChoice->name.data(),fpsChoice->name.size()-choiceSuffix.size());
-    for(auto& item:hItems) {
-      if(item.handle!=nullptr && item.handle->type==zenkit::MenuItemType::TEXT &&
-         asciiEqualNoCase(item.name,labelName)) {
-        fpsLabel = &item;
-        break;
-        }
-      }
-    }
-  if(fpsLabel==nullptr && fpsChoiceIndex>0) {
-    for(size_t i=fpsChoiceIndex; i>0; --i) {
-      auto& candidate = hItems[i-1];
-      if(candidate.handle!=nullptr && candidate.handle->type==zenkit::MenuItemType::TEXT) {
-        fpsLabel = &candidate;
-        break;
-        }
-      }
-    }
-  if(fpsLabel!=nullptr) {
-    fpsLabel->handle->text[0] = label;
-    fpsLabel->handle->text[1] = help;
-    }
-
-#endif
+void GameMenu::initIosVideoOptions() {
+  // Engine-owned rows survive MENU.DAT reloads without mutating shared script items.
+  const bool pl=padDiagramLanguage()==ScriptLang::PL, de=padDiagramLanguage()==ScriptLang::DE;
+  const auto text=[&](const char* en,const char* polish,const char* german) { return pl ? polish : de ? german : en; };
+  for(auto& entry:hItems)
+    entry=Item{};
+  menu->dim_x=6800; menu->dim_y=7600;
+  menu->flags=zenkit::MenuFlag::ALIGN_CENTER | zenkit::MenuFlag::SHOW_INFO;
+  menu->default_ingame=menu->default_outgame=2;
+  size_t count=0;
+  const auto item=[&](const char* title,int x,int y,int width) -> zenkit::IMenuItem& {
+    auto& entry=hItems[count++];
+    entry.name="IOS_VIDEO_"+std::to_string(count);
+    entry.handle=std::make_shared<zenkit::IMenuItem>();
+    auto& row=*entry.handle;
+    row.fontname="FONT_OLD_20_WHITE.TGA";
+    row.type=zenkit::MenuItemType::TEXT; row.text[0]=title;
+    row.pos_x=x; row.pos_y=y; row.dim_x=width; row.dim_y=550;
+    row.alpha=255;
+    return row;
+    };
+  item(text("Graphics","Grafika","Grafik"),800,400,6600);
+  int y=1450;
+  const auto option=[&](const char* label,const char* section,const char* key,const char* values,const char* help) {
+    item(label,800,y,3500);
+    auto& row=item(values,4400,y,3100);
+    row.type=values[0]=='\0' ? zenkit::MenuItemType::SLIDER : zenkit::MenuItemType::CHOICEBOX;
+    row.flags=zenkit::MenuItemFlag::SELECTABLE;
+    row.on_chg_set_option_section=section; row.on_chg_set_option=key; row.text[1]=help;
+    updateItem(hItems[count-1]);
+    y+=650;
+    };
+  option(text("Upscaling","Skalowanie","Skalierung"),"ENGINE","zUpscaler",
+      "#Auto|Temporal|Spatial|FSR 1|Native",
+      text("Auto selects the best supported mode. Native uses full resolution.",
+           "Auto wybiera najlepszy obslugiwany tryb. Native uzywa pelnej rozdzielczosci.",
+           "Auto waehlt den besten unterstuetzten Modus. Native nutzt die volle Aufloesung."));
+  option(text("Scene resolution","Rozdzielczosc sceny","Szenenaufloesung"),"INTERNAL","vidResIndex","#100%|75%|50%",
+      text("Changes the 3D scene. Text and menus stay at full resolution.",
+           "Zmienia scene 3D. Tekst i menu pozostaja w pelnej rozdzielczosci.",
+           "Aendert die 3D-Szene. Texte und Menues behalten die volle Aufloesung."));
+  option(text("Drawing distance","Zasieg widzenia","Sichtweite"),"PERFORMANCE","sightValue",
+      "#20%|40%|60%|80%|100%|120%|140%|160%|180%|200%|220%|240%|260%|280%|300%",
+      text("100% is approximately 1 km.","100% to okolo 1 km.","100% entspricht etwa 1 km."));
+  option(text("FPS limit","Limit FPS","FPS-Limit"),"ENGINE","zMaxFpsMode",
+      text("#Off|30|60","#Wylaczony|30|60","#Aus|30|60"),
+      text("Limits rendered frames per second.","Ogranicza liczbe klatek na sekunde.","Begrenzt die Bilder pro Sekunde."));
+  option(text("Brightness","Jasnosc","Helligkeit"),"VIDEO","zVidBrightness","","");
+  option(text("Contrast","Kontrast","Kontrast"),"VIDEO","zVidContrast","","");
+  option(text("Gamma","Gamma","Gamma"),"VIDEO","zVidGamma","","");
+  auto& back=item(text("Back","Wstecz","Zurueck"),4400,y+150,3100);
+  back.flags=zenkit::MenuItemFlag::SELECTABLE;
+  back.on_sel_action[0]=int(zenkit::MenuItemSelectAction::BACK);
   }
 
 ScriptLang GameMenu::padDiagramLanguage() const {
@@ -513,13 +491,13 @@ ScriptLang GameMenu::padDiagramLanguage() const {
         };
       keywords(polishScore, {"sterowan","klawiatur","ekwipun","skradan",
                              "przodu","parowan","wspinacz","ruch","atak",
-                             "skok","przedmiot","wczyt"});
+                             "skok","przedmiot","wczyt","rozdziel","jasno"});
       keywords(germanScore, {"steuer","tastatur","inventar","schleich",
                              "bewegen","springen","parieren","waffe",
-                             "angriff","ziel","laufen"});
+                             "angriff","ziel","laufen","aufl","helligkeit"});
       keywords(englishScore,{"control","keyboard","inventory","sneak",
                              "forward","backward","parry","weapon",
-                             "attack","target","climb"});
+                             "attack","target","climb","resolution","brightness"});
       }
     }
   const int activeScore = std::max({polishScore,germanScore,englishScore});
@@ -580,6 +558,63 @@ void GameMenu::paintEvent(PaintEvent &e) {
     }
   }
 
+Rect GameMenu::itemRect(const Item& it) const {
+  const auto& item=*it.handle;
+  const int dx=item.dim_x!=-1 ? item.dim_x : 8192;
+  const int dy=item.dim_y!=-1 ? item.dim_y : 750;
+  return {int(float(w()*item.pos_x)/scriptDiv),int(float(h()*item.pos_y)/scriptDiv),
+          int(float(w()*dx)/scriptDiv),int(float(h()*dy)/scriptDiv)};
+  }
+
+#if defined(__IOS__)
+void GameMenu::setSliderValue(Item& it, int x) {
+  const auto rect=itemRect(it);
+  const auto& item=*it.handle;
+  if(rect.w<=0 || item.on_chg_set_option_section.empty() || item.on_chg_set_option.empty())
+    return;
+  Gothic::settingsSetF(item.on_chg_set_option_section,item.on_chg_set_option,
+                      std::clamp(float(x-rect.x)/float(rect.w),0.f,1.f));
+  update();
+  }
+
+void GameMenu::mouseDownEvent(MouseEvent& e) {
+  if(e.button!=Event::ButtonLeft) {
+    e.ignore();
+    return;
+    }
+  if(hasModalDialog() || (padDiagramPage && PadDiagram::available()))
+    return;
+  for(size_t i=0;i<zenkit::IMenu::item_count;++i) {
+    auto& it=hItems[i];
+    if(!it.visible || !isSelectable(it.handle) || !isEnabled(it.handle))
+      continue;
+    auto rect=itemRect(it);
+    if(iosVideoPage) {
+      rect.x=int(float(w())*800.f/scriptDiv);
+      rect.w=int(float(w())*6600.f/scriptDiv);
+      }
+    if(!rect.contains(e.pos()))
+      continue;
+    setSelection(int(i));
+    updateSavThumb(it);
+    update();
+    if(it.handle->type==zenkit::MenuItemType::SLIDER) {
+      if(e.x>=itemRect(it).x)
+        setSliderValue(it,e.x);
+      }
+    else
+      onKeyboard(KeyCodec::ActionGeneric);
+    return;
+    }
+  }
+
+void GameMenu::mouseDragEvent(MouseEvent& e) {
+  auto* it=selectedItem();
+  if(it!=nullptr && it->handle->type==zenkit::MenuItemType::SLIDER)
+    setSliderValue(*it,e.x);
+  }
+#endif
+
 void GameMenu::drawItem(Painter& p, Item& hItem) {
   if(!hItem.visible || hItem.name.empty())
     return;
@@ -590,13 +625,8 @@ void GameMenu::drawItem(Painter& p, Item& hItem) {
   auto flags = item->flags;
   getText(hItem,textBuf);
 
-  const int32_t dimx = (item->dim_x!=-1) ? item->dim_x : 8192;
-  const int32_t dimy = (item->dim_y!=-1) ? item->dim_y : 750;
-
-  const int   x     = int(float(w()*item->pos_x)/scriptDiv);
-  const int   y     = int(float(h()*item->pos_y)/scriptDiv);
-  int         szX   = int(float(w()*dimx       )/scriptDiv);
-  int         szY   = int(float(h()*dimy       )/scriptDiv);
+  const auto rect=itemRect(hItem);
+  const int x=rect.x, y=rect.y, szX=rect.w, szY=rect.h;
 
   if(hItem.img && !hItem.img->isEmpty()) {
     p.setBrush(*hItem.img);
@@ -1096,6 +1126,7 @@ void GameMenu::execSingle(Item &it, int slideDx, KeyCodec::Action hint) {
   if(item->type==zenkit::MenuItemType::INPUT && slideDx==0) {
     ctrlInput = &it;
     if(item->on_chg_set_option.empty()) {
+#if !defined(__IOS__)
       SavNameDialog dlg{item->text[0]};
       if(it.savHdr.version==0)
         dlg.text = "";
@@ -1104,6 +1135,9 @@ void GameMenu::execSingle(Item &it, int slideDx, KeyCodec::Action hint) {
       ctrlInput = nullptr;
       if(!dlg.accepted)
         return;
+#else
+      ctrlInput = nullptr;
+#endif
       }
     else if(hint==KeyCodec::K_Del) {
       keyCodec.clear(item->on_chg_set_option_section, item->on_chg_set_option);
@@ -1202,11 +1236,11 @@ void GameMenu::execChgOption(Item &item, int slideDx) {
     const int cnt = int(strEnumSize(item.handle->text[0]));
     const bool fpsLimit = asciiEqualNoCase(sec,"ENGINE") &&
                           asciiEqualNoCase(opt,"zMaxFpsMode");
-    if(slideDx==0 && (cnt==2 || fpsLimit))
-      slideDx = 1; // QoL: toggle or advance the FPS choice on tap
+    if(slideDx==0 && (cnt==2 || fpsLimit || iosVideoPage))
+      slideDx = 1; // Tap advances a native option.
 
     item.value += slideDx; // next value
-    if(cnt>0 && fpsLimit) {
+    if(cnt>0 && (fpsLimit || iosVideoPage)) {
       item.value = (item.value%cnt+cnt)%cnt;
       }
     else if(cnt>0) {

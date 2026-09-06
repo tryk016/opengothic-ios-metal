@@ -10,17 +10,17 @@ namespace RendererIOSPipelineArchive {
 
 inline constexpr uint32_t CacheSchemaVersion    = 1u;
 inline constexpr uint32_t PipelineKeyAbiVersion = 1u;
-inline constexpr uint32_t MetallibAbiVersion    = 12u;
+inline constexpr uint32_t MetallibAbiVersion    = 13u;
 inline constexpr uint32_t ProvenanceSchemaVersion = 1u;
 
 inline constexpr std::string_view RelativeDirectory =
     "RendererIOS/PipelineArchives/schema-1";
 inline constexpr std::string_view ArchiveFileName =
-    "RendererIOS-abi-12.binaryarchive";
+    "RendererIOS-abi-13.binaryarchive";
 inline constexpr std::string_view RelativeArchivePath =
-    "RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-12.binaryarchive";
+    "RendererIOS/PipelineArchives/schema-1/RendererIOS-abi-13.binaryarchive";
 inline constexpr std::string_view ProvenanceFileName =
-    "RendererIOS-abi-12.provenance";
+    "RendererIOS-abi-13.provenance";
 inline constexpr std::string_view PreviousArchiveFileName =
     "RendererIOS-abi-8.binaryarchive";
 inline constexpr std::string_view PreviousProvenanceFileName =
@@ -104,7 +104,7 @@ inline constexpr std::string_view TestModeColdArgument =
 inline constexpr std::string_view TestModeCorruptArgument =
     "-renderer-ios-pipeline-archive-corrupt";
 inline constexpr std::string_view TestModeTemporaryFileName =
-    "RendererIOS-abi-12.binaryarchive.test-mode.tmp";
+    "RendererIOS-abi-13.binaryarchive.test-mode.tmp";
 inline constexpr std::string_view TestModeLogPrefix =
     "RendererIOS pipeline archive test-mode: mode=";
 
@@ -196,7 +196,7 @@ inline std::string provenanceRecord(std::string_view metallibSha256) {
   record += "\n";
   record += "metallib-sha256=";
   record += metallibSha256;
-  record += "\narchive-file=RendererIOS-abi-12.binaryarchive\n";
+  record += "\narchive-file=RendererIOS-abi-13.binaryarchive\n";
   return record;
   }
 

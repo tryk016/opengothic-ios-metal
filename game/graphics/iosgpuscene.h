@@ -18,6 +18,8 @@ class Encoder;
 }
 
 class IOSSceneAssetRegistry;
+class IOSUpscaler;
+struct IOSToneResolveConstants;
 struct IOSSceneSnapshot;
 struct IOSLinearHDRProofMetadata;
 struct IOSLinearHDRProofNativeView;
@@ -136,6 +138,7 @@ class IOSGPUScene final {
     IOSGPUScene& operator=(const IOSGPUScene&) = delete;
 
     bool pipelinesReady() const noexcept;
+    bool motionPipelinesReady() const noexcept;
     bool additiveTerminalFailureReported() const noexcept;
 
     // Preparation is synchronous and must complete before the SceneHDR render
@@ -146,16 +149,24 @@ class IOSGPUScene final {
                         const IOSSceneSnapshot& snapshot,
                         const IOSSceneAssetRegistry& assets,
                         const IOSFrameAnimationEvidence* frameAnimation,
-                        const IOSUVAnimationEvidence* uvAnimation = nullptr) noexcept;
+                        const IOSUVAnimationEvidence* uvAnimation = nullptr,
+                        bool temporal = false) noexcept;
 
     // Must precede all other recording on this command buffer.
     bool encodePreparedEnvironment(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
                                    PreparedFrame& prepared) noexcept;
 
+    struct SceneOutput final {
+      IOSUpscaler& upscaler;
+      const IOSSceneSnapshot& snapshot;
+      const IOSToneResolveConstants& tone;
+      };
+
     Report encodePreparedScene(Tempest::Encoder<Tempest::CommandBuffer>& encoder,
                                PreparedFrame& prepared,
                                const Tempest::Attachment& sceneHDR,
-                               std::string_view marker = {}) noexcept;
+                               std::string_view marker = {},
+                               const SceneOutput* output = nullptr) noexcept;
 
     // The encoder must own an active render pass whose color, depth and sample
     // layout exactly matches the TargetLayout used to construct this scene.

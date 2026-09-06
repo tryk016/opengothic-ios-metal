@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include "iosframeinput.h"
+#include "iosupscaler.h"
 #include "iosfunctionalevidence.h"
 
 namespace Tempest {
@@ -81,6 +82,8 @@ class IOSMetalContext final {
     void             updateLinearHDRSettings(float brightness,
                                              float contrast,
                                              float gamma) noexcept;
+    void             updateUpscalerSettings(IOSUpscalerSettings settings) noexcept;
+    void             prepareSceneCamera(IOSSceneFrameState& scene) const noexcept;
     void             shutdown() noexcept;
     void             prepareForOwnerRelease() noexcept;
     void             onWorldChanged();
@@ -88,7 +91,6 @@ class IOSMetalContext final {
     const IOSFeaturePolicyProvenance&
                      featurePolicyProvenance() const noexcept;
 
-    bool             requiresGpuSavePreviewCapture() const noexcept;
     bool             savePreviewReady();
     bool             savePreviewIsPlaceholder() const noexcept;
     Tempest::Pixmap  takeSavePreview();

@@ -640,7 +640,7 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
-  riosToneResolveVertex riosToneResolveFragment \
+  riosToneResolveVertex riosToneResolveFragment riosSavePreviewFragment riosFsrPrepare riosFsrEasu riosFsrRcas riosSceneCopyFragment riosMotionVertex riosMotionSkinnedVertex riosMotionMorphVertex riosMotionInstancedVertex riosMotionFragment riosReactiveFragment riosSkyMotionFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -654,7 +654,7 @@ ACTUAL_RIOS_EXPORTS="$(xcrun --sdk iphoneos metal-nm \
   "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '$2 == "T" { print $3 }' | LC_ALL=C sort)"
 test "$ACTUAL_RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS"
-test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 35
+test "$(printf '%s\n' "$ACTUAL_RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 47
 shasum -a 256 "$RUNNER_TEMP/RendererIOS.candidate.metallib" |
   awk '{print $1}' >"$RUNNER_TEMP/RendererIOS.candidate.sha256"
 # CI_PROFILE_CANDIDATE_END
@@ -783,7 +783,7 @@ else
     "$APP_STRINGS"
 fi
 if [ "$SHADING_PROTOTYPE_TILE_SELF_TEST" = ON ]; then
-  test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1' \
+  test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=13 minimum-apple=4 output=4x4 rgba8-private=1' \
     "$APP_STRINGS" || true)" -eq 1
   test "$(grep -Fxc -- 'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
     "$APP_STRINGS" || true)" -eq 1
@@ -1313,14 +1313,7 @@ cp -R "$APP" "$PACKAGE_ROOT/Payload/"
 
 TEMPEST_SHA="$(git -C lib/Tempest rev-parse HEAD)"
 IPA_SHA256="$(shasum -a 256 "$ARTIFACT_DIR/$BASENAME.ipa" | awk '{print $1}')"
-SAVE_PREVIEW_ROUTE='cpu-placeholder'
-if [ "$DIAGNOSTICS" = 'ON' ]; then
-  case "$ACTIVE_FAULT_MODE" in
-    preview-attachment-missing|preview-readback-error|preview-fence-error-after-terminal)
-      SAVE_PREVIEW_ROUTE='gpu-diagnostic'
-      ;;
-  esac
-fi
+SAVE_PREVIEW_ROUTE='gpu-preview'
 cat > "$ARTIFACT_DIR/$BASENAME-provenance.txt" <<EOF
 repository=$GITHUB_REPOSITORY
 workflow_run_id=$GITHUB_RUN_ID

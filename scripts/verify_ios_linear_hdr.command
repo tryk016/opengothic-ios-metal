@@ -2206,9 +2206,7 @@ copy_block = """          if(!impl->linearHDRProof->encodeCopy(
             throw std::runtime_error(
               \"RendererIOS HDR proof copy encode failed\");
 """
-resolve_block = """        const IOSLinearHDRMetalEncodeResult resolve =
-            impl->linearHDRMetal->encodeToneResolve(
-              encoder,impl->linearHDRTargets.color,constants);
+resolve_block = """          resolve=impl->linearHDRMetal->encodeToneResolve(encoder,source,constants);
 """
 if paths["context"].count(copy_block) != 1 or \
    paths["context"].count(resolve_block) != 1:
@@ -2407,7 +2405,7 @@ def validate(renderer: str, context: str, native: str) -> None:
     ordered = (
         "boollinearHDRSceneActive=sceneVisible&&",
         "impl->gpuScene->encodePreparedScene("
-        "encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker)",
+        "encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker,",
         "constIOSToneResolveConstantsconstants={tone.brightness,"
         "tone.contrast,tone.gamma,tone.exposure,};",
         "encoder.setFramebuffer({});"
@@ -2573,9 +2571,9 @@ mutations.append((
     replace_once(
         context,
         "        const auto report = impl->gpuScene->encodePreparedScene(\n"
-        "            encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker);\n",
+        "            encoder,preparedScene,impl->linearHDRTargets.color,sceneMarker,output ? &*output : nullptr);\n",
         "        const auto report = impl->gpuScene->encodePreparedScene(\n"
-        "            encoder,preparedScene,drawable,sceneMarker);\n"),
+        "            encoder,preparedScene,drawable,sceneMarker,output ? &*output : nullptr);\n"),
     native,
 ))
 ui_draw = "      frameContext.uiMesh.draw(encoder);\n"

@@ -83,7 +83,6 @@ class RendererIOS final {
     bool            restoreAfterOwnerRelease() noexcept;
     void            onWorldChanged();
 
-    bool            requiresGpuSavePreviewCapture() const noexcept;
     bool            savePreviewReady();
     bool            savePreviewIsPlaceholder() const noexcept;
     Tempest::Pixmap takeSavePreview();

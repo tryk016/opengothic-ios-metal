@@ -1,4 +1,5 @@
 #include "iosgpuscene.h"
+#include "iosupscaler.h"
 
 #include "ioslinearhdrproofproducer.h"
 #include "iosmultiply2coverageproof.h"
@@ -549,6 +550,12 @@ struct alignas(16) IOSGPUInstance final {
   };
 static_assert(sizeof(IOSGPUInstance)==96);
 
+struct alignas(16) IOSMotionConstants final {
+  IOSMatrix4x4 previousModel, previousViewProjection;
+  IOSFloat4 jitter, extent;
+  };
+static_assert(sizeof(IOSMotionConstants)==160);
+
 struct IOSParticlePreparedBatch final {
   IOSParticleBatch batch;
   id texture = nil;
@@ -564,11 +571,14 @@ struct IOSGPUSceneNativePreparedDraw final {
   IOSGPUSceneDrawPlan plan;
   IOSDeformationConstants deformation;
   id deformationBuffer = nil;
+  id previousDeformationBuffer = nil;
+  IOSMatrix4x4 previousTransform;
   id morphIndices = nil;
   id morphSamples = nil;
   id tessellationFactors = nil;
   size_t tessellationOffset = 0;
   id instanceBuffer = nil;
+  id previousInstanceBuffer = nil;
   size_t instanceOffset = 0;
   size_t instanceCount = 1;
   float cameraDepth = 0.f;
@@ -889,6 +899,7 @@ struct IOSGPUScene::PreparedFrame::Uploads final {
   OwnedObjectiveC bones;
   OwnedObjectiveC morphLayers;
   OwnedObjectiveC instances;
+  OwnedObjectiveC previousBones, previousMorphLayers, previousInstances;
   OwnedObjectiveC lights;
   OwnedObjectiveC tessellationFactors;
   OwnedObjectiveC particles;
@@ -975,6 +986,7 @@ struct IOSGPUScene::Impl final {
     uint8_t                  phase = 0u;
     id sceneHDR = nil;
     std::string_view sceneMarker;
+    const SceneOutput* output = nullptr;
     };
 
 #if defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) || \
@@ -1023,6 +1035,9 @@ struct IOSGPUScene::Impl final {
   static void encodeLandscape(void* opaque,
                               MTL::RenderCommandEncoder* nativeEncoder);
   static void encodeScene(void* opaque, MTL::CommandBuffer* command);
+  bool initializeMotion(id<MTLDevice> device, id<MTLLibrary> library, MTLVertexDescriptor* vertices);
+  bool encodeMotion(id<MTLCommandBuffer> command, const PreparedFrame::Impl& prepared,
+                    const IOSSceneSnapshot& snapshot);
   bool encodeWaterFactors(id<MTLCommandBuffer> command, const PreparedFrame::Impl& prepared);
   void ensureSceneTargets(id<MTLTexture> color, const PreparedFrame::Impl& prepared);
   bool encodeShadows(id<MTLCommandBuffer> command, PreparedFrame::Impl& prepared);
@@ -1829,6 +1844,9 @@ struct IOSGPUScene::Impl final {
           throw std::bad_alloc();
         }
 
+      @try { motionReady = initializeMotion(device,nativeLibrary,descriptor); }
+      @catch(NSException*) { motionReady = false; }
+
       opaquePipelineState    = opaquePipelineOwner.relinquish();
       alphaTestPipelineState = alphaTestPipelineOwner.relinquish();
       additivePipelineState  = additivePipelineOwner.relinquish();
@@ -1891,6 +1909,10 @@ struct IOSGPUScene::Impl final {
   std::array<std::array<OwnedObjectiveC,3>,5> materialPipelines;
   OwnedObjectiveC waterPatchPipeline, waterFactorPipeline, underwaterPipeline;
   OwnedObjectiveC sceneDepth, sceneColorCopy, sceneDepthCopy;
+  std::array<OwnedObjectiveC,4> motionPipelines;
+  std::array<OwnedObjectiveC,5> reactivePipelines;
+  OwnedObjectiveC skyMotionPipeline, motionDepthState, motionTexture, reactiveTexture;
+  bool motionReady = false;
   std::array<OwnedObjectiveC,2>     shadowMaps;
   OwnedObjectiveC                 shadowDepthState;
   OwnedObjectiveC                 skyLut;
@@ -2644,6 +2666,8 @@ void IOSGPUScene::Impl::ensureSceneTargets(id<MTLTexture> color,
     sceneDepth = OwnedObjectiveC();
     sceneColorCopy = OwnedObjectiveC();
     sceneDepthCopy = OwnedObjectiveC();
+    motionTexture = OwnedObjectiveC();
+    reactiveTexture = OwnedObjectiveC();
     }
   const auto allocate = [&](OwnedObjectiveC& storage, MTLPixelFormat format) {
     if(storage.get()!=nil)
@@ -2662,6 +2686,162 @@ void IOSGPUScene::Impl::ensureSceneTargets(id<MTLTexture> color,
     allocate(sceneColorCopy,color.pixelFormat);
   if(!prepared.water.empty())
     allocate(sceneDepthCopy,MTLPixelFormatDepth32Float);
+  }
+
+bool IOSGPUScene::Impl::initializeMotion(id<MTLDevice> device, id<MTLLibrary> library,
+                                          MTLVertexDescriptor* vertices) {
+  OwnedObjectiveC descriptor([[MTLRenderPipelineDescriptor alloc] init]);
+  auto desc=(MTLRenderPipelineDescriptor*)descriptor.get();
+  desc.colorAttachments[0].pixelFormat=MTLPixelFormatRG16Float;
+  desc.colorAttachments[1].pixelFormat=MTLPixelFormatR8Unorm;
+  desc.depthAttachmentPixelFormat=MTLPixelFormatDepth32Float;
+  const auto pipeline = [&](OwnedObjectiveC& owner, NSString* vertex, NSString* fragment, bool packed) {
+    OwnedObjectiveC v([library newFunctionWithName:vertex]), f([library newFunctionWithName:fragment]);
+    desc.vertexFunction=(id<MTLFunction>)v.get(); desc.fragmentFunction=(id<MTLFunction>)f.get();
+    desc.vertexDescriptor=packed ? nil : vertices;
+    if(v.get()==nil || f.get()==nil) return false;
+    owner=OwnedObjectiveC([device newRenderPipelineStateWithDescriptor:desc error:nil]);
+    return owner.get()!=nil;
+    };
+  NSArray<NSString*>* motionNames=@[@"riosMotionVertex",@"riosMotionSkinnedVertex",
+                                    @"riosMotionMorphVertex",@"riosMotionInstancedVertex"];
+  for(size_t i=0;i<motionPipelines.size();++i)
+    if(!pipeline(motionPipelines[i],motionNames[i],@"riosMotionFragment",i==1)) return false;
+  if(!pipeline(skyMotionPipeline,@"riosSkyVertex",@"riosSkyMotionFragment",true)) return false;
+  desc.colorAttachments[0].writeMask=MTLColorWriteMaskNone;
+  auto reactive=desc.colorAttachments[1];
+  reactive.blendingEnabled=YES;
+  reactive.rgbBlendOperation=MTLBlendOperationMax;
+  reactive.alphaBlendOperation=MTLBlendOperationMax;
+  reactive.sourceRGBBlendFactor=MTLBlendFactorOne;
+  reactive.destinationRGBBlendFactor=MTLBlendFactorOne;
+  reactive.sourceAlphaBlendFactor=MTLBlendFactorOne;
+  reactive.destinationAlphaBlendFactor=MTLBlendFactorOne;
+  NSArray<NSString*>* reactiveNames=@[@"riosLandscapeVertex",@"riosSkinnedVertex",
+                                      @"riosMorphVertex",@"riosParticleVertex"];
+  for(size_t i=0;i<4;++i)
+    if(!pipeline(reactivePipelines[i],reactiveNames[i],@"riosReactiveFragment",i==1 || i==3)) return false;
+  if(waterPatchPipeline.get()!=nil) {
+    desc.maxTessellationFactor=[device supportsFamily:MTLGPUFamilyApple5] || [device supportsFamily:MTLGPUFamilyMac2] ? 64 : 16;
+    desc.tessellationFactorFormat=MTLTessellationFactorFormatHalf;
+    desc.tessellationFactorStepFunction=MTLTessellationFactorStepFunctionPerPatch;
+    desc.tessellationControlPointIndexType=MTLTessellationControlPointIndexTypeNone;
+    desc.tessellationPartitionMode=MTLTessellationPartitionModeFractionalOdd;
+    desc.tessellationOutputWindingOrder=MTLWindingClockwise;
+    if(!pipeline(reactivePipelines[4],@"riosWaterPatchVertex",@"riosReactiveFragment",true)) return false;
+    }
+  MTLDepthStencilDescriptor* depth=[MTLDepthStencilDescriptor new];
+  depth.depthCompareFunction=MTLCompareFunctionLessEqual;
+  depth.depthWriteEnabled=NO;
+  motionDepthState=OwnedObjectiveC([device newDepthStencilStateWithDescriptor:depth]);
+  [depth release];
+  return motionDepthState.get()!=nil;
+  }
+
+bool IOSGPUScene::Impl::encodeMotion(id<MTLCommandBuffer> command,
+                                      const PreparedFrame::Impl& prepared,
+                                      const IOSSceneSnapshot& snapshot) {
+  @try {
+    auto depth=(id<MTLTexture>)sceneDepth.get();
+    const auto allocate = [&](OwnedObjectiveC& texture, MTLPixelFormat format) {
+      if(texture.get()!=nil) return true;
+      auto desc=[MTLTextureDescriptor texture2DDescriptorWithPixelFormat:format
+          width:depth.width height:depth.height mipmapped:NO];
+      desc.storageMode=MTLStorageModePrivate;
+      desc.usage=MTLTextureUsageShaderRead | MTLTextureUsageRenderTarget;
+      texture=OwnedObjectiveC([depth.device newTextureWithDescriptor:desc]);
+      return texture.get()!=nil;
+      };
+    if(!motionReady || !allocate(motionTexture,MTLPixelFormatRG16Float) ||
+       !allocate(reactiveTexture,MTLPixelFormatR8Unorm)) return false;
+    auto pass=[MTLRenderPassDescriptor renderPassDescriptor];
+    pass.colorAttachments[0].texture=(id<MTLTexture>)motionTexture.get();
+    pass.colorAttachments[1].texture=(id<MTLTexture>)reactiveTexture.get();
+    for(NSUInteger i=0;i<2;++i) {
+      pass.colorAttachments[i].loadAction=MTLLoadActionClear;
+      pass.colorAttachments[i].storeAction=MTLStoreActionStore;
+      }
+    pass.depthAttachment.texture=depth;
+    pass.depthAttachment.loadAction=MTLLoadActionLoad;
+    pass.depthAttachment.storeAction=MTLStoreActionStore;
+    auto encoder=[command renderCommandEncoderWithDescriptor:pass];
+    if(encoder==nil) return false;
+    @try {
+      encoder.label=@"RendererIOS temporal motion and reactive mask";
+      [encoder setViewport:MTLViewport{0,0,double(depth.width),double(depth.height),0,1}];
+      const auto& current=snapshot.currentCamera;
+      const auto& previous=snapshot.previousCamera;
+      IOSMotionConstants motion;
+      motion.previousViewProjection=previous.viewProjection;
+      motion.jitter={current.jitter.x,current.jitter.y,previous.jitter.x,previous.jitter.y};
+      motion.extent={float(current.viewport.width),float(current.viewport.height),
+                     float(previous.viewport.width),float(previous.viewport.height)};
+      // Rain overlays and underwater distortion have no persistent surface history.
+      const float globalReactive=current.underwater ? 1.f : std::clamp(prepared.lighting.skyParameters.y*0.25f,0.f,1.f);
+      [encoder setFragmentBytes:&globalReactive length:sizeof(globalReactive) atIndex:1];
+      [encoder setFragmentBytes:&motion length:sizeof(motion) atIndex:9];
+      [encoder setCullMode:MTLCullModeNone];
+      [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)skyMotionPipeline.get()];
+      [encoder setFragmentBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:0];
+      [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+      [encoder setCullMode:MTLCullModeFront];
+      [encoder setDepthStencilState:(id<MTLDepthStencilState>)motionDepthState.get()];
+      [encoder setFragmentSamplerState:(id<MTLSamplerState>)samplerState atIndex:0];
+      const auto drawGeometry = [&](const auto& draw, bool reactive) {
+        const size_t geometry=draw.instanceCount>1 ? 3u : draw.plan.kind==IOSSceneMeshKind::Animated ? 1u :
+                              draw.plan.kind==IOSSceneMeshKind::Morph ? 2u : 0u;
+        const uint32_t material=uint32_t(draw.plan.materialCategory);
+        [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)(reactive
+            ? reactivePipelines[draw.tessellationFactors!=nil ? 4u : geometry].get() : motionPipelines[geometry].get())];
+        bindGeometry(encoder,draw);
+        [encoder setFragmentTexture:(id<MTLTexture>)draw.baseColorTexture atIndex:0];
+        [encoder setFragmentBytes:&material length:sizeof(material) atIndex:0];
+        if(!reactive) {
+          motion.previousModel=draw.previousTransform;
+          [encoder setVertexBytes:&motion length:sizeof(motion) atIndex:9];
+          if(geometry==1 || geometry==2)
+            [encoder setVertexBuffer:(id<MTLBuffer>)draw.previousDeformationBuffer offset:0 atIndex:10];
+          if(geometry==3)
+            [encoder setVertexBuffer:(id<MTLBuffer>)draw.previousInstanceBuffer
+                             offset:draw.instanceOffset/sizeof(IOSGPUInstance)*sizeof(IOSMatrix4x4) atIndex:11];
+          }
+        if(draw.tessellationFactors!=nil) {
+          [encoder setVertexBuffer:(id<MTLBuffer>)draw.indexBuffer offset:draw.plan.indexBufferOffset atIndex:7];
+          [encoder setVertexBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:8];
+          [encoder setTessellationFactorBuffer:(id<MTLBuffer>)draw.tessellationFactors offset:draw.tessellationOffset instanceStride:0];
+          [encoder drawPatches:3 patchStart:0 patchCount:draw.plan.indexCount/3 patchIndexBuffer:nil
+             patchIndexBufferOffset:0 instanceCount:1 baseInstance:0];
+          }
+        else
+          [encoder drawIndexedPrimitives:MTLPrimitiveTypeTriangle indexCount:draw.plan.indexCount indexType:MTLIndexTypeUInt32
+                             indexBuffer:(id<MTLBuffer>)draw.indexBuffer indexBufferOffset:draw.plan.indexBufferOffset
+                           instanceCount:draw.instanceCount];
+        };
+      for(const auto& draw:prepared.base) drawGeometry(draw,false);
+      [encoder setCullMode:MTLCullModeNone];
+      for(const auto& draw:prepared.water) drawGeometry(draw,true);
+      [encoder setCullMode:MTLCullModeFront];
+      for(const auto* draws:{&prepared.ghost,&prepared.multiply,
+                             &prepared.multiply2,&prepared.additive,&prepared.transparent})
+        for(const auto& draw:*draws) drawGeometry(draw,true);
+      [encoder setCullMode:MTLCullModeNone];
+      [encoder setRenderPipelineState:(id<MTLRenderPipelineState>)reactivePipelines[3].get()];
+      [encoder setVertexBuffer:(id<MTLBuffer>)prepared.particleBuffer offset:0 atIndex:0];
+      [encoder setVertexBytes:&prepared.particleCamera length:sizeof(prepared.particleCamera) atIndex:1];
+      for(size_t i=0;i<prepared.particles.size();++i) {
+        const uint32_t material=uint32_t(i);
+        [encoder setFragmentBytes:&material length:sizeof(material) atIndex:0];
+        for(const auto& value:prepared.particles[i]) {
+          [encoder setFragmentTexture:(id<MTLTexture>)value.texture atIndex:0];
+          [encoder drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:6
+                   instanceCount:value.batch.vertices.count baseInstance:value.batch.vertices.offset];
+          }
+        }
+      }
+    @finally { [encoder endEncoding]; }
+    return true;
+    }
+  @catch(NSException*) { return false; }
   }
 
 bool IOSGPUScene::Impl::encodeWaterFactors(id<MTLCommandBuffer> command,
@@ -2782,6 +2962,16 @@ void IOSGPUScene::Impl::encodeScene(void* opaque, MTL::CommandBuffer* nativeComm
       copyScene(false);
       render(0u,false,true);
       }
+    if(context.report.result==Result::Success && context.output!=nullptr) {
+      const auto& output=*context.output;
+      IOSUpscalerTemporalInputs temporal;
+      if(output.upscaler.activeMode()==IOSUpscalerMode::Temporal &&
+         scene.encodeMotion(command,prepared,output.snapshot))
+        temporal = {(MTL::Texture*)(void*)depth,(MTL::Texture*)(void*)scene.motionTexture.get(),
+                    (MTL::Texture*)(void*)scene.reactiveTexture.get()};
+      if(!output.upscaler.encodeNative(nativeCommand,(MTL::Texture*)(void*)color,temporal,output.snapshot,output.tone))
+        context.report.result=Result::NativeEncodingFailed;
+      }
     }
   @catch(NSException*) {
     prepared.nativeException = true;
@@ -2808,7 +2998,7 @@ bool IOSGPUScene::encodePreparedEnvironment(Tempest::Encoder<Tempest::CommandBuf
 
 IOSGPUScene::Report IOSGPUScene::encodePreparedScene(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder, PreparedFrame& prepared,
-    const Tempest::Attachment& sceneHDR, std::string_view marker) noexcept {
+    const Tempest::Attachment& sceneHDR, std::string_view marker, const SceneOutput* output) noexcept {
   Report failure = makeReport(Result::NativeEncodingFailed);
   if(impl==nullptr || prepared.impl==nullptr || !prepared.impl->ready)
     return failure;
@@ -2823,6 +3013,7 @@ IOSGPUScene::Report IOSGPUScene::encodePreparedScene(
       return failure;
     context.sceneHDR = (id)(void*)borrowed.get();
     context.sceneMarker = marker;
+    context.output = output;
     impl->ensureSceneTargets((id<MTLTexture>)context.sceneHDR,*prepared.impl);
     const bool encoded = Tempest::MetalApi::withActiveCommandBuffer(
         impl->owner,encoder,&context,&Impl::encodeScene);
@@ -3033,7 +3224,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     const IOSSceneSnapshot& snapshot,
     const IOSSceneAssetRegistry& assets,
     const IOSFrameAnimationEvidence* frameAnimation,
-    const IOSUVAnimationEvidence* uvAnimation) noexcept {
+    const IOSUVAnimationEvidence* uvAnimation, bool temporal) noexcept {
   prepared.impl.reset();
   (void)targetGeneration;
   Report report = makeReport(Result::NativeEncodingFailed);
@@ -3139,6 +3330,12 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         snapshot.currentBones.data(),snapshot.currentBones.size()*sizeof(IOSMatrix4x4));
     PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->morphLayers,
         snapshot.currentMorphLayers.data(),snapshot.currentMorphLayers.size()*sizeof(IOSMorphLayer));
+    if(temporal) {
+      PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->previousBones,
+          snapshot.previousBones.data(),snapshot.previousBones.size()*sizeof(IOSMatrix4x4));
+      PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->previousMorphLayers,
+          snapshot.previousMorphLayers.data(),snapshot.previousMorphLayers.size()*sizeof(IOSMorphLayer));
+      }
     auto candidateFrame = std::make_unique<PreparedFrame::Impl>();
     candidateFrame->owner = impl.get();
     candidateFrame->lighting = iosSceneLighting(snapshot.currentSky,snapshot.currentCamera);
@@ -3178,7 +3375,11 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     candidateFrame->particleCamera.view = snapshot.currentCamera.view;
     const auto basis = [&](size_t row) {
       const auto& vp = snapshot.currentCamera.viewProjection;
-      const float x = vp.at(row,0), y = vp.at(row,1), z = vp.at(row,2);
+      const auto& camera = snapshot.currentCamera;
+      const float jitter = row==0 ? 2.f*camera.jitter.x/float(camera.viewport.width) :
+                           row==1 ? 2.f*camera.jitter.y/float(camera.viewport.height) : 0.f;
+      const float x = vp.at(row,0)-jitter*vp.at(3,0), y = vp.at(row,1)-jitter*vp.at(3,1),
+                  z = vp.at(row,2)-jitter*vp.at(3,2);
       const float scale = 1.f/std::sqrt(x*x+y*y+z*z);
       return IOSFloat4{x*scale,y*scale,z*scale,0.f};
       };
@@ -3275,6 +3476,9 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       const auto nativeDraw = [&]() {
         IOSGPUSceneNativePreparedDraw draw;
         draw.plan = plan;
+        draw.previousTransform = entity.previousTransform;
+        draw.previousDeformationBuffer = plan.kind==IOSSceneMeshKind::Animated
+            ? prepared.uploads->previousBones.get() : prepared.uploads->previousMorphLayers.get();
         draw.deformation = {entity.boneRange.offset,entity.morphRange.offset,
                             entity.morphRange.count,entity.fatness};
         draw.deformationBuffer = plan.kind==IOSSceneMeshKind::Animated
@@ -3715,6 +3919,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     auto& draws = candidateFrame->base;
     std::stable_sort(draws.begin(),draws.end(),[&](const auto& a,const auto& b) { return key(a)<key(b); });
     std::vector<IOSGPUInstance> instances;
+    std::vector<IOSMatrix4x4> previousInstances;
     std::vector<IOSGPUSceneNativePreparedDraw> batches;
     batches.reserve(draws.size());
     for(size_t first=0;first<draws.size();) {
@@ -3729,6 +3934,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         draws[first].pipelineState = impl->geometryPipelines[4u+alpha].get();
         for(size_t i=first;i<end;++i) {
           const auto& draw = draws[i];
+          if(temporal) previousInstances.push_back(draw.previousTransform);
           instances.push_back({draw.plan.constants.model,draw.plan.constants.baseColor,
                                draw.plan.constants.uvOffset,draw.deformation.fatness,draw.plan.constants.landscape});
           }
@@ -3738,9 +3944,15 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
       }
     PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->instances,
         instances.data(),instances.size()*sizeof(IOSGPUInstance));
-    for(auto& draw:batches)
-      if(draw.instanceCount>1)
+    if(temporal)
+      PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->previousInstances,
+          previousInstances.data(),previousInstances.size()*sizeof(IOSMatrix4x4));
+    for(auto& draw:batches) {
+      if(draw.instanceCount>1) {
         draw.instanceBuffer = prepared.uploads->instances.get();
+        draw.previousInstanceBuffer = prepared.uploads->previousInstances.get();
+        }
+      }
     draws = std::move(batches);
 #endif
     size_t factorBytes = 0;
@@ -4326,4 +4538,8 @@ const char* iosGPUSceneResultName(IOSGPUScene::Result result) noexcept {
       return "native-encoding-failed";
     }
   return "unknown";
+  }
+
+bool IOSGPUScene::motionPipelinesReady() const noexcept {
+  return impl!=nullptr && impl->motionReady;
   }

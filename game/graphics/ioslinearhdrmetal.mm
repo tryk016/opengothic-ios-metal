@@ -99,7 +99,7 @@ bool finiteConstants(const IOSToneResolveConstants& constants) noexcept {
 
 struct IOSLinearHDRMetal::Impl final {
   struct EncodeContext final {
-    Impl* renderer = nullptr;
+    id pipeline = nil;
     id<MTLTexture> source = nil;
     IOSToneResolveConstants constants;
     NSUInteger width = 0u;
@@ -191,6 +191,12 @@ struct IOSLinearHDRMetal::Impl final {
       if(pipelineOwner.get()==nil || !reflectionMatches(reflection))
         return;
       pipelineState = pipelineOwner.relinquish();
+      OwnedObjectiveC previewFunction([nativeLibrary newFunctionWithName:@"riosSavePreviewFragment"]);
+      if(previewFunction.get()!=nil) {
+        descriptor.fragmentFunction = (id<MTLFunction>)previewFunction.get();
+        descriptor.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA8Unorm;
+        previewPipeline = [device newRenderPipelineStateWithDescriptor:descriptor error:&pipelineError];
+        }
         }
       @catch(NSException* exception) {
         (void)exception;
@@ -201,6 +207,7 @@ struct IOSLinearHDRMetal::Impl final {
 
   ~Impl() {
     [pipelineState release];
+    [previewPipeline release];
     }
 
   bool exactTarget(const Tempest::Attachment& target,
@@ -237,7 +244,7 @@ struct IOSLinearHDRMetal::Impl final {
     id<MTLRenderCommandEncoder> encoder =
         (id<MTLRenderCommandEncoder>)(void*)nativeEncoder;
     [encoder setRenderPipelineState:
-        (id<MTLRenderPipelineState>)context.renderer->pipelineState];
+        (id<MTLRenderPipelineState>)context.pipeline];
     [encoder setCullMode:MTLCullModeNone];
     [encoder setViewport:MTLViewport{0.0,0.0,
                                     double(context.width),
@@ -258,7 +265,36 @@ struct IOSLinearHDRMetal::Impl final {
   Tempest::BorrowedMetalDevice nativeDevice;
   IOSLinearHDRProbeResult probeResult =
       IOSLinearHDRProbeResult::factoryFailed();
+  IOSLinearHDRMetalEncodeResult encodeTexture(
+      Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+      const Tempest::Texture2d& source, const IOSToneResolveConstants& constants,
+      Tempest::Size extent, id pipeline) noexcept {
+    if(pipeline==nil)
+      return IOSLinearHDRMetalEncodeResult::PipelineUnavailable;
+    if(source.isEmpty() || !finiteConstants(constants) || extent.w<=0 || extent.h<=0)
+      return IOSLinearHDRMetalEncodeResult::InvalidSource;
+    try {
+      const auto native = Tempest::MetalApi::borrowTexture(owner,source);
+      if(!native)
+        return IOSLinearHDRMetalEncodeResult::InvalidSource;
+      EncodeContext context;
+      context.pipeline = pipeline;
+      context.source = (id<MTLTexture>)(void*)native.get();
+      context.constants = constants;
+      context.width = NSUInteger(extent.w);
+      context.height = NSUInteger(extent.h);
+      if(!Tempest::MetalApi::withActiveRenderEncoder(owner,encoder,&context,&Impl::encode))
+        return IOSLinearHDRMetalEncodeResult::NoActiveRenderEncoder;
+      return context.encoded ? IOSLinearHDRMetalEncodeResult::Success
+                             : IOSLinearHDRMetalEncodeResult::NativeEncodingFailed;
+      }
+    catch(...) {
+      return IOSLinearHDRMetalEncodeResult::NativeEncodingFailed;
+      }
+    }
+
   id pipelineState = nil;
+  id previewPipeline = nil;
   };
 
 IOSLinearHDRMetal::IOSLinearHDRMetal(Tempest::Device& device)
@@ -286,33 +322,22 @@ IOSLinearHDRMetalEncodeResult IOSLinearHDRMetal::encodeToneResolve(
     Tempest::Encoder<Tempest::CommandBuffer>& encoder,
     const Tempest::Attachment& source,
     const IOSToneResolveConstants& constants) noexcept {
-  if(impl==nullptr || impl->pipelineState==nil)
-    return IOSLinearHDRMetalEncodeResult::PipelineUnavailable;
-  if(!finiteConstants(constants) || source.isEmpty())
-    return IOSLinearHDRMetalEncodeResult::InvalidSource;
-  try {
-    const auto& texture =
-        Tempest::textureCast<const Tempest::Texture2d&>(source);
-    const auto native = Tempest::MetalApi::borrowTexture(impl->owner,texture);
-    if(!native || !impl->exactTarget(
-         source,static_cast<uint32_t>(source.w()),
-         static_cast<uint32_t>(source.h())))
-      return IOSLinearHDRMetalEncodeResult::InvalidSource;
-    Impl::EncodeContext context;
-    context.renderer = impl.get();
-    context.source = (id<MTLTexture>)(void*)native.get();
-    context.constants = constants;
-    context.width = NSUInteger(source.w());
-    context.height = NSUInteger(source.h());
-    if(!Tempest::MetalApi::withActiveRenderEncoder(
-           impl->owner,encoder,&context,&Impl::encode))
-      return IOSLinearHDRMetalEncodeResult::NoActiveRenderEncoder;
-    return context.encoded ? IOSLinearHDRMetalEncodeResult::Success
-                           : IOSLinearHDRMetalEncodeResult::NativeEncodingFailed;
-    }
-  catch(...) {
-    return IOSLinearHDRMetalEncodeResult::NativeEncodingFailed;
-    }
+  return encodeToneResolve(encoder,Tempest::textureCast<const Tempest::Texture2d&>(source),constants);
+  }
+
+IOSLinearHDRMetalEncodeResult IOSLinearHDRMetal::encodeToneResolve(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    const Tempest::Texture2d& source,
+    const IOSToneResolveConstants& constants) noexcept {
+  return impl->encodeTexture(encoder,source,constants,{source.w(),source.h()},impl->pipelineState);
+  }
+
+IOSLinearHDRMetalEncodeResult IOSLinearHDRMetal::encodeSavePreview(
+    Tempest::Encoder<Tempest::CommandBuffer>& encoder,
+    const Tempest::Attachment& source,
+    const IOSToneResolveConstants& constants, Tempest::Size outputSize) noexcept {
+  return impl->encodeTexture(encoder,Tempest::textureCast<const Tempest::Texture2d&>(source),
+                             constants,outputSize,impl->previewPipeline);
   }
 
 const char* iosLinearHDRMetalEncodeResultName(

@@ -201,33 +201,17 @@ xcrun clang++ -std=c++17 \
   -Ilib/Tempest/Engine/include -fsyntax-only \
   lib/Tempest/Tests/tests/metalapi_borrowed_handle_compile_test.cpp
 
-echo "### RendererIOS save-preview routing policy"
-[ -f game/graphics/iossavepreviewpolicy.h ]
-[ -f ios/tests/iossavepreviewpolicy.cpp ]
-xcrun clang++ -std=c++20 \
-  -Wall -Wextra -Wconversion -Wsign-conversion -Werror \
-  -Igame \
-  ios/tests/iossavepreviewpolicy.cpp \
-  -o "$TMP_GATE/iossavepreviewpolicy"
-codesign -f -s - "$TMP_GATE/iossavepreviewpolicy"
-"$TMP_GATE/iossavepreviewpolicy"
-grep -Fq 'requiresGpuSavePreviewCapture()' game/graphics/iosmetalcontext.cpp
-grep -Fq 'if(!renderer.requiresGpuSavePreviewCapture())' game/mainwindow.cpp
-grep -Fq 'save-cpu-fastpath' game/graphics/iosmetalcontext.cpp
-grep -Fq 'savePreviewRoute=' game/graphics/iosmetalcontext.cpp
-grep -Fq 'route=cpu-placeholder' game/mainwindow.cpp
-grep -Fq 'route=gpu-diagnostic' game/mainwindow.cpp
+
 grep -Fq 'pixels[i*4u+3u] = 255u;' game/mainwindow.cpp
 grep -Fq 'request-to-accepted-us=' game/mainwindow.cpp
 grep -Fq 'serialize-us=' game/mainwindow.cpp
 grep -Fq 'request-to-complete-us=' game/mainwindow.cpp
 grep -Fq 'wait-idle-us=' game/graphics/iosmetalcontext.cpp
-grep -Fq 'RendererIOS save preview diagnostic capture' game/graphics/iosmetalcontext.cpp
+grep -Fq 'RendererIOS save preview' game/graphics/iosmetalcontext.cpp
 if grep -Fq 'RendererIOS save preview placeholder' \
     game/graphics/iosmetalcontext.cpp; then
   fail "obsolete RendererIOS save preview placeholder pozostaje w kodzie"
 fi
-[ "$(grep -Fc '!configuredSavePreviewNeedsGpuCapture() ||' game/graphics/iosmetalcontext.cpp)" -eq 1 ]
 [ "$(grep -Fc 'impl->device.attachment(TextureFormat::RGBA8,dstW,dstH)' game/graphics/iosmetalcontext.cpp)" -eq 1 ]
 [ "$(grep -Fc 'device.readPixels(savePreview)' game/graphics/iosmetalcontext.cpp)" -eq 1 ]
 grep -Fq 'previewFenceErrorAfterTerminal()' game/graphics/iosmetalcontext.cpp
@@ -1834,7 +1818,7 @@ codesign -f -s - "$TMP_GATE/iosbinkselftest"
 xcrun --sdk iphoneos metal \
   -target air64-apple-ios16.4 \
   -Wall -Wextra -Werror \
-  -c shader/ios-metal/landscape.metal \
+  -fpreserve-invariance -c shader/ios-metal/landscape.metal \
   -o "$TMP_GATE/ios-landscape.air"
 xcrun --sdk iphoneos metal \
   -target air64-apple-ios16.4 \
@@ -1879,7 +1863,7 @@ for function in \
     riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
     riosLandscapeAlphaTestFragment \
     riosLandscapeAdditiveFragment \
-    riosToneResolveVertex riosToneResolveFragment \
+    riosToneResolveVertex riosToneResolveFragment riosSavePreviewFragment riosFsrPrepare riosFsrEasu riosFsrRcas riosSceneCopyFragment riosMotionVertex riosMotionSkinnedVertex riosMotionMorphVertex riosMotionInstancedVertex riosMotionFragment riosReactiveFragment riosSkyMotionFragment \
     riosBinkVertex riosBinkFragment \
     riosUiColorVertex riosUiColorFragment \
     riosUiTextureVertex riosUiTextureFragment \
@@ -1899,7 +1883,7 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosLandscapeVertex riosSkinnedVertex riosMorphVertex riosInstancedVertex riosLandscapeFragment riosLandscapeTransparentFragment riosShadowAlphaTestFragment riosSkyLut riosSkyVertex riosSkyFragment riosRainVertex riosRainFragment riosParticleVertex riosWaterFactors riosWaterPatchVertex riosWaterFragment riosGhostFragment riosUnderwaterFragment \
   riosLandscapeAlphaTestFragment \
   riosLandscapeAdditiveFragment \
-  riosToneResolveVertex riosToneResolveFragment \
+  riosToneResolveVertex riosToneResolveFragment riosSavePreviewFragment riosFsrPrepare riosFsrEasu riosFsrRcas riosSceneCopyFragment riosMotionVertex riosMotionSkinnedVertex riosMotionMorphVertex riosMotionInstancedVertex riosMotionFragment riosReactiveFragment riosSkyMotionFragment \
   riosBinkVertex riosBinkFragment \
   riosUiColorVertex riosUiColorFragment \
   riosUiTextureVertex riosUiTextureFragment \
@@ -1910,9 +1894,9 @@ EXPECTED_RIOS_EXPORTS="$(printf '%s\n' \
   riosForwardPlusBuildLightList \
   riosForwardPlusFragment | LC_ALL=C sort)"
 [ "$RIOS_EXPORTS" = "$EXPECTED_RIOS_EXPORTS" ] ||
-  fail "RendererIOS.metallib nie ma exact 35-export ABI12"
-[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 35 ] ||
-  fail "RendererIOS.metallib export count nie wynosi 34"
+  fail "RendererIOS.metallib nie ma exact 47-export ABI13"
+[ "$(printf '%s\n' "$RIOS_EXPORTS" | wc -l | tr -d ' ')" -eq 47 ] ||
+  fail "RendererIOS.metallib export count nie wynosi 47"
 CANONICAL_RENDERER_IOS_METALLIB_SHA256="$(
   shasum -a 256 "$TMP_GATE/RendererIOS.metallib" | awk '{print $1}'
 )"
@@ -2267,7 +2251,7 @@ module = runpy.run_path(validator_path)
 markers = {
     "ARMED": (
         "RendererIOS shading prototype tile self-test: ARMED "
-        "case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 "
+        "case=tile-prototype-v1 contract=1 metallib-abi=13 minimum-apple=4 "
         "output=4x4 rgba8-private=1"
     ),
     "FACTORY_READY": (
@@ -3297,7 +3281,7 @@ PY
     [ "$(/usr/libexec/PlistBuddy -c 'Print :MetalCaptureEnabled' "$plist")" = true ] ||
       fail "profil TILE nie ma MetalCaptureEnabled=true"
     for marker in \
-        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=12 minimum-apple=4 output=4x4 rgba8-private=1' \
+        'RendererIOS shading prototype tile self-test: ARMED case=tile-prototype-v1 contract=1 metallib-abi=13 minimum-apple=4 output=4x4 rgba8-private=1' \
         'RendererIOS shading prototype tile self-test: FACTORY READY case=tile-prototype-v1 pipelines=3 forward=0 runtime-delta=0 builtin-delta=0 archive-delta=0' \
         'RendererIOS shading prototype tile self-test: ENCODED case=tile-prototype-v1 pass=1 encoder=1 draws=2 opaque=1 alpha=1 tdispatch=1 vb=168 output=1 mat=0 ib=4 clear-a=0 tgmem=0 size=16 dispatch=16x16x1 order=opaque,alpha,tile drawable=0 present=0' \
         'RendererIOS shading prototype tile self-test: SUBMITTED case=tile-prototype-v1 command-buffers=1 submits=1' \
@@ -3808,7 +3792,7 @@ if wants_profile multiply2-a-hdr && wants_profile multiply2-b-hdr; then
   [ -n "$MULTIPLY2_A_METALLIB_SHA256" ] &&
     [ -n "$MULTIPLY2_B_METALLIB_SHA256" ] &&
     [ "$MULTIPLY2_A_METALLIB_SHA256" = "$MULTIPLY2_B_METALLIB_SHA256" ] ||
-    fail "Multiply2 A/B nie maja tego samego ABI12 metallib"
+    fail "Multiply2 A/B nie maja tego samego ABI13 metallib"
   [ -n "$MULTIPLY2_A_BINARY_SHA256" ] &&
     [ -n "$MULTIPLY2_B_BINARY_SHA256" ] &&
     [ "$MULTIPLY2_A_BINARY_SHA256" != "$MULTIPLY2_B_BINARY_SHA256" ] ||
@@ -3825,7 +3809,7 @@ if wants_profile additive-a-hdr && wants_profile additive-b-hdr; then
   [ -n "$ADDITIVE_A_METALLIB_SHA256" ] &&
     [ -n "$ADDITIVE_B_METALLIB_SHA256" ] &&
     [ "$ADDITIVE_A_METALLIB_SHA256" = "$ADDITIVE_B_METALLIB_SHA256" ] ||
-    fail "Additive A/B nie maja tego samego ABI12 metallib"
+    fail "Additive A/B nie maja tego samego ABI13 metallib"
   [ -n "$ADDITIVE_A_BINARY_SHA256" ] &&
     [ -n "$ADDITIVE_B_BINARY_SHA256" ] &&
     [ "$ADDITIVE_A_BINARY_SHA256" != "$ADDITIVE_B_BINARY_SHA256" ] ||
