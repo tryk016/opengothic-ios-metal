@@ -275,11 +275,7 @@ def select_product_bundle(
     product_pattern = re.compile(
         r"^opengothic\.gothic2\.[A-Z0-9]{10}$"
     )
-    runner_pattern = re.compile(
-        r"^opengothic\.gothic2\.[A-Z0-9]{10}\..+$"
-    )
     products: list[str] = []
-    malformed: list[str] = []
     for app in result["apps"]:
         if not isinstance(app, dict):
             continue
@@ -290,12 +286,6 @@ def select_product_bundle(
             continue
         if product_pattern.fullmatch(bundle):
             products.append(bundle)
-        elif runner_pattern.fullmatch(bundle):
-            continue
-        else:
-            malformed.append(bundle)
-    if malformed:
-        raise SelectionError("malformed OpenGothic bundle suffix")
     if requested:
         if product_pattern.fullmatch(requested) is None:
             raise SelectionError("requested bundle is not an exact product")
@@ -496,6 +486,10 @@ def run_self_test() -> None:
     assert select_product_bundle(
         _apps_payload(product, runner), "opengothic.gothic2"
     ) == product
+    # Old diagnostic apps can coexist with the exact installed game product.
+    installed = _apps_payload(product, runner, "opengothic.gothic2.t09probe.ABCDE12345")
+    assert select_product_bundle(installed, "opengothic.gothic2") == product
+    assert select_product_bundle(installed, "opengothic.gothic2", product) == product
     for label, payload, requested in (
         ("runner-only", _apps_payload(runner), ""),
         (
