@@ -235,6 +235,9 @@ elseif(IOS)
          "Use MetalFX Temporal AA upscaling with Spatial/Lanczos fallback on supported iOS devices" OFF)
   option(OPENGOTHIC_RENDERER_IOS_METAL4
          "Build the experimental Metal 4 static-scene transport" OFF)
+  if(CMAKE_OSX_SYSROOT MATCHES "iphonesimulator")
+    set(OPENGOTHIC_RENDERER_IOS_METAL4 OFF) # Simulator SDK has no Metal 4 API.
+  endif()
   if(OPENGOTHIC_RENDERER_IOS_METAL4)
     target_compile_definitions(${PROJECT_NAME} PRIVATE OPENGOTHIC_RENDERER_IOS_METAL4=1)
   endif()
