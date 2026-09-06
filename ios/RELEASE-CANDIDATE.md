@@ -1,8 +1,10 @@
 # RendererIOS stable candidate
 
-Status: implementation and host validation in progress. No stable release has
-been published from this candidate. Host, Simulator and Mac GPU results do not
-establish iPhone/iPad performance, thermal behavior or final visual acceptance.
+Status: implementation has passed host validation; the final device campaign
+is pending. Product commit `a4425f26` with Tempest `e2da30c2` passed all nine local
+profiles, all 11 required CI jobs, Simulator world loading and Home/resume.
+No stable release has been published. These results do not establish iPhone/iPad
+performance, thermal behavior or final visual acceptance.
 
 ## Build
 
