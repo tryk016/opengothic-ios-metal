@@ -5758,7 +5758,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
               impl->linearHDRTargets.color,
               impl->linearHDRTargets.generation,
               input.snapshot->sequence.value,
-              impl->swapchain.w(),impl->swapchain.h());
+              impl->linearHDRTargets.extent.width,
+              impl->linearHDRTargets.extent.height);
           if(!linearHDRProofPrepared)
             throw std::runtime_error(
               "RendererIOS HDR proof preparation failed");
@@ -5784,7 +5785,8 @@ IOSMetalContext::SubmitResult IOSMetalContext::submitFrame(
                  impl->linearHDRTargets.color,hdrNative) ||
              !impl->gpuScene->multiply2CoverageMetadata(
                  preparedScene,hdrNative.metadata,
-                 impl->swapchain.w(),impl->swapchain.h(),
+                 impl->linearHDRTargets.extent.width,
+                 impl->linearHDRTargets.extent.height,
                  coverageMetadata) ||
              !impl->multiply2Coverage->prepareFrame(
                  frameContext.multiply2Coverage,
