@@ -3750,6 +3750,12 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         }
       const auto* mesh = assets.lookupMesh(entity.mesh);
       const auto* texture = assets.lookupTexture(plan.baseColorTexture);
+      // Inactive morph layers leave the base mesh bounds unchanged.
+      const bool canCullByBounds = entity.fatness==0.f && plan.kind!=IOSSceneMeshKind::Animated &&
+          (plan.kind!=IOSSceneMeshKind::Morph || std::none_of(
+              snapshot.currentMorphLayers.begin()+entity.morphRange.offset,
+              snapshot.currentMorphLayers.begin()+entity.morphRange.offset+entity.morphRange.count,
+              [](const auto& layer) { return layer.intensity!=0.f; }));
 #if defined(OPENGOTHIC_RENDERER_IOS_RAYTRACING)
       if((rayTracingMode==1 || rayTracingMode==2) && !impl->rayTracingUnavailable && mesh!=nullptr &&
          (entity.kind==IOSSceneMeshKind::Landscape || entity.kind==IOSSceneMeshKind::Static) &&
@@ -3786,7 +3792,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
                                 plan.kind==IOSSceneMeshKind::Morph ? 2u : 0u;
         const size_t alpha = plan.pipeline==IOSGPUScenePipelineSelector::AlphaTest ? 1u : 0u;
         for(size_t layer=0;layer<2;++layer) {
-          if(geometry==0 && entity.fatness==0.f &&
+          if(canCullByBounds &&
              classifyIOSGPUSceneMultiply2ClipBounds(entity.bounds,plan.constants.model,
                  snapshot.currentSky.viewShadow[layer])==IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside)
             continue;
@@ -3811,9 +3817,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     !defined(OPENGOTHIC_RENDERER_IOS_ADDITIVE_CAUSAL_B) && \
     !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_A) && \
     !defined(OPENGOTHIC_RENDERER_IOS_MULTIPLY2_CAUSAL_B)
-      // Bind-pose bounds cannot reject skin/morph or expanded vertices.
-      if(entity.kind!=IOSSceneMeshKind::Animated &&
-         entity.kind!=IOSSceneMeshKind::Morph && entity.fatness==0.f &&
+      if(canCullByBounds &&
          plan.pipeline!=IOSGPUScenePipelineSelector::Water &&
          !requiresAnimationEvidence &&
          classifyIOSGPUSceneMultiply2ClipBounds(
@@ -4263,11 +4267,17 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     std::sort(transparent.begin(),transparent.end(),[](const auto& a,const auto& b) {
       return a.cameraDepth!=b.cameraDepth ? a.cameraDepth>b.cameraDepth : a.sourceId<b.sourceId;
       });
-    if(!impl->geometryReported && !candidateFrame->base.empty()) {
+    if((!impl->geometryReported
+#if defined(OPENGOTHIC_RENDERER_IOS_DIAGNOSTICS)
+        || snapshot.sequence.value%300u==0u
+#endif
+        ) && !candidateFrame->base.empty()) {
       Tempest::Log::i("RendererIOS native geometry: entities=",report.counts.drawn.material.total,
           " draw-calls=",candidateFrame->base.size()+candidateFrame->multiply2.size()+candidateFrame->additive.size()+candidateFrame->transparent.size()+candidateFrame->water.size()+candidateFrame->ghost.size()+candidateFrame->multiply.size(),
           " animated=",report.counts.drawn.kind.animated," morph=",report.counts.drawn.kind.morph,
           " lights=",snapshot.lights.size()," visible-lights=",candidateFrame->lighting.lightInfo[0],
+          " shadow-near=",candidateFrame->shadows[0].size()," shadow-far=",candidateFrame->shadows[1].size(),
+          " generation=",snapshot.generation.value," sequence=",snapshot.sequence.value,
           " transparent=",candidateFrame->transparent.size(),
           " water=",candidateFrame->water.size()," particles=",snapshot.particles.size()," particle-batches=",snapshot.particleBatches.size(),
           " sun-y=",snapshot.currentSky.sunDirection.y," rain=",snapshot.currentSky.rainIntensity);
