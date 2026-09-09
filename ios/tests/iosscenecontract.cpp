@@ -82,7 +82,7 @@ SceneHandles resolveScene(IOSRenderWorld& world, uint64_t keyBase) {
   }
 
 IOSSceneFrameState populatedFrame(const SceneHandles& handles,
-                                  float cameraX, float objectX) {
+                                  float cameraX, float objectX, float fatness = 0.f) {
   auto frame = frameState(cameraX);
   frame.featureMask |= IOSSceneFeatureLights |
                        IOSSceneFeatureParticles;
@@ -98,6 +98,7 @@ IOSSceneFrameState populatedFrame(const SceneHandles& handles,
   entity.material = handles.material;
   entity.kind     = IOSSceneMeshKind::Landscape;
   entity.transform.set(0u,3u,objectX);
+  entity.fatness = fatness;
   entity.bounds.minimum = {-1.f,-2.f,-3.f};
   entity.bounds.maximum = { 1.f, 2.f, 3.f};
   entity.visibilityMask = IOSSceneVisibilityMain |
@@ -322,8 +323,15 @@ int main() {
          frameTextureWorld.resolveFrameTexture(0x2001u,9u));
 
   const auto populatedFirst =
-    populatedWorld.buildSnapshot(populatedFrame(handles,10.f,1.f));
+    populatedWorld.buildSnapshot(populatedFrame(handles,10.f,1.f,0.25f));
   assert(populatedFirst->isStructurallyValid());
+  assert(populatedFirst->entities[0].previousFatness==0.25f);
+  auto invalidFatness = *populatedFirst;
+  invalidFatness.entities[0].previousFatness = 0.5f;
+  assert(!invalidFatness.isStructurallyValid());
+  invalidFatness.historyValid = true;
+  invalidFatness.entities[0].previousFatness = std::numeric_limits<float>::quiet_NaN();
+  assert(!invalidFatness.isStructurallyValid());
   assert(populatedFirst->entities.size()==1u);
   assert(populatedFirst->materials.size()==1u);
   assert(populatedFirst->lights.size()==1u);
@@ -337,13 +345,17 @@ int main() {
   assert(populatedWorld.commitAccepted(populatedFirst));
 
   const auto populatedCanceled =
-    populatedWorld.buildSnapshot(populatedFrame(handles,20.f,2.f));
+    populatedWorld.buildSnapshot(populatedFrame(handles,20.f,2.f,0.5f));
   assert(populatedCanceled->historyValid);
+  assert(populatedCanceled->entities[0].fatness==0.5f);
+  assert(populatedCanceled->entities[0].previousFatness==0.25f);
   assert(populatedCanceled->entities[0].previousTransform.at(0u,3u)==1.f);
 
   const auto populatedAccepted =
-    populatedWorld.buildSnapshot(populatedFrame(handles,30.f,3.f));
+    populatedWorld.buildSnapshot(populatedFrame(handles,30.f,3.f,0.75f));
   assert(populatedAccepted->historyValid);
+  assert(populatedAccepted->entities[0].fatness==0.75f);
+  assert(populatedAccepted->entities[0].previousFatness==0.25f);
   assert(populatedAccepted->previousCamera.position.x==10.f);
   assert(populatedAccepted->entities[0].previousTransform.at(0u,3u)==1.f);
   assert(!populatedWorld.acceptsForSubmit(populatedCanceled));
@@ -453,6 +465,7 @@ int main() {
   addDeformation(deformationA,2.f,0.25f);
   const auto acceptedDeformationA =
     populatedWorld.buildSnapshot(std::move(deformationA));
+  assert(acceptedDeformationA->entities[0].previousFatness==0.75f);
   assert(populatedWorld.commitAccepted(acceptedDeformationA));
 
   auto changedMeshHandles = handles;

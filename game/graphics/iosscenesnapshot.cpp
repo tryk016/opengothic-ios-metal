@@ -277,6 +277,7 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
        !isFinite(entity.currentTransform) ||
        !isFinite(entity.previousTransform) ||
        !isFinite(entity.fatness) ||
+       !isFinite(entity.previousFatness) ||
        !validBounds(entity.bounds) ||
        !validRange(entity.boneRange,currentBones.size()) ||
        !validRange(entity.morphRange,currentMorphLayers.size()) ||
@@ -285,7 +286,8 @@ bool IOSSceneSnapshot::isStructurallyValid() const noexcept {
     if((material->flags!=IOSMaterialFlagNone) &&
        entity.kind!=IOSSceneMeshKind::Static)
       return false;
-    if(!historyValid && entity.currentTransform!=entity.previousTransform)
+    if(!historyValid && (entity.currentTransform!=entity.previousTransform ||
+                         entity.fatness!=entity.previousFatness))
       return false;
     }
   if(!idsStrictlyIncrease(entities,&IOSRenderEntity::id))

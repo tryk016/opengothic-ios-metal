@@ -262,6 +262,7 @@ struct IOSRenderEntity final {
   IOSIndexRange     morphRange;
   uint64_t          visibilityMask = IOSSceneVisibilityMain;
   float             fatness = 0.f;
+  float             previousFatness = 0.f;
 
   constexpr bool operator==(const IOSRenderEntity&) const noexcept = default;
   };

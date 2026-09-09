@@ -2,8 +2,15 @@ struct IOSMotionConstants {
   float4x4 previousModel, previousViewProjection;
   float4 jitter; // Current and previous input-pixel offsets.
   float4 extent; // Current and previous input dimensions.
+  float previousFatness;
 };
-static_assert(sizeof(IOSMotionConstants)==160, "motion constants ABI");
+static_assert(sizeof(IOSMotionConstants)==176, "motion constants ABI");
+
+struct IOSMotionInstance {
+  float4x4 model;
+  float fatness;
+};
+static_assert(sizeof(IOSMotionInstance)==80, "motion instance stride");
 
 struct IOSMotionVertexOut {
   float4 position [[position, invariant]];
@@ -33,7 +40,8 @@ vertex IOSMotionVertexOut riosMotionVertex(IOSLandscapeVertexIn in [[stage_in]],
     constant IOSDeformationConstants& deformation [[buffer(2)]],
     constant IOSMotionConstants& motion [[buffer(9)]]) {
   const float4 local=float4(in.position+in.normal*deformation.fatness,1.0);
-  return riosMotionOutput((draw.model*local).xyz,(motion.previousModel*local).xyz,
+  const float4 previousLocal=float4(in.position+in.normal*motion.previousFatness,1.0);
+  return riosMotionOutput((draw.model*local).xyz,(motion.previousModel*previousLocal).xyz,
       in.uv+draw.uvOffset,in.color.a*draw.baseColor.a,draw,motion);
 }
 
@@ -49,7 +57,7 @@ vertex IOSMotionVertexOut riosMotionSkinnedVertex(uint vertexId [[vertex_id]],
   const float3 world=riosSkinPosition(in,bones,deformation.boneOffset)+
       (draw.model*normal).xyz*deformation.fatness;
   const float3 previous=riosSkinPosition(in,previousBones,deformation.boneOffset)+
-      (motion.previousModel*normal).xyz*deformation.fatness;
+      (motion.previousModel*normal).xyz*motion.previousFatness;
   return riosMotionOutput(world,previous,float2(in.uv)+draw.uvOffset,
       float(in.color>>24u)/255.0*draw.baseColor.a,draw,motion);
 }
@@ -67,7 +75,7 @@ vertex IOSMotionVertexOut riosMotionMorphVertex(IOSLandscapeVertexIn in [[stage_
   const float3 normal=(draw.model*float4(in.normal,0.0)).xyz;
   const float3 oldNormal=(motion.previousModel*float4(in.normal,0.0)).xyz;
   return riosMotionOutput((draw.model*float4(local,1.0)).xyz+normal*deformation.fatness,
-      (motion.previousModel*float4(previous,1.0)).xyz+oldNormal*deformation.fatness,
+      (motion.previousModel*float4(previous,1.0)).xyz+oldNormal*motion.previousFatness,
       in.uv+draw.uvOffset,in.color.a*draw.baseColor.a,draw,motion);
 }
 
@@ -76,10 +84,12 @@ vertex IOSMotionVertexOut riosMotionInstancedVertex(IOSLandscapeVertexIn in [[st
     constant IOSLandscapeDrawConstants& draw [[buffer(1)]],
     const device IOSGPUInstance* instances [[buffer(6)]],
     constant IOSMotionConstants& motion [[buffer(9)]],
-    const device float4x4* previousModels [[buffer(11)]]) {
+    const device IOSMotionInstance* previousInstances [[buffer(11)]]) {
   const IOSGPUInstance instance=instances[instanceId];
   const float4 local=float4(in.position+in.normal*instance.fatness,1.0);
-  return riosMotionOutput((instance.model*local).xyz,(previousModels[instanceId]*local).xyz,
+  const IOSMotionInstance previous=previousInstances[instanceId];
+  const float4 previousLocal=float4(in.position+in.normal*previous.fatness,1.0);
+  return riosMotionOutput((instance.model*local).xyz,(previous.model*previousLocal).xyz,
       in.uv+instance.uvOffset,in.color.a*instance.baseColor.a,draw,motion);
 }
 

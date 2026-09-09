@@ -193,6 +193,7 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
       entity.morphRange,
       entity.visibilityMask,
       entity.fatness,
+      entity.fatness,
       });
     }
 
@@ -227,6 +228,7 @@ IOSSceneSnapshotPtr IOSRenderWorld::buildSnapshot(IOSSceneFrameState&& frame) {
         continue;
       const auto& previous = committedSnapshot->entities[previousEntity];
       entity.previousTransform = previous.currentTransform;
+      entity.previousFatness = previous.fatness;
 
       const bool meshHistoryCompatible = entity.mesh==previous.mesh;
       if(meshHistoryCompatible &&

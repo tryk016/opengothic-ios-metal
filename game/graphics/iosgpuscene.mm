@@ -553,11 +553,18 @@ struct alignas(16) IOSGPUInstance final {
   };
 static_assert(sizeof(IOSGPUInstance)==96);
 
+struct alignas(16) IOSMotionInstance final {
+  IOSMatrix4x4 model;
+  float fatness = 0.f;
+  };
+static_assert(sizeof(IOSMotionInstance)==80);
+
 struct alignas(16) IOSMotionConstants final {
   IOSMatrix4x4 previousModel, previousViewProjection;
   IOSFloat4 jitter, extent;
+  float previousFatness = 0.f;
   };
-static_assert(sizeof(IOSMotionConstants)==160);
+static_assert(sizeof(IOSMotionConstants)==176);
 
 struct IOSParticlePreparedBatch final {
   IOSParticleBatch batch;
@@ -576,6 +583,7 @@ struct IOSGPUSceneNativePreparedDraw final {
   id deformationBuffer = nil;
   id previousDeformationBuffer = nil;
   IOSMatrix4x4 previousTransform;
+  float previousFatness = 0.f;
   id morphIndices = nil;
   id morphSamples = nil;
   id tessellationFactors = nil;
@@ -2831,12 +2839,13 @@ bool IOSGPUScene::Impl::encodeMotion(id<MTLCommandBuffer> command,
         [encoder setFragmentBytes:&material length:sizeof(material) atIndex:0];
         if(!reactive) {
           motion.previousModel=draw.previousTransform;
+          motion.previousFatness=draw.previousFatness;
           [encoder setVertexBytes:&motion length:sizeof(motion) atIndex:9];
           if(geometry==1 || geometry==2)
             [encoder setVertexBuffer:(id<MTLBuffer>)draw.previousDeformationBuffer offset:0 atIndex:10];
           if(geometry==3)
             [encoder setVertexBuffer:(id<MTLBuffer>)draw.previousInstanceBuffer
-                             offset:draw.instanceOffset/sizeof(IOSGPUInstance)*sizeof(IOSMatrix4x4) atIndex:11];
+                             offset:draw.instanceOffset/sizeof(IOSGPUInstance)*sizeof(IOSMotionInstance) atIndex:11];
           }
         if(draw.tessellationFactors!=nil) {
           [encoder setVertexBuffer:(id<MTLBuffer>)draw.indexBuffer offset:draw.plan.indexBufferOffset atIndex:7];
@@ -3754,6 +3763,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         IOSGPUSceneNativePreparedDraw draw;
         draw.plan = plan;
         draw.previousTransform = entity.previousTransform;
+        draw.previousFatness = entity.previousFatness;
         draw.previousDeformationBuffer = plan.kind==IOSSceneMeshKind::Animated
             ? prepared.uploads->previousBones.get() : prepared.uploads->previousMorphLayers.get();
         draw.deformation = {entity.boneRange.offset,entity.morphRange.offset,
@@ -4198,7 +4208,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     auto& draws = candidateFrame->base;
     std::stable_sort(draws.begin(),draws.end(),[&](const auto& a,const auto& b) { return key(a)<key(b); });
     std::vector<IOSGPUInstance> instances;
-    std::vector<IOSMatrix4x4> previousInstances;
+    std::vector<IOSMotionInstance> previousInstances;
     std::vector<IOSGPUSceneNativePreparedDraw> batches;
     batches.reserve(draws.size());
     for(size_t first=0;first<draws.size();) {
@@ -4214,7 +4224,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         for(size_t i=first;i<end;++i) {
           const auto& draw = draws[i];
           draws[first].metal4Eligible &= draw.metal4Eligible;
-          if(temporal) previousInstances.push_back(draw.previousTransform);
+          if(temporal) previousInstances.push_back({draw.previousTransform,draw.previousFatness});
           instances.push_back({draw.plan.constants.model,draw.plan.constants.baseColor,
                                draw.plan.constants.uvOffset,draw.deformation.fatness,draw.plan.constants.landscape});
           }
@@ -4226,7 +4236,7 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
         instances.data(),instances.size()*sizeof(IOSGPUInstance));
     if(temporal)
       PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->previousInstances,
-          previousInstances.data(),previousInstances.size()*sizeof(IOSMatrix4x4));
+          previousInstances.data(),previousInstances.size()*sizeof(IOSMotionInstance));
     for(auto& draw:batches) {
       if(draw.instanceCount>1) {
         draw.instanceBuffer = prepared.uploads->instances.get();

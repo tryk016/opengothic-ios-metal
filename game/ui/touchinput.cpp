@@ -562,7 +562,8 @@ void TouchInput::mouseDragEvent(MouseEvent& e) {
   if(id==lookId) {
     const Point d = pos - lookLast;
     lookLast = pos;
-    ctrl.onRotateCamera(float(-d.x)*3.4f, float(-d.y)*1.7f);
+    const float sensitivity = 120.f/float(std::max(1,worldLayout().look.w));
+    ctrl.onRotateCamera(-float(d.x)*sensitivity, -float(d.y)*sensitivity*0.5f);
     return;
     }
 
