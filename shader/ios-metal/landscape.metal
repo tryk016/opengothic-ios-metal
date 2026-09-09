@@ -152,6 +152,7 @@ static float3 riosTextureAlbedo(float3 color) {
 static float3 riosSceneLighting(IOSLandscapeVertexOut in, bool transparent,
                                constant IOSSceneLightingConstants& scene,
                                const device IOSPointLightConstants* lights,
+                               const device uint* lightGrid,
                                depth2d<float> nearMap, depth2d<float> farMap, float alpha = 1.0) {
   constexpr float invPi = 0.31830988618;
   const float3 normal = normalize(in.normal);
@@ -174,9 +175,12 @@ static float3 riosSceneLighting(IOSLandscapeVertexOut in, bool transparent,
   const float3 ambient = scene.ambientColor.xyz+(normal.y*0.25+0.75)*night;
   float3 light = scene.sunColor.xyz*lambert*shadow*(transparent ? 1.0 : invPi);
   light += ambient*(transparent ? 2.0 : 1.0);
-  if(!transparent) {
-    for(uint i=0; i<scene.lightInfo.x; ++i) {
-      const IOSPointLightConstants point = lights[i];
+  if(!transparent && scene.lightInfo.x!=0u) {
+    const uint2 tile = min(uint2(in.position.xy)/32u,uint2(lightGrid[0],lightGrid[1])-1u);
+    const uint cell = 2u+2u*(tile.y*lightGrid[0]+tile.x);
+    const uint offset = lightGrid[cell], count = lightGrid[cell+1u];
+    for(uint i=0; i<count; ++i) {
+      const IOSPointLightConstants point = lights[lightGrid[offset+i]];
       const float3 direction = point.positionRange.xyz-in.world;
       const float distanceSquared = dot(direction,direction);
       const float factor = distanceSquared/(point.positionRange.w*point.positionRange.w);
@@ -205,10 +209,11 @@ fragment float4 riosLandscapeFragment(
     sampler baseColorSampler [[sampler(0)]],
     constant IOSSceneLightingConstants& scene [[buffer(0)]],
     const device IOSPointLightConstants* lights [[buffer(1)]],
+    const device uint* lightGrid [[buffer(5)]],
     depth2d<float> shadowNear [[texture(1)]],
     depth2d<float> shadowFar [[texture(2)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
-  const float3 light = riosSceneLighting(in,false,scene,lights,shadowNear,shadowFar);
+  const float3 light = riosSceneLighting(in,false,scene,lights,lightGrid,shadowNear,shadowFar);
   const float3 color = riosSceneFog(riosTextureAlbedo(texel.rgb*in.color.rgb)*light,in.world,scene);
   return float4(color,1.0);
 }
@@ -219,12 +224,13 @@ fragment float4 riosLandscapeAlphaTestFragment(
     sampler baseColorSampler [[sampler(0)]],
     constant IOSSceneLightingConstants& scene [[buffer(0)]],
     const device IOSPointLightConstants* lights [[buffer(1)]],
+    const device uint* lightGrid [[buffer(5)]],
     depth2d<float> shadowNear [[texture(1)]],
     depth2d<float> shadowFar [[texture(2)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
   if(texel.a*((in.landscape&4u)!=0 ? 1.0 : in.color.a)<0.5)
     discard_fragment();
-  const float3 light = riosSceneLighting(in,false,scene,lights,shadowNear,shadowFar);
+  const float3 light = riosSceneLighting(in,false,scene,lights,lightGrid,shadowNear,shadowFar);
   const float3 color = riosSceneFog(riosTextureAlbedo(texel.rgb*in.color.rgb)*light,in.world,scene);
   return float4(color,1.0);
 }
@@ -235,10 +241,11 @@ fragment float4 riosLandscapeTransparentFragment(
     sampler baseColorSampler [[sampler(0)]],
     constant IOSSceneLightingConstants& scene [[buffer(0)]],
     const device IOSPointLightConstants* lights [[buffer(1)]],
+    const device uint* lightGrid [[buffer(5)]],
     depth2d<float> shadowNear [[texture(1)]],
     depth2d<float> shadowFar [[texture(2)]]) {
   const float4 texel = baseColorTexture.sample(baseColorSampler,in.uv);
-  const float3 light = riosSceneLighting(in,true,scene,lights,shadowNear,shadowFar,texel.a*in.color.a);
+  const float3 light = riosSceneLighting(in,true,scene,lights,lightGrid,shadowNear,shadowFar,texel.a*in.color.a);
   const float3 color = riosSceneFog(riosTextureAlbedo(texel.rgb*in.color.rgb)*light,in.world,scene);
   return float4(color,texel.a*in.color.a);
 }

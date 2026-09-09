@@ -915,7 +915,7 @@ struct IOSGPUScene::PreparedFrame::Uploads final {
   OwnedObjectiveC morphLayers;
   OwnedObjectiveC instances;
   OwnedObjectiveC previousBones, previousMorphLayers, previousInstances;
-  OwnedObjectiveC lights;
+  OwnedObjectiveC lights, lightGrid;
   OwnedObjectiveC tessellationFactors;
   OwnedObjectiveC particles;
 #if defined(OPENGOTHIC_RENDERER_IOS_METAL4)
@@ -961,6 +961,7 @@ struct IOSGPUScene::PreparedFrame::Impl final {
     }
   IOSSceneLightingConstants lighting;
   id lightBuffer = nil;
+  id lightGridBuffer = nil;
   std::array<id,6> skyImages = {};
   IOSFloat4 cloudOffsets;
   IOSMatrix4x4 viewProjection;
@@ -2582,6 +2583,7 @@ void IOSGPUScene::Impl::bindLighting(id<MTLRenderCommandEncoder> encoder,
                                     const PreparedFrame::Impl& prepared) {
   [encoder setFragmentBytes:&prepared.lighting length:sizeof(prepared.lighting) atIndex:0];
   [encoder setFragmentBuffer:(id<MTLBuffer>)prepared.lightBuffer offset:0 atIndex:1];
+  [encoder setFragmentBuffer:(id<MTLBuffer>)prepared.lightGridBuffer offset:0 atIndex:5];
   for(size_t layer=0;layer<shadowMaps.size();++layer)
     [encoder setFragmentTexture:(id<MTLTexture>)shadowMaps[layer].get() atIndex:layer+1];
   }
@@ -2947,7 +2949,7 @@ bool IOSGPUScene::Impl::prepareMetal4(NativeEncodeContext& context, PreparedFram
         auto tableDesc = (MTL4ArgumentTableDescriptor*)tableDescriptor.get();
         tableDesc.maxBufferBindCount = 7;
         prepared.metal4VertexTable = OwnedObjectiveC([device newArgumentTableWithDescriptor:tableDesc error:nil]);
-        tableDesc.maxBufferBindCount = 2;
+        tableDesc.maxBufferBindCount = 6;
         tableDesc.maxTextureBindCount = 3;
         tableDesc.maxSamplerStateBindCount = 1;
         prepared.metal4FragmentTable = OwnedObjectiveC([device newArgumentTableWithDescriptor:tableDesc error:nil]);
@@ -2959,7 +2961,7 @@ bool IOSGPUScene::Impl::prepareMetal4(NativeEncodeContext& context, PreparedFram
           return false;
         auto residency = (id<MTLResidencySet>)prepared.metal4Residency.get();
         const auto add = [&](id resource) { if(resource!=nil) [residency addAllocation:resource]; };
-        add(uniforms); add(context.sceneHDR); add(sceneDepth.get()); add(prepared.lightBuffer);
+        add(uniforms); add(context.sceneHDR); add(sceneDepth.get()); add(prepared.lightBuffer); add(prepared.lightGridBuffer);
         for(const auto& map:shadowMaps) add(map.get());
         for(size_t i=context.metal4Begin;i<context.metal4End;++i) {
           const auto& draw = prepared.base[i];
@@ -2969,6 +2971,7 @@ bool IOSGPUScene::Impl::prepareMetal4(NativeEncodeContext& context, PreparedFram
         auto fragment = (id<MTL4ArgumentTable>)prepared.metal4FragmentTable.get();
         [fragment setAddress:uniforms.gpuAddress atIndex:0];
         [fragment setAddress:((id<MTLBuffer>)prepared.lightBuffer).gpuAddress atIndex:1];
+        [fragment setAddress:((id<MTLBuffer>)prepared.lightGridBuffer).gpuAddress atIndex:5];
         for(size_t i=0;i<shadowMaps.size();++i)
           [fragment setTexture:((id<MTLTexture>)shadowMaps[i].get()).gpuResourceID atIndex:i+1];
         [fragment setSamplerState:((id<MTLSamplerState>)samplerState).gpuResourceID atIndex:0];
@@ -3620,12 +3623,15 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     candidateFrame->lighting.lightInfo[2] = snapshot.currentCamera.underwater ? 1u : 0u;
     candidateFrame->viewProjection = snapshot.currentCamera.viewProjection;
     std::vector<IOSPointLightConstants> lights;
+    std::vector<IOSGPUSceneLightTileBounds> lightBounds;
+    lightBounds.reserve(snapshot.lights.size());
     lights.reserve(std::max(size_t(1),snapshot.lights.size()));
     for(const auto& light:snapshot.lights) {
       if(light.type!=IOSLightType::Point || light.range<=0.f ||
          (light.visibilityMask&IOSSceneVisibilityMain)==0 ||
          !iosGPUScenePointLightVisible(light,snapshot.currentCamera.viewProjection))
         continue;
+      lightBounds.push_back(iosGPUScenePointLightTiles(light,snapshot.currentCamera));
       const float scale = light.intensity*candidateFrame->lighting.ambientColor.w;
       lights.push_back({{light.position.x,light.position.y,light.position.z,light.range},
                         {light.color.x*scale,light.color.y*scale,light.color.z*scale,0.f}});
@@ -3636,6 +3642,10 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
     PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->lights,
         lights.data(),lights.size()*sizeof(IOSPointLightConstants));
     candidateFrame->lightBuffer = prepared.uploads->lights.get();
+    const auto lightGrid = iosGPUSceneLightGrid(lightBounds,snapshot.currentCamera.viewport);
+    PreparedFrame::Uploads::write(nativeDevice,prepared.uploads->lightGrid,
+        lightGrid.data(),lightGrid.size()*sizeof(uint32_t));
+    candidateFrame->lightGridBuffer = prepared.uploads->lightGrid.get();
     candidateFrame->cloudOffsets = snapshot.currentSky.cloudOffsets;
     candidateFrame->skyReady = (snapshot.featureMask&IOSSceneFeatureSky)!=0;
     for(size_t i=0;i<candidateFrame->skyImages.size();++i) {
@@ -4276,6 +4286,8 @@ IOSGPUScene::Report IOSGPUScene::prepareFrame(
           " draw-calls=",candidateFrame->base.size()+candidateFrame->multiply2.size()+candidateFrame->additive.size()+candidateFrame->transparent.size()+candidateFrame->water.size()+candidateFrame->ghost.size()+candidateFrame->multiply.size(),
           " animated=",report.counts.drawn.kind.animated," morph=",report.counts.drawn.kind.morph,
           " lights=",snapshot.lights.size()," visible-lights=",candidateFrame->lighting.lightInfo[0],
+          " light-tiles=",lightGrid[0]*lightGrid[1],
+          " light-indices=",lightGrid.size()-2u-size_t(lightGrid[0])*lightGrid[1]*2u,
           " shadow-near=",candidateFrame->shadows[0].size()," shadow-far=",candidateFrame->shadows[1].size(),
           " generation=",snapshot.generation.value," sequence=",snapshot.sequence.value,
           " transparent=",candidateFrame->transparent.size(),

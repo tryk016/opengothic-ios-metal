@@ -4,12 +4,14 @@
 #include "iosscenesnapshot.h"
 #include "iosuvanimationevidence.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
 #include <cstdint>
 #include <limits>
+#include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -2782,8 +2784,7 @@ inline IOSGPUSceneMultiply2ClipBoundsResult
   return IOSGPUSceneMultiply2ClipBoundsResult::Intersects;
   }
 
-inline bool iosGPUScenePointLightVisible(const IOSLight& light,
-                                         const IOSMatrix4x4& viewProjection) noexcept {
+inline IOSBounds iosGPUScenePointLightBounds(const IOSLight& light) noexcept {
   // The shader contributes only inside position +/- range. Keep boundary and
   // uncertain volumes, including camera/near-plane crossings. Expanding by
   // several world-coordinate ULPs covers float transform/interpolation error.
@@ -2791,10 +2792,92 @@ inline bool iosGPUScenePointLightVisible(const IOSLight& light,
   const float margin = 32.f*std::numeric_limits<float>::epsilon()*
       std::max({1.f,std::abs(p.x),std::abs(p.y),std::abs(p.z),light.range});
   const float radius = light.range+margin;
-  const IOSBounds influence = {{p.x-radius,p.y-radius,p.z-radius},
-                               {p.x+radius,p.y+radius,p.z+radius}};
-  return classifyIOSGPUSceneMultiply2ClipBounds(influence,{},viewProjection)!=
+  return {{p.x-radius,p.y-radius,p.z-radius},
+          {p.x+radius,p.y+radius,p.z+radius}};
+  }
+
+inline bool iosGPUScenePointLightVisible(const IOSLight& light,
+                                         const IOSMatrix4x4& viewProjection) noexcept {
+  return classifyIOSGPUSceneMultiply2ClipBounds(iosGPUScenePointLightBounds(light),{},viewProjection)!=
       IOSGPUSceneMultiply2ClipBoundsResult::DefinitelyOutside;
+  }
+
+inline constexpr uint32_t IOSSceneLightTileSize = 32u;
+
+struct IOSGPUSceneLightTileBounds final {
+  uint32_t minX = 0u, minY = 0u, maxX = 0u, maxY = 0u;
+  };
+
+inline IOSGPUSceneLightTileBounds iosGPUScenePointLightTiles(
+    const IOSLight& light, const IOSCameraState& camera) noexcept {
+  const uint32_t columns = (camera.viewport.width-1u)/IOSSceneLightTileSize+1u;
+  const uint32_t rows = (camera.viewport.height-1u)/IOSSceneLightTileSize+1u;
+  const IOSGPUSceneLightTileBounds full{0u,0u,columns-1u,rows-1u};
+  const auto bounds = iosGPUScenePointLightBounds(light);
+  std::array<float,2> low = {1.f,1.f}, high = {-1.f,-1.f};
+  for(uint32_t corner=0u;corner<8u;++corner) {
+    const float x = (corner&1u)!=0u ? bounds.maximum.x : bounds.minimum.x;
+    const float y = (corner&2u)!=0u ? bounds.maximum.y : bounds.minimum.y;
+    const float z = (corner&4u)!=0u ? bounds.maximum.z : bounds.minimum.z;
+    std::array<float,4> clip;
+    for(size_t row=0u;row<4u;++row)
+      clip[row] = camera.viewProjection.at(row,0u)*x+camera.viewProjection.at(row,1u)*y+
+                  camera.viewProjection.at(row,2u)*z+camera.viewProjection.at(row,3u);
+    if(!std::isfinite(clip[3]) || !std::isfinite(clip[2]) || clip[3]<=0.f || clip[2]<=0.f)
+      return full;
+    for(size_t axis=0u;axis<2u;++axis) {
+      const float projected = clip[axis]/clip[3];
+      if(!std::isfinite(projected))
+        return full;
+      low[axis] = std::min(low[axis],projected);
+      high[axis] = std::max(high[axis],projected);
+      }
+    }
+  const auto tile = [](float ndc,uint32_t extent) {
+    // The vertex shader flips clip Y; Metal's top-left viewport flips it back.
+    const float pixel = std::clamp((ndc+1.f)*0.5f*float(extent),0.f,float(extent-1u));
+    return uint32_t(pixel)/IOSSceneLightTileSize;
+    };
+  const auto lower = [&](float ndc,uint32_t extent) {
+    const uint32_t value = tile(ndc,extent);
+    return value==0u ? 0u : value-1u;
+    };
+  // Keep a neighbouring tile to cover projection/interpolation rounding.
+  return {lower(low[0],camera.viewport.width),lower(low[1],camera.viewport.height),
+          std::min(tile(high[0],camera.viewport.width)+1u,columns-1u),
+          std::min(tile(high[1],camera.viewport.height)+1u,rows-1u)};
+  }
+
+inline std::vector<uint32_t> iosGPUSceneLightGrid(
+    const std::vector<IOSGPUSceneLightTileBounds>& bounds, const IOSViewport& viewport) {
+  const uint32_t columns = (viewport.width-1u)/IOSSceneLightTileSize+1u;
+  const uint32_t rows = (viewport.height-1u)/IOSSceneLightTileSize+1u;
+  // Columns, rows, then (absolute word offset, count) per tile and light indices.
+  std::vector<uint32_t> grid(2u+size_t(columns)*rows*2u,0u);
+  grid[0] = columns;
+  grid[1] = rows;
+  const auto visit = [&](const auto& b,const auto& action) {
+    for(uint32_t y=b.minY;y<=b.maxY;++y)
+      for(uint32_t x=b.minX;x<=b.maxX;++x)
+        action(2u+2u*(size_t(y)*columns+x));
+    };
+  for(const auto& b:bounds)
+    visit(b,[&](size_t cell) { ++grid[cell+1u]; });
+  size_t total = grid.size();
+  for(size_t cell=2u;cell<grid.size();cell+=2u) {
+    const uint32_t count = grid[cell+1u];
+    grid[cell] = uint32_t(total);
+    grid[cell+1u] = 0u;
+    total += count;
+    }
+  if(total>std::numeric_limits<uint32_t>::max())
+    throw std::length_error("RendererIOS point-light grid is too large");
+  grid.resize(total);
+  for(size_t index=0u;index<bounds.size();++index)
+    visit(bounds[index],[&](size_t cell) {
+      grid[size_t(grid[cell])+grid[cell+1u]++] = uint32_t(index);
+      });
+  return grid;
   }
 
 inline uint64_t iosGPUSceneFailingHandle(

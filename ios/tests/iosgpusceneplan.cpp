@@ -1405,7 +1405,71 @@ void testPointLightFrustumCulling() {
   assert(iosGPUScenePointLightVisible(light,crossing));
   }
 
+void testPointLightTiles() {
+  IOSCameraState camera;
+  camera.viewport = {0u,0u,320u,160u};
+  IOSLight light;
+  light.position = {0.5f,-0.5f,0.5f};
+  light.range = 0.04f;
+  const auto local = iosGPUScenePointLightTiles(light,camera);
+  assert(local.minX>0u && local.maxX<9u && local.maxY<4u);
+  const auto grid = iosGPUSceneLightGrid({local,local},camera.viewport);
+  assert(grid[0]==10u && grid[1]==5u);
+  const size_t centre = 2u+2u*(1u*10u+7u);
+  assert(grid[centre+1u]==2u && grid[grid[centre]]==0u && grid[grid[centre]+1u]==1u);
+  assert(grid[3u]==0u); // A light in the upper-right projection misses this tile.
+
+  const auto empty = iosGPUSceneLightGrid({},camera.viewport);
+  assert(empty.size()==102u);
+  for(size_t cell=2u;cell<empty.size();cell+=2u)
+    assert(empty[cell+1u]==0u);
+
+  light.position.z = 0.f;
+  const auto crossing = iosGPUScenePointLightTiles(light,camera);
+  assert(crossing.minX==0u && crossing.minY==0u && crossing.maxX==9u && crossing.maxY==4u);
+  const auto many = iosGPUSceneLightGrid(std::vector<IOSGPUSceneLightTileBounds>(300u,crossing),camera.viewport);
+  for(size_t cell=2u;cell<102u;cell+=2u) {
+    assert(many[cell+1u]==300u);
+    for(uint32_t i=0u;i<300u;++i)
+      assert(many[many[cell]+i]==i);
+    }
+
+  light.position = {0.2f,-0.4f,0.6f};
+  light.range = 0.15f;
+  // Every sampled point inside the influence sphere must retain the light.
+  for(const auto viewport:std::array<IOSViewport,3>{{{0,0,65,33},{0,0,2796,1290},{0,0,2097,967}}}) {
+    camera.viewport = viewport;
+    camera.viewProjection.set(0u,0u,0.8f);
+    camera.viewProjection.set(1u,1u,1.7f);
+    camera.viewProjection.set(3u,2u,0.5f);
+    camera.viewProjection.set(0u,3u,0.375f/float(viewport.width));
+    camera.viewProjection.set(1u,3u,-0.25f/float(viewport.height));
+    const auto projected = iosGPUSceneLightGrid({iosGPUScenePointLightTiles(light,camera)},viewport);
+    for(int x=-2;x<=2;++x)
+      for(int y=-2;y<=2;++y)
+        for(int z=-2;z<=2;++z) {
+          if(x*x+y*y+z*z>4)
+            continue;
+          const float px = light.position.x+float(x)*light.range*0.5f;
+          const float py = light.position.y+float(y)*light.range*0.5f;
+          const float pz = light.position.z+float(z)*light.range*0.5f;
+          const float w = 1.f+0.5f*pz;
+          const float u = (0.8f*px+0.375f/float(viewport.width))/w;
+          const float v = (1.7f*py-0.25f/float(viewport.height))/w;
+          const uint32_t tx = uint32_t((u+1.f)*0.5f*float(viewport.width))/32u;
+          const uint32_t ty = uint32_t((v+1.f)*0.5f*float(viewport.height))/32u;
+          const size_t cell = 2u+2u*(size_t(ty)*projected[0]+tx);
+          assert(projected[cell+1u]==1u && projected[projected[cell]]==0u);
+          }
+    }
+  camera.viewProjection.set(3u,3u,std::numeric_limits<float>::infinity());
+  const auto uncertain = iosGPUScenePointLightTiles(light,camera);
+  assert(uncertain.minX==0u && uncertain.minY==0u && uncertain.maxX==65u && uncertain.maxY==30u);
+  }
+
+
 int main() {
+  testPointLightTiles();
   testPointLightFrustumCulling();
   testFrameAnimationDownstreamEvidence();
   testUVAnimationDownstreamEvidence();
