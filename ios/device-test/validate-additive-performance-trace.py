@@ -290,8 +290,12 @@ def validate_toc(raw: bytes, device: str, process_id: int,
             "TOC template differs")
     require(_text(summary, "./end-reason", "TOC end reason") ==
             "Time limit reached", "TOC did not reach the time limit")
-    require(_text(summary, "./time-limit", "TOC time limit") ==
-            f"{trace_seconds} seconds", "TOC time limit differs")
+    expected_limits = {f"{trace_seconds} seconds"}
+    if trace_seconds % 60 == 0:
+        minutes = trace_seconds // 60
+        expected_limits.add(f"{minutes} minute" + ("s" if minutes != 1 else ""))
+    require(_text(summary, "./time-limit", "TOC time limit") in expected_limits,
+            "TOC time limit differs")
     instruments = summary.findall("./intruments-recording-settings/instrument")
     require(len(instruments) == 1 and
             instruments[0].get("name") == "Metal Performance Overview",

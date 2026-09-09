@@ -811,9 +811,31 @@ def live_pid_reader_tests(source: str) -> int:
         return killed + 1
 
 
+def validate_toc_time_units() -> None:
+    validator = load_validator()
+    for label, seconds, duration, accepted in (
+        ("30 seconds", 30, 30.5, True),
+        ("1 minute", 60, 60.5, True),
+        ("5 minutes", 300, 300.5, True),
+        ("300 seconds", 300, 300.5, True),
+        ("6 minutes", 300, 300.5, False),
+        ("5 minutes", 300, 299.5, False),
+        ("5 minutes", 301, 301.5, False),
+    ):
+        raw = toc().replace("30 seconds", label).replace(
+            "<duration>30.5</duration>", f"<duration>{duration}</duration>")
+        try:
+            validator.validate_toc(raw.encode(), DEVICE, int(PID), seconds)
+        except validator.ValidationError:
+            require(not accepted, f"valid time limit rejected: {label}")
+        else:
+            require(accepted, f"invalid time limit accepted: {label}")
+
+
 def main() -> int:
     tool_identity_killed = tool_identity_verifier_tests()
     validate_good_summary()
+    validate_toc_time_units()
     fake_killed = mutation_tests()
     directory_killed = evidence_directory_mutations()
     source = COLLECTOR.read_text(encoding="utf-8")
